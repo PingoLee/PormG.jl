@@ -6,6 +6,9 @@ module Configuration
 import YAML, Logging
 using PormG
 import DataFrames
+using DataFrames, Tables, XLSX
+
+
 
 export env, Settings
 # app environments
@@ -87,21 +90,29 @@ function read_db_connection_data(db_settings_file::String) :: Dict{String,Any}
 end
 
 
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing) :: Dict{String,Any}
-  db_config_file = path === nothing ? joinpath(PormG.DB_PATH, PormG.PORMG_DB_CONFIG_FILE_NAME) : path
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing)
+  path === nothing && (path = PormG.DB_PATH )
+  db_config_file = joinpath(path, PormG.PORMG_DB_CONFIG_FILE_NAME) 
   PormG.config.db_config_settings = read_db_connection_data(db_config_file)
   context !== nothing && Base.eval(context, Meta.parse("using PormG$(PormG.config.db_config_settings["adapter"])"))
 
+  # PormG.config.db_config_settings
+
+  cols_config_file = joinpath(path, PormG.PORMG_COLS_FILE_NAME)
+  PormG.config.columns = XLSX.readtable(cols_config_file, 1) |> DataFrame
+
+  pk_config_file = joinpath(path, PormG.PORMG_PK_FILE_NAME)
+  PormG.config.pk = XLSX.readtable(pk_config_file, 1) |> DataFrame
+
   PormG.config.db_config_settings
 end
-
 
 """
     mutable struct Settings
 
 App configuration - sets up the app's defaults. Individual options are overwritten in the corresponding environment file.
 """
-mutable struct Settings
+mutable struct Settings <: PormG.SQLConn
   app_env::String
   
   db_def_folder::String
@@ -110,7 +121,9 @@ mutable struct Settings
   log_queries::Bool
   log_level::Logging.LogLevel
   log_to_file::Bool
-  tables::Union{DataFrames.DataFrame, Nothing}
+  columns::Union{DataFrames.DataFrame, Nothing}
+  pk::Union{DataFrames.DataFrame, Nothing}
+
 
   Settings(;
             app_env         = ENV["PORMG_ENV"],           
@@ -119,13 +132,15 @@ mutable struct Settings
             log_queries   = true,
             log_level     = Logging.Debug,
             log_to_file   = true,
-            tables        = nothing
+            columns       = nothing,
+            pk            = nothing
+
         ) =
               new(
                   app_env,
                   db_def_folder, db_config_settings,
                   log_queries, log_level, log_to_file,
-                  tables
+                  columns, pk
                 )
 end
 

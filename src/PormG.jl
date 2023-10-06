@@ -1,6 +1,6 @@
 module PormG
 
-# using Revise
+using Revise
 
 import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
 import DataFrames.DataFrame
@@ -46,7 +46,7 @@ function build(object::SQLType; conection=config)
   #   throw("""You need load() before build a query (ex. PormG.Configuration.load())""")
   # end
   
-  df_join = QueryBuilder.get_on_query(object)
+  df_join = QueryBuilder.get_join_query(object, conection)
   
   if length(object.values) > 0
     for v in object.object.values

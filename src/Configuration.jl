@@ -4,7 +4,7 @@ Core PormG configuration / settings functionality.
 module Configuration
 
 import YAML, Logging
-using PormG
+using ..PormG: PormG
 import DataFrames
 using DataFrames, Tables, XLSX
 

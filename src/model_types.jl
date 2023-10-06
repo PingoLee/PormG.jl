@@ -230,13 +230,14 @@ function up_create(q::SQLType, values::Tuple{Pair{String, Int64}, Vararg{Pair{St
 
 end
 
-function up_filter(q::SQLType, filter::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}})
+function up_filter(q::SQLType, filter)
   for (k,v) in filter   
     q.filter[k] = v 
-  end
-  
+  end  
   return Object(object =q)
 end
+
+
 
 function query(q::SQLType)
  

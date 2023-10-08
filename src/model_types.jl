@@ -238,7 +238,6 @@ function up_filter(q::SQLType, filter)
 end
 
 
-
 function query(q::SQLType)
  
   build(q) 

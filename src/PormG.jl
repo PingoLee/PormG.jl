@@ -8,6 +8,8 @@ import DataFrames.DataFrame
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
 abstract type SQLType <: PormGAbstractType end
+abstract type SQLTypeQ <: SQLType end
+abstract type SQLTypeQor <: SQLType end
 abstract type SQLObject <: PormGAbstractType end
 abstract type AbstractModel <: PormGAbstractType end
 

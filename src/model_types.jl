@@ -6,9 +6,11 @@ import Base.length
 import Base.==
 import Base.hash
 
+import Base.|
+
 import Dates, Intervals
 
-
+export Q, Qor
 
 function hash(a::T) where {T<:AbstractModel}
   Base.hash(string(typeof(a)) * string(getfield(a, pk(a) |> Symbol)))
@@ -18,129 +20,45 @@ function ==(a::A, b::B) where {A<:AbstractModel,B<:AbstractModel}
   hash(a) == hash(b)
 end
 
-# function Base.print(io::IO, t::T) where {T<:PormGAbstractType}
-#   props = []
-#   for (k,v) in to_string_dict(t)
-#     push!(props, "$k=$v")
-#   end
-#   print(io, string("$(typeof(t))(", join(props, ','), ")"))
-# end
 
-# Base.show(io::IO, t::T) where {T<:PormGAbstractType} = print(io, PormGAbstractType_to_print(t))
-
-# """
-#     PormGAbstractType_to_print{T<:PormGAbstractType}(m::T) :: String
-
-# Pretty printing of SearchLight types.
-# """
-# function PormGAbstractType_to_print(m::T) :: String where {T<:PormGAbstractType}
-#   string(typeof(m), "\n", Millboard.table(to_string_dict(m)), "\n")
-# end
-
-
-
-#
-# SQLColumn
-#
-
-
-"""
-Represents a SQL column when building SQL queries.
-"""
-mutable struct SQLColumn <: SQLType
-  value::String
-  escaped::Bool
-  raw::Bool
-  table_name::String
-  column_name::String
-end
-SQLColumn(v::Union{String,Symbol}; escaped = false, raw = false, table_name = "", column_name = "") = begin
-  SQLColumn(string(v), escaped, raw, string(table_name), string(v))
-end
-# SQLColumn(a::Array) = map(x -> SQLColumn(x), a)
-# SQLColumn(t::Tuple) = SQLColumn([t...])
-# ==(a::SQLColumn, b::SQLColumn) = a.value == b.value
-
-
-
-#
-# SQLLogicOperator
-#
-
-#
-# SQLWhere
-#
-
-"""
-Represents the `ON` operator used in SQL `JOIN`
-"""
-# struct SQLOn <: SQLType
-#   column_1::SQLColumn
-#   column_2::SQLColumn
-#   conditions::Vector{SQLWhereEntity}
-
-#   SQLOn(column_1, column_2; conditions = SQLWhereEntity[]) = new(column_1, column_2, conditions)
-# end
-# function string(o::SQLOn)
-#   on = " ON $(o.column_1) = $(o.column_2) "
-#   if ! isempty(o.conditions)
-#     on *= " AND " * join( map(x -> string(x), o.conditions), " AND " )
-#   end
-
-#   on
-# end
-
-# convert(::Type{Vector{SQLOn}}, j::SQLOn) = [j]
-
-
-
-
-"""
-Provides functionality for building and manipulating SQL `WHERE` conditions.
-"""
-struct SQLWhere <: SQLType
-  column::SQLColumn
-  value::Union{String, Int64, Float64, Bool}
-  condition::String
-  operator::String
-
-  SQLWhere(column::SQLColumn, value::Union{String, Int64, Float64, Bool}, condition::String, operator::String) =
-    new(column, value, condition, operator)
+Base.@kwdef mutable struct QObject <: SQLTypeQ
+  filters::Vector{Union{Pair{String, String}, Pair{String, Int64}, Pair{String, Bool}, SQLTypeQ, SQLTypeQor}}
 end
 
-
-
-#
-# SQLJoin - SQLJoinType
-#
-
-struct InvalidJoinTypeException <: Exception
-  jointype::String
+Base.@kwdef mutable struct QorObject <: SQLTypeQor
+  or::Vector{Union{SQLTypeQ, SQLTypeQor}}
 end
 
-Base.showerror(io::IO, e::InvalidJoinTypeException) = print(io, "Invalid join type $(e.jointype)")
-
-"""
-Wrapper around the various types of SQL `join` (`left`, `right`, `inner`, etc).
-"""
-struct SQLJoinType <: SQLType
-  join_type::String
-
-  function SQLJoinType(t::Union{String,Symbol})
-    t = string(t)
-    accepted_values = ["inner", "INNER", "left", "LEFT", "right", "RIGHT", "full", "FULL"]
-    if in(t, accepted_values)
-      new(uppercase(t))
+function Q(x...)
+  colect = []
+  for v in x
+    if isa(v, Pair) || isa(v, SQLTypeQor)
+      push!(colect, v)
     else
-      @error  """Accepted JOIN types are $(join(accepted_values, ", "))"""
-      throw(InvalidJoinTypeException(t))
+      error("Invalid argument: $(v); please use a pair (key => value)")
     end
   end
+  println(colect)
+  return QObject(filters = colect)
 end
 
-convert(::Type{SQLJoinType}, s::Union{String,Symbol}) = SQLJoinType(s)
+function Qor(x...)
+  colect = []
+  for v in x
+    if isa(v, SQLTypeQ) || isa(v, SQLTypeQor)
+      push!(colect, v)
+    elseif isa(v, Pair)
+      push!(colect, Q(v))
+    else
+      error("Invalid argument: $(v); please use a pair (key => value) or a Q(key => value...)")
+    end
+  end
+  println(colect)
+  return QorObject(or = colect)
+end
 
-string(jt::SQLJoinType) = jt.join_type
+#
+
 
 #
 # SQLJoin
@@ -178,19 +96,6 @@ string(jt::SQLJoinType) = jt.join_type
 #         columns = SQLColumn[]) where {T<:AbstractModel} = SQLJoin(model_name, SQLOn(on_column_1, on_column_2), join_type = join_type, outer = outer, where = where, natural = natural, columns = columns)
 
 # function string(j::SQLJoin)
-#   sql = """ $(j.natural ? "NATURAL " : "") $(string(j.join_type)) $(j.outer ? "OUTER " : "") JOIN $( escape_column_name(table(j.model_name), SearchLight.connection())) $(join(string.(j.on), " AND ")) """
-#   sql *=  if ! isempty(j.where)
-#           SearchLight.to_where_part(j.where)
-#         else
-#           ""
-#         end
-
-#   sql = replace(sql, "  " => " ")
-
-#   replace(sql, " AND ON " => " AND ")
-# end
-
-# convert(::Type{Vector{SQLJoin}}, j::SQLJoin) = [j]
 
 
 #
@@ -201,17 +106,33 @@ string(jt::SQLJoinType) = jt.join_type
 mutable struct SQLQuery <: SQLType
   model_name::Union{String, Missing}
   values::Vector{String}
-  filter::Dict{String,Union{Int64, String}} 
+  filter::Vector{Union{SQLTypeQ, SQLTypeQor, Pair{String, String}, Pair{String, Int64}, Pair{String, Bool}}}
   create::Dict{String,Union{Int64, String}}
   limit::Int64
   offset::Int64
   order::Vector{String}
   group::Vector{String}
   having::Vector{String}
+  list_joins::Vector{String}
 
-  SQLQuery(; model_name=missing, values = [],  filter = Dict(), create = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = []) =
-    new(model_name, values, filter, create, limit, offset, order, group, having)
+  SQLQuery(; model_name=missing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
+        order = [], group = [], having = [], list_joins = []) =
+    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins)
+end
+
+function _get_pair_list_joins(q::SQLType, v::Pair)
+  push!(q.list_joins, v[1])
+  unique!(q.list_joins)
+end
+function _get_pair_list_joins(q::SQLType, v::SQLTypeQ)
+  for v in v.filters
+    _get_pair_list_joins(q, v)
+  end
+end
+function _get_pair_list_joins(q::SQLType, v::SQLTypeQor)
+  for v in v.or
+    _get_pair_list_joins(q, v)
+  end
 end
 
 function up_values(q::SQLType, values::Tuple{String, Vararg{String}})
@@ -226,20 +147,23 @@ end
 function up_create(q::SQLType, values::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}})
   for (k,v) in values   
     q.values[k] = v 
-  end 
-
+  end
 end
 
 function up_filter(q::SQLType, filter)
-  for (k,v) in filter   
-    q.filter[k] = v 
-  end  
+  for v in filter
+    if ~isa(v, SQLTypeQ) && ~isa(v, SQLTypeQor) && ~isa(v, Pair)
+      error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
+    else
+      push!(q.filter, v)
+      _get_pair_list_joins(q, v)
+    end
+  end
   return Object(object =q)
 end
 
 
-function query(q::SQLType)
- 
+function query(q::SQLType) 
   build(q) 
 end
   

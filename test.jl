@@ -22,3 +22,8 @@ Q("co_dim_tempo__dt_registro__y_month__gte" => "2023-01", "co_dim_tempo__dt_regi
 Qor("co_dim_tempo__dt_registro__y_month__gte" => "2023-01", "A", "co_dim_tempo__dt_registro__y_month__lte" => "2025-01")
 
 Qor("co_dim_tempo__dt_registro__y_month__gte" => "2023-01", "co_dim_tempo__dt_registro__y_month__lte" => "2025-01")
+
+
+a.values("co_dim_tempo__dt_registro__y_month", "co_seq_fat_visita_domiciliar", "co_fat_cidadao_pec__co_fat_cad_domiciliar")
+
+a.values("co_dim_tempo__dt_registro__date__y_month")

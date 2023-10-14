@@ -1,15 +1,22 @@
-import Base.string
-import Base.print
-import Base.show
-import Base.convert
-import Base.length
-import Base.==
-import Base.hash
-
-import Base.|
-
 import Dates, Intervals
 
+#
+# SQLInstruction Objects (instructions to build a query)
+#
+
+@kwdef mutable struct InstrucObject <: SQLInstruction
+  text::String # text to be used in the query
+  select::Vector{String} = missing # values to be used in select query
+  join::Union{Missing, Vector{String}} = missing # values to be used in join query
+  _where::Union{Missing, Vector{String}} = missing # values to be used in where query
+  group::Union{Missing, Vector{String}} = missing # values to be used in group query
+  having::Union{Missing, Vector{String}} = missing # values to be used in having query
+  order::Union{Missing, Vector{String}} = missing # values to be used in order query
+  df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+  df_object::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+  df_pks::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+  df_columns::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+end
 
 #
 # SQLTypeOper Objects (operators from sql)
@@ -17,24 +24,86 @@ import Dates, Intervals
 
 # export In, NotIn, Between, NotBetween, Like, NotLike, ILike, NotILike, SimilarTo, NotSimilarTo, IsNull, IsNotNull
 
+"""
+  OperObject <: SQLTypeOper
+
+  Mutable struct representing an SQL operator object for using in the filter and annotate.
+  That is a internal function, please do not use it.
+
+  # Fields
+  - `operator::String`: the operator used in the SQL query.
+  - `values::Union{String, Int64, Bool}`: the value(s) to be used with the operator.
+  - `column::Union{String, SQLTypeF}`: the column to be used with the operator.
+
+"""
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String, Int64, Bool, SQLTypeF}
+  values::Union{String, Int64, Bool}
   column::Union{String, SQLTypeF}
 end
 
+function _check_function(x::Vector{SubString{String}})
+  vect = copy(x)
+  if length(x) == 1
+    return string(x[1])
+  else
+    # get keys from PormGtrasnform (that is a dict)
+    keyS = collect(keys(PormGtrasnform))
+    column = join(filter(x -> !(x in keyS), x), "__")
+    countS = count(x -> x in keyS, x)
+    resp = missing
+    if countS > 0      
+      while count(x -> x in keyS, x) > 0
+        if ismissing(resp)
+          resp = getfield(PormG, Symbol(PormGtrasnform[x[end]]))(column)
+        else
+          resp = getfield(PormG, Symbol(PormGtrasnform[x[end]]))(resp)
+        end
+        x = x[1:end-1]
+      end
+      resp.kwargs["as"] = join(vect, "__")
+
+      print(resp)
+      return resp
+    else 
+      return join(x, "__")
+    end            
+  end  
+end
+_check_function(x::String) = _check_function(split(x, "__"))
+
+"""
+  _get_pair_to_oper(x::Pair)
+
+  Converts a Pair object to an OperObject. If the Pair's key is a string, it checks if it contains an operator suffix (e.g. "__gte", "__lte") and returns an OperObject with the corresponding operator. If the key does not contain an operator suffix, it returns an OperObject with the "=" operator. If the key is not a string, it throws an error.
+
+  # Arguments
+  - `x::Pair`: A Pair object to be converted to an OperObject.
+
+  # Returns
+  - `OperObject`: An OperObject with the corresponding operator and values.
+
+  # Throws
+  - `Error`: If the key is not a string or if it contains more than one operator suffix.
+
+  # Wharning
+  - That is a internal function, please do not use it.
+"""
 function _get_pair_to_oper(x::Pair)
   if isa(x.first, String)
     check = split(x.first, "__")
     # check if exist operators
-    if check in PormGsuffix
-      return OperObject(operator = PormGsuffix[check], values = x.second, column = check[1])
+    count = count(x -> x in PormGsuffix, check) 
+    if count > 1
+      throw("Invalid argument: $(x.first); please use only one operator __gte, __lte ...")
+    elseif count == 1
+      return OperObject(operator = PormGsuffix[string("__", check)], values = x.second, column = _check_function(first(check, length(check)-1)))
     else
-      return OperObject(operator = "=", values = x.second, column = x.first)
+      return OperObject(operator = "=", values = x.second, column = _check_function(check))
     end
-
   else
-    throw()
+    throw("""Invalid argument: $(x.first) (::$(typeof(x.first))); please use a string""")
+  end
 end
  
 
@@ -144,11 +213,19 @@ function When(condition::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64,
 end
 
 
+TO_CHAR(x::Union{String, SQLTypeF}, format::String) = FObject(function_name = "TO_CHAR", kwargs = Dict("column" => x, "format" => format))
+MONTH(x) = TO_CHAR(x, "MM")
+YEAR(x) = TO_CHAR(x, "YYYY")
+DAY(x) = TO_CHAR(x, "DD")
+Y_M(x) = TO_CHAR(x, "YYYY-MM")
+DATE(x) = TO_CHAR(x, "YYYY-MM-DD")
+
 
 
 mutable struct SQLQuery <: SQLType
   model_name::Union{String, Missing}
-  values::Vector{String}
+  values::Vector{Union{String, SQLTypeF}}
+  annotate::Vector{SQLTypeF}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
   limit::Int64
@@ -158,9 +235,9 @@ mutable struct SQLQuery <: SQLType
   having::Vector{String}
   list_joins::Vector{String}
 
-  SQLQuery(; model_name=missing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
+  SQLQuery(; model_name=missing, values = [], annotate = [],  filter = [], create = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = []) =
-    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins)
+    new(model_name, values, annotate, filter, create, limit, offset, order, group, having, list_joins)
 end
 
 function _get_pair_list_joins(q::SQLType, v::Pair)
@@ -178,9 +255,19 @@ function _get_pair_list_joins(q::SQLType, v::SQLTypeQor)
   end
 end
 
-function up_values(q::SQLType, values::Tuple{String, Vararg{String}})
-  for v in values   
-    push!(q.values, v)
+function up_values(q::SQLType, values)
+  # every call of values, reset the values
+  q.values = []
+  for v in values 
+    println(v)
+    println(typeof(v))
+    if isa(v, SQLTypeF)
+      push!(q.values, v)
+    elseif isa(v, String)
+      push!(q.values, _check_function(v))
+    else
+      throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (TO_CHAR, Mounth, Year, Day, Y_M ...)")
+    end    
   end 
   unique!(q.values)
   
@@ -224,9 +311,19 @@ replace("teste", "teste" => "teste2")
 
 export object
 
+"""
+    object(model_name::String)
+
+Create an object with a SQLQuery model.
+
+# Arguments
+- `model_name::String`: The name of the model.
+
+# Returns
+- An `Object` with a `SQLQuery` model.
+
+"""
 function object(model_name::String)
   return Object(object = SQLQuery(model_name = model_name))
 end
 
-
-# string(q::SQLQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)

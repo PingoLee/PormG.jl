@@ -1,6 +1,6 @@
 module QueryBuilder
 
-using ..PormG: SQLType, SQLConn
+using ..PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, PormGsuffix, PormGtrasnform
 import DataFrames
 
 
@@ -38,6 +38,7 @@ function _get_join_query(array::Vector{String}; array_store::Vector{String}=Stri
   println(array_store)
   return array_store  
 end
+
 function _get_join_query(x::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}}; array_store::Vector{String} = String[])
   array = String[]
   for (k,v) in x
@@ -86,58 +87,113 @@ function _insert_join(df::DataFrames.DataFrame, row::Dict{String,String})
 end
 
 "build a row to join"
-function _build_row_join(tables::Vector{SubString{String}}, df_join::DataFrames.DataFrame, df_object::DataFrames.DataFrame, 
-  df_pks::DataFrames.DataFrame, df_columns::DataFrames.DataFrame)
-
-  df = filter(row -> row.column_name == tables[1], df_object)
-  # check if A is the from table
-  row_join = Dict{String,String}()
-  if size(df, 1) != 0
-    row_join["a"] = df[1, :table_name]
-    row_join["alias_a"] = "tb"  
-    row_join["how"] = df[1, :is_nullable] == "YES" ? "LEFT" : "INNER"   
-    df2 = filter(row -> row.table_name == row_join["a"] && row.column_name == tables[1], df_pks)
-    row_join["b"] = df2[1, :foreign_table_name]
-    row_join["alias_b"] = _get_alias_name(df_join)
-    row_join["key_b"] = df2[1, :foreign_column_name]
-    row_join["key_a"] = tables[1]    
-  else
-    df = filter(row -> row.column_name == column_name, df_columns)
+function _build_row_join(tables::Vector{SubString{String}}, instruct::SQLInstruction)
+  println("_build_row_join")
+  println(tables)
+    df = filter(row -> row.column_name == tables[1], instruct.df_object)
+    # check if A is the from table
+    row_join = Dict{String,String}()
     if size(df, 1) != 0
-      # construir o join inverso
+      row_join["a"] = df[1, :table_name]
+      row_join["alias_a"] = "tb"  
+      row_join["how"] = df[1, :is_nullable] == "YES" ? "LEFT" : "INNER"   
+      df2 = filter(row -> row.table_name == row_join["a"] && row.column_name == tables[1], instruct.df_pks)
+      row_join["b"] = df2[1, :foreign_table_name]
+      row_join["alias_b"] = _get_alias_name(instruct.df_join)
+      row_join["key_b"] = df2[1, :foreign_column_name]
+      row_join["key_a"] = tables[1]    
     else
-      throw("""The column $(tables[1]) not found in $(df_object.table_name) or $(df_columns.table_name)""")
+      df = filter(row -> row.column_name == column_name, instruct.df_columns)
+      if size(df, 1) != 0
+        # construir o join inverso
+      else
+        throw("""The column $(tables[1]) not found in $(instruct.df_object.table_name) or $(instruct.df_columns.table_name)""")
+      end
     end
-  end
-
-  println("")
-
-  println(row_join)
-
-  last_alias = _insert_join(df_join, row_join)
   
-  while size(tables, 1) > 2
-    row_join2 = Dict{String,String}()
-    df = filter(row -> row.table_name == row_join["b"] && row.column_name == tables[3], df_pks)
-    if size(df, 1) != 0
-      row_join2["a"] = row_join["b"]
-      row_join2["alias_a"] = row_join["alias_b"]      
-      row_join2["b"] = df[1, :foreign_table_name]
-      row_join2["alias_b"] = _get_alias_name(df_join)
-      row_join2["key_b"] = df[1, :foreign_column_name]
-      row_join2["key_a"] = tables[2]
-      df2 = filter(row -> row.table_name == row_join2["a"] && row.column_name == row_join2["key_a"], df_columns)
-      row_join2["how"] = df2[1, :is_nullable] == "YES" ? "LEFT" : "INNER"
-      last_alias =_insert_join(df_join, row_join)      
-      tables = tables[2:end]
-    else
-      throw("""The column $(tables[3]) not found in $(df_object.table_name)""")
+    println("")
+  
+    println(row_join)
+  
+    last_alias = _insert_join(instruct.df_join, row_join)
+    
+    while size(tables, 1) > 2
+      row_join2 = Dict{String,String}()
+      df = filter(row -> row.table_name == row_join["b"] && row.column_name == tables[3], instruct.df_pks)
+      if size(df, 1) != 0
+        row_join2["a"] = row_join["b"]
+        row_join2["alias_a"] = row_join["alias_b"]      
+        row_join2["b"] = df[1, :foreign_table_name]
+        row_join2["alias_b"] = _get_alias_name(instruct.df_join)
+        row_join2["key_b"] = df[1, :foreign_column_name]
+        row_join2["key_a"] = tables[2]
+        df2 = filter(row -> row.table_name == row_join2["a"] && row.column_name == row_join2["key_a"], instruct.df_columns)
+        row_join2["how"] = df2[1, :is_nullable] == "YES" ? "LEFT" : "INNER"
+        last_alias =_insert_join(instruct.df_join, row_join)      
+        tables = tables[2:end]
+      else
+        throw("""The column $(tables[3]) not found in $(instruct.df_object.table_name)""")
+      end
     end
-  end
+  
+    return last_alias
 
-  return last_alias
   
 end
+
+# forma antiga
+# function _build_row_join(tables::Vector{SubString{String}}, df_join::DataFrames.DataFrame, df_object::DataFrames.DataFrame, 
+#   df_pks::DataFrames.DataFrame, df_columns::DataFrames.DataFrame)
+
+#   df = filter(row -> row.column_name == tables[1], df_object)
+#   # check if A is the from table
+#   row_join = Dict{String,String}()
+#   if size(df, 1) != 0
+#     row_join["a"] = df[1, :table_name]
+#     row_join["alias_a"] = "tb"  
+#     row_join["how"] = df[1, :is_nullable] == "YES" ? "LEFT" : "INNER"   
+#     df2 = filter(row -> row.table_name == row_join["a"] && row.column_name == tables[1], df_pks)
+#     row_join["b"] = df2[1, :foreign_table_name]
+#     row_join["alias_b"] = _get_alias_name(df_join)
+#     row_join["key_b"] = df2[1, :foreign_column_name]
+#     row_join["key_a"] = tables[1]    
+#   else
+#     df = filter(row -> row.column_name == column_name, df_columns)
+#     if size(df, 1) != 0
+#       # construir o join inverso
+#     else
+#       throw("""The column $(tables[1]) not found in $(df_object.table_name) or $(df_columns.table_name)""")
+#     end
+#   end
+
+#   println("")
+
+#   println(row_join)
+
+#   last_alias = _insert_join(df_join, row_join)
+  
+#   while size(tables, 1) > 2
+#     row_join2 = Dict{String,String}()
+#     df = filter(row -> row.table_name == row_join["b"] && row.column_name == tables[3], df_pks)
+#     if size(df, 1) != 0
+#       row_join2["a"] = row_join["b"]
+#       row_join2["alias_a"] = row_join["alias_b"]      
+#       row_join2["b"] = df[1, :foreign_table_name]
+#       row_join2["alias_b"] = _get_alias_name(df_join)
+#       row_join2["key_b"] = df[1, :foreign_column_name]
+#       row_join2["key_a"] = tables[2]
+#       df2 = filter(row -> row.table_name == row_join2["a"] && row.column_name == row_join2["key_a"], df_columns)
+#       row_join2["how"] = df2[1, :is_nullable] == "YES" ? "LEFT" : "INNER"
+#       last_alias =_insert_join(df_join, row_join)      
+#       tables = tables[2:end]
+#     else
+#       throw("""The column $(tables[3]) not found in $(df_object.table_name)""")
+#     end
+#   end
+
+#   return last_alias
+  
+# end
 
 function _build_row_join_sql_text(df::DataFrames.DataFrame)
   sql = """"""
@@ -147,7 +203,8 @@ function _build_row_join_sql_text(df::DataFrames.DataFrame)
   return sql
 end
 
-function get_join_query(object::SQLType, config::SQLConn)
+"Substituir essa ideia está ultrapassada"
+function get_join_query(object::SQLType, instruc::SQLInstruction, config::SQLConn)
   
     println("get_values")
     joins = _get_join_query(object.values)
@@ -184,6 +241,7 @@ function get_join_query(object::SQLType, config::SQLConn)
   return df , df_join, _build_row_join_sql_text(df_join)
 end
 
+
 # outher functions
 function _df_to_dic(df::DataFrames.DataFrame, column::String, filter::String)
   println(df)
@@ -198,68 +256,67 @@ function _df_to_dic(df::DataFrames.DataFrame, column::String, filter::String)
   end
 end
 
-# functions PostgreSQL
-function _date(value::String)
-  return "to_char($(value), 'YYYY-MM-DD')"
-end
-function _y_month(value::String)
-  return "to_char($(value), 'YYYY-MM')"
+
+#PostgreSQL
+function TO_CHAR(column::String, format::String)
+  return "to_char($(column), '$(format)')"
 end
 
-function get_select_query(object::SQLType, df::DataFrames.DataFrame)
-  values = []
-  # check if values contains PormGsuffix and throw error
-  for v in object.values
-    for (k, value) in PormGsuffix
-      if endswith(v, k)
-        throw("Error in values, $(v) contains $(k), that isn't allowed")
-      end
-    end
-  end
+# APAGAR
+# function get_select_query(object::SQLType, df::DataFrames.DataFrame)
+#   values = []
+#   # check if values contains PormGsuffix and throw error
+#   for v in object.values
+#     for (k, value) in PormGsuffix
+#       if endswith(v, k)
+#         throw("Error in values, $(v) contains $(k), that isn't allowed")
+#       end
+#     end
+#   end
 
-  # colect a array wiht keys of PormGtrasnform
-  keys = []
-  for (k, value) in PormGtrasnform
-    push!(keys, replace(k, "__" => ""))
-  end
+#   # colect a array wiht keys of PormGtrasnform
+#   keys = []
+#   for (k, value) in PormGtrasnform
+#     push!(keys, replace(k, "__" => ""))
+#   end
 
-  # check if values contains PormGtrasnform and transform
-  println(object.values)
-  for v in object.values
-    println(v)
-    parts = split(v, "__")
-    last = ""
-    value = []
-    text = ""
-    if size(parts, 1) > 1
-      for p in parts   
-        println(p)     
-        if !in(p, keys)
-          last = p 
-          push!(value, p)    
-        end
-        println(value)
-        if in(p, keys)
-          loc = _df_to_dic(df, "all", join(value, "__"))
-          println(loc)
-          text = getfield(QueryBuilder, Symbol(PormGtrasnform[string("__", p)]))(loc["last_alias"] * "." * last)            
-        end
-      end
-      if text == ""
-        loc = _df_to_dic(df, "all", join(value, "__"))
-        text = loc["last_alias"] * "." * last  
-      end
-      push!(values, Dict("text" => text, "value" => join(value, "__")))
-    else
-      text = string("tb", ".", v)
-      push!(values, Dict("text" => text, "value" => v))
-    end
+#   # check if values contains PormGtrasnform and transform
+#   println(object.values)
+#   for v in object.values
+#     println(v)
+#     parts = split(v, "__")
+#     last = ""
+#     value = []
+#     text = ""
+#     if size(parts, 1) > 1
+#       for p in parts   
+#         println(p)     
+#         if !in(p, keys)
+#           last = p 
+#           push!(value, p)    
+#         end
+#         println(value)
+#         if in(p, keys)
+#           loc = _df_to_dic(df, "all", join(value, "__"))
+#           println(loc)
+#           text = getfield(QueryBuilder, Symbol(PormGtrasnform[string("__", p)]))(loc["last_alias"] * "." * last)            
+#         end
+#       end
+#       if text == ""
+#         loc = _df_to_dic(df, "all", join(value, "__"))
+#         text = loc["last_alias"] * "." * last  
+#       end
+#       push!(values, Dict("text" => text, "value" => join(value, "__")))
+#     else
+#       text = string("tb", ".", v)
+#       push!(values, Dict("text" => text, "value" => v))
+#     end
     
-  end
+#   end
 
-  return values
+#   return values
 
-end
+# end
 
 function get_filter_query(object::SQLType, df::DataFrames.DataFrame)
   filter = []
@@ -322,4 +379,59 @@ function get_filter_query(object::SQLType, df::DataFrames.DataFrame)
 end
 
 
+# select
+function _get_select_query(v::String, instruc::SQLInstruction)
+  for (k, value) in PormGsuffix
+    if endswith(v, k)
+      throw("Error in values, $(v) contains $(k), that isn't allowed in values")
+    end
+  end  
+
+  println(v)
+  parts = split(v, "__")  
+  if size(parts, 1) > 1
+    return string(_build_row_join(parts, instruc), ".", parts[end])
+  else
+    return string("tb", ".", v)    
+  end
+  
 end
+function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)
+  println("foi")
+  println(v)
+  value = _get_select_query(v.kwargs["column"], instruc)
+  return getfield(QueryBuilder, Symbol(v.function_name))(value, v.kwargs["format"])
+  # println(result)
+  # return result
+end
+
+"""
+get_select_query(object::SQLType, instruc::SQLInstruction)
+
+Iterates over the values of the SQLType object and generates the SELECT query for the given SQLInstruction object.
+
+# ALERT
+- This internal function is called by the `build` function.
+
+# Arguments
+- `object::SQLType`: The SQLType object containing the values to be selected.
+- `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
+"""
+function get_select_query(object::SQLType, instruc::SQLInstruction)
+  for v in object.values    
+    if isa(v, String)    
+      if count("__", v) > 0 # if exist join in values insert as alias
+        push!(instruc.select, string(_get_select_query(v, instruc), " as ", v)) 
+      else
+        push!(instruc.select, _get_select_query(v, instruc))
+      end
+    elseif isa(v, SQLTypeF)
+      push!(instruc.select, string(_get_select_query(v, instruc), " as ", v.kwargs["as"]))    
+    else
+      throw("Error in values, $(v) is not a SQLTypeF or String")
+    end    
+  end  
+end
+
+end
+

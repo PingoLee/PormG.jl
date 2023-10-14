@@ -10,25 +10,62 @@ import Base.|
 
 import Dates, Intervals
 
+
+#
+# SQLTypeOper Objects (operators from sql)
+#
+
+# export In, NotIn, Between, NotBetween, Like, NotLike, ILike, NotILike, SimilarTo, NotSimilarTo, IsNull, IsNotNull
+
+@kwdef mutable struct OperObject <: SQLTypeOper
+  operator::String
+  values::Union{String, Int64, Bool, SQLTypeF}
+  column::Union{String, SQLTypeF}
+end
+
+function _get_pair_to_oper(x::Pair)
+  if isa(x.first, String)
+    check = split(x.first, "__")
+    # check if exist operators
+    if check in PormGsuffix
+      return OperObject(operator = PormGsuffix[check], values = x.second, column = check[1])
+    else
+      return OperObject(operator = "=", values = x.second, column = x.first)
+    end
+
+  else
+    throw()
+end
+ 
+
+#
+# SQLTypeQ and SQLTypeQor Objects
+#
+
 export Q, Qor
 
-function hash(a::T) where {T<:AbstractModel}
-  Base.hash(string(typeof(a)) * string(getfield(a, pk(a) |> Symbol)))
+@kwdef mutable struct QObject <: SQLTypeQ
+  filters::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor}}
 end
 
-function ==(a::A, b::B) where {A<:AbstractModel,B<:AbstractModel}
-  hash(a) == hash(b)
-end
-
-
-Base.@kwdef mutable struct QObject <: SQLTypeQ
-  filters::Vector{Union{Pair{String, String}, Pair{String, Int64}, Pair{String, Bool}, SQLTypeQ, SQLTypeQor}}
-end
-
-Base.@kwdef mutable struct QorObject <: SQLTypeQor
+@kwdef mutable struct QorObject <: SQLTypeQor
   or::Vector{Union{SQLTypeQ, SQLTypeQor}}
 end
 
+"""
+  Q(x...)
+
+  Create a `QObject` with the given filters.
+  Ex.:
+  ```julia
+  a = object("tb_user")
+  a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
+  ```
+
+  Arguments:
+  - `x`: A list of key-value pairs or Qor(x...) or Q(x...) objects.
+
+"""
 function Q(x...)
   colect = []
   for v in x
@@ -42,6 +79,22 @@ function Q(x...)
   return QObject(filters = colect)
 end
 
+
+"""
+  Qor(x...)
+
+  Create a `QorObject` from the given arguments. The `QorObject` represents a disjunction of `SQLTypeQ` or `SQLTypeQor` objects.
+
+  Ex.:
+  ```julia
+  a = object("tb_user")
+  a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
+  ```
+
+  # Arguments
+  - `x...`: A variable number of arguments. Each argument can be either a `SQLTypeQ` or `SQLTypeQor` object, or a `Pair` object.
+
+"""
 function Qor(x...)
   colect = []
   for v in x
@@ -58,55 +111,45 @@ function Qor(x...)
 end
 
 #
-
-
-#
-# SQLJoin
+# SQLTypeF Objects (functions from sql)
 #
 
-
-# """
-# Builds and manipulates SQL `join` expressions.
-# """
-# struct SQLJoin{T<:AbstractModel} <: SQLType
-#   model_name::Type{T}
-#   on::Vector{SQLOn}
-#   join_type::SQLJoinType
-#   outer::Bool
-#   where::Vector{SQLWhereEntity}
-#   natural::Bool
-#   columns::Vector{SQLColumn}
-# end
-
-# SQLJoin(model_name::Type{T},
-#         on::Vector{SQLOn};
-#         join_type = SQLJoinType("INNER"),
-#         outer = false,
-#         where = SQLWhereEntity[],
-#         natural = false,
-#         columns = SQLColumn[]) where {T<:AbstractModel} = SQLJoin{T}(model_name, on, join_type, outer, where, natural, columns)
-
-# SQLJoin(model_name::Type{T},
-#         on_column_1::Union{String,SQLColumn},
-#         on_column_2::Union{String,SQLColumn};
-#         join_type = SQLJoinType("INNER"),
-#         outer = false,
-#         where = SQLWhereEntity[],
-#         natural = false,
-#         columns = SQLColumn[]) where {T<:AbstractModel} = SQLJoin(model_name, SQLOn(on_column_1, on_column_2), join_type = join_type, outer = outer, where = where, natural = natural, columns = columns)
-
-# function string(j::SQLJoin)
+export Sum, Avg, Count, Max, Min, When
+@kwdef mutable struct FObject <: SQLTypeF
+  function_name::String
+  kwargs::Dict{}
+end
 
 
-#
-# SQLQuery
-#
+function Sum(x)
+  return FObject(function_name = "SUM", kwargs = Dict("column" => x))
+end  
+function Avg(x)
+  return FObject(function_name = "AVG", kwargs = Dict("column" => x))
+end
+function Count(x)
+  return FObject(function_name = "COUNT", kwargs = Dict("column" => x))
+end
+function Max(x)
+  return FObject(function_name = "MAX", kwargs = Dict("column" => x))
+end
+function Min(x)
+  return FObject(function_name = "MIN", kwargs = Dict("column" => x))
+end
+function When(condition::Vector{Union{SQLTypeQ, SQLTypeQor}}; then::Vector{Union{String, Int64, Bool, SQLTypeF}} = [], else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  return FObject(function_name = "WHEN", kwargs = Dict("condition" => condition, "then" => then, "else_result" => else_result))
+end
+function When(condition::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 1, else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  return FObject(function_name = "WHEN", kwargs = Dict("condition" => [condition], "then" => [then], "else_result" => else_result))
+end
+
+
 
 
 mutable struct SQLQuery <: SQLType
   model_name::Union{String, Missing}
   values::Vector{String}
-  filter::Vector{Union{SQLTypeQ, SQLTypeQor, Pair{String, String}, Pair{String, Int64}, Pair{String, Bool}}}
+  filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
   limit::Int64
   offset::Int64
@@ -172,6 +215,7 @@ Base.@kwdef mutable struct Object <: SQLObject
   values::Function = (x...) -> up_values(object, x) 
   filter::Function = (x...) -> up_filter(object, x) 
   create::Function = (x...) -> up_create(object, x) 
+  annotate::Function = (x...) -> annotate(object, x) 
   query::Function = () -> query(object)
 end
 

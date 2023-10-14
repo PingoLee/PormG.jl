@@ -3,21 +3,6 @@ module QueryBuilder
 using ..PormG: SQLType, SQLConn
 import DataFrames
 
-const PormGsuffix = Dict{String,Union{Int64, String}}(
-  "__gte" => ">=",
-  "__gt" => ">",
-  "__lte" => "<=",
-  "__lt" => "<",
-  "__contains" => "_contains",
-)
-
-const PormGtrasnform = Dict{String,Union{Int64, String}}(
-  "__date" => "_date",
-  "__month" => "_month",
-  "__year" => "_year",
-  "__day" => "_day",  
-  "__y_month" => "_y_month",
-)
 
 println(typeof(SQLType))
 

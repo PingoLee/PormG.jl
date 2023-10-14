@@ -10,6 +10,8 @@ abstract type SQLConn <: PormGAbstractType end
 abstract type SQLType <: PormGAbstractType end
 abstract type SQLTypeQ <: SQLType end
 abstract type SQLTypeQor <: SQLType end
+abstract type SQLTypeF <: SQLType end
+abstract type SQLTypeOper <: SQLType end
 abstract type SQLObject <: PormGAbstractType end
 abstract type AbstractModel <: PormGAbstractType end
 

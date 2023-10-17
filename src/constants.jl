@@ -23,7 +23,9 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "gt" => ">",
   "lte" => "<=",
   "lt" => "<",
+  "isnull" => "ISNULL",
   "contains" => "contains",
+
 )
 
 const PormGtrasnform = Dict{String,Union{Int64, String}}(

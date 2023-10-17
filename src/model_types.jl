@@ -6,12 +6,12 @@ import Dates, Intervals
 
 @kwdef mutable struct InstrucObject <: SQLInstruction
   text::String # text to be used in the query
-  select::Vector{String} = missing # values to be used in select query
-  join::Union{Missing, Vector{String}} = missing # values to be used in join query
-  _where::Union{Missing, Vector{String}} = missing # values to be used in where query
-  group::Union{Missing, Vector{String}} = missing # values to be used in group query
-  having::Union{Missing, Vector{String}} = missing # values to be used in having query
-  order::Union{Missing, Vector{String}} = missing # values to be used in order query
+  select::Vector{String}  # values to be used in select query
+  join::Vector{String}  # values to be used in join query
+  _where::Vector{String}  # values to be used in where query
+  group::Vector{String}  # values to be used in group query
+  having::Vector{String} # values to be used in having query
+  order::Vector{String} # values to be used in order query
   df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   df_object::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   df_pks::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
@@ -22,7 +22,7 @@ end
 # SQLTypeOper Objects (operators from sql)
 #
 
-# export In, NotIn, Between, NotBetween, Like, NotLike, ILike, NotILike, SimilarTo, NotSimilarTo, IsNull, IsNotNull
+export OP
 
 """
   OperObject <: SQLTypeOper
@@ -41,7 +41,10 @@ end
   values::Union{String, Int64, Bool}
   column::Union{String, SQLTypeF}
 end
+OP(column::String, value) = OperObject(operator = "=", values = value, column = column)
+OP(column::String, operator::String, value) = OperObject(operator = operator, values = value, column = column)
 
+# talvez eu não precise dessa função no inicio, mas pode ser útil na hora de processar o query
 function _check_function(x::Vector{SubString{String}})
   vect = copy(x)
   if length(x) == 1
@@ -93,13 +96,17 @@ function _get_pair_to_oper(x::Pair)
   if isa(x.first, String)
     check = split(x.first, "__")
     # check if exist operators
-    count = count(x -> x in PormGsuffix, check) 
-    if count > 1
-      throw("Invalid argument: $(x.first); please use only one operator __gte, __lte ...")
-    elseif count == 1
-      return OperObject(operator = PormGsuffix[string("__", check)], values = x.second, column = _check_function(first(check, length(check)-1)))
+    countS = count(x -> x in keys(PormGsuffix), check) 
+    if countS > 1
+      throw("Invalid argument: $(x.first); please use only one operator __gte, __lte ...")    
+    elseif countS == 1
+      if haskey(PormGsuffix, check[end])
+        return OperObject(operator = PormGsuffix[check[end]], values = x.second, column = join(first(check, length(check)-1), "__"))
+      else
+        throw("Invalid argument: $(x.first); please use a valid operator __gte, __lte ... in last position of the string")
+      end
     else
-      return OperObject(operator = "=", values = x.second, column = _check_function(check))
+      return OperObject(operator = "=", values = x.second, column = x.first)
     end
   else
     throw("""Invalid argument: $(x.first) (::$(typeof(x.first))); please use a string""")
@@ -118,7 +125,7 @@ export Q, Qor
 end
 
 @kwdef mutable struct QorObject <: SQLTypeQor
-  or::Vector{Union{SQLTypeQ, SQLTypeQor}}
+  or::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor}}
 end
 
 """
@@ -136,15 +143,7 @@ end
 
 """
 function Q(x...)
-  colect = []
-  for v in x
-    if isa(v, Pair) || isa(v, SQLTypeQor)
-      push!(colect, v)
-    else
-      error("Invalid argument: $(v); please use a pair (key => value)")
-    end
-  end
-  println(colect)
+  colect = [isa(v, Pair) ? _get_pair_to_oper(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QObject(filters = colect)
 end
 
@@ -165,17 +164,7 @@ end
 
 """
 function Qor(x...)
-  colect = []
-  for v in x
-    if isa(v, SQLTypeQ) || isa(v, SQLTypeQor)
-      push!(colect, v)
-    elseif isa(v, Pair)
-      push!(colect, Q(v))
-    else
-      error("Invalid argument: $(v); please use a pair (key => value) or a Q(key => value...)")
-    end
-  end
-  println(colect)
+  colect = [isa(v, Pair) ? _get_pair_to_oper(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QorObject(or = colect)
 end
 
@@ -212,6 +201,8 @@ function When(condition::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64,
   return FObject(function_name = "WHEN", kwargs = Dict("condition" => [condition], "then" => [then], "else_result" => else_result))
 end
 
+export TO_CHAR
+
 
 TO_CHAR(x::Union{String, SQLTypeF}, format::String) = FObject(function_name = "TO_CHAR", kwargs = Dict("column" => x, "format" => format))
 MONTH(x) = TO_CHAR(x, "MM")
@@ -234,6 +225,7 @@ mutable struct SQLQuery <: SQLType
   group::Vector{String}
   having::Vector{String}
   list_joins::Vector{String}
+  #distinct::Bool
 
   SQLQuery(; model_name=missing, values = [], annotate = [],  filter = [], create = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = []) =
@@ -259,17 +251,18 @@ function up_values(q::SQLType, values)
   # every call of values, reset the values
   q.values = []
   for v in values 
-    println(v)
-    println(typeof(v))
     if isa(v, SQLTypeF)
       push!(q.values, v)
     elseif isa(v, String)
-      push!(q.values, _check_function(v))
+      if count(x -> x in collect(keys(PormGsuffix)), split(v, "__")) > 0
+        throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
+      else       
+        push!(q.values, v)
+      end     
     else
       throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (TO_CHAR, Mounth, Year, Day, Y_M ...)")
     end    
   end 
-  unique!(q.values)
   
   return Object(object =q)
 end
@@ -282,11 +275,12 @@ end
 
 function up_filter(q::SQLType, filter)
   for v in filter
-    if ~isa(v, SQLTypeQ) && ~isa(v, SQLTypeQor) && ~isa(v, Pair)
-      error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
-    else
+    if isa(v, SQLTypeQ) || isa(v, SQLTypeQor) 
       push!(q.filter, v)
-      _get_pair_list_joins(q, v)
+    elseif isa(v, Pair)
+      push!(q.filter, _get_pair_to_oper(v))
+    else
+      error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
     end
   end
   return Object(object =q)
@@ -294,7 +288,14 @@ end
 
 
 function query(q::SQLType) 
-  build(q) 
+  instruction = build(q) 
+  @info """ Query returned:
+    SELECT
+      $(length(instruction.select )> 0 ? join(instruction.select, ", \n  ") : "*" )
+    FROM $(q.model_name) as tb
+    $(join(instruction.join, "\n"))
+    WHERE $(join(instruction._where, " AND \n   "))
+    """
 end
   
 Base.@kwdef mutable struct Object <: SQLObject
@@ -312,18 +313,17 @@ replace("teste", "teste" => "teste2")
 export object
 
 """
-    object(model_name::String)
+  object(model_name::String)
 
-Create an object with a SQLQuery model.
+  Create an object with a SQLQuery model, that can be used to operatorations.
 
-# Arguments
-- `model_name::String`: The name of the model.
+  # Arguments
+  - `model_name::String`: The name of the table from SQL.
 
-# Returns
-- An `Object` with a `SQLQuery` model.
+  # Returns
+  - An `Object` with a `SQLQuery` model.
 
 """
 function object(model_name::String)
   return Object(object = SQLQuery(model_name = model_name))
 end
-

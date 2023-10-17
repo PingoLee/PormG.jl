@@ -36,10 +36,8 @@ const config =  Configuration.Settings(app_env = ENV["PORMG_ENV"])
 
 export object
 
-
-
 include("QueryBuilder.jl")
-import .QueryBuilder: get_join_query, get_select_query, get_filter_query
+import .QueryBuilder: get_select_query, get_filter_query, build_row_join_sql_text
 
 function build(object::SQLType; conection=config) 
   if ismissing(object.model_name )
@@ -48,14 +46,14 @@ function build(object::SQLType; conection=config)
 
   instruct = InstrucObject(text = "", 
     select = [], 
-    join = missing, 
-    _where = missing, 
-    group = missing, 
-    having = missing, 
-    order = missing, 
+    join = [],
+    _where = [],
+    group = [],
+    having = [],
+    order = [],
     df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
     alias_b=String[], alias_a=String[]),
-    df_object = filter(row -> row.table_name == object.model_name, conection.columns),
+    df_object = DataFrames.subset(conection.columns, DataFrames.AsTable([:table_name]) => ( @. r -> r.table_name == object.model_name )),  
     df_pks = conection.pk, 
     df_columns = conection.columns)
 
@@ -64,10 +62,13 @@ function build(object::SQLType; conection=config)
   # df_sels, df_join, text_on = QueryBuilder.get_join_query(object, conection)
   
   QueryBuilder.get_select_query(object, instruct)
+  QueryBuilder.get_filter_query(object, instruct)
+  QueryBuilder.build_row_join_sql_text(instruct)
 
-  println("TESTE")
-  println(instruct.select)
-  println(instruct.df_join)
+  # println("TESTE")
+  # println(instruct.select)
+  # println(instruct._where)
+  # println(instruct.df_join)
 
   # filter = QueryBuilder.get_filter_query(object, df_sels)
 
@@ -84,7 +85,7 @@ function build(object::SQLType; conection=config)
  
   # return """SELECT $(join(text_values, ", ")) FROM $(object.model_name) as tb $text_on WHERE $(join(filter_Values, " AND ")))"""
 
-  
+  return instruct
 end
 # function build(object::SQLType)
 #   build(object, config)

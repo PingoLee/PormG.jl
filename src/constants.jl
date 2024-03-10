@@ -19,17 +19,19 @@ const TEST_FILE_IDENTIFIER = "_test.jl"
 const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"
 
 const PormGsuffix = Dict{String,Union{Int64, String}}(
-  "__gte" => ">=",
-  "__gt" => ">",
-  "__lte" => "<=",
-  "__lt" => "<",
-  "__contains" => "contains",
+  "gte" => ">=",
+  "gt" => ">",
+  "lte" => "<=",
+  "lt" => "<",
+  "isnull" => "ISNULL",
+  "contains" => "contains",
+
 )
 
 const PormGtrasnform = Dict{String,Union{Int64, String}}(
-  "__date" => "_date",
-  "__month" => "_month",
-  "__year" => "_year",
-  "__day" => "_day",  
-  "__y_month" => "_y_month",
+  "date" => "DATE",
+  "month" => "MONTH",
+  "year" => "YEAR",
+  "day" => "DAY",  
+  "y_month" => "Y_M",
 )

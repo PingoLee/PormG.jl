@@ -34,7 +34,8 @@ function _get_pair_to_oper(x::Pair)
     end
 
   else
-    throw()
+    throw(ArgumentError("Invalid argument: $(x.first) (::$(typeof(x.first)))); please use a string"))
+  end
 end
  
 
@@ -147,7 +148,7 @@ end
 
 
 mutable struct SQLQuery <: SQLType
-  model_name::Union{String, Missing}
+  model_name::Model
   values::Vector{String}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
@@ -158,7 +159,7 @@ mutable struct SQLQuery <: SQLType
   having::Vector{String}
   list_joins::Vector{String}
 
-  SQLQuery(; model_name=missing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
+  SQLQuery(; model_name=nothing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = []) =
     new(model_name, values, filter, create, limit, offset, order, group, having, list_joins)
 end
@@ -220,13 +221,18 @@ Base.@kwdef mutable struct Object <: SQLObject
 end
 
 
-replace("teste", "teste" => "teste2")
-
 export object
 
-function object(model_name::String)
+function object(model_name::Model)
   return Object(object = SQLQuery(model_name = model_name))
 end
+function object(model_name::String)
+  return object(getfield(Models, Symbol(model_name)))
+end
+function object(model_name::Symbol)
+  return object(getfield(Models, model_name))
+end
+ 
 
 
-# string(q::SQLQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)
+### string(q::SQLQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)

@@ -14,6 +14,8 @@ abstract type SQLTypeF <: SQLType end
 abstract type SQLTypeOper <: SQLType end
 abstract type SQLObject <: PormGAbstractType end
 abstract type AbstractModel <: PormGAbstractType end
+abstract type Model <: PormGAbstractType end
+abstract type Field  <: Model end # define the type of the column from the model
 
 function build()
 end
@@ -28,7 +30,10 @@ include("Configuration.jl")
 using .Configuration
 
 include("model_types.jl")
-# includet("model_types.jl")
+
+
+include("Models.jl")
+using .Models
 
 
 const config =  Configuration.Settings(app_env = ENV["PORMG_ENV"])

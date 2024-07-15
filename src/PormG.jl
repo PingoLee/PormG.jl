@@ -1,3 +1,4 @@
+__precompile__(true)
 module PormG
 
 using Revise
@@ -15,8 +16,8 @@ abstract type SQLTypeF <: SQLType end
 abstract type SQLTypeOper <: SQLType end
 abstract type SQLObject <: PormGAbstractType end
 abstract type AbstractModel <: PormGAbstractType end
-abstract type Model <: PormGAbstractType end
-abstract type Field  <: Model end # define the type of the column from the model
+abstract type PormGModel <: PormGAbstractType end
+abstract type PormGField  <: PormGModel end # define the type of the column from the model
 
 function build()
 end
@@ -96,8 +97,18 @@ end
 #   build(object, config)
 # end
 
+include("Models.jl")
+import .Models
+
+include("Migrations.jl")
+using .Migrations
+
+function build_models_from_db(db::SQLConn; path::String=DB_PATH) 
+  # download the tables and columns from the database and string from sql create table
+  tables = db.tables()
 
 
+end
 
 
 end # module PormG

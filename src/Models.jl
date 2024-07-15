@@ -2,9 +2,9 @@
 module Models
 using PormG: Field, Model
 
-export CharField, IntegerField, ForeignKey, Model
+export CharField, IntegerField, ForeignKey, Model, Model_Type, Model, Field, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField
 
-@Base.kwdef mutable struct Model_Type <: Model
+@kwdef mutable struct Model_Type <: Model
   name::String
   verbose_name::Union{String, Nothing} = nothing
   fields::Dict{Symbol, Field}  
@@ -33,7 +33,7 @@ function Model()
 end
 
 
-@Base.kwdef mutable struct sCharField <: Field
+@kwdef mutable struct sCharField <: Field
   verbose_name::Union{String, Nothing} = nothing
   name::Union{String, Nothing} = nothing
   primary_key::Bool = false
@@ -50,7 +50,7 @@ function CharField(; verbose_name=nothing, name=nothing, max_length=250, unique=
   return sCharField(verbose_name=verbose_name, name=name, max_length=max_length, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
-@Base.kwdef mutable struct sIntegerField <: Field
+@kwdef mutable struct sIntegerField <: Field
   verbose_name::Union{String, Nothing} = nothing
   name::Union{String, Nothing} = nothing
   primary_key::Bool = false
@@ -66,7 +66,7 @@ function IntegerField(; verbose_name=nothing, name=nothing, unique=false, blank=
   return sIntegerField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
-@Base.kwdef mutable struct sForeignKey <: Field
+@kwdef mutable struct sForeignKey <: Field
   verbose_name::Union{String, Nothing} = nothing
   name::Union{String, Nothing} = nothing
   primary_key::Bool = true
@@ -84,6 +84,173 @@ end
 function ForeignKey(to::Union{String, Model}, on_delete::String; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
   return sForeignKey(verbose_name=verbose_name, name=name, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, to=to, on_delete=on_delete)  
 end
+
+@kwdef mutable struct sBigIntegerField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Int64, Nothing} = nothing
+  editable::Bool = false
+end
+
+function BigIntegerField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sBigIntegerField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sBooleanField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Bool, Nothing} = nothing
+  editable::Bool = false 
+end
+
+function BooleanField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sBooleanField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sDateField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{String, Nothing} = nothing
+  editable::Bool = false
+end
+
+function DateField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sDateField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+
+@kwdef mutable struct sDateTimeField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{String, Nothing} = nothing
+  editable::Bool = false
+end
+
+function DateTimeField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sDateTimeField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sDecimalField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Float64, Nothing} = nothing
+  editable::Bool = false
+  max_digits::Int = 10
+  decimal_places::Int = 2
+end
+
+function DecimalField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_digits=10, decimal_places=2)
+  return sDecimalField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, max_digits=max_digits, decimal_places=decimal_places)
+end
+
+@kwdef mutable struct sEmailField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{String, Nothing} = nothing
+  editable::Bool = false
+end
+
+function EmailField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sEmailField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sFloatField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Float64, Nothing} = nothing
+  editable::Bool = false
+end
+
+function FloatField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sFloatField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sImageField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{String, Nothing} = nothing
+  editable::Bool = false
+end
+
+function ImageField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sImageField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sTextField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{String, Nothing} = nothing
+  editable::Bool = false
+end
+
+function TextField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sTextField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+@kwdef mutable struct sTimeField <: Field
+  verbose_name::Union{String, Nothing} = nothing
+  name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{String, Nothing} = nothing
+  editable::Bool = false
+end
+
+function TimeField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sTimeField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+end
+
+
+
+
 
   
 end

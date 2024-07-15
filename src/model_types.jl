@@ -228,7 +228,7 @@ mutable struct SQLQuery <: SQLType
 
   SQLQuery(; model_name=nothing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = []) =
-    new(model_name, values, annotate, filter, create, limit, offset, order, group, having, list_joins)
+    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins)
 end
 
 function _get_pair_list_joins(q::SQLType, v::Pair)

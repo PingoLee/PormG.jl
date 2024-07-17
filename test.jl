@@ -43,8 +43,6 @@ end
 @time a = object("tb_fat_visita_domiciliar")
 @time a.values("co_dim_tempo__dt_registro__y_month", "co_seq_fat_visita_domiciliar", "co_fat_cidadao_pec__co_fat_cad_domiciliar")
 @time a.filter(Qor("co_seq_fat_visita_domiciliar__isnull" => true, Q("co_dim_tempo__dt_registro__y_month__gte" => "2023-01", "co_dim_tempo__dt_registro__y_month__lte" => "2025-01")))
-
-
 @time a.query()
 
 df = PormG.config.columns

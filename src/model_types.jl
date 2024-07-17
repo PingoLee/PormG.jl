@@ -109,7 +109,7 @@ function _get_pair_to_oper(x::Pair)
       return OperObject(operator = "=", values = x.second, column = x.first)
     end
   else
-    throw("""Invalid argument: $(x.first) (::$(typeof(x.first))); please use a string""")
+    throw(ArgumentError("Invalid argument: $(x.first) (::$(typeof(x.first)))); please use a string"))
   end
 end
  
@@ -214,9 +214,8 @@ DATE(x) = TO_CHAR(x, "YYYY-MM-DD")
 
 
 mutable struct SQLQuery <: SQLType
-  model_name::Union{String, Missing}
-  values::Vector{Union{String, SQLTypeF}}
-  annotate::Vector{SQLTypeF}
+  model_name::Model
+  values::Vector{String}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
   limit::Int64
@@ -227,9 +226,9 @@ mutable struct SQLQuery <: SQLType
   list_joins::Vector{String}
   #distinct::Bool
 
-  SQLQuery(; model_name=missing, values = [], annotate = [],  filter = [], create = Dict(), limit = 0, offset = 0,
+  SQLQuery(; model_name=nothing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = []) =
-    new(model_name, values, annotate, filter, create, limit, offset, order, group, having, list_joins)
+    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins)
 end
 
 function _get_pair_list_joins(q::SQLType, v::Pair)
@@ -308,22 +307,18 @@ Base.@kwdef mutable struct Object <: SQLObject
 end
 
 
-replace("teste", "teste" => "teste2")
-
 export object
 
-"""
-  object(model_name::String)
-
-  Create an object with a SQLQuery model, that can be used to operatorations.
-
-  # Arguments
-  - `model_name::String`: The name of the table from SQL.
-
-  # Returns
-  - An `Object` with a `SQLQuery` model.
-
-"""
-function object(model_name::String)
+function object(model_name::Model)
   return Object(object = SQLQuery(model_name = model_name))
 end
+function object(model_name::String)
+  return object(getfield(Models, Symbol(model_name)))
+end
+function object(model_name::Symbol)
+  return object(getfield(Models, model_name))
+end
+ 
+
+
+### string(q::SQLQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)

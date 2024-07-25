@@ -1,10 +1,12 @@
-__precompile__(true)
 module PormG
 
 using Revise
 
 import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
 import DataFrames.DataFrame
+
+
+using SQLite
 
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
@@ -96,9 +98,6 @@ end
 # function build(object::SQLType)
 #   build(object, config)
 # end
-
-include("Models.jl")
-import .Models
 
 include("Migrations.jl")
 using .Migrations

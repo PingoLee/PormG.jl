@@ -4,13 +4,13 @@ Core PormG configuration / settings functionality.
 module Configuration
 
 import YAML, Logging
-using ..PormG: PormG
+import PormG
 import DataFrames
 using DataFrames, Tables, XLSX
 
+import SQLite
 
-
-export env, Settings
+export env, Settings, connection
 # app environments
 const DEV   = "dev"
 const PROD  = "prod"
@@ -94,17 +94,42 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   path === nothing && (path = PormG.DB_PATH )
   db_config_file = joinpath(path, PormG.PORMG_DB_CONFIG_FILE_NAME) 
   PormG.config.db_config_settings = read_db_connection_data(db_config_file)
-  context !== nothing && Base.eval(context, Meta.parse("using PormG$(PormG.config.db_config_settings["adapter"])"))
 
   # PormG.config.db_config_settings
 
-  cols_config_file = joinpath(path, PormG.PORMG_COLS_FILE_NAME)
-  PormG.config.columns = XLSX.readtable(cols_config_file, 1) |> DataFrame
+  if PormG.config.db_config_settings["adapter"] == "SQLite"
+    dbname =  if haskey(PormG.config.db_config_settings, "host") && PormG.config.db_config_settings["host"] !== nothing
+      PormG.config.db_config_settings["host"]
+        elseif haskey(PormG.config.db_config_settings, "database") && PormG.config.db_config_settings["database"] !== nothing
+          PormG.config.db_config_settings["database"]
+        else
+          nothing
+        end
 
-  pk_config_file = joinpath(path, PormG.PORMG_PK_FILE_NAME)
-  PormG.config.pk = XLSX.readtable(pk_config_file, 1) |> DataFrame
+    db = if dbname !== nothing
+    isempty(dirname(dbname)) || mkpath(dirname(dbname))
+    SQLite.DB(dbname)
+    else # in-memory
+    SQLite.DB()
+    end
 
-  PormG.config.db_config_settings
+    println(typeof(db))
+
+    if PormG.CONNECTIONS === nothing 
+      (PormG.CONNECTIONS = [db]) 
+    else
+      (push!(PormG.CONNECTIONS, db)[end])
+    end
+
+  end
+end
+
+function connection() 
+  PormG.CONNECTIONS === nothing && throw("PormG is not connected to the database")
+
+  if typeof(PormG.CONNECTIONS) == Vector{SQLite.DB}
+    return PormG.CONNECTIONS[end]
+  end
 end
 
 """
@@ -126,14 +151,14 @@ mutable struct Settings <: PormG.SQLConn
 
 
   Settings(;
-            app_env         = ENV["PORMG_ENV"],           
-            db_def_folder      = PormG.DB_PATH,
-            db_config_settings        = Dict{String,Any}(),
-            log_queries   = true,
-            log_level     = Logging.Debug,
-            log_to_file   = true,
-            columns       = nothing,
-            pk            = nothing
+            app_env             = ENV["PORMG_ENV"],           
+            db_def_folder       = PormG.DB_PATH,
+            db_config_settings  = Dict{String,Any}(),
+            log_queries         = true,
+            log_level           = Logging.Debug,
+            log_to_file         = true,
+            columns             = nothing,
+            pk                  = nothing
 
         ) =
               new(

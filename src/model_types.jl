@@ -214,7 +214,7 @@ DATE(x) = TO_CHAR(x, "YYYY-MM-DD")
 
 
 mutable struct SQLQuery <: SQLType
-  model_name::Model
+  model_name::PormGModel
   values::Vector{String}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
@@ -309,7 +309,7 @@ end
 
 export object
 
-function object(model_name::Model)
+function object(model_name::PormGModel)
   return Object(object = SQLQuery(model_name = model_name))
 end
 function object(model_name::String)

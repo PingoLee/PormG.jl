@@ -4,13 +4,13 @@ import PormG: DB_PATH
 
 # I want generate files with db models, can you help me?
 # example:
-# users = Models.Model("users", 
+# users = Models.PormGModel("users", 
 #   name = Models.CharField(), 
 #   email = Models.CharField(), 
 #   age = Models.IntegerField()
 # )
 
-# cars = Models.Model("cars", 
+# cars = Models.PormGModel("cars", 
 #   user = Models.ForeignKey(users, "CASCADE"),
 #   name = Models.CharField(), 
 #   brand = Models.CharField(), 

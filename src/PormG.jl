@@ -28,6 +28,9 @@ include("constants.jl")
 
 haskey(ENV, "PORMG_ENV") || (ENV["PORMG_ENV"] = "dev")
 
+include("Generator.jl")
+using .Generator
+
 import Inflector
 
 include("Configuration.jl")

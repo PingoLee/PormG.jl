@@ -312,12 +312,12 @@ export object
 function object(model_name::PormGModel)
   return Object(object = SQLQuery(model_name = model_name))
 end
-function object(model_name::String)
-  return object(getfield(Models, Symbol(model_name)))
-end
-function object(model_name::Symbol)
-  return object(getfield(Models, model_name))
-end
+# function object(model_name::String)
+#   return object(getfield(Models, Symbol(model_name)))
+# end
+# function object(model_name::Symbol)
+#   return object(getfield(Models, model_name))
+# end
  
 
 

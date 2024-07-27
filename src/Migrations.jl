@@ -8,7 +8,8 @@ module Migrations
   using JSON
   using SQLite
 
-  import PormG: Models, connection, sqlite_type_map, PormGModel
+  import PormG: Models, connection, sqlite_type_map, PormGModel, MODEL_PATH, sqlite_ignore_schema
+  import PormG.Generator: generate_models_from_db
 
   abstract type Migration end
 
@@ -143,14 +144,17 @@ module Migrations
     return model_names
   end
 
-  function import_models_from_sql(;db::SQLite.DB = connection(), force_replace::Bool=false, ignore_schema::Vector{String} = [])
+  function import_models_from_sql(;db::SQLite.DB = connection(), 
+                                    force_replace::Bool=false, 
+                                    ignore_schema::Vector{String} = sqlite_ignore_schema,
+                                    file::String="automatic_models.jl")
 
     # check if db/models/automatic_models.jl exists
-    if isfile("db/models/automatic_models.jl") && !force_replace
+    if isfile(joinpath(MODEL_PATH, file)) && !force_replace
       @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
       return
-    elseif !ispath("db/models")
-      mkdir("db/models")
+    elseif !ispath(joinpath(MODEL_PATH))
+      mkdir(joinpath(MODEL_PATH))
     end
     
     # Get all schema
@@ -160,9 +164,12 @@ module Migrations
     Instructions::Vector{Any} = []
     for schema in schemas
       schema[2]["type"] == "index" && continue    
+      schema[1] in ignore_schema && continue
       println(schema[2]["sql"])
-      # push!(Instructions, convertSQLToModel(schema[2]["sql"]))
+      push!(Instructions, convertSQLToModel(schema[2]["sql"]) |> Models.Model_to_str)
     end
+
+    generate_models_from_db(db, file, Instructions)
 
 
   end
@@ -199,33 +206,7 @@ module Migrations
   - `PormGModel`: The model definition.
 
   # Example"""
-  function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_type_map)
-    # Example usage (to depure)
-    # sql = """CREATE TABLE \"rel_avan\" (
-    #   \"id\"    INTEGER  NOT NULL,
-    #   \"nome\" TEXT,
-    #   \"function\"    TEXT,
-    #   \"ordem\"    INTEGER,
-    #   \"rel_id\"    INTEGER,
-    #   \"definition\"    TEXT,
-    #   PRIMARY KEY(\"id\" AUTOINCREMENT),
-    #   FOREIGN KEY(\"rel_id\") REFERENCES \"opc_cruz_rel\"(\"id\")
-    # )"""
-    
-    # sql = """CREATE TABLE \"example3\" (
-    #   \"first_name\" TEXT,
-    #   \"last_name\" TEXT,
-    #   \"cpf\" NUMERIC,
-    #   PRIMARY KEY (\"first_name\", \"last_name\", \"cpf\")
-    # );"""
-    # sql = """CREATE TABLE \"example4\" (
-    #   \"id\" INTEGER NOT NULL,
-    #   \"name\" TEXT,
-    #   PRIMARY KEY (\"id\")
-    # );"""
-
-    sql = "CREATE TABLE \"defs_prob\" (\n\t\"id\"\tINTEGER NOT NULL UNIQUE,\n\t\"npm\"\tNUMERIC NOT NULL,\n\t\"npu\"\tNUMERIC NOT NULL,\n\t\"mpm\"\tNUMERIC NOT NULL,\n\t\"mpu\"\tNUMERIC NOT NULL,\n\t\"dnpm\"\tNUMERIC NOT NULL,\n\t\"dnpu\"\tNUMERIC NOT NULL,\n\t\"lim_n\"\tNUMERIC NOT NULL,\n\t\"lim_m\"\tNUMERIC NOT NULL,\n\t\"lim_dn\"\tNUMERIC NOT NULL,\n\t\"desc\"\tTEXT NOT NULL DEFAULT 'Novo',\n\tPRIMARY KEY(\"id\" AUTOINCREMENT)\n)"
-
+  function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_type_map)   
 
     # Extract table name
     table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
@@ -264,16 +245,14 @@ module Migrations
       # println(match.captures)
       column_name, column_type, nullable, default_value = match.captures
       # check if column_name is a primary key
-      if haskey(pk_map, "primary_keys")
-        if column_name in pk_map["primary_keys"]
+        if pk_map !== nothing && haskey(pk_map, "primary_keys") && column_name in pk_map["primary_keys"]
           field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map["auto_increment"])
-          # str_fields_dict[column_name] = "IDField(null=$(!(nullable === nothing)), auto_increment=$(pk_map["auto_increment"]))"
+        elseif fk_map !== nothing && haskey(fk_map, "column_name") && column_name == fk_map["column_name"]
+          field_instance = Models.ForeignKey(fk_map["fk_table"] |> string; pk_field=fk_map["fk_column"] |> string, on_delete=fk_map["on_delete"], on_update=fk_map["on_update"], deferrable=!(fk_map["on_deferable"] === nothing), null=!(nullable === nothing))
         else
-          field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default=default_value)
-          # str_fields_dict[column_name] = "$(type_map[column_type] |> string)(null=$(!(nullable === nothing)), default=$default_value)"
+          field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value == nothing ? default_value : replace(default_value, "'" => ""))
         end
-      end
-        
+              
       fields_dict[Symbol(column_name)] = field_instance
     end
 

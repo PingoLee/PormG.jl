@@ -62,7 +62,18 @@ function _get_alias_name(df::DataFrames.DataFrame)
   array = vcat(df.alias_a, df.alias_b)
   count = 1
   while true
-    alias_name = "tb_" * string(count)
+    alias_name = "tb_" * string(count) # TODO maybe when exist more then one sql, the alias must be different
+    if !in(alias_name, array)
+      return alias_name
+    end
+    count += 1
+  end
+end
+function _get_alias_name(row_join::Vector{Dict{String, Any}})
+  array = vcat([r["alias_a"] for r in row_join], [r["alias_b"] for r in row_join])
+  count = 1
+  while true
+    alias_name = "tb_" * string(count) # TODO maybe when exist more then one sql, the alias must be different
     if !in(alias_name, array)
       return alias_name
     end
@@ -86,97 +97,172 @@ function _insert_join(df::DataFrames.DataFrame, row::Dict{String,String})
     return check[1, :alias_b]  
   end
 end
-
-"build a row to join"
-function _build_row_join(tables::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
-  vector = copy(tables) 
-  df = DataFrames.subset(instruct.df_object, DataFrames.AsTable([:column_name]) => ( @. x -> x[:column_name] == tables[1]) )
-  # df = filter(row -> row.column_name == tables[1], instruct.df_object)
-  row_join = Dict{String,String}()
-  if size(df, 1) != 0
-    last_column = tables[1]
-    row_join["a"] = df[1, :table_name]
-    row_join["alias_a"] = "tb"  
-    row_join["how"] = df[1, :is_nullable] == "YES" ? "LEFT" : "INNER"    
-    df2 = DataFrames.subset(instruct.df_pks, DataFrames.AsTable([:table_name, :column_name]) => (@. x -> 
-    (x.table_name == row_join["a"]) && (x.column_name == tables[1])))
-    # df2 = filter(row -> row.table_name == row_join["a"] && row.column_name == tables[1], instruct.df_pks)
-    row_join["b"] = df2[1, :foreign_table_name]
-    row_join["alias_b"] = _get_alias_name(instruct.df_join)
-    row_join["key_b"] = df2[1, :foreign_column_name]
-    row_join["key_a"] = tables[1]    
+function _insert_join(row_join::Vector{Dict{String, Any}}, row::Dict{String,String})
+  if size(row_join, 1) == 0
+    push!(row_join, row)
+    return row["alias_b"]
   else
-    df = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name]) => ( @.  x -> x[:column_name] == tables[1]) )
-    # df = filter(row -> row.column_name == tables[1], instruct.df_columns)
-    if size(df, 1) != 0
-      # construir o join inverso
+    check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"], row_join)
+    if size(check, 1) == 0
+      push!(row_join, row)
+      return row["alias_b"]
     else
-      throw("""The column $(tables[1]) not found in $(instruct.df_object.table_name) or $(instruct.df_columns.table_name)""")
+      if size(check, 1) > 1
+        throw("Error in join")
+      end
+      return check[1]["alias_b"]  
     end
   end
+end
+  
 
-  # println("")
+"build a row to join"
+function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
+  vector = copy(field) 
+  _modude = instruct.object.model_name._module::Module
+  row_join = Dict{String,String}()
+  println(vector)
 
-  # println(row_join)
+  fields_model = instruct.object.model_name.field_names
+  println(fields_model)
+  last_column::String = ""
+  # get module from instruct.object
+
+   # df = filter(row -> row.column_name == tables[1], instruct.df_object)
+  
+  # if size(df, 1) != 0
+  #   last_column = tables[1]
+  #   row_join["a"] = df[1, :table_name]
+  #   row_join["alias_a"] = "tb"  
+  #   row_join["how"] = df[1, :is_nullable] == "YES" ? "LEFT" : "INNER"    
+  #   df2 = DataFrames.subset(instruct.df_pks, DataFrames.AsTable([:table_name, :column_name]) => (@. x -> 
+  #   (x.table_name == row_join["a"]) && (x.column_name == tables[1])))
+  #   # df2 = filter(row -> row.table_name == row_join["a"] && row.column_name == tables[1], instruct.df_pks)
+  #   row_join["b"] = df2[1, :foreign_table_name]
+  #   row_join["alias_b"] = _get_alias_name(instruct.df_join)
+  #   row_join["key_b"] = df2[1, :foreign_column_name]
+  #   row_join["key_a"] = tables[1]    
+  # else
+  #   df = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name]) => ( @.  x -> x[:column_name] == tables[1]) )
+  #   # df = filter(row -> row.column_name == tables[1], instruct.df_columns)
+  #   if size(df, 1) != 0
+  #     # construir o join inverso
+  #   else
+  #     throw("""The column $(tables[1]) not found in $(instruct.df_object.table_name) or $(instruct.df_columns.table_name)""")
+  #   end
+  # end
+  # I need refatorate the upper code from DataFrame to dict
+  if vector[1] |> Symbol in fields_model # vector moust be a field from the model
+    last_column = vector[i]
+    row_join["a"] = fields_model.table_name.name
+    row_join["alias_a"] = "tb" # TODO maybe when exist more then one sql, the alias must be different
+    how = fields_model.table_name.fields[vector[i]].how
+    if how === nothing
+      row_join["how"] = fields_model.table_name.fields[vector[i]].null == "YES" ? "LEFT" : "INNER"
+    else
+      row_join["how"] = how
+    end
+    foreign_table_name::Union{String, PormGModel, Nothing} = fields_model.table_name.fields[vector[i]].to
+    if foreign_table_name === nothing
+      throw("Error in _build_row_join, the column $(vector[i]) does not have a foreign key")
+    elseif isa(foreign_table_name, PormGModel)
+      row_join["b"] = foreign_table_name.table_name
+    else
+      row_join["b"] = foreign_table_name
+    end
+    row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
+    row_join["key_b"] = fields_model.table_name.fields[vector[i]].pk_field::String
+    row_join["key_a"] = vector[i]
+  else
+    throw("Error in _build_row_join, the column $(vector[i]) not found in $(instruct.df_object.table_name)")
+  end
+
+  println(row_join)
+
+  println(instruct.df_join)
+
+  vector = vector[2:end]
+
+
+  # # println("")
+
+  # # println(row_join)
+
+  # tb_alias = _insert_join(instruct.df_join, row_join)
+  # functions = []
+  # while size(tables, 1) > 2
+  #   row_join2 = Dict{String,String}()
+  #   df = DataFrames.subset(instruct.df_pks, DataFrames.AsTable([:column_name, :table_name]) => ( @. x -> 
+  #   (x[:table_name] == row_join["b"]) && (x[:column_name] == tables[3])))
+  #   # df = filter(row -> row.table_name == row_join["b"] && row.column_name == tables[3], instruct.df_pks)
+  #   if size(df, 1) != 0
+  #     last_column = tables[3]
+  #     row_join2["a"] = row_join["b"]
+  #     row_join2["alias_a"] = row_join["alias_b"]      
+  #     row_join2["b"] = df[1, :foreign_table_name]
+  #     row_join2["alias_b"] = _get_alias_name(instruct.df_join)
+  #     row_join2["key_b"] = df[1, :foreign_column_name]
+  #     row_join2["key_a"] = tables[2]
+  #     df2 = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name, :table_name]) => ( @. x -> 
+  #     (x[:table_name] ==row_join2["a"]) && (x[:column_name] == row_join2["key_a"]) ))
+  #     # df2 = filter(row -> row.table_name == row_join2["a"] && row.column_name == row_join2["key_a"], instruct.df_columns)
+  #     row_join2["how"] = df2[1, :is_nullable] == "YES" ? "LEFT" : "INNER"
+  #     tb_alias =_insert_join(instruct.df_join, row_join)      
+  #     tables = tables[2:end]
+  #   else
+  #     df = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name]) => ( @.  x -> x[:column_name] == tables[3]) )
+  #     # df = filter(row -> row.column_name == tables[3], instruct.df_columns)
+  #     if size(df, 1) != 0
+  #       # construir o join inverso
+  #     else
+  #       if tables[3] in collect(keys(PormGtrasnform))
+  #         while size(tables, 1) > 2
+  #           push!(functions, tables[3])
+  #           tables = tables[2:end] 
+  #         end                       
+  #       else
+  #         throw("""The column $(tables[3]) not found in $(instruct.df_object.table_name)""")
+  #       end
+  #     end         
+  #   end
+  # end
 
   tb_alias = _insert_join(instruct.df_join, row_join)
   functions = []
   while size(tables, 1) > 2
     row_join2 = Dict{String,String}()
-    df = DataFrames.subset(instruct.df_pks, DataFrames.AsTable([:column_name, :table_name]) => ( @. x -> 
-    (x[:table_name] == row_join["b"]) && (x[:column_name] == tables[3])))
-    # df = filter(row -> row.table_name == row_join["b"] && row.column_name == tables[3], instruct.df_pks)
-    if size(df, 1) != 0
-      last_column = tables[3]
-      row_join2["a"] = row_join["b"]
-      row_join2["alias_a"] = row_join["alias_b"]      
-      row_join2["b"] = df[1, :foreign_table_name]
-      row_join2["alias_b"] = _get_alias_name(instruct.df_join)
-      row_join2["key_b"] = df[1, :foreign_column_name]
-      row_join2["key_a"] = tables[2]
-      df2 = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name, :table_name]) => ( @. x -> 
-      (x[:table_name] ==row_join2["a"]) && (x[:column_name] == row_join2["key_a"]) ))
-      # df2 = filter(row -> row.table_name == row_join2["a"] && row.column_name == row_join2["key_a"], instruct.df_columns)
-      row_join2["how"] = df2[1, :is_nullable] == "YES" ? "LEFT" : "INNER"
-      tb_alias =_insert_join(instruct.df_join, row_join)      
-      tables = tables[2:end]
-    else
-      df = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name]) => ( @.  x -> x[:column_name] == tables[3]) )
-      # df = filter(row -> row.column_name == tables[3], instruct.df_columns)
-      if size(df, 1) != 0
-        # construir o join inverso
+    if tables[1] in fields_model.table_name.fields
+      last_column = tables[2]
+      row_join2["a"] = fields_model.table_name.fields[tables[1]].to
+      row_join2["alias_a"] = tb_alias
+      how = fields_model.table_name.fields[tables[1]].how
+      if how === nothing
+        row_join2["how"] = fields_model.table_name.fields[tables[1]].null == "YES" ? "LEFT" : "INNER"
       else
-        if tables[3] in collect(keys(PormGtrasnform))
-          while size(tables, 1) > 2
-            push!(functions, tables[3])
-            tables = tables[2:end] 
-          end                       
-        else
-          throw("""The column $(tables[3]) not found in $(instruct.df_object.table_name)""")
-        end
-      end         
+        row_join2["how"] = how
+      end
+
     end
   end
+  # # tb_alias is the last table alias in the join ex. tb_1
+  # # last_column is the last column in the join ex. last_login
+  # # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
-  # tb_alias is the last table alias in the join ex. tb_1
-  # last_column is the last column in the join ex. last_login
-  # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
+  # # functions must be processed here
+  # text = string(tb_alias, ".", last_column)
+  # while size(functions, 1) > 0
+  #   function_name = functions[end]      
+  #   text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
+  #   functions = functions[1:end-1]
+  # end
 
-  # functions must be processed here
-  text = string(tb_alias, ".", last_column)
-  while size(functions, 1) > 0
-    function_name = functions[end]      
-    text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
-    functions = functions[1:end-1]
-  end
-
-  if as
-    return string(text, " as ", join(vector, "__"))
-  else
-    # println("as false")
-    # println(text)
-    return text
-  end      
+  # if as
+  #   return string(text, " as ", join(vector, "__"))
+  # else
+  #   # println("as false")
+  #   # println(text)
+  #   return text
+  # end      
   
 end
 

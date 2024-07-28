@@ -21,6 +21,7 @@ abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
 abstract type PormGField  <: PormGModel end # define the type of the column from the model
 
+
 function build()
 end
 
@@ -56,6 +57,7 @@ function build(object::SQLType; conection=config)
   end
 
   instruct = InstrucObject(text = "", 
+    object = object,
     select = [], 
     join = [],
     _where = [],
@@ -64,9 +66,7 @@ function build(object::SQLType; conection=config)
     order = [],
     df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
     alias_b=String[], alias_a=String[]),
-    df_object = DataFrames.subset(conection.columns, DataFrames.AsTable([:table_name]) => ( @. r -> r.table_name == object.model_name )),  
-    df_pks = conection.pk, 
-    df_columns = conection.columns)
+  )
 
    
   
@@ -105,12 +105,6 @@ end
 include("Migrations.jl")
 using .Migrations
 
-function build_models_from_db(db::SQLConn; path::String=DB_PATH) 
-  # download the tables and columns from the database and string from sql create table
-  tables = db.tables()
-
-
-end
 
 
 end # module PormG

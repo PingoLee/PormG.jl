@@ -1,5 +1,5 @@
 module Automatic_models
-using PormG.Models
+import PormG.Models
 
 b1_proc = Models.Model("b1_proc",
   index = Models.IDField(auto_increment=false, null=true),
@@ -182,5 +182,8 @@ defs_prob = Models.Model("defs_prob",
   mpu = Models.FloatField(null=true),
   npm = Models.FloatField(null=true),
   npu = Models.FloatField(null=true))
+
+
+Models.set_models(@__MODULE__)
 
 end

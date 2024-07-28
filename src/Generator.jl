@@ -38,6 +38,7 @@ function generate_models_from_db(db::SQLite.DB, file::String, Instructions::Vect
     for table in Instructions
       write(f, "$(table)\n\n")      
     end
+    write(f, "Models.set_models(@__MODULE__)\n\n")
     write(f, "end\n")
   end
 

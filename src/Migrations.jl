@@ -131,18 +131,7 @@ module Migrations
   # functions to repreoduce the makemigrations from django
   
 
-  # Assuming a function that can return all defined models
-  function get_all_models(modules::Module)
-    model_names = []
-    for name in names(modules; all=true, imported=true)
-        # Check if the attribute is an instance of Model_Type
-        attr = getfield(modules, name)
-        if isa(attr, Models.Model_Type)
-            push!(model_names, attr)
-        end
-    end
-    return model_names
-  end
+  
 
   function import_models_from_sql(;db::SQLite.DB = connection(), 
                                     force_replace::Bool=false, 

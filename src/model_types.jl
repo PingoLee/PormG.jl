@@ -6,16 +6,14 @@ import Dates, Intervals
 
 @kwdef mutable struct InstrucObject <: SQLInstruction
   text::String # text to be used in the query
+  object::SQLType
   select::Vector{String}  # values to be used in select query
   join::Vector{String}  # values to be used in join query
   _where::Vector{String}  # values to be used in where query
   group::Vector{String}  # values to be used in group query
   having::Vector{String} # values to be used in having query
-  order::Vector{String} # values to be used in order query
+  order::Vector{String} # values to be used in order query  
   df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
-  df_object::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
-  df_pks::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
-  df_columns::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
 end
 
 #
@@ -223,12 +221,13 @@ mutable struct SQLQuery <: SQLType
   order::Vector{String}
   group::Vector{String}
   having::Vector{String}
-  list_joins::Vector{String}
+  list_joins::Vector{String} # is ther a better way to do this?
+  row_join::Vector{Dict{String, Any}}
   #distinct::Bool
 
   SQLQuery(; model_name=nothing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = [], list_joins = []) =
-    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins)
+        order = [], group = [], having = [], list_joins = [], row_join = []) =
+    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins, row_join)
 end
 
 function _get_pair_list_joins(q::SQLType, v::Pair)

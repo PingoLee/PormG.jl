@@ -1,6 +1,6 @@
 module QueryBuilder
 
-using ..PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, PormGsuffix, PormGtrasnform
+using ..PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, PormGsuffix, PormGtrasnform, PormGModel
 import DataFrames
 
 function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[])
@@ -118,151 +118,177 @@ end
 
 "build a row to join"
 function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
+  # convert the field to a vector of string
+  vector = String.(field)
+  _build_row_join(vector, instruct, as=as)  
+end
+function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
   vector = copy(field) 
-  _modude = instruct.object.model_name._module::Module
+  # println(vector)
+  foreign_table_name::Union{String, PormGModel, Nothing} = nothing
+  foreing_table_module::Module = instruct.object.model_name._module::Module
   row_join = Dict{String,String}()
-  println(vector)
+  # println(vector)
 
-  fields_model = instruct.object.model_name.field_names
-  println(fields_model)
+  # fields_model = instruct.object.model_name.field_names
+  # println(fields_model)
   last_column::String = ""
-  # get module from instruct.object
 
-   # df = filter(row -> row.column_name == tables[1], instruct.df_object)
+  println(instruct.object.model_name.reverse_fields)
   
-  # if size(df, 1) != 0
-  #   last_column = tables[1]
-  #   row_join["a"] = df[1, :table_name]
-  #   row_join["alias_a"] = "tb"  
-  #   row_join["how"] = df[1, :is_nullable] == "YES" ? "LEFT" : "INNER"    
-  #   df2 = DataFrames.subset(instruct.df_pks, DataFrames.AsTable([:table_name, :column_name]) => (@. x -> 
-  #   (x.table_name == row_join["a"]) && (x.column_name == tables[1])))
-  #   # df2 = filter(row -> row.table_name == row_join["a"] && row.column_name == tables[1], instruct.df_pks)
-  #   row_join["b"] = df2[1, :foreign_table_name]
-  #   row_join["alias_b"] = _get_alias_name(instruct.df_join)
-  #   row_join["key_b"] = df2[1, :foreign_column_name]
-  #   row_join["key_a"] = tables[1]    
-  # else
-  #   df = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name]) => ( @.  x -> x[:column_name] == tables[1]) )
-  #   # df = filter(row -> row.column_name == tables[1], instruct.df_columns)
-  #   if size(df, 1) != 0
-  #     # construir o join inverso
-  #   else
-  #     throw("""The column $(tables[1]) not found in $(instruct.df_object.table_name) or $(instruct.df_columns.table_name)""")
-  #   end
-  # end
-  # I need refatorate the upper code from DataFrame to dict
-  if vector[1] |> Symbol in fields_model # vector moust be a field from the model
-    last_column = vector[i]
-    row_join["a"] = fields_model.table_name.name
+  if vector[1] in instruct.object.model_name.field_names # vector moust be a field from the model
+    last_column = vector[1]
+    row_join["a"] = instruct.object.model_name.name
     row_join["alias_a"] = "tb" # TODO maybe when exist more then one sql, the alias must be different
-    how = fields_model.table_name.fields[vector[i]].how
+    how = instruct.object.model_name.fields[vector[1]].how
     if how === nothing
-      row_join["how"] = fields_model.table_name.fields[vector[i]].null == "YES" ? "LEFT" : "INNER"
+      row_join["how"] = instruct.object.model_name.fields[vector[1]].null == "YES" ? "LEFT" : "INNER"
     else
       row_join["how"] = how
     end
-    foreign_table_name::Union{String, PormGModel, Nothing} = fields_model.table_name.fields[vector[i]].to
+    foreign_table_name = instruct.object.model_name.fields[vector[1]].to
     if foreign_table_name === nothing
-      throw("Error in _build_row_join, the column $(vector[i]) does not have a foreign key")
+      throw("Error in _build_row_join, the column $(vector[1]) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
       row_join["b"] = foreign_table_name.table_name
     else
       row_join["b"] = foreign_table_name
     end
-    row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
-    row_join["key_b"] = fields_model.table_name.fields[vector[i]].pk_field::String
-    row_join["key_a"] = vector[i]
+    # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
+    row_join["alias_b"] = _get_alias_name(instruct.row_join)
+    row_join["key_b"] = instruct.object.model_name.fields[vector[1]].pk_field::String
+    row_join["key_a"] = vector[1]
+  elseif haskey(instruct.object.model_name.reverse_fields, vector[1])
+    reverse_model = getfield(foreing_table_module, instruct.object.model_name.reverse_fields[vector[1]][3])
+    length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
+    # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.table_name)")
+    last_column = vector[2]
+    row_join["a"] = instruct.object.model_name.name
+    row_join["alias_a"] = "tb" # TODO maybe when exist more then one sql, the alias must be different
+    how = reverse_model.fields[instruct.object.model_name.reverse_fields[vector[1]][1] |> String].how
+    if how === nothing
+      row_join["how"] = instruct.object.model_name.fields[instruct.object.model_name.reverse_fields[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
+    else
+      row_join["how"] = how
+    end
+    foreign_table_name = instruct.object.model_name.reverse_fields[vector[1]][3] |> String
+    if foreign_table_name === nothing
+      throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
+    elseif isa(foreign_table_name, PormGModel)
+      row_join["b"] = foreign_table_name.table_name
+    else
+      row_join["b"] = foreign_table_name
+    end
+
+    row_join["alias_b"] = _get_alias_name(instruct.row_join)
+    row_join["key_b"] = instruct.object.model_name.reverse_fields[vector[1]][1] |> String
+    row_join["key_a"] = instruct.object.model_name.reverse_fields[vector[1]][4] |> String
   else
-    throw("Error in _build_row_join, the column $(vector[i]) not found in $(instruct.df_object.table_name)")
+    throw("Error in _build_row_join, the column $(vector[1]) not found in $(instruct.df_object.table_name)")
   end
+  
+  # println(row_join)
+  # println(instruct.row_join)
+  vector = vector[2:end]  
 
-  println(row_join)
-
-  println(instruct.df_join)
-
-  vector = vector[2:end]
-
-
-  # # println("")
-
-  # # println(row_join)
-
-  # tb_alias = _insert_join(instruct.df_join, row_join)
-  # functions = []
-  # while size(tables, 1) > 2
-  #   row_join2 = Dict{String,String}()
-  #   df = DataFrames.subset(instruct.df_pks, DataFrames.AsTable([:column_name, :table_name]) => ( @. x -> 
-  #   (x[:table_name] == row_join["b"]) && (x[:column_name] == tables[3])))
-  #   # df = filter(row -> row.table_name == row_join["b"] && row.column_name == tables[3], instruct.df_pks)
-  #   if size(df, 1) != 0
-  #     last_column = tables[3]
-  #     row_join2["a"] = row_join["b"]
-  #     row_join2["alias_a"] = row_join["alias_b"]      
-  #     row_join2["b"] = df[1, :foreign_table_name]
-  #     row_join2["alias_b"] = _get_alias_name(instruct.df_join)
-  #     row_join2["key_b"] = df[1, :foreign_column_name]
-  #     row_join2["key_a"] = tables[2]
-  #     df2 = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name, :table_name]) => ( @. x -> 
-  #     (x[:table_name] ==row_join2["a"]) && (x[:column_name] == row_join2["key_a"]) ))
-  #     # df2 = filter(row -> row.table_name == row_join2["a"] && row.column_name == row_join2["key_a"], instruct.df_columns)
-  #     row_join2["how"] = df2[1, :is_nullable] == "YES" ? "LEFT" : "INNER"
-  #     tb_alias =_insert_join(instruct.df_join, row_join)      
-  #     tables = tables[2:end]
-  #   else
-  #     df = DataFrames.subset(instruct.df_columns, DataFrames.AsTable([:column_name]) => ( @.  x -> x[:column_name] == tables[3]) )
-  #     # df = filter(row -> row.column_name == tables[3], instruct.df_columns)
-  #     if size(df, 1) != 0
-  #       # construir o join inverso
-  #     else
-  #       if tables[3] in collect(keys(PormGtrasnform))
-  #         while size(tables, 1) > 2
-  #           push!(functions, tables[3])
-  #           tables = tables[2:end] 
-  #         end                       
-  #       else
-  #         throw("""The column $(tables[3]) not found in $(instruct.df_object.table_name)""")
-  #       end
-  #     end         
-  #   end
-  # end
-
-  tb_alias = _insert_join(instruct.df_join, row_join)
+  tb_alias = _insert_join(instruct.row_join, row_join)
   functions = []
-  while size(tables, 1) > 2
+  while size(vector, 1) > 1
+    println(foreign_table_name)
+    println(vector)
     row_join2 = Dict{String,String}()
-    if tables[1] in fields_model.table_name.fields
-      last_column = tables[2]
-      row_join2["a"] = fields_model.table_name.fields[tables[1]].to
+    # get new object
+    new_object = getfield(foreing_table_module, foreign_table_name |> Symbol)
+    println(new_object.reverse_fields)
+    println(new_object.field_names)
+
+    if vector[1] in new_object.field_names
+      !("to" in new_object.field_names) && throw("Error in _build_row_join, the column $(vector[1]) is a field from $(new_object.name), but this field has not a foreign key")
+      println(new_object.fields[vector[1]])
+      last_column = vector[2]
+      row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
-      how = fields_model.table_name.fields[tables[1]].how
+      how = new_object.fields[vector[1]].how
       if how === nothing
-        row_join2["how"] = fields_model.table_name.fields[tables[1]].null == "YES" ? "LEFT" : "INNER"
+        row_join2["how"] = new_object.fields[vector[1]].null == "YES" ? "LEFT" : "INNER"
       else
         row_join2["how"] = how
       end
+      foreign_table_name = new_object.fields[vector[1]].to
+      if foreign_table_name === nothing
+        throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
+      elseif isa(foreign_table_name, PormGModel)
+        row_join2["b"] = foreign_table_name.table_name
+      else
+        row_join2["b"] = foreign_table_name
+      end
+      row_join2["alias_b"] = _get_alias_name(instruct.row_join) # TODO chage by row_join and test the speed
+      row_join2["key_b"] = new_object.fields[vector[1]].pk_field::String
+      row_join2["key_a"] = vector[1]
+      tb_alias = _insert_join(instruct.row_join, row_join2)
+    
+    elseif haskey(new_object.reverse_fields, vector[1])
+      reverse_model = getfield(foreing_table_module, new_object.reverse_fields[vector[1]][3])
+      length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
+      !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.table_name)")
+      last_column = vector[2]
+      row_join2["a"] = row_join["b"]
+      row_join2["alias_a"] = tb_alias
+      how = reverse_model.fields[new_object.reverse_fields[vector[1]][1] |> String].how
+      if how === nothing
+        row_join2["how"] = new_object.fields[new_object.reverse_fields[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
+      else
+        row_join2["how"] = how
+      end
+      foreign_table_name = new_object.reverse_fields[vector[1]][3] |> String
+      if foreign_table_name === nothing
+        throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
+      elseif isa(foreign_table_name, PormGModel)
+        row_join2["b"] = foreign_table_name.table_name
+      else
+        row_join2["b"] = foreign_table_name
+      end
 
+      row_join2["alias_b"] = _get_alias_name(instruct.row_join)
+      row_join2["key_b"] = new_object.reverse_fields[vector[1]][1] |> String
+      row_join2["key_a"] = new_object.reverse_fields[vector[1]][4] |> String
+      tb_alias = _insert_join(instruct.row_join, row_join2)
+      vector = vector[2:end]
+
+    else
+      println(field)
+      throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
+    vector = vector[2:end]
   end
-  # # tb_alias is the last table alias in the join ex. tb_1
-  # # last_column is the last column in the join ex. last_login
-  # # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
-  # # functions must be processed here
-  # text = string(tb_alias, ".", last_column)
-  # while size(functions, 1) > 0
-  #   function_name = functions[end]      
-  #   text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
-  #   functions = functions[1:end-1]
-  # end
+  # tb_alias is the last table alias in the join ex. tb_1
+  # last_column is the last column in the join ex. last_login
+  # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
-  # if as
-  #   return string(text, " as ", join(vector, "__"))
-  # else
-  #   # println("as false")
-  #   # println(text)
-  #   return text
-  # end      
+  # check if last_column a field from the model
+  println(last_column)
+  new_model = getfield(foreing_table_module, foreign_table_name |> Symbol)
+  if !(last_column in new_model.field_names)
+    throw("Error in _build_row_join, the column $(last_column) not found in $(new_model.table_name)")
+  end
+
+
+  # functions must be processed here
+  text = string(tb_alias, ".", last_column)
+  while size(functions, 1) > 0
+    function_name = functions[end]      
+    text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
+    functions = functions[1:end-1]
+  end
+
+  if as
+    return string(text, " as ", join(field, "__"))
+  else
+    # println("as false")
+    # println(text)
+    return text
+  end      
   
 end
 
@@ -541,8 +567,12 @@ end
 
 
 function build_row_join_sql_text(instruc::SQLInstruction)
-  for row in eachrow(instruc.df_join)
-    push!(instruc.join, """ $(row.how) JOIN $(row.b) $(row.alias_b) ON $(row.alias_a).$(row.key_a) = $(row.alias_b).$(row.key_b) """)
+  # for row in eachrow(instruc.df_join)
+  #   push!(instruc.join, """ $(row.how) JOIN $(row.b) $(row.alias_b) ON $(row.alias_a).$(row.key_a) = $(row.alias_b).$(row.key_b) """)
+  # end
+  # println(instruc.row_join)
+  for value in instruc.row_join
+    push!(instruc.join, """ $(value["how"]) JOIN $(value["b"]) $(value["alias_b"]) ON $(value["alias_a"]).$(value["key_a"]) = $(value["alias_b"]).$(value["key_b"]) """)
   end
 end
 

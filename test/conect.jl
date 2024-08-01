@@ -25,13 +25,32 @@ PormG.Configuration.load()
 Base.include(PormG, "db/models/automatic_models.jl")
 import PormG.Automatic_models as AM
 
-query = AM.rel_avan |> object
-# PormG.Modcels.set_models(AM)
 
+# PormG.Models.set_models(AM)
 
-query.values("id", "definition", "rel_id__nome").filter("id__gte" => 1)
+# query = AM.rel_avan |> object
+# query.values("id", "definition", "rel_id__nome").filter("id__gte" => 1)
 
-query.query()
+# @time query.query()
+
+# query = AM.rel_avan |> object
+# query.values("id", "definition", "rel_id__nome", "rel_id__opc_cruz_id__nome", "rel_id__opc_cruz_id__b1_id__nome", "rel_id__obs" ).filter("rel_id__opc_cruz_id__b1_id" => 1)
+# @time query.query()
+
+# reverso curto
+query = AM.bancos |> object
+query.values("rel_cols__cruz_rel_id", "rel_cols__id").filter("id" => 1)
+@time query.query()
+
+# # reverso muitos com problema por conta da importação
+# query = AM.bancos |> object
+# query.values("rel_cols__cruz_rel_id", "rel_cols__cruz_rel_id__nome", "rel_cols__cruz_rel_id__var_rel", "opc_cruzamento__nome").filter("id" => 1)
+# @time query.query()
+
+# reverso longo
+query = AM.bancos |> object
+query.values("opc_cruzamento__st_cruz__linkado").filter("id" => 1)
+@time query.query()
 
 instruct = PormG.InstrucObject(text = "", 
     object =  query.object,

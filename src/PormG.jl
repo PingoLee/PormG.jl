@@ -64,8 +64,8 @@ function build(object::SQLType; conection=config)
     group = [],
     having = [],
     order = [],
-    df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
-    alias_b=String[], alias_a=String[]),
+    # df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
+    # alias_b=String[], alias_a=String[]),
   )
 
    

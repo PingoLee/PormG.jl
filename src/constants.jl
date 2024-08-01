@@ -19,6 +19,14 @@ const TEST_FILE_IDENTIFIER = "_test.jl"
 
 const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"
 
+const reserved_words = [
+  "if", "else", "elseif", "while", "for", "begin", "end", "function", "return",
+  "break", "continue", "global", "local", "const", "let", "do", "try", "catch",
+  "finally", "struct", "mutable", "abstract", "primitive", "type", "quote",
+  "macro", "module", "baremodule", "using", "import", "export", "importall",
+  "where", "in", "isa", "throw", "true", "false", "nothing", "missing"
+]
+
 const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "gte" => ">=",
   "gt" => ">",

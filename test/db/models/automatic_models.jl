@@ -101,7 +101,7 @@ st_cruz = Models.Model("st_cruz",
   revisado = Models.FloatField(default="0"),
   selrel = Models.IntegerField())
 
-rel_cols = Models.Model("rel_cols",
+rel_cols = Models.Model("rel_cols", # TODO corrigir os foreign keys da tabela
   id = Models.IDField(null=true),
   banco_id = Models.ForeignKey("bancos", pk_field="id"),
   cruz_rel_id = Models.IntegerField(),
@@ -124,7 +124,7 @@ opc_cruzamento = Models.Model("opc_cruzamento",
   id = Models.IDField(null=true),
   ativo = Models.IntegerField(null=true, default=0),
   b1_id = Models.ForeignKey("bancos", pk_field="id"),
-  b2_id = Models.IntegerField(),
+  b2_id = Models.IntegerField(), # TODO corrigir a importação do ForeignKey
   nome = Models.CharField(null=true),
   obs = Models.CharField())
 
@@ -155,7 +155,7 @@ list_cruz = Models.Model("list_cruz",
   id1 = Models.BigIntegerField(null=true),
   id2 = Models.BigIntegerField(null=true),
   levn = Models.BigIntegerField(null=true),
-  levnm = Models.BigIntegerField(),
+  levnm = Models.BigIntegerField(), # TODO corrigir o tipo de dado não era pra ser BigIntegerField
   nm_m1 = Models.CharField(),
   nm_m2 = Models.CharField(),
   nome1 = Models.CharField(null=true),

@@ -14,6 +14,7 @@ import Dates, Intervals
   having::Vector{String} # values to be used in having query
   order::Vector{String} # values to be used in order query  
   df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+  row_join::Vector{Dict{String, Any}} = [] # dataframe to be used in join query
 end
 
 #
@@ -285,15 +286,17 @@ function up_filter(q::SQLType, filter)
 end
 
 
-function query(q::SQLType) 
+function query(q::SQLType)
   instruction = build(q) 
-  @info """ Query returned:
+  respota = """ Query returned:
     SELECT
       $(length(instruction.select )> 0 ? join(instruction.select, ", \n  ") : "*" )
-    FROM $(q.model_name) as tb
+    FROM $(q.model_name.name) as tb
     $(join(instruction.join, "\n"))
     WHERE $(join(instruction._where, " AND \n   "))
     """
+  @info respota
+  # return respota
 end
   
 Base.@kwdef mutable struct Object <: SQLObject

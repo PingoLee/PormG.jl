@@ -202,8 +202,8 @@ module Migrations
     table_name = table_name_match !== nothing ? table_name_match.captures[1] : error("Table name not found")
 
     # Define a dictionary to map SQL types to Models.jl field types
-    fk_map::Union{Dict{String, Any},Nothing} = nothing
-    pk_map::Union{Dict{String, Any},Nothing} = nothing
+    fk_map::Dict{String, Any} = Dict{String, Any}()
+    pk_map::Dict{String, Any} = Dict{String, Any}()
 
     # Extract any primary key constraints
     # primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)", sql)
@@ -213,7 +213,11 @@ module Migrations
       primary_keys = replace(primary_keys, r"\"" => "") 
       primary_keys = split(primary_keys, ",")
       auto_increment = isnothing(match.captures[2]) ? false : true
-      pk_map = Dict("primary_keys" => primary_keys, "auto_increment" => auto_increment)
+      println(primary_keys)
+      for key in primary_keys
+        key = strip(key) |> String
+        pk_map[key] = Dict("primary_keys" => key, "auto_increment" => auto_increment)
+      end
     end
 
     # Extract any foreign key constraints
@@ -221,7 +225,8 @@ module Migrations
     for match in foreign_key_matches
       column_name, fk_table, fk_column, on_delete, on_update, on_deferable = match.captures
       println(match.captures)
-      fk_map = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete, "on_update" => on_update, "on_deferable" => on_deferable)
+      typeof(column_name |> String) |> println
+      fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete, "on_update" => on_update, "on_deferable" => on_deferable)
     end
 
     
@@ -234,10 +239,11 @@ module Migrations
       # println(match.captures)
       column_name, column_type, nullable, default_value = match.captures
       # check if column_name is a primary key
-        if pk_map !== nothing && haskey(pk_map, "primary_keys") && column_name in pk_map["primary_keys"]
-          field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map["auto_increment"])
-        elseif fk_map !== nothing && haskey(fk_map, "column_name") && column_name == fk_map["column_name"]
-          field_instance = Models.ForeignKey(fk_map["fk_table"] |> string; pk_field=fk_map["fk_column"] |> string, on_delete=fk_map["on_delete"], on_update=fk_map["on_update"], deferrable=!(fk_map["on_deferable"] === nothing), null=!(nullable === nothing))
+        if haskey(pk_map, column_name)
+          field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
+        elseif haskey(fk_map, column_name)
+          field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
+          on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
         else
           field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value == nothing ? default_value : replace(default_value, "'" => ""))
         end
@@ -247,6 +253,8 @@ module Migrations
 
     # Construct and return the model
     # Dict(:models => Models.Model(table_name, fields_dict), :str_models => Models.Model(table_name, str_fields_dict))
+    println(fields_dict)
+    println(typeof(table_name))
     return Models.Model(table_name, fields_dict)
   end
 

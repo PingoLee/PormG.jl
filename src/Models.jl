@@ -1,6 +1,6 @@
 # I want recreate the Django models in Julia
 module Models
-using PormG: PormGField, PormGModel
+using PormG: PormGField, PormGModel, reserved_words
 
 export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField, IDField, BigIntegerField
 
@@ -8,16 +8,16 @@ export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField
   name::AbstractString
   verbose_name::Union{String, Nothing} = nothing
   fields::Dict{String, PormGField}
-  field_names::Vector{String} = []
-  _module::Union{Module, Nothing} = nothing
+  field_names::Vector{String} = [] # needed to create sql queries with joins
+  reverse_fields::Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}} = Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}}() # needed to create sql queries with joins
+  _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
 end
 
 """
-  get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbol, PormGModel}}
-
 Returns a vector containing all the models defined in the given module.
 
 # Arguments
+    get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbol, PormGModel}}
 - `modules::Module`: The module to search for models.
 - `symbol::Bool=false`: If `true`, returns the model names as symbols. If `false`, returns the model instances.
 
@@ -36,6 +36,22 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
   return model_names
 end
 
+function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
+  fields::Vector{Symbol} = []
+  for (field_name, field) in pairs(model.fields)
+    if field.primary_key
+      push!(fields, field_name |> Symbol)
+    end
+  end
+  if length(fields) == 1
+    return fields[1]
+  elseif length(fields) == 0
+    return nothing  
+  else
+    throw(ArgumentError("The model $(model.name) has more than one primary key field: $(join(fields, ", "))"))
+  end
+end
+
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 function set_models(_module::Module)::Nothing
   models = get_all_models(_module)
@@ -47,28 +63,42 @@ function set_models(_module::Module)::Nothing
   for model in models
     dict_tables_c = Dict{String, Int}()
     dict_tables_fiels = Dict{String, Vector{String}}()
+    reverse_fields = Dict{String, Tuple{Symbol, Symbol, Symbol}}()
+    println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey
-        if field.to isa PormGModel
-          if haskey(dict_tables_c, field.to.name)
-            dict_tables_c[field.to.name] += 1
-            push!(dict_tables_fiels[field.to.name], field_name)
+        field_to = getfield(_module, field.to |> Symbol)
+        if field_to isa PormGModel
+          println("field_to_", field_to.name)
+          if haskey(dict_tables_c, field_to.name)
+            dict_tables_c[field_to.name] += 1
+            push!(dict_tables_fiels[field_to.name], field_name)
           else
-            dict_tables_c[field.to.name] = 1
-            dict_tables_fiels[field.to.name] = [field_name]
+            dict_tables_c[field_to.name] = 1
+            dict_tables_fiels[field_to.name] = [field_name]
           end
-        end
+          if dict_tables_c[field_to.name] > 1
+            if field.related_name === nothing 
+              throw(ArgumentError("The field $field_name in the model $model is a ForeignKey and the related_name is not defined"))
+            elseif haskey(field_to.reverse_fields, field.related_name)
+              throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
+            else
+              field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+            end
+          elseif dict_tables_c[field_to.name] == 1
+            if field.related_name === nothing
+              field_to.reverse_fields[model.name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+            else
+              if haskey(field_to.reverse_fields, field.related_name)
+                throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
+              else
+                field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+              end
+            end
+          end        
+        end 
       end
     end
-    for (table, count) in pairs(dict_tables_c)
-      if count > 1
-        for field_name in dict_tables_fiels[table]
-          if model.fields[field_name].related_name === nothing
-            throw(ArgumentError("The field $field_name in the model $model is a ForeignKey and the related_name is not defined"))
-          end
-        end
-      end
-    end    
   end
  
   return nothing
@@ -93,7 +123,7 @@ function Model(name::AbstractString; fields...)
   fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
-    field_name = field_name |> string |> format_fild_name
+    field_name = field_name |> String |> format_fild_name
     if !(field isa PormGField)
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
@@ -101,7 +131,7 @@ function Model(name::AbstractString; fields...)
     push!(field_names, field_name)
   end
   # println(fields_dict)
-  return Model_Type(name=name, fields=fields_dict)
+  return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
 function Model(name::AbstractString, dict::Dict{Symbol, PormGField})
   field_names::Vector{String} = []
@@ -111,16 +141,17 @@ function Model(name::AbstractString, dict::Dict{Symbol, PormGField})
   return Model_Type(name=name, fields=dict, field_names=field_names)
 end
 function Model(name::AbstractString, fields::Dict{Symbol, Any})
-  fields_dict = Dict{Symbol, PormGField}()
+  fields_dict = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
+    field_name = field_name |> String |> format_fild_name
     if !(field isa PormGField)
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
     fields_dict[field_name] = field
     push!(field_names, field_name)
   end
-  return Model_Type(name=name, fields=fields_dict)
+  return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
 function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
@@ -131,15 +162,31 @@ function Model()
   throw(ArgumentError("You need to add a name and fields to the model, example: $example_usage"))
 end
 
-# Generate the string representation of the model
-# users = Models.Model("users", 
-#   name = Models.CharField(), 
-#   email = Models.CharField(), 
-#   age = Models.IntegerField()
-# )
-function Model_to_str(model::Union{Model_Type, PormGModel})::String
+"""
+Converts a model object to a string representation to create the model.
+
+# Arguments
+    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words)::String
+- `model::Union{Model_Type, PormGModel}`: The model object to convert.
+- `contants_julia::Vector{String}=reserved_words`: A vector of reserved words in Julia.
+
+# Returns
+- `String`: The string representation of the model object.
+
+# Examples
+```julia
+users = Models.Model("users", 
+  name = Models.CharField(), 
+  email = Models.CharField(), 
+  age = Models.IntegerField()
+)
+```
+"""
+function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words)::String
   fields::String = ""
   for (field_name, field) in pairs(model.fields) |> sort
+    occursin(r"__|@|^_", field_name) && throw(ArgumentError("The field name $field_name in the model $model contains __ or @ or starts with _"))
+    field_name in contants_julia && (field_name = "_$field_name")
     struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol    
     sets::Vector{String} = []
     fields = struct_name == :ForeignKey ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
@@ -286,7 +333,7 @@ end
 @kwdef mutable struct sForeignKey <: PormGField
   verbose_name::Union{String, Nothing} = nothing
   name::Union{String, Nothing} = nothing
-  primary_key::Bool = true
+  primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
   null::Bool = false
@@ -303,7 +350,7 @@ end
 
 end
 
-function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, name=nothing, primary_key=true, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing)
+function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing)
   # TODO: validate the to parameter how, on_delete, on_update and others
   return sForeignKey(verbose_name=verbose_name, name=name, primary_key=primary_key, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field, on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name)  
 end

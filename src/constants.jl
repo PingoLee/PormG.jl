@@ -42,7 +42,8 @@ const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "month" => "MONTH",
   "year" => "YEAR",
   "day" => "DAY",  
-  "y_month" => "Y_M",
+  "yyyy_mm" => "Y_M",
+  "quarter" => "QUARTER",
 )
 
 CONNECTIONS::Union{Vector{SQLite.DB},Nothing} = nothing

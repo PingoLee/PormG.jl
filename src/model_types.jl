@@ -38,80 +38,11 @@ export OP
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
   values::Union{String, Int64, Bool}
-  column::Union{String, SQLTypeF}
+  column::Union{String, SQLTypeF, Vector{String}}
 end
 OP(column::String, value) = OperObject(operator = "=", values = value, column = column)
 OP(column::String, operator::String, value) = OperObject(operator = operator, values = value, column = column)
 
-# talvez eu não precise dessa função no inicio, mas pode ser útil na hora de processar o query
-function _check_function(x::Vector{SubString{String}})
-  vect = copy(x)
-  if length(x) == 1
-    return string(x[1])
-  else
-    # get keys from PormGtrasnform (that is a dict)
-    keyS = collect(keys(PormGtrasnform))
-    column = join(filter(x -> !(x in keyS), x), "__")
-    countS = count(x -> x in keyS, x)
-    resp = missing
-    if countS > 0      
-      while count(x -> x in keyS, x) > 0
-        if ismissing(resp)
-          resp = getfield(PormG, Symbol(PormGtrasnform[x[end]]))(column)
-        else
-          resp = getfield(PormG, Symbol(PormGtrasnform[x[end]]))(resp)
-        end
-        x = x[1:end-1]
-      end
-      resp.kwargs["as"] = join(vect, "__")
-
-      print(resp)
-      return resp
-    else 
-      return join(x, "__")
-    end            
-  end  
-end
-_check_function(x::String) = _check_function(split(x, "__"))
-
-"""
-  _get_pair_to_oper(x::Pair)
-
-  Converts a Pair object to an OperObject. If the Pair's key is a string, it checks if it contains an operator suffix (e.g. "__gte", "__lte") and returns an OperObject with the corresponding operator. If the key does not contain an operator suffix, it returns an OperObject with the "=" operator. If the key is not a string, it throws an error.
-
-  # Arguments
-  - `x::Pair`: A Pair object to be converted to an OperObject.
-
-  # Returns
-  - `OperObject`: An OperObject with the corresponding operator and values.
-
-  # Throws
-  - `Error`: If the key is not a string or if it contains more than one operator suffix.
-
-  # Wharning
-  - That is a internal function, please do not use it.
-"""
-function _get_pair_to_oper(x::Pair)
-  if isa(x.first, String)
-    check = split(x.first, "__")
-    # check if exist operators
-    countS = count(x -> x in keys(PormGsuffix), check) 
-    if countS > 1
-      throw("Invalid argument: $(x.first); please use only one operator __gte, __lte ...")    
-    elseif countS == 1
-      if haskey(PormGsuffix, check[end])
-        return OperObject(operator = PormGsuffix[check[end]], values = x.second, column = join(first(check, length(check)-1), "__"))
-      else
-        throw("Invalid argument: $(x.first); please use a valid operator __gte, __lte ... in last position of the string")
-      end
-    else
-      return OperObject(operator = "=", values = x.second, column = x.first)
-    end
-  else
-    throw(ArgumentError("Invalid argument: $(x.first) (::$(typeof(x.first)))); please use a string"))
-  end
-end
- 
 
 #
 # SQLTypeQ and SQLTypeQor Objects
@@ -174,36 +105,36 @@ end
 export Sum, Avg, Count, Max, Min, When
 @kwdef mutable struct FObject <: SQLTypeF
   function_name::String
-  kwargs::Dict{}
+  column::Union{String, SQLTypeF, Vector{String}}
+  kwargs::Dict{String, Any}
 end
 
 
 function Sum(x)
-  return FObject(function_name = "SUM", kwargs = Dict("column" => x))
+  return FObject(function_name = "SUM", column = x)
 end  
 function Avg(x)
-  return FObject(function_name = "AVG", kwargs = Dict("column" => x))
+  return FObject(function_name = "AVG", column = x)
 end
 function Count(x)
-  return FObject(function_name = "COUNT", kwargs = Dict("column" => x))
+  return FObject(function_name = "COUNT", column = x)
 end
 function Max(x)
-  return FObject(function_name = "MAX", kwargs = Dict("column" => x))
+  return FObject(function_name = "MAX", column = x)
 end
 function Min(x)
-  return FObject(function_name = "MIN", kwargs = Dict("column" => x))
+  return FObject(function_name = "MIN", column = x)
 end
-function When(condition::Vector{Union{SQLTypeQ, SQLTypeQor}}; then::Vector{Union{String, Int64, Bool, SQLTypeF}} = [], else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
-  return FObject(function_name = "WHEN", kwargs = Dict("condition" => condition, "then" => then, "else_result" => else_result))
-end
-function When(condition::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 1, else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
-  return FObject(function_name = "WHEN", kwargs = Dict("condition" => [condition], "then" => [then], "else_result" => else_result))
-end
+# function When(condition::Vector{Union{SQLTypeQ, SQLTypeQor}}; then::Vector{Union{String, Int64, Bool, SQLTypeF}} = [], else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+#   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => condition, "then" => then, "else_result" => else_result))
+# end
+# function When(condition::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 1, else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+#   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => [condition], "then" => [then], "else_result" => else_result))
+# end
 
 export TO_CHAR
 
-
-TO_CHAR(x::Union{String, SQLTypeF}, format::String) = FObject(function_name = "TO_CHAR", kwargs = Dict("column" => x, "format" => format))
+TO_CHAR(x::Union{String, SQLTypeF, Vector{String}}, format::String) = FObject(function_name = "TO_CHAR", column = x, kwargs = Dict{String, Any}("format" => format))
 MONTH(x) = TO_CHAR(x, "MM")
 YEAR(x) = TO_CHAR(x, "YYYY")
 DAY(x) = TO_CHAR(x, "DD")
@@ -211,10 +142,9 @@ Y_M(x) = TO_CHAR(x, "YYYY-MM")
 DATE(x) = TO_CHAR(x, "YYYY-MM-DD")
 
 
-
 mutable struct SQLQuery <: SQLType
   model_name::PormGModel
-  values::Vector{String}
+  values::Vector{Union{String, SQLTypeF}}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
   limit::Int64
@@ -246,24 +176,25 @@ function _get_pair_list_joins(q::SQLType, v::SQLTypeQor)
   end
 end
 
-function up_values(q::SQLType, values)
+function up_values(q::SQLType, values::NTuple{N, Union{String, SQLTypeF, Vector{String}}} where N)
   # every call of values, reset the values
   q.values = []
   for v in values 
     if isa(v, SQLTypeF)
-      push!(q.values, v)
+      push!(q.values, _check_function(v))
     elseif isa(v, String)
-      if count(x -> x in collect(keys(PormGsuffix)), split(v, "__")) > 0
+      check = String.(split(v, "__@"))
+      if haskey(PormGsuffix, check[end])
         throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
-      else       
-        push!(q.values, v)
+      else     
+        push!(q.values, _check_function(check))
       end     
     else
       throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (TO_CHAR, Mounth, Year, Day, Y_M ...)")
     end    
   end 
   
-  return Object(object =q)
+  # return Object(object =q)
 end
   
 function up_create(q::SQLType, values::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}})
@@ -275,9 +206,9 @@ end
 function up_filter(q::SQLType, filter)
   for v in filter
     if isa(v, SQLTypeQ) || isa(v, SQLTypeQor) 
-      push!(q.filter, v)
+      push!(q.filter, v) # TODO I need process the Qor and Q with _check_filter
     elseif isa(v, Pair)
-      push!(q.filter, _get_pair_to_oper(v))
+      push!(q.filter, _check_filter(v))
     else
       error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
     end
@@ -324,3 +255,63 @@ end
 
 
 ### string(q::SQLQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)
+
+# talvez eu não precise dessa função no inicio, mas pode ser útil na hora de processar o query
+# function _check_function(f::OperObject)
+function _check_function(f::FObject)
+  f.column = _check_function(f.column)
+  return f
+end
+function _check_function(x::Vector{String})
+  if length(x) == 1
+    return x[1]
+  else    
+    if haskey(PormGtrasnform, x[end])
+      resp = getfield(PormG, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])
+      return _check_function(resp)
+    else
+      joined_keys_with_prefix = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), "\n")
+      if haskey(PormGsuffix, x[end])
+        yes = "you can use \"column__@\e[32m$(x[end])\e[0m\""
+        not = "you can not use \"column__\e[31m@$(x[end])__@function\e[0m\". valid functions are:\n$(joined_keys_with_prefix)\e[0m"
+        throw(ArgumentError("\e[4m\e[31m$(x[end])\e[0m is not allowed.\n$yes\n$not"))
+      else
+        throw(ArgumentError("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid; please use a valid function:\n$(joined_keys_with_prefix)\e[0m"))
+      end
+    end
+  end    
+end
+_check_function(x::String) = _check_function(String.(split(x, "__@")))
+
+
+"""
+  _get_pair_to_oper(x::Pair)
+
+  Converts a Pair object to an OperObject. If the Pair's key is a string, it checks if it contains an operator suffix (e.g. "__gte", "__lte") and returns an OperObject with the corresponding operator. If the key does not contain an operator suffix, it returns an OperObject with the "=" operator. If the key is not a string, it throws an error.
+
+  # Arguments
+  - `x::Pair`: A Pair object to be converted to an OperObject.
+
+  # Returns
+  - `OperObject`: An OperObject with the corresponding operator and values.
+
+  # Throws
+  - `Error`: If the key is not a string or if it contains more than one operator suffix.
+
+  # Wharning
+  - That is a internal function, please do not use it.
+"""
+function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Int64}
+ if haskey(PormGsuffix, x.first[end])
+    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = x.first[1:end-1])   
+  else
+    return OperObject(operator = "=", values = x.second, column = x.first)
+  end  
+end
+
+function _check_filter(x::Pair)
+  check = String.(split(x.first, "__@"))
+  resp = _get_pair_to_oper(check => x.second)
+  resp.column = _check_function(resp.column)
+  return resp
+end

@@ -9,6 +9,22 @@ cd("test")
 
 PormG.Configuration.load()
 
+# # check functions
+# x = "teste__teste2__@date__@gte"
+# PormG._check_filter(x => 1)
+# x = "teste__teste2__@date"
+# PormG._check_filter(x => 1)
+
+# # report error
+# x = "teste__teste2__@gte__@date"
+# PormG._check_filter(x => 1)
+
+# # report error
+# x = "teste__teste2__@error"
+# PormG._check_filter(x => 1)
+
+#
+
 # # test importation
 # schemas = PormG.Migrations.get_database_schema()
 
@@ -25,6 +41,10 @@ PormG.Configuration.load()
 Base.include(PormG, "db/models/automatic_models.jl")
 import PormG.Automatic_models as AM
 
+# teste function
+query = AM.list_cruz |> object
+@time query.values("dn1__@year")
+
 
 # PormG.Models.set_models(AM)
 
@@ -39,7 +59,8 @@ import PormG.Automatic_models as AM
 
 # reverso curto
 query = AM.bancos |> object
-query.values("rel_cols__cruz_rel_id", "rel_cols__id").filter("id" => 1)
+query.values("rel_cols__cruz_rel_id", "rel_cols__id")
+query.filter("id" => 1)
 @time query.query()
 
 # # reverso muitos com problema por conta da importação
@@ -49,7 +70,8 @@ query.values("rel_cols__cruz_rel_id", "rel_cols__id").filter("id" => 1)
 
 # reverso longo
 query = AM.bancos |> object
-query.values("opc_cruzamento__st_cruz__linkado").filter("id" => 1)
+query.values("opc_cruzamento__st_cruz__linkado")
+query.filter("id" => 1)
 @time query.query()
 
 instruct = PormG.InstrucObject(text = "", 

@@ -192,7 +192,6 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   vector = vector[2:end]  
 
   tb_alias = _insert_join(instruct.row_join, row_join)
-  functions = []
   while size(vector, 1) > 1
     println(foreign_table_name)
     println(vector)
@@ -276,11 +275,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   # functions must be processed here
   text = string(tb_alias, ".", last_column)
-  while size(functions, 1) > 0
-    function_name = functions[end]      
-    text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
-    functions = functions[1:end-1]
-  end
+  
 
   if as
     return string(text, " as ", join(field, "__"))
@@ -494,9 +489,23 @@ function get_select_query(object::SQLType, instruc::SQLInstruction)
   end  
 end
 
+function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction, )
+  # for loop from end to start exept the first
+  v = String.(v)
+  text = _build_row_join(v[1], instruc, as=false)
+  i = 2
+  to = size(v, 1)
+  
+  while i <= to
+    function_name = functions[end]      
+    text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
+    functions = functions[1:end-1]
+  end
+end
 
 function _get_filter_query(v::String, instruc::SQLInstruction)
-  # V does not have be suffix 
+  # V does not have be suffix
+  contains(v, "@") && return _get_filter_query(split(v, "_@"), instruc)
   parts = split(v, "__")  
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)

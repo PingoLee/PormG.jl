@@ -1,6 +1,6 @@
 module QueryBuilder
 
-using ..PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, PormGsuffix, PormGtrasnform, PormGModel
+import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, PormGsuffix, PormGtrasnform, PormGModel
 import DataFrames
 import Dates, Intervals
 
@@ -30,13 +30,13 @@ export OP
 """
   OperObject <: SQLTypeOper
 
-  Mutable struct representing an SQL operator object for using in the filter and annotate.
-  That is a internal function, please do not use it.
+Mutable struct representing an SQL operator object for using in the filter and annotate.
+That is a internal function, please do not use it.
 
-  # Fields
-  - `operator::String`: the operator used in the SQL query.
-  - `values::Union{String, Int64, Bool}`: the value(s) to be used with the operator.
-  - `column::Union{String, SQLTypeF}`: the column to be used with the operator.
+# Fields
+- `operator::String`: the operator used in the SQL query.
+- `values::Union{String, Int64, Bool}`: the value(s) to be used with the operator.
+- `column::Union{String, SQLTypeF}`: the column to be used with the operator.
 
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
@@ -109,23 +109,24 @@ export Sum, Avg, Count, Max, Min, When
 @kwdef mutable struct FObject <: SQLTypeF
   function_name::String
   column::Union{String, SQLTypeF, Vector{String}}
+  agregate::Bool = false
   kwargs::Dict{String, Any}
 end
 
 function Sum(x)
-  return FObject(function_name = "SUM", column = x)
+  return FObject(function_name = "SUM", column = x, agregate = true)
 end  
 function Avg(x)
-  return FObject(function_name = "AVG", column = x)
+  return FObject(function_name = "AVG", column = x, agregate = true)
 end
 function Count(x)
-  return FObject(function_name = "COUNT", column = x)
+  return FObject(function_name = "COUNT", column = x, agregate = true)
 end
 function Max(x)
-  return FObject(function_name = "MAX", column = x)
+  return FObject(function_name = "MAX", column = x, agregate = true)
 end
 function Min(x)
-  return FObject(function_name = "MIN", column = x)
+  return FObject(function_name = "MIN", column = x, agregate = true)
 end
 # function When(condition::Vector{Union{SQLTypeQ, SQLTypeQor}}; then::Vector{Union{String, Int64, Bool, SQLTypeF}} = [], else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
 #   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => condition, "then" => then, "else_result" => else_result))
@@ -269,7 +270,7 @@ function _check_function(x::Vector{String})
     return x[1]
   else    
     if haskey(PormGtrasnform, x[end])
-      resp = getfield(PormG, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])
+      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])
       return _check_function(resp)
     else
       joined_keys_with_prefix = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), "\n")
@@ -615,18 +616,6 @@ function _df_to_dic(df::DataFrames.DataFrame, column::String, filter::String)
   end
 end
 
-
-#PostgreSQL
-function TO_CHAR(column::String, format::String)
-  return "to_char($(column), '$(format)')"
-end
-MONTH(x) = TO_CHAR(x, "MM")
-YEAR(x) = TO_CHAR(x, "YYYY")
-DAY(x) = TO_CHAR(x, "DD")
-Y_M(x) = TO_CHAR(x, "YYYY-MM")
-DATE(x) = TO_CHAR(x, "YYYY-MM-DD")
-
-
 function ISNULL(v::String , value::Bool)
   if contains(v, "(")
     throw("Error in ISNULL, the column $(v) can't be a function")
@@ -898,11 +887,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   end
 end
 
-function build(object::SQLType; conection=config) 
-  if ismissing(object.model_name )
-    throw("""You new to set a object before build a query (ex. object("table_name"))""")
-  end
-
+function build(object::SQLType; conection=config)
   instruct = InstrucObject(text = "", 
     object = object,
     select = [], 

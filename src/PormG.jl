@@ -46,7 +46,7 @@ const config =  Configuration.Settings(app_env = ENV["PORMG_ENV"])
 export object
 
 include("QueryBuilder.jl")
-import QueryBuilder: object
+import .QueryBuilder: object
 
 
 

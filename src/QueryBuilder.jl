@@ -1,30 +1,48 @@
 module QueryBuilder
 
-import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, PormGsuffix, PormGtrasnform, PormGModel
+import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, SQLTypeText, SQLTypeArrays, PormGsuffix, PormGtrasnform, PormGModel, Dialect, PormGField, CONNECTIONS
 import DataFrames
 import Dates, Intervals
+import ..PormG.Models: CharField, IntegerField
+using SQLite
+
+#
+# SQLTypeArrays Objects
+#
+@kwdef mutable struct SQLArrays <: SQLTypeArrays
+  count::Int64 = 1
+  array_string::Array{String, 2} = Array{String, 2}(undef, 20, 3)
+  array_int::Array{Int64, 2} = Array{Int64, 2}(undef, 20, 3)
+end
 
 #
 # SQLInstruction Objects (instructions to build a query)
 #
-
 @kwdef mutable struct InstrucObject <: SQLInstruction
   text::String # text to be used in the query
   object::SQLType
-  select::Vector{String}  # values to be used in select query
-  join::Vector{String}  # values to be used in join query
-  _where::Vector{String}  # values to be used in where query
-  group::Vector{String}  # values to be used in group query
-  having::Vector{String} # values to be used in having query
-  order::Vector{String} # values to be used in order query  
+  select::Array{String, 2} = Array{String, 2}(undef, 60, 3)
+  agregate::Array{String, 2} = Array{String, 2}(undef, 10, 3)
+  join::Vector{String} = []  # values to be used in join query
+  _where::Vector{String} = []  # values to be used in where query
+  group::Vector{String} = []  # values to be used in group query
+  having::Vector{String} = [] # values to be used in having query
+  order::Vector{String} = [] # values to be used in order query  
   df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{Dict{String, Any}} = [] # dataframe to be used in join query
+  conection::Union{SQLite.DB, Nothing}
+  array_defs::SQLTypeArrays = SQLArrays()
 end
+
+struct SQLText <: SQLTypeText
+  text::String
+  _as::Union{String, Nothing}
+end
+SQLText(text::String; _as::Union{String, Nothing} = nothing) = SQLText(text, _as)
 
 #
 # SQLTypeOper Objects (operators from sql)
 #
-
 export OP
 
 """
@@ -44,8 +62,8 @@ That is a internal function, please do not use it.
   values::Union{String, Int64, Bool}
   column::Union{String, SQLTypeF, Vector{String}}
 end
-OP(column::String, value) = OperObject(operator = "=", values = value, column = column)
-OP(column::String, operator::String, value) = OperObject(operator = operator, values = value, column = column)
+OP(column::Union{String, SQLTypeF}, value) = OperObject(operator = "=", values = value, column = column)
+OP(column::Union{String, SQLTypeF}, operator::String, value) = OperObject(operator = operator, values = value, column = column)
 
 #
 # SQLTypeQ and SQLTypeQor Objects
@@ -108,9 +126,10 @@ end
 export Sum, Avg, Count, Max, Min, When
 @kwdef mutable struct FObject <: SQLTypeF
   function_name::String
-  column::Union{String, SQLTypeF, Vector{String}}
+  column::Union{String, N, Vector{N}, Vector{String}, SQLTypeOper, Vector{M}} where {N <: SQLTypeF, M <: SQLType}
   agregate::Bool = false
-  kwargs::Dict{String, Any}
+  _as::Union{String, Nothing} = nothing
+  kwargs::Dict{String, Any} = Dict{String, Any}()
 end
 
 function Sum(x)
@@ -128,6 +147,34 @@ end
 function Min(x)
   return FObject(function_name = "MIN", column = x, agregate = true)
 end
+function Value(x::String)
+  return SQLText(x)
+end
+
+function Cast(x::Union{String, SQLTypeText, SQLTypeF}, type::String)
+  return FObject(function_name = "CAST", column = x, kwargs = Dict{String, Any}("type" => type))
+end
+function Cast(x::Union{String, SQLTypeText, SQLTypeF}, type::PormGField)
+  return Cast(x, type.type)
+end
+function Concat(x::Union{Vector{String}, Vector{N}} where N <: SQLType; output_field::Union{N, String, Nothing} where N <: PormGField = nothing, _as::String="")
+  if isa(output_field, PormGField)
+    output_field = output_field.type
+  end
+  return FObject(function_name = "CONCAT", column = x, kwargs = Dict{String, Any}("output_field" => output_field, "as" => _as))
+end
+function Extract(x, format::String)
+  return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("format" => format))
+end
+function When(x; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
+end
+function Case(conditions::Vector{N} where N <: SQLTypeF; _else::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+  if isa(output_field, PormGField)
+    output_field = output_field.type
+  end  
+  return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => _else, "output_field" => output_field)) 
+end
 # function When(condition::Vector{Union{SQLTypeQ, SQLTypeQor}}; then::Vector{Union{String, Int64, Bool, SQLTypeF}} = [], else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
 #   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => condition, "then" => then, "else_result" => else_result))
 # end
@@ -135,14 +182,30 @@ end
 #   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => [condition], "then" => [then], "else_result" => else_result))
 # end
 
-export TO_CHAR
-
-TO_CHAR(x::Union{String, SQLTypeF, Vector{String}}, format::String) = FObject(function_name = "TO_CHAR", column = x, kwargs = Dict{String, Any}("format" => format))
-MONTH(x) = TO_CHAR(x, "MM")
-YEAR(x) = TO_CHAR(x, "YYYY")
-DAY(x) = TO_CHAR(x, "DD")
-Y_M(x) = TO_CHAR(x, "YYYY-MM")
-DATE(x) = TO_CHAR(x, "YYYY-MM-DD")
+Extract_date(x::Union{String, SQLTypeF, Vector{String}}, format::String) = FObject(function_name = "EXTRACT_DATE", column = x, kwargs = Dict{String, Any}("format" => format))
+MONTH(x) = Extract_date(x, "MM")
+YEAR(x) = Extract_date(x, "YYYY")
+DAY(x) = Extract_date(x, "DD")
+Y_M(x) = Extract_date(x, "YYYY-MM")
+DATE(x) = Extract_date(x, "YYYY-MM-DD")
+# Same that function CAST in django ORM
+# # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
+# # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
+# # 					When(**{ f'{data}__month__lte': 8 }, then=Value('2')),
+# # 					When(**{ f'{data}__month__lte': 12 }, then=Value('3')),
+# # 					output_field=CharField()
+# # 				)))
+QUARTER(x) = Concat([
+                Cast(YEAR(x), CharField()), 
+                Value("-Q"), 
+                Case([When(OP(MONTH(x), "<=", 4), then = 1), 
+                      When(OP(MONTH(x), "<=", 8), then = 2), 
+                      When(OP(MONTH(x), "<=", 12), then = 3)
+                      ], 
+                      output_field = CharField())
+                ], 
+                output_field = CharField(), 
+                _as = "$(x[1])__quarter")
 
 
 mutable struct SQLQuery <: SQLType
@@ -156,8 +219,7 @@ mutable struct SQLQuery <: SQLType
   group::Vector{String}
   having::Vector{String}
   list_joins::Vector{String} # is ther a better way to do this?
-  row_join::Vector{Dict{String, Any}}
-  #distinct::Bool
+  row_join::Vector{Dict{String, Any}}  
 
   SQLQuery(; model_name=nothing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = [], row_join = []) =
@@ -189,11 +251,13 @@ function up_values(q::SQLType, values::NTuple{N, Union{String, SQLTypeF, Vector{
       check = String.(split(v, "__@"))
       if haskey(PormGsuffix, check[end])
         throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
-      else     
-        push!(q.values, _check_function(check))
+      else
+        _function = _check_function(check)
+        _function._as = join(check, "__")
+        push!(q.values, _function)
       end     
     else
-      throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (TO_CHAR, Mounth, Year, Day, Y_M ...)")
+      throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (Mounth, Year, Day, Y_M ...)")
     end    
   end 
   
@@ -261,16 +325,34 @@ end
 
 # talvez eu não precise dessa função no inicio, mas pode ser útil na hora de processar o query
 # function _check_function(f::OperObject)
+function _check_function(f::Vector{N} where N <: SQLType)
+  r_v::Vector{SQLType} = []
+  for v in f
+    if isa(v, SQLTypeOper)
+      push!(r_v, _check_filter(v))
+    else
+      push!(r_v, _check_function(v))
+    end
+  end
+  return r_v
+end
 function _check_function(f::FObject)
   f.column = _check_function(f.column)
   return f
 end
-function _check_function(x::Vector{String})
+function _check_function(f::SQLTypeOper)
+  f.column = _check_function(f.column)
+  return f
+end
+function _check_function(f::SQLText)
+  return f
+end
+function _check_function(x::Vector{String})  
   if length(x) == 1
     return x[1]
   else    
     if haskey(PormGtrasnform, x[end])
-      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])
+      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])   
       return _check_function(resp)
     else
       joined_keys_with_prefix = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), "\n")
@@ -592,6 +674,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # functions must be processed here
   text = string(tb_alias, ".", last_column)
   
+  
 
   if as
     return string(text, " as ", join(field, "__"))
@@ -629,126 +712,8 @@ end
  
 
 
-# APAGAR
-# function get_select_query(object::SQLType, df::DataFrames.DataFrame)
-#   values = []
-#   # check if values contains PormGsuffix and throw error
-#   for v in object.values
-#     for (k, value) in PormGsuffix
-#       if endswith(v, k)
-#         throw("Error in values, $(v) contains $(k), that isn't allowed")
-#       end
-#     end
-#   end
-
-#   # colect a array wiht keys of PormGtrasnform
-#   keys = []
-#   for (k, value) in PormGtrasnform
-#     push!(keys, replace(k, "__" => ""))
-#   end
-
-#   # check if values contains PormGtrasnform and transform
-#   println(object.values)
-#   for v in object.values
-#     println(v)
-#     parts = split(v, "__")
-#     last = ""
-#     value = []
-#     text = ""
-#     if size(parts, 1) > 1
-#       for p in parts   
-#         println(p)     
-#         if !in(p, keys)
-#           last = p 
-#           push!(value, p)    
-#         end
-#         println(value)
-#         if in(p, keys)
-#           loc = _df_to_dic(df, "all", join(value, "__"))
-#           println(loc)
-#           text = getfield(QueryBuilder, Symbol(PormGtrasnform[string("__", p)]))(loc["last_alias"] * "." * last)            
-#         end
-#       end
-#       if text == ""
-#         loc = _df_to_dic(df, "all", join(value, "__"))
-#         text = loc["last_alias"] * "." * last  
-#       end
-#       push!(values, Dict("text" => text, "value" => join(value, "__")))
-#     else
-#       text = string("tb", ".", v)
-#       push!(values, Dict("text" => text, "value" => v))
-#     end
-    
-#   end
-
-#   return values
-
-# end
-
-# function get_filter_query(object::SQLType, df::DataFrames.DataFrame)
-#   filter = []
-#   # colect a array wiht keys of PormGtrasnform
-#   keys = []
-#   for (k, value) in PormGtrasnform
-#     push!(keys, replace(k, "__" => ""))
-#   end
-
-#   # colect a array wiht keys of PormGsuffix
-#   keys2 = []
-#   for (k, value) in PormGsuffix
-#     push!(keys2, replace(k, "__" => ""))
-#   end
-
-#   # check if values contains PormGtrasnform and transform
-#   println(object.filter)
-#   for (k, v) in object.filter
-#     println(k)
-#     parts = split(k, "__")
-#     last = ""
-#     value = []
-#     text = ""
-#     opr = "="
-#     if size(parts, 1) > 1
-#       for p in parts   
-#         println(p)     
-#         if !in(p, keys) && !in(p, keys2)
-#           last = p 
-#           push!(value, p)    
-#         end
-#         println(value)
-#         if in(p, keys)
-#           loc = _df_to_dic(df, "all", join(value, "__"))
-#           println(loc)
-#           text = getfield(QueryBuilder, Symbol(PormGtrasnform[string("__", p)]))(loc["last_alias"] * "." * last)            
-#         end
-#         if in(p, keys2)
-#           opr = PormGsuffix[string("__", p)]
-#         end
-#       end
-#       if text == ""
-#         loc = _df_to_dic(df, "all", join(value, "__"))
-#         text = loc["last_alias"] * "." * last * " " * opr * " '" * v * "'" 
-#       else
-#         text *= " " * opr * " '" * v * "'" 
-#       end
-#       push!(filter, Dict("text" => text, "value" => join(value, "__")))
-#     else
-#       text = string("tb", ".", k, " = '", v, "'")
-#       push!(filter, Dict("text" => text, "value" => k))
-#     end
-    
-#   end
-
-
-#   return filter
-
-  
-# end
-
-
 # select
 function _get_select_query(v::String, instruc::SQLInstruction)
-  # V does not have be suffix
   # println(v)
   parts = split(v, "__")  
   if size(parts, 1) > 1
@@ -758,15 +723,9 @@ function _get_select_query(v::String, instruc::SQLInstruction)
   end
   
 end
-function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)
-  # println("foi")
-  # println(v)
-  value = _get_select_query(v.kwargs["column"], instruc)
-  split_value = split(value, " as ")
-  # println(split_value)
-  return string(getfield(QueryBuilder, Symbol(v.function_name))(string(split_value[1]), v.kwargs["format"]), " as ", split_value[2], "__", lowercase(v.kwargs["format"]))
-  # println(result)
-  # return result
+function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)  
+  println(v)
+  return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs["format"], instruc.connection)
 end
 
 """
@@ -781,16 +740,11 @@ end
   - `object::SQLType`: The SQLType object containing the values to be selected.
   - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
 """
-function get_select_query(object::SQLType, instruc::SQLInstruction)
-  for v in object.values    
-    if isa(v, String)    
-      push!(instruc.select, _get_select_query(v, instruc))      
-    elseif isa(v, SQLTypeF)
-      push!(instruc.select, _get_select_query(v, instruc))    
-    else
-      throw("Error in values, $(v) is not a SQLTypeF or String")
-    end    
-  end  
+function get_select_query(values::Vector{Union{String, SQLTypeF}}, instruc::SQLInstruction)
+  for i in eachindex(values) # linear indexing
+    instruc.select[i, 1] = values[i]._as
+    instruc.select[i, 2] = _get_select_query(values[i], instruc)    
+  end
 end
 
 function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction, )
@@ -887,15 +841,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   end
 end
 
-function build(object::SQLType; conection=config)
+function build(object::SQLType; conection=CONNECTIONS[end])
+  println(conection)
   instruct = InstrucObject(text = "", 
     object = object,
-    select = [], 
-    join = [],
-    _where = [],
-    group = [],
-    having = [],
-    order = [],
+    conection = conection,
     # df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
     # alias_b=String[], alias_a=String[]),
   )
@@ -904,9 +854,9 @@ function build(object::SQLType; conection=config)
   
   # df_sels, df_join, text_on = QueryBuilder.get_join_query(object, conection)
   
-  QueryBuilder.get_select_query(object, instruct)
-  QueryBuilder.get_filter_query(object, instruct)
-  QueryBuilder.build_row_join_sql_text(instruct)
+  get_select_query(object.values, instruct)
+  get_filter_query(object, instruct)
+  build_row_join_sql_text(instruct)
 
   # println("TESTE")
   # println(instruct.select)

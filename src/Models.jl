@@ -261,6 +261,49 @@ end
 #   return sql_type
 # end
 
+#
+# Formaters
+#
+
+function format_text_sql(value::Union{Int, Date, DateTime, ZonedDateTime})
+    return string("'", value, "'")        
+end
+function format_text_sql(value::Union{Missing, Nothing})
+    return "null"
+end
+function format_text_sql(value::Bool)
+    return value ? "true" : "false"
+end
+function format_text_sql(value::AbstractString)
+    return string("'", replace(value, "'" => "`"), "'")    
+end
+
+function format_number_sql(value::Integer)
+    return string(value)    
+end
+function format_number_sql(value::Union{Missing, Nothing})
+    return "null"
+end
+function format_number_sql(value::Union{Float16, Float32, Float64})
+    return string("'", value, "'")    
+end
+function format_number_sql(value::AbstractString)
+    return parse(Float64, value) |> string   
+end
+
+function format_bool_sql(value::Integer)
+    if value in [0, 1] == false
+        throw(ArgumentError("The value must be 0, 1, true or false"))
+    end
+    return value == 1 ? "true" : "false"
+end
+function format_bool_sql(value::Union{Missing, Nothing})
+    return "null"
+end
+function format_bool_sql(value::Bool)
+    return value ? "true" : "false"
+end
+
 @kwdef mutable struct SIDField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
   name::Union{String, Nothing} = nothing
@@ -272,6 +315,8 @@ end
   db_index::Bool = false
   default::Union{Int64, Nothing} = nothing
   editable::Bool = false
+  type::String = "INTEGER"
+  formater::Function = format_number_sql
 end
 
 function IDField(; verbose_name=nothing, name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -290,6 +335,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "VARCHAR"
+  formater::Function = format_text_sql
 end
 
 function CharField(; verbose_name=nothing, name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -306,6 +353,8 @@ end
   db_index::Bool = false
   default::Union{Int64, Nothing} = nothing
   editable::Bool = false
+  type::String = "INTEGER"
+  formater::Function = format_number_sql
 end
 
 function IntegerField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -323,7 +372,8 @@ end
   db_index::Bool = false
   default::Union{Int64, Nothing} = nothing
   editable::Bool = false
-
+  type::String = "BIGINT"
+  formater::Function = format_number_sql
 end
 
 function BigIntegerField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -347,7 +397,8 @@ end
   deferrable::Bool = false
   how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
   related_name::Union{String, Nothing} = nothing
-
+  type::String = "BIGINT"
+  formater::Function = format_number_sql
 end
 
 function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing)
@@ -363,7 +414,9 @@ end
   null::Bool = false
   db_index::Bool = false
   default::Union{Bool, Nothing} = nothing
-  editable::Bool = false 
+  editable::Bool = false
+  type::String = "BOOLEAN"
+  formater::Function = format_bool_sql
 end
 
 function BooleanField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -380,6 +433,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "DATE"
+  formater::Function = format_text_sql
 end
 
 function DateField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -397,6 +452,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "DATETIME"
+  formater::Function = format_text_sql
 end
 
 function DateTimeField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -415,6 +472,8 @@ end
   editable::Bool = false
   max_digits::Int = 10
   decimal_places::Int = 2
+  type::String = "DECIMAL"
+  formater::Function = format_number_sql
 end
 
 function DecimalField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_digits=10, decimal_places=2)
@@ -431,6 +490,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "VARCHAR"
+  formater::Function = format_text_sql
 end
 
 function EmailField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -447,6 +508,8 @@ end
   db_index::Bool = false
   default::Union{Float64, String, Int64, Nothing} = nothing
   editable::Bool = false
+  type::String = "FLOAT"
+  formater::Function = format_number_sql
 end
 
 function FloatField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -464,6 +527,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "BLOB"
+  formater::Function = format_text_sql
 end
 
 function ImageField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -480,6 +545,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "TEXT"
+  formater::Function = format_text_sql
 end
 
 function TextField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -496,6 +563,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "TIME"
+  formater::Function = format_text_sql
 end
 
 function TimeField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -512,6 +581,8 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  type::String = "BLOB"
+  formater::Function = format_text_sql
 end
 
 function BinaryField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)

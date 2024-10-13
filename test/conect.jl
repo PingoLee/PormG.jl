@@ -45,6 +45,18 @@ import PormG.Automatic_models as AM
 query = AM.list_cruz |> object
 @time query.values("dn1__@year")
 
+query = AM.list_cruz |> object
+@time query.values("dn1__@date__@year")
+query.object.values
+
+query = AM.list_cruz |> object
+@time query.values("dn1__@quarter")
+
+query = AM.list_cruz |> object
+@time query.values("dn1__@quarter", "dn2__@quarter", "id__@count")
+
+
+import PormG.QueryBuilder: OP, When, Cast, Concat, Extract, Case, Sum, Avg, Count, Max, Min, MONTH, YEAR, DAY, QUARTER, DATE, TO_CHAR, CharField, Value, QUARTER
 
 # PormG.Models.set_models(AM)
 

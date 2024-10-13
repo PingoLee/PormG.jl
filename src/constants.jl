@@ -63,5 +63,23 @@ const sqlite_type_map = Dict{String, Any}(
   "BOOLEAN" => :BooleanField
 )
 
+const sqlite_date_format_map = Dict{String, String}(
+  "YYYY" => "%Y",
+  "MM" => "%m",
+  "DD" => "%d",
+  "HH" => "%H",
+  "MI" => "%M",
+  "SS" => "%S",
+  "YYYY-MM-DD" => "%Y-%m-%d",
+  "YYYY-MM" => "%Y-%m",
+  "YYYY-MM-DD HH:MI:SS" => "%Y-%m-%d %H:%M:%S",
+  "YYYY-MM-DD HH:MI:SS.SSS" => "%Y-%m-%d %H:%M:%S.%f",
+  "YYYY-MM-DDTHH:MI:SS" => "%Y-%m-%dT%H:%M:%S",
+  "YYYY-MM-DDTHH:MI:SS.SSS" => "%Y-%m-%dT%H:%M:%S.%f",
+  "HH:MI:SS" => "%H:%M:%S",
+  "HH:MI:SS.SSS" => "%H:%M:%S.%f",
+  "HH:MI" => "%H:%M"
+)
+
 
 const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoindex"]

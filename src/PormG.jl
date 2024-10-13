@@ -16,6 +16,8 @@ abstract type SQLTypeQ <: SQLType end
 abstract type SQLTypeQor <: SQLType end
 abstract type SQLTypeF <: SQLType end
 abstract type SQLTypeOper <: SQLType end
+abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
+abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations 
 abstract type SQLObject <: PormGAbstractType end
 abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
@@ -40,6 +42,8 @@ using .Configuration
 include("Models.jl")
 using .Models
 
+include("Dialect.jl")
+import .Dialect
 
 const config =  Configuration.Settings(app_env = ENV["PORMG_ENV"])
 
@@ -47,8 +51,6 @@ export object
 
 include("QueryBuilder.jl")
 import .QueryBuilder: object
-
-
 
 include("Migrations.jl")
 using .Migrations

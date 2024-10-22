@@ -1,5 +1,7 @@
 # I want recreate the Django models in Julia
 module Models
+using Dates
+using TimeZones
 using PormG: PormGField, PormGModel, reserved_words
 
 export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField, IDField, BigIntegerField

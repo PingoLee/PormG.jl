@@ -63,6 +63,19 @@ const sqlite_type_map = Dict{String, Any}(
   "BOOLEAN" => :BooleanField
 )
 
+const sqlite_type_map_reverse = Dict{String, String}(
+  "VARCHAR" => "TEXT",
+  "CHAR" => "TEXT",
+  "INTEGER" => "INTEGER",
+  "BIGINT" => "INTEGER",
+  "FLOAT" => "REAL",
+  "DECIMAL" => "DECIMAL",
+  "DATETIME" => "DATETIME",
+  "TIME" => "TIME",
+  "DATE" => "DATE",
+  "BLOB" => "BLOB",
+)
+
 const sqlite_date_format_map = Dict{String, String}(
   "YYYY" => "%Y",
   "MM" => "%m",

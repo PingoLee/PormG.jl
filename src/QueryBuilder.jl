@@ -30,10 +30,11 @@ end
   order::Vector{String} = [] # values to be used in order query  
   df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{Dict{String, Any}} = [] # dataframe to be used in join query
-  conection::Union{SQLite.DB, Nothing}
+  connection::Union{SQLite.DB, Nothing}
   array_defs::SQLTypeArrays = SQLArrays()
 end
 
+# Why I need this function?
 struct SQLText <: SQLTypeText
   text::String
   _as::Union{String, Nothing}
@@ -283,15 +284,36 @@ function up_filter(q::SQLType, filter)
   return Object(object =q)
 end
 
+function _query_select(array::Array{String, 2})
+  typeof(array) |> println
+  println(array)
+  println(size(array, 1))
+  if !isassigned(array, 1, 2)
+    return "*"
+  else
+    colect = []
+    for i in 1:size(array, 1)     
+      if !isassigned(array, i, 2)
+        return join(colect,  ", \n  ")
+      else
+        push!(colect, "$(array[i, 2]) as $(array[i, 1])")
+      end
+    end
+  end
+
+  
+end
+
 
 function query(q::SQLType)
   instruction = build(q) 
+  println("$(instruction._where |> length > 0 ? "WHERE" : "")")
   respota = """ Query returned:
     SELECT
-      $(length(instruction.select )> 0 ? join(instruction.select, ", \n  ") : "*" )
+      $(_query_select(instruction.select ))
     FROM $(q.model_name.name) as tb
     $(join(instruction.join, "\n"))
-    WHERE $(join(instruction._where, " AND \n   "))
+    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     """
   @info respota
   # return respota
@@ -713,8 +735,23 @@ end
 
 
 # select
+function _get_select_query(v::SQLText, instruc::SQLInstruction)  
+  println("foi SQLText")
+  return Dialect.VALUE(v.text, instruc.connection)
+end
+function _get_select_query(v::Vector{SQLType}, instruc::SQLInstruction)
+  println("foi vector")
+  resp = []
+  for v in v
+    push!(resp, _get_select_query(v, instruc))
+  end
+  return resp
+end
+# I think that is not the local to build the select query
 function _get_select_query(v::String, instruc::SQLInstruction)
-  # println(v)
+  println("foi string")
+  println(v)
+  println(instruc.select)
   parts = split(v, "__")  
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
@@ -723,9 +760,33 @@ function _get_select_query(v::String, instruc::SQLInstruction)
   end
   
 end
+function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
+  println("foi SQLTypeOper")
+  column = _get_select_query(v.column, instruc)
+  if isa(v.values, String)
+    value = "'" * v.values * "'"
+  else
+    value = string(v.values)
+  end
+  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
+    return string(column, " ", v.operator, " ", value)
+  elseif v.operator in ["in", "not in"]
+    return string(column, " ", v.operator, " (", join(value, ", "), ")")
+  elseif v.operator in ["ISNULL"]
+    return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
+  else
+    throw("Error in operator, $(v.operator) is not a valid operator")
+  end
+end
 function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)  
-  println(v)
-  return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs["format"], instruc.connection)
+  println("foi SQLTypeF")
+  println(v) 
+  println(v.kwargs)
+  println(v.function_name)
+  println(v.column |> typeof)
+  value = getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
+  println(value)
+  return value # getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
 end
 
 """
@@ -742,6 +803,8 @@ end
 """
 function get_select_query(values::Vector{Union{String, SQLTypeF}}, instruc::SQLInstruction)
   for i in eachindex(values) # linear indexing
+    println(values[i]._as)
+    println(typeof(values[i]))
     instruc.select[i, 1] = values[i]._as
     instruc.select[i, 2] = _get_select_query(values[i], instruc)    
   end
@@ -756,7 +819,7 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
   
   while i <= to
     function_name = functions[end]      
-    text = getfield(QueryBuilder, Symbol(PormGtrasnform[string(function_name)]))(text)
+    text = getfield(Dialect, Symbol(PormGtrasnform[string(function_name)]))(text)
     functions = functions[1:end-1]
   end
 end
@@ -773,9 +836,8 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   
 end
 function _get_filter_query(v::SQLTypeF, instruc::SQLInstruction)
-  # println("foi SQLTypeF")
-  value = _get_filter_query(v.kwargs["column"], instruc)
-  return getfield(QueryBuilder, Symbol(v.function_name))(string(value[1]), v.kwargs["format"]) 
+  println("foi SQLTypeF")
+  return _get_select_query(v, instruc) 
 end
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # println("foi SQLTypeOper")
@@ -841,18 +903,18 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   end
 end
 
-function build(object::SQLType; conection=CONNECTIONS[end])
-  println(conection)
+function build(object::SQLType; connection=CONNECTIONS[end])
+  println(connection)
   instruct = InstrucObject(text = "", 
     object = object,
-    conection = conection,
+    connection = connection,
     # df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
     # alias_b=String[], alias_a=String[]),
   )
 
    
   
-  # df_sels, df_join, text_on = QueryBuilder.get_join_query(object, conection)
+  # df_sels, df_join, text_on = QueryBuilder.get_join_query(object, connection)
   
   get_select_query(object.values, instruct)
   get_filter_query(object, instruct)

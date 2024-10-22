@@ -4,6 +4,7 @@ Pkg.activate(".")
 using Revise
 using PormG
 using DataFrames
+using Test
 
 cd("test")
 
@@ -44,16 +45,27 @@ import PormG.Automatic_models as AM
 # teste function
 query = AM.list_cruz |> object
 @time query.values("dn1__@year")
+query.query()
 
 query = AM.list_cruz |> object
 @time query.values("dn1__@date__@year")
 query.object.values
+query.query()
 
 query = AM.list_cruz |> object
 @time query.values("dn1__@quarter")
+query.query()
 
 query = AM.list_cruz |> object
-@time query.values("dn1__@quarter", "dn2__@quarter", "id__@count")
+@test_throws ArgumentError query.values("dn1__@quarter", "dn2__@quarter", "id__@count")
+# query.values("dn1__@quarter", "dn2__@quarter", "id__@count")
+
+# teste filter
+query = AM.list_cruz |> object
+query.values("dn1__@year")
+@time query.filter("dn1__@year" => 2020)
+
+
 
 
 import PormG.QueryBuilder: OP, When, Cast, Concat, Extract, Case, Sum, Avg, Count, Max, Min, MONTH, YEAR, DAY, QUARTER, DATE, TO_CHAR, CharField, Value, QUARTER

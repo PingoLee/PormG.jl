@@ -308,7 +308,6 @@ end
 
 @kwdef mutable struct SIDField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = true
   auto_increment::Bool = true
   unique::Bool = true
@@ -321,33 +320,50 @@ end
   formater::Function = format_number_sql
 end
 
-function IDField(; verbose_name=nothing, name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return SIDField(verbose_name=verbose_name, name=name, primary_key=primary_key, auto_increment=auto_increment, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return SIDField(verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 
 @kwdef mutable struct sCharField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   max_length::Int = 250
   unique::Bool = false
   blank::Bool = false
   null::Bool = false
   db_index::Bool = false
+  db_column::Union{String, Nothing} = nothing
   default::Union{String, Nothing} = nothing
   editable::Bool = false
   type::String = "VARCHAR"
   formater::Function = format_text_sql
 end
 
-function CharField(; verbose_name=nothing, name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sCharField(verbose_name=verbose_name, name=name, max_length=max_length, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, db_column=nothing, default=nothing, editable=false)  
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  max_length isa AbstractString && (max_length = parse(Int, max_length))
+  max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
+  max_length > 255 && throw(ArgumentError("The max_length must be less than or equal to 255"))
+  max_length < 1 && throw(ArgumentError("The max_length must be greater than 1"))
+  if !(default isa Nothing) && !(default isa AbstractString)
+    throw(ArgumentError("The default value must be a string"))
+  end
+  if !(default isa Nothing) && length(default) > max_length
+    throw(ArgumentError("The default value exceeds the max_length"))
+  end
+  !(unique isa Bool) && throw(ArgumentError("The unique must be a boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The blank must be a boolean"))
+  !(null isa Bool) && throw(ArgumentError("The null must be a boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The db_index must be a boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The db_column must be a string or nothing"))
+  !(editable isa Bool) && throw(ArgumentError("The editable must be a boolean"))  
+  return sCharField(verbose_name=verbose_name, max_length=max_length, unique=unique, blank=blank, null=null, db_index=db_index, db_column=db_column, default=default, editable=editable)  
 end
+
 
 @kwdef mutable struct sIntegerField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -359,14 +375,13 @@ end
   formater::Function = format_number_sql
 end
 
-function IntegerField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function IntegerField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
   default = validate_default(default, Union{Int64, Nothing}, "IntegerField", format2int64)
-  return sIntegerField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  return sIntegerField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sBigIntegerField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -378,13 +393,12 @@ end
   formater::Function = format_number_sql
 end
 
-function BigIntegerField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sBigIntegerField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function BigIntegerField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sBigIntegerField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sForeignKey <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -403,13 +417,12 @@ end
   formater::Function = format_number_sql
 end
 
-function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing)
+function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing)
   # TODO: validate the to parameter how, on_delete, on_update and others
-  return sForeignKey(verbose_name=verbose_name, name=name, primary_key=primary_key, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field, on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name)  
+  return sForeignKey(verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field, on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name)  
 end
 @kwdef mutable struct sBooleanField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -421,13 +434,12 @@ end
   formater::Function = format_bool_sql
 end
 
-function BooleanField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sBooleanField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function BooleanField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sBooleanField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sDateField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -439,14 +451,13 @@ end
   formater::Function = format_text_sql
 end
 
-function DateField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sDateField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sDateField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 
 @kwdef mutable struct sDateTimeField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -458,13 +469,12 @@ end
   formater::Function = format_text_sql
 end
 
-function DateTimeField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sDateTimeField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sDateTimeField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sDecimalField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -478,13 +488,12 @@ end
   formater::Function = format_number_sql
 end
 
-function DecimalField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_digits=10, decimal_places=2)
-  return sDecimalField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, max_digits=max_digits, decimal_places=decimal_places)
+function DecimalField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_digits=10, decimal_places=2)
+  return sDecimalField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, max_digits=max_digits, decimal_places=decimal_places)
 end
 
 @kwdef mutable struct sEmailField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -496,13 +505,12 @@ end
   formater::Function = format_text_sql
 end
 
-function EmailField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sEmailField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function EmailField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sEmailField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sFloatField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -514,14 +522,13 @@ end
   formater::Function = format_number_sql
 end
 
-function FloatField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function FloatField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
   default  = validate_default(default, Union{Float64, String, Int64, Nothing}, "FloatField", parse)
-  return sFloatField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  return sFloatField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sImageField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -533,13 +540,12 @@ end
   formater::Function = format_text_sql
 end
 
-function ImageField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sImageField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function ImageField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sImageField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sTextField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -551,13 +557,12 @@ end
   formater::Function = format_text_sql
 end
 
-function TextField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sTextField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function TextField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sTextField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sTimeField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -569,13 +574,12 @@ end
   formater::Function = format_text_sql
 end
 
-function TimeField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sTimeField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function TimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sTimeField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 @kwdef mutable struct sBinaryField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
-  name::Union{String, Nothing} = nothing
   primary_key::Bool = false
   unique::Bool = false
   blank::Bool = false
@@ -587,8 +591,8 @@ end
   formater::Function = format_text_sql
 end
 
-function BinaryField(; verbose_name=nothing, name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sBinaryField(verbose_name=verbose_name, name=name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  return sBinaryField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
 end
 
 

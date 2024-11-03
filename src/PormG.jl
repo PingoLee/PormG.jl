@@ -7,6 +7,7 @@ import DataFrames.DataFrame
 
 
 using SQLite
+using LibPQ
 
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end

@@ -46,7 +46,10 @@ const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "quarter" => "QUARTER",
 )
 
-CONNECTIONS::Union{Vector{SQLite.DB},Nothing} = nothing
+const CONNECTIONS::Dict{String, Union{SQLite.DB, LibPQ.Connection}} = Dict()
+
+
+# I whant work with dictionary to handle pool connections
 
 
 const sqlite_type_map = Dict{String, Any}(
@@ -96,3 +99,5 @@ const sqlite_date_format_map = Dict{String, String}(
 
 
 const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoindex"]
+
+const postgres_ignore_table::Vector{String} = ["auth_", "django_", "social_", "account_", "allauth_", "admin_", "celery_", "django_celery_", "djcelery_", "kombu_"]

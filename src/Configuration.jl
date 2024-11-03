@@ -9,6 +9,7 @@ import DataFrames
 using DataFrames, Tables, XLSX
 
 import SQLite
+import LibPQ
 
 export env, Settings, connection
 # app environments
@@ -107,13 +108,11 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
         end
 
     db = if dbname !== nothing
-    isempty(dirname(dbname)) || mkpath(dirname(dbname))
-    SQLite.DB(dbname)
+      isempty(dirname(dbname)) || mkpath(dirname(dbname))
+      SQLite.DB(dbname)
     else # in-memory
-    SQLite.DB()
+      SQLite.DB()
     end
-
-    println(typeof(db))
 
     if PormG.CONNECTIONS === nothing 
       (PormG.CONNECTIONS = [db]) 
@@ -121,17 +120,43 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       (push!(PormG.CONNECTIONS, db)[end])
     end
 
+  elseif PormG.config.db_config_settings["adapter"] == "PostgreSQL"
+    dns = String[]
+
+    for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding"]
+      get!(PormG.config.db_config_settings, key, get(ENV, "SEARCHLIGHT_$(uppercase(key))", nothing))
+      PormG.config.db_config_settings[key] !== nothing && push!(dns, string("$key=", PormG.config.db_config_settings[key]))
+    end
+
+    get!(PormG.config.db_config_settings, "database", get(ENV, "SEARCHLIGHT_DATABASE", nothing))
+    PormG.config.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", PormG.config.db_config_settings["database"]))
+
+    get!(PormG.config.db_config_settings, "username", get(ENV, "SEARCHLIGHT_USERNAME", nothing))
+    PormG.config.db_config_settings["username"] !== nothing && push!(dns, string("user=", PormG.config.db_config_settings["username"]))
+
+    println(join(dns, " "))
+    PormG.CONNECTIONS[path] = LibPQ.Connection(join(dns, " "))
+
   end
 end
 
-function connection() 
-  PormG.CONNECTIONS === nothing && throw("PormG is not connected to the database")
+# Function to get a connection from the pool
+function get_connection(name::String)::Union{SQLite.DB, Nothing}
+  return get(PormG.CONNECTIONS, name, nothing)
+end
 
-  if typeof(PormG.CONNECTIONS) == Vector{SQLite.DB}
-    return PormG.CONNECTIONS[end]
+# Function to remove a connection from the pool
+function remove_connection(name::String)
+  if haskey(PormG.CONNECTIONS, name)
+      close(PormG.CONNECTIONS[name])
+      delete!(PormG.CONNECTIONS, name)
   end
 end
 
+function connection(;key::String = "db") 
+  haskey(PormG.CONNECTIONS, key) || throw("PormG is not connected to the database")  
+    return PormG.CONNECTIONS[key]
+end
 """
     mutable struct Settings
 

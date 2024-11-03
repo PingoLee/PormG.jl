@@ -7,8 +7,9 @@ module Migrations
   using Dates
   using JSON
   using SQLite
+  using LibPQ
 
-  import PormG: Models, connection, sqlite_type_map, PormGModel, MODEL_PATH, sqlite_ignore_schema
+  import PormG: Models, connection, sqlite_type_map, PormGModel, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table
   import PormG.Generator: generate_models_from_db
 
   abstract type Migration end
@@ -147,7 +148,7 @@ module Migrations
     end
     
     # Get all schema
-    schemas = get_database_schema(db=db)
+    schemas = get_database_schema(db)
 
     # Colect all create instructions
     Instructions::Vector{Any} = []
@@ -163,7 +164,9 @@ module Migrations
 
   end
 
-  function get_database_schema(;db::SQLite.DB = connection())
+  
+
+  function get_database_schema(db::SQLite.DB)
     # Query the sqlite_master table to get the schema information
     schema_query = "SELECT type, name, sql FROM sqlite_master WHERE type='table' OR type='index';"
     schema_info = SQLite.DBInterface.execute(db, schema_query)
@@ -239,14 +242,14 @@ module Migrations
       # println(match.captures)
       column_name, column_type, nullable, default_value = match.captures
       # check if column_name is a primary key
-        if haskey(pk_map, column_name)
-          field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
-        elseif haskey(fk_map, column_name)
-          field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
-          on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
-        else
-          field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value == nothing ? default_value : replace(default_value, "'" => ""))
-        end
+      if haskey(pk_map, column_name)
+        field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
+      elseif haskey(fk_map, column_name)
+        field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
+        on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
+      else
+        field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value == nothing ? default_value : replace(default_value, "'" => ""))
+      end
               
       fields_dict[Symbol(column_name)] = field_instance
     end
@@ -300,6 +303,222 @@ module Migrations
   # # Example usage
   # makemigrations()
 
+
+#   # sugestion to PostgreSQL
   
+function import_models_from_sql(;db::LibPQ.Connection = connection(), 
+                                  force_replace::Bool=false, 
+                                  ignore_table::Vector{String} = postgres_ignore_table,
+                                  file::String="automatic_models.jl")
+
+  # check if db/models/automatic_models.jl exists
+  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
+      @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
+      return
+  elseif !ispath(joinpath(MODEL_PATH))
+      mkdir(joinpath(MODEL_PATH))
+  end
+  
+  # Get all schema
+  schemas = get_database_schema(db)
+
+  # Collect all create instructions
+  Instructions::Vector{Any} = []
+  # schemas is a DataFrame
+  #   Row │ table_schema  table_name                         columns                            primary_keys  foreign_keys              foreign_tables                     indexes 
+  #       │ String?       String?                            String?                            String?       String?                   String?                            String? 
+  #  ─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  #     1 │ public        auth_group                         id integer NOT NULL DEFAULT next…  id            missing                   missing                            missing 
+  #     2 │ public        auth_group_permissions             id bigint NOT NULL DEFAULT nextv…  id            group_id, permission_id   public.auth_group, public.auth_p…  missing 
+  for (index, schema) in enumerate(eachrow(schemas))
+    # check if each ignore_table value is contained in the schema.table_name
+    any(ignored -> occursin(ignored, schema.table_name), ignore_table) && continue
+    println(typeof(schema))
+    return schema
+    convertSQLToModel(schema) |> println
+    # push!(Instructions, convertSQLToModel(schema) |> Models.Model_to_str)
+    index > 4 && break
+  end
+
+  # generate_models_from_db(db, file, Instructions)
+end
+
+function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
+  query = """
+  SELECT
+      n.nspname AS table_schema,
+      c.relname AS table_name,
+      array_to_string(array_agg(quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod) ||
+                                CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END ||
+                                CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END), ', ') AS columns,
+      pk.pk_cols AS primary_keys,
+      fk.fk_cols AS foreign_keys,
+      fk.fk_tables AS foreign_tables,
+      ix.indexes AS indexes
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attribute a ON a.attrelid = c.oid
+  LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+  LEFT JOIN (
+      SELECT i.indrelid, array_to_string(array_agg(quote_ident(a.attname)), ', ') AS pk_cols
+      FROM pg_index i
+      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indisprimary
+      GROUP BY i.indrelid
+  ) pk ON pk.indrelid = c.oid
+  LEFT JOIN (
+      SELECT con.conrelid, 
+             array_to_string(array_agg(quote_ident(att2.attname)), ', ') AS fk_cols,
+             array_to_string(array_agg(quote_ident(nf.nspname) || '.' || quote_ident(cf.relname)), ', ') AS fk_tables
+      FROM pg_constraint con
+      JOIN pg_attribute att2 ON att2.attnum = ANY(con.conkey) AND att2.attrelid = con.conrelid
+      JOIN pg_class cf ON cf.oid = con.confrelid
+      JOIN pg_namespace nf ON nf.oid = cf.relnamespace
+      WHERE con.contype = 'f'
+      GROUP BY con.conrelid
+  ) fk ON fk.conrelid = c.oid
+  LEFT JOIN (
+      SELECT i.indexrelid, array_to_string(array_agg(quote_ident(att2.attname)), ', ') AS indexes
+      FROM pg_index i
+      JOIN pg_class idx ON idx.oid = i.indexrelid
+      JOIN pg_attribute att2 ON att2.attnum = ANY(i.indkey) AND att2.attrelid = i.indrelid
+      GROUP BY i.indexrelid
+  ) ix ON ix.indexrelid = c.oid
+  WHERE c.relkind = 'r'
+    $(schema === nothing ? "" : "AND n.nspname = '" * schema * "'" )
+    $(table === nothing ? "" : "AND c.relname = '" * table * "'" )
+    AND a.attnum > 0
+    AND NOT a.attisdropped
+  GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, ix.indexes;
+  """
+  result = LibPQ.execute(db, query) |> DataFrame
+  if nrow(result) == 0
+      error("Table definition not found")
+  end
+  println(result)
+  return result
+end
+
+function convertSQLToModel(row::DataFrameRow)
+    # Implement the conversion logic here
+
+    table_name = row[:table_name]
+    columns = split(row[:columns], ", ")
+    # SubString{String}["denominador numeric(5,1)", "meta numeric(5,1)", "perc numeric(5,1)", "perc_cat boolean NOT NULL", "apto_id bigint", "cat_cbo_id bigint", "ibge_id bigint NOT NULL", "tipologia_id bigint NOT NULL", "vinculo_id bigint NOT NULL", "encer boolean NOT NULL", "recalc boolean NOT NULL", "nu_cnes_id bigint", "mat_rh_id bigint", "tipo_id bigint NOT NULL", "metac numeric(5,1)", "dias_n_c integer", "id bigint NOT NULL DEFAULT nextval('dash_aval_avaliacao_mensal_id_seq'::regclass)", "periodo_id bigint", "mes integer", "ano integer", "n_apt_mot character varying(250)", "numerador numeric(5,1)", "resultado numeric(5,1)", "indicador_id bigint", "nu_ine_id bigint", "prof_id bigint"]
+    println(columns)
+    
+    # Define a dictionary to map SQL types to Models.jl field types
+    fk_map::Dict{String, Any} = Dict{String, Any}()
+    pk_map::Dict{String, Any} = Dict{String, Any}()
+
+    # Extract any primary key constraints
+
+
+    return row
+end
+
+# function generate_models_from_db(db::LibPQ.Connection, file::String, instructions::Vector{Any})
+#     # Implement the model generation logic here
+#     open(joinpath(MODEL_PATH, file), "w") do f
+#         for instruction in instructions
+#             println(f, instruction)
+#         end
+#     end
+# end
+
+  
+function get_database_schema(;pickup::Union{SQLite.DB, LibPQ.Connection} = connection())  
+  return get_database_schema(pickup)
+end
+
+
+# IMPORT MODELS FROM model.py
+function import_models_from_django(model_str::String;
+                                    db::Union{SQLite.DB, LibPQ.Connection} = connection(),
+                                    force_replace::Bool=false, 
+                                    ignore_table::Vector{String} = postgres_ignore_table,
+                                    file::String="automatic_models.jl")
+  # check if db/models/automatic_models.jl exists
+  if !isfile(model_str)
+    @warn("The file $(model_str) does not exists")
+    return
+  end
+
+  # check if db/models/automatic_models.jl exists
+  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
+      @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
+      return
+  elseif !ispath(joinpath(MODEL_PATH))
+      mkdir(joinpath(MODEL_PATH))
+  end
+
+  # Read the file
+  model_py_string = read(model_str, String)
+
+  # Get all schema
+  model_regex = r"class\s+(\w+)\(models\.Model\):\n((?:\s*#[^\n]*\n|\s*[^\n]+\n)*?)(?=(\n+)?class\s|\Z)" 
+  field_regex = r"\s*(\w+)\s*=\s*models\.(\w+)\(([^)]*)\)"
+  
+ 
+  for match in eachmatch(model_regex, model_py_string, overlap = true)
+    println(match)
+    
+    class_content = match.captures[2]  # Extract the class content
+
+    # Further process class_content:
+    #   - Use regex to extract field names, types, and options
+    #   - Translate Python types to corresponding Julia types
+    #   - Generate Julia structs or types to represent the models
+    
+    println(class_name)
+    println("oooo")
+    println(class_content)
+
+    # Extract table name
+    class_name = match.captures[1]  # Extract the class name
+
+    # Define a dictionary to map SQL types to Models.jl field types
+    check_pk::Bool = false
+    fk_map::Dict{String, Any} = Dict{String, Any}()
+    pk_map::Dict{String, Any} = Dict{String, Any}()
+
+    # Iterate over the fields in the class content
+    fields_dict = Dict{Symbol, Any}()
+    for match in eachmatch(field_regex, class_content)
+      field_name = match.captures[1]
+      field_type = match.captures[2]
+      field_options = match.captures[3]      
+
+      
+                  
+      # Parse field options
+      options = Dict{String, Any}()
+      capture::Bool = true
+      for option in split(field_options, ",")
+        key_value = split(option, "=")
+        if length(key_value) == 2
+          key = strip(key_value[1])
+          value = strip(key_value[2])
+          # primary key are not suported yeat
+          if key == "primary_key"
+            @warn("Primary key is not supported yet, the field $field_name will be ignored in model $class_name")
+            capture = false
+          end
+          options[key] = value
+        end
+      end
+
+      # Check if the field is a primary key
+
+      # # Generate the field instance
+      if capture
+        fields_dict[Symbol(field_name)] = getfield(Models, field_type)(options...)
+      end
+          
+    end
+    
+  end
+
+end
 
 end # module Migrations

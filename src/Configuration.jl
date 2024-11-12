@@ -114,11 +114,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       SQLite.DB()
     end
 
-    if PormG.CONNECTIONS === nothing 
-      (PormG.CONNECTIONS = [db]) 
-    else
-      (push!(PormG.CONNECTIONS, db)[end])
-    end
+    PormG.CONNECTIONS[path] = db
 
   elseif PormG.config.db_config_settings["adapter"] == "PostgreSQL"
     dns = String[]

@@ -1,7 +1,7 @@
 module Generator
 
 import PormG: MODEL_PATH
-using SQLite
+using SQLite, LibPQ
 
 # I want generate files with db models, can you help me?
 # example:
@@ -30,11 +30,12 @@ Generate models from a database and write them to a file.
 - `file::String`: The name of the file to write the generated models to.
 - `Instructions::Vector{Any}`: A vector of instructions for generating the models.
 """
-function generate_models_from_db(db::SQLite.DB, file::String, Instructions::Vector{Any}) :: Nothing 
+function generate_models_from_db(db::Union{SQLite.DB, LibPQ.LibPQ.Connection }, file::String, Instructions::Vector{Any}) :: Nothing 
 
   open(joinpath(MODEL_PATH, file), "w") do f
     write(f, """module Models
-    using PormG.Models""")
+    using PormG.Models
+    """)
     for table in Instructions
       write(f, "$(table)\n\n")      
     end

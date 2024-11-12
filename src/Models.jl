@@ -321,9 +321,24 @@ end
 end
 
 function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return SIDField(verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(auto_increment isa Bool) && throw(ArgumentError("The 'auto_increment' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "IDField", format2int64)
+  # Return the field instance
+  return SIDField(
+    verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment,
+    unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable
+  ) 
 end
-
 
 @kwdef mutable struct sCharField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
@@ -376,8 +391,29 @@ end
 end
 
 function IntegerField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  
+  # Validate default using validate_default
   default = validate_default(default, Union{Int64, Nothing}, "IntegerField", format2int64)
-  return sIntegerField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Booleadn"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  
+  return sIntegerField(
+    verbose_name=verbose_name,
+    primary_key=false,
+    unique=unique,
+    blank=blank,
+    null=null,
+    db_index=db_index,
+    default=default,
+    editable=editable
+  )  
 end
 
 @kwdef mutable struct sBigIntegerField <: PormGField
@@ -394,7 +430,29 @@ end
 end
 
 function BigIntegerField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sBigIntegerField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  
+  # Validate default using validate_default
+  default = validate_default(default, Union{Int64, Nothing}, "BigIntegerField", format2int64)
+  
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  
+  return sBigIntegerField(
+    verbose_name=verbose_name,
+    primary_key=false,
+    unique=unique,
+    blank=blank,
+    null=null,
+    db_index=db_index,
+    default=default,
+    editable=editable
+  )  
 end
 
 @kwdef mutable struct sForeignKey <: PormGField
@@ -415,12 +473,39 @@ end
   related_name::Union{String, Nothing} = nothing
   type::String = "BIGINT"
   formater::Function = format_number_sql
+  db_constraint::Bool = true
 end
 
-function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing)
-  # TODO: validate the to parameter how, on_delete, on_update and others
-  return sForeignKey(verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field, on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name)  
+function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
+  # Validate 'to' parameter
+  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
+  # Validate optional string parameters
+  !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(on_delete isa Union{Nothing, String}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
+  !(on_update isa Union{Nothing, String}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
+  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
+  # Return the field instance
+  return sForeignKey(
+    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
+    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint
+  )  
 end
+
 @kwdef mutable struct sBooleanField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
   primary_key::Bool = false
@@ -435,7 +520,21 @@ end
 end
 
 function BooleanField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sBooleanField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{Bool, Nothing}, "BooleanField", x -> parse(Bool, string(x)))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sBooleanField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 @kwdef mutable struct sDateField <: PormGField
@@ -452,7 +551,21 @@ end
 end
 
 function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sDateField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{Date, Nothing}, "DateField", x -> Date(x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sDateField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 
@@ -470,7 +583,21 @@ end
 end
 
 function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sDateTimeField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{DateTime, Nothing}, "DateTimeField", x -> DateTime(x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sDateTimeField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 @kwdef mutable struct sDecimalField <: PormGField
@@ -489,7 +616,33 @@ end
 end
 
 function DecimalField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_digits=10, decimal_places=2)
-  return sDecimalField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, max_digits=max_digits, decimal_places=decimal_places)
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  
+  # Validate default using validate_default
+  default = validate_default(default, Union{Float64, Nothing}, "DecimalField", parse)
+  max_digits = validate_default(max_digits, Int, "DecimalField", format2int64)
+  decimal_places = validate_default(decimal_places, Int, "DecimalField", format2int64)
+  
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  
+  return sDecimalField(
+    verbose_name=verbose_name,
+    primary_key=false,
+    unique=unique,
+    blank=blank,
+    null=null,
+    db_index=db_index,
+    default=default,
+    editable=editable,
+    max_digits=max_digits,
+    decimal_places=decimal_places
+  )
 end
 
 @kwdef mutable struct sEmailField <: PormGField
@@ -506,7 +659,21 @@ end
 end
 
 function EmailField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sEmailField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{String, Nothing}, "EmailField", x -> parse(String, x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sEmailField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 @kwdef mutable struct sFloatField <: PormGField
@@ -523,8 +690,29 @@ end
 end
 
 function FloatField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  default  = validate_default(default, Union{Float64, String, Int64, Nothing}, "FloatField", parse)
-  return sFloatField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  
+  # Validate default using validate_default
+  default = validate_default(default, Union{Float64, String, Int64, Nothing}, "FloatField", parse)
+  
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  
+  return sFloatField(
+    verbose_name=verbose_name,
+    primary_key=false,
+    unique=unique,
+    blank=blank,
+    null=null,
+    db_index=db_index,
+    default=default,
+    editable=editable
+  )  
 end
 
 @kwdef mutable struct sImageField <: PormGField
@@ -541,7 +729,21 @@ end
 end
 
 function ImageField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sImageField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{String, Nothing}, "ImageField", x -> parse(String, x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sImageField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 @kwdef mutable struct sTextField <: PormGField
@@ -558,7 +760,21 @@ end
 end
 
 function TextField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sTextField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{String, Nothing}, "TextField", x -> parse(String, x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sTextField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 @kwdef mutable struct sTimeField <: PormGField
@@ -575,7 +791,21 @@ end
 end
 
 function TimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sTimeField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{Time, Nothing}, "TimeField", x -> Time(x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sTimeField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
 
 @kwdef mutable struct sBinaryField <: PormGField
@@ -592,9 +822,22 @@ end
 end
 
 function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  return sBinaryField(verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable)  
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", x -> Base64.decode(x))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sBinaryField(
+    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable
+  )  
 end
-
 
 # axiliar function
 
@@ -612,8 +855,8 @@ function format_string(x)
 end
 
 # convert string to Int64
-function format2int64(x::String)::Int64
-  return parse(Int64, x) 
+function format2int64(x::AbstractString)::Int64
+  return parse(Int64, x |> string) 
 end
 
 
@@ -638,7 +881,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
     return default
   else
     try
-      converter(default)
+      return converter(default)
     catch e
       throw(ArgumentError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end

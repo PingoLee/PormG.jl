@@ -248,7 +248,7 @@ module Migrations
         field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
         on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
       else
-        field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value == nothing ? default_value : replace(default_value, "'" => ""))
+        field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value === nothing ? default_value : replace(default_value, "'" => ""))
       end
               
       fields_dict[Symbol(column_name)] = field_instance
@@ -433,92 +433,131 @@ end
 
 
 # IMPORT MODELS FROM model.py
-function import_models_from_django(model_str::String;
-                                    db::Union{SQLite.DB, LibPQ.Connection} = connection(),
-                                    force_replace::Bool=false, 
-                                    ignore_table::Vector{String} = postgres_ignore_table,
-                                    file::String="automatic_models.jl")
+function django_to_string(path::String)
   # check if db/models/automatic_models.jl exists
-  if !isfile(model_str)
-    @warn("The file $(model_str) does not exists")
+  if !isfile(path)
+    @warn("The file $(path) does not exists")
     return
   end
 
-  # check if db/models/automatic_models.jl exists
-  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
-      @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
-      return
-  elseif !ispath(joinpath(MODEL_PATH))
-      mkdir(joinpath(MODEL_PATH))
-  end
-
   # Read the file
-  model_py_string = read(model_str, String)
+  return read(path, String)
+end
 
-  # Get all schema
-  model_regex = r"class\s+(\w+)\(models\.Model\):\n((?:\s*#[^\n]*\n|\s*[^\n]+\n)*?)(?=(\n+)?class\s|\Z)" 
-  field_regex = r"\s*(\w+)\s*=\s*models\.(\w+)\(([^)]*)\)"
-  
- 
-  for match in eachmatch(model_regex, model_py_string, overlap = true)
-    println(match)
-    
-    class_content = match.captures[2]  # Extract the class content
-
-    # Further process class_content:
-    #   - Use regex to extract field names, types, and options
-    #   - Translate Python types to corresponding Julia types
-    #   - Generate Julia structs or types to represent the models
-    
-    println(class_name)
-    println("oooo")
-    println(class_content)
-
-    # Extract table name
-    class_name = match.captures[1]  # Extract the class name
-
-    # Define a dictionary to map SQL types to Models.jl field types
-    check_pk::Bool = false
-    fk_map::Dict{String, Any} = Dict{String, Any}()
-    pk_map::Dict{String, Any} = Dict{String, Any}()
-
-    # Iterate over the fields in the class content
-    fields_dict = Dict{Symbol, Any}()
-    for match in eachmatch(field_regex, class_content)
-      field_name = match.captures[1]
-      field_type = match.captures[2]
-      field_options = match.captures[3]      
-
-      
-                  
-      # Parse field options
-      options = Dict{String, Any}()
-      capture::Bool = true
-      for option in split(field_options, ",")
-        key_value = split(option, "=")
-        if length(key_value) == 2
-          key = strip(key_value[1])
-          value = strip(key_value[2])
-          # primary key are not suported yeat
-          if key == "primary_key"
-            @warn("Primary key is not supported yet, the field $field_name will be ignored in model $class_name")
-            capture = false
-          end
-          options[key] = value
-        end
-      end
-
-      # Check if the field is a primary key
-
-      # # Generate the field instance
-      if capture
-        fields_dict[Symbol(field_name)] = getfield(Models, field_type)(options...)
-      end
-          
+function import_models_from_django(
+    model_py_string::String;
+    db::Union{SQLite.DB, LibPQ.Connection} = connection(),
+    force_replace::Bool = false,
+    ignore_table::Vector{String} = postgres_ignore_table,
+    file::String = "automatic_models.jl"
+  )
+    # Check if db/models/automatic_models.jl exists
+    if isfile(joinpath(MODEL_PATH, file)) && !force_replace
+        @warn(
+            "The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it"
+        )
+        return
+    elseif !ispath(joinpath(MODEL_PATH))
+        mkdir(joinpath(MODEL_PATH))
     end
-    
-  end
 
+    # Get all schema
+    model_regex = r"class\s+(\w+)\(models\.Model\):\n((?:\s*#[^\n]*\n|\s*[^\n]+\n)*?)(?=(\n+)?class\s|\Z)"
+    # field_regex = r"\s*(\w+)\s*=\s*models\.(\w+)\(([^,]+)(?:,\s*(.*))?\)"
+    field_regex = r"\s*(\w+)\s*=\s*models\.(\w+)\(([^)]*)\)"
+
+    
+
+    Instructions::Vector{Any} = []
+    for match in eachmatch(model_regex, model_py_string, overlap = true)
+        class_content = match.captures[2]  # Extract the class content
+        class_name = match.captures[1]  # Extract the class name
+
+        println("Processing class: ", class_name)
+        println(class_content)
+
+        # Initialize fields_dict
+        fields_dict = Dict{Symbol, Any}()
+        has_primary_key = false  # Flag to check if a primary key exists
+        fk_map::Dict{String, Any} = Dict{String, Any}()
+        pk_map::Dict{String, Any} = Dict{String, Any}()
+        # Iterate over the fields in the class content
+        for field_match in eachmatch(field_regex, class_content)
+            field_name = field_match.captures[1]
+            field_type = field_match.captures[2]
+            related_model = missing
+            field_options = field_match.captures[3]
+
+            # Parse field options
+            options = Dict{Symbol, Any}()
+            capture::Bool = true            
+
+            for option in split(field_options, ",")
+              key_value = split(option, "=")
+              if length(key_value) == 2
+                key = strip(key_value[1])
+                value = strip(key_value[2]) |> String
+                value == "True" && (value = true)
+                value == "False" && (value = false)
+                # print(" ", value, " ")
+
+                # Handle quoted string values
+                if value isa String && startswith(value, "\"") && endswith(value, "\"")
+                  value = value[2:end-1]  # Remove enclosing quotes
+                end
+
+                # Check if the field is a primary key
+                if key == "primary_key"
+                  @warn("Primary key is not supported yet, the field $field_name will be ignored in model $class_name")
+                  capture = false
+                  has_primary_key = true
+                end
+                options[key |> Symbol] = value
+              else
+                println("Field: ", option)
+                if field_type == "ForeignKey"
+                  related_model = option |> String
+                end
+                println("Option: ", related_model)
+              end
+
+            end
+
+            # Capture the field if not ignored
+            if capture
+              try
+                println("Processing field: ", options)
+                # Handle ForeignKey related model
+                if field_type == "ForeignKey"                
+                  fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(related_model; options...)
+                else
+                  fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
+                end
+
+
+              catch e
+                # Catch any exceptions and throw with additional information
+                error_msg = "Error processing field '$field_name' in class '$class_name': $(e.msg)"
+                throw(ErrorException(error_msg))
+              end
+            end
+        end
+
+        # Insert IDField if no primary key is defined
+        if !has_primary_key
+            println("No primary key found in class '$class_name'. Adding an IDField named 'id'.")
+            fields_dict[:id] = Models.IDField()
+        end
+
+        # println(fields_dict)
+
+        # Collect all create instructions
+        if length(fields_dict) > 0
+          push!(Instructions, Models.Model(class_name, fields_dict) |> Models.Model_to_str)
+        end
+    end
+
+    generate_models_from_db(db, file, Instructions)
 end
 
 end # module Migrations

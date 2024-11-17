@@ -4,7 +4,7 @@ using Dates
 using TimeZones
 using PormG: PormGField, PormGModel, reserved_words
 
-export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField, IDField, BigIntegerField
+export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField, IDField, BigIntegerField, OneToOneField, AutoField
 
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
@@ -353,19 +353,41 @@ end
   editable::Bool = false
   type::String = "VARCHAR"
   formater::Function = format_text_sql
+  choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N = nothing
+  
 end
 
-function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, db_column=nothing, default=nothing, editable=false)  
+function parse_choices(choices_str::String)
+  # Parse a string into a tuple of tuples
+  # println(choices_str)
+  choices = ()
+  pattern = r"\(([^()]+)\)"
+  for m in eachmatch(pattern, choices_str)
+    inner = m.captures[1]
+    values = split(inner, ",")
+    if length(values) == 2
+      key = strip(values[1]) |> string
+      value = strip(values[2]) |> string
+      choices = (choices..., (key, value))
+    else
+      throw(ArgumentError("Invalid choices format"))
+    end
+  end
+  return choices
+end
+
+function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, db_column=nothing, default=nothing, choices=nothing, editable=false)  
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
   max_length > 255 && throw(ArgumentError("The max_length must be less than or equal to 255"))
   max_length < 1 && throw(ArgumentError("The max_length must be greater than 1"))
-  if !(default isa Nothing) && !(default isa AbstractString)
-    throw(ArgumentError("The default value must be a string"))
+  default isa Int && (default = string(default))
+  if !(default isa Nothing) && !(default isa AbstractString) 
+    throw(ArgumentError("The default value must be a string, but got $(default) ($(typeof(default)))"))
   end
   if !(default isa Nothing) && length(default) > max_length
-    throw(ArgumentError("The default value exceeds the max_length"))
+    throw(ArgumentError("The default value exceeds the max_length, but got $(length(default)) and max_length is $(max_length)"))
   end
   !(unique isa Bool) && throw(ArgumentError("The unique must be a boolean"))
   !(blank isa Bool) && throw(ArgumentError("The blank must be a boolean"))
@@ -373,7 +395,30 @@ function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=f
   !(db_index isa Bool) && throw(ArgumentError("The db_index must be a boolean"))
   !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The db_column must be a string or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The editable must be a boolean"))  
-  return sCharField(verbose_name=verbose_name, max_length=max_length, unique=unique, blank=blank, null=null, db_index=db_index, db_column=db_column, default=default, editable=editable)  
+  if choices isa AbstractString
+    choices = parse_choices(choices)
+  elseif !(choices isa Union{Nothing, NTuple{N, Tuple{AbstractString, AbstractString}} where N })
+    println(choices)
+    println(choices |> typeof)
+    throw(ArgumentError("The 'choices' must be a String or Tuple{Tuple{String,String}}, but got $(choices) ($(typeof(choices)))"))
+  end
+  if choices !== nothing
+    for choice in choices
+      if !(choice[1] isa AbstractString)
+        throw(ArgumentError("Choice values must be strings"))
+      end
+      if length(choice[1]) > max_length
+        throw(ArgumentError("Choices cannot exceed max_length"))
+      end
+    end
+    if default !== nothing
+      valid_defaults = choices isa Vector{String} ? choices : [c[1] for c in choices]
+      if !(default in valid_defaults)
+        throw(ArgumentError("The default value must be one of the choices"))
+      end
+    end
+  end
+  return sCharField(verbose_name=verbose_name, max_length=max_length, unique=unique, blank=blank, null=null, db_index=db_index, db_column=db_column, default=default, choices=choices, editable=editable)  
 end
 
 
@@ -477,6 +522,7 @@ end
 end
 
 function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
+  # println(on_delete |> typeof)
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
   # Validate verbose_name
@@ -492,11 +538,11 @@ function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
   # Validate optional string parameters
-  !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_delete isa Union{Nothing, String}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
-  !(on_update isa Union{Nothing, String}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
-  !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
-  !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
+  !(pk_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
+  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
   !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
   # Return the field instance
   return sForeignKey(
@@ -546,13 +592,16 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  auto_now::Bool = false
+  auto_now_add::Bool = false
+  auto_created::Bool = false
   type::String = "DATE"
   formater::Function = format_text_sql
 end
 
-function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false, auto_created=false)
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Date, Nothing}, "DateField", x -> Date(x))
   # Validate other parameters
@@ -561,13 +610,16 @@ function DateField(; verbose_name=nothing, unique=false, blank=false, null=false
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
+  !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
+  # Validate auto_created
+  !(auto_created isa Bool) && throw(ArgumentError("The 'auto_created' must be a Boolean"))
   # Return the field instance
   return sDateField(
     verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add, auto_created=auto_created
   )  
 end
-
 
 @kwdef mutable struct sDateTimeField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
@@ -578,13 +630,16 @@ end
   db_index::Bool = false
   default::Union{String, Nothing} = nothing
   editable::Bool = false
+  auto_now::Bool = false
+  auto_now_add::Bool = false
+  auto_created::Bool = false
   type::String = "DATETIME"
   formater::Function = format_text_sql
 end
 
-function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false, auto_created=false)
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{DateTime, Nothing}, "DateTimeField", x -> DateTime(x))
   # Validate other parameters
@@ -593,10 +648,14 @@ function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=f
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
+  !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
+  # Validate auto_created
+  !(auto_created isa Bool) && throw(ArgumentError("The 'auto_created' must be a Boolean"))
   # Return the field instance
   return sDateTimeField(
     verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add, auto_created=auto_created
   )  
 end
 
@@ -620,7 +679,7 @@ function DecimalField(; verbose_name=nothing, unique=false, blank=false, null=fa
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   
   # Validate default using validate_default
-  default = validate_default(default, Union{Float64, Nothing}, "DecimalField", parse)
+  default = validate_default(default, Union{Float64, Nothing}, "DecimalField", format2float64)
   max_digits = validate_default(max_digits, Int, "DecimalField", format2int64)
   decimal_places = validate_default(decimal_places, Int, "DecimalField", format2int64)
   
@@ -819,13 +878,26 @@ end
   editable::Bool = false
   type::String = "BLOB"
   formater::Function = format_text_sql
+  max_length::Union{Int, Nothing} = nothing
 end
 
-function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_length=nothing)
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", x -> Base64.decode(x))
+  if max_length isa AbstractString
+    if occursin(r"\d+", max_length)
+      max_length = validate_default(max_length, Int, "BinaryField", format2int64)
+    else
+      max_length = nothing
+    end
+  end
+  if !(max_length isa Union{Nothing, Int})
+    throw(ArgumentError("The 'max_length' must be an integer or nothing"))
+  elseif max_length isa Int && max_length <= 0
+    throw(ArgumentError("The 'max_length' must be a positive integer"))
+  end
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -834,9 +906,138 @@ function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=fal
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBinaryField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
-  )  
+    verbose_name=verbose_name,
+    unique=unique,
+    blank=blank,
+    null=null,
+    db_index=db_index,
+    default=default,
+    editable=editable,
+    max_length=max_length
+  )
+end
+
+@kwdef mutable struct sOneToOneField <: PormGField
+  # Same fields as sForeignKey but with unique=true by default
+  unique::Bool = true
+  verbose_name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Int64, Nothing} = nothing
+  editable::Bool = false
+  to::Union{String, PormGModel, Nothing} = nothing
+  pk_field::Union{String, Symbol, Nothing} = nothing
+  on_delete::Union{String, Nothing} = nothing
+  on_update::Union{String, Nothing} = nothing
+  deferrable::Bool = false
+  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
+  related_name::Union{String, Nothing} = nothing
+  type::String = "BIGINT"
+  formater::Function = format_number_sql
+  db_constraint::Bool = true
+end
+
+function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
+  # Similar validation as in ForeignKey
+  # Validate 'to' parameter
+  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
+  # Validate optional string parameters
+  !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
+  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
+  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
+  # Return the field instance
+  return sOneToOneField(
+    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
+    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint
+  )
+end
+
+@kwdef mutable struct sAutoField <: PormGField
+  verbose_name::Union{String, Nothing} = nothing
+  primary_key::Bool = true
+  auto_increment::Bool = true
+  unique::Bool = true
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Int64, Nothing} = nothing
+  editable::Bool = false
+  type::String = "INTEGER"
+  formater::Function = format_number_sql
+end
+
+function AutoField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(auto_increment isa Bool) && throw(ArgumentError("The 'auto_increment' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
+  # Return the field instance
+  return sAutoField(
+    verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment,
+    unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable
+  )
+end
+
+@kwdef mutable struct sDurationField <: PormGField
+  verbose_name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Period, Nothing} = nothing
+  editable::Bool = false
+  type::String = "INTERVAL"
+  formater::Function = format_text_sql
+end
+
+function DurationField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate default
+  default = validate_default(default, Union{Period, Nothing}, "DurationField", x -> parse(Period, string(x)))
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Return the field instance
+  return sDurationField(
+    verbose_name=verbose_name,
+    unique=unique,
+    blank=blank,
+    null=null,
+    db_index=db_index,
+    default=default,
+    editable=editable
+  )
 end
 
 # axiliar function
@@ -857,6 +1058,10 @@ end
 # convert string to Int64
 function format2int64(x::AbstractString)::Int64
   return parse(Int64, x |> string) 
+end
+# convert string to Float64
+function format2float64(x::Union{Int, AbstractString})::Float64
+  return parse(Float64, x |> string) 
 end
 
 

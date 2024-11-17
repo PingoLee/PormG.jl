@@ -1,4 +1,5 @@
 db/*
 Manifest.toml
 test/pg/db/connection.yml
-todo.md
+test/pg/db_2/connection.yml
+todo.txt

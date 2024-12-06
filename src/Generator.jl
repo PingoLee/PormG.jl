@@ -33,8 +33,8 @@ Generate models from a database and write them to a file.
 function generate_models_from_db(db::Union{SQLite.DB, LibPQ.LibPQ.Connection }, file::String, Instructions::Vector{Any}) :: Nothing 
 
   open(joinpath(MODEL_PATH, file), "w") do f
-    write(f, """module Models
-    using PormG.Models
+    write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
+    import PormG.Models
     """)
     for table in Instructions
       write(f, "$(table)\n\n")      

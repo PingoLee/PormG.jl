@@ -134,7 +134,7 @@ module Migrations
 
   
 
-  function import_models_from_sql(;db::SQLite.DB = connection(), 
+  function import_models_from_sqlite(;db::SQLite.DB = connection(), 
                                     force_replace::Bool=false, 
                                     ignore_schema::Vector{String} = sqlite_ignore_schema,
                                     file::String="automatic_models.jl")
@@ -311,7 +311,7 @@ module Migrations
 #
 
   
-function import_models_from_sql(;db::LibPQ.Connection = connection(), 
+function import_models_from_postgres(;db::LibPQ.Connection = connection(), 
                                   force_replace::Bool=false, 
                                   ignore_table::Vector{String} = postgres_ignore_table,
                                   file::String="automatic_models.jl")
@@ -460,7 +460,7 @@ function django_to_string(path::String)
   end
 
   # Read the file  
-  return replace(read(Loc, String), "'" => "\"")
+  return replace(read(path, String), "'" => "\"")
 end
 
 """
@@ -469,7 +469,7 @@ end
 Imports Django models from a given `model.py` file content string and generates corresponding Julia models.
 
 # Arguments
-- `model_py_string::String`: The content of the `model.py` file as a string; user django_to_string(path) to read the file.
+- `model_py_string::String`: The content of the `model.py` file as a string; user django_to_string(path) to read the file; or insert the file path.
 - `db::Union{SQLite.DB, LibPQ.Connection}`: The database connection object. Defaults to `connection()`.
 - `force_replace::Bool`: If `true`, forces replacement of the existing models file. Defaults to `false`.
 - `ignore_table::Vector{String}`: Tables to ignore during the import process. Defaults to `postgres_ignore_table`.
@@ -500,6 +500,11 @@ function import_models_from_django(
       return
   elseif !ispath(joinpath(MODEL_PATH))
       mkdir(joinpath(MODEL_PATH))
+  end
+
+  # check if model_py_string is a path to file and if yes, call django_to_string
+  if isfile(model_py_string)
+    model_py_string = django_to_string(model_py_string)
   end
 
   # check if model_py_string is a model.py file content and not a path

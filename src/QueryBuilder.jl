@@ -4,7 +4,7 @@ import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper,
 import DataFrames
 import Dates, Intervals
 import ..PormG.Models: CharField, IntegerField
-using SQLite
+using SQLite, LibPQ
 
 #
 # SQLTypeArrays Objects
@@ -30,7 +30,7 @@ end
   order::Vector{String} = [] # values to be used in order query  
   df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{Dict{String, Any}} = [] # dataframe to be used in join query
-  connection::Union{SQLite.DB, Nothing}
+  connection::Union{SQLite.DB, LibPQ.LibPQ.Connection, Nothing} = nothing
   array_defs::SQLTypeArrays = SQLArrays()
 end
 
@@ -211,7 +211,7 @@ QUARTER(x) = Concat([
 
 mutable struct SQLQuery <: SQLType
   model_name::PormGModel
-  values::Vector{Union{String, SQLTypeF}}
+  values::Vector{Union{SQLTypeText, SQLTypeF}}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
   create::Dict{String,Union{Int64, String}}
   limit::Int64
@@ -242,7 +242,11 @@ function _get_pair_list_joins(q::SQLType, v::SQLTypeQor)
   end
 end
 
-function up_values(q::SQLType, values::NTuple{N, Union{String, SQLTypeF, Vector{String}}} where N)
+#
+# Functions to build the SQLType object
+#
+
+function up_values!(q::SQLType, values::NTuple{N, Union{String, SQLTypeF, Vector{String}}} where N)
   # every call of values, reset the values
   q.values = []
   for v in values 
@@ -250,7 +254,9 @@ function up_values(q::SQLType, values::NTuple{N, Union{String, SQLTypeF, Vector{
       push!(q.values, _check_function(v))
     elseif isa(v, String)
       check = String.(split(v, "__@"))
-      if haskey(PormGsuffix, check[end])
+      if size(check, 1) == 1
+        push!(q.values, SQLText(v))
+      elseif haskey(PormGsuffix, check[end])
         throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
       else
         _function = _check_function(check)
@@ -262,16 +268,17 @@ function up_values(q::SQLType, values::NTuple{N, Union{String, SQLTypeF, Vector{
     end    
   end 
   
-  # return Object(object =q)
+  return q
 end
   
-function up_create(q::SQLType, values::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}})
+function up_create!(q::SQLType, values::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}})
   for (k,v) in values   
     q.values[k] = v 
   end
+  return q
 end
 
-function up_filter(q::SQLType, filter)
+function up_filter!(q::SQLType, filter)
   for v in filter
     if isa(v, SQLTypeQ) || isa(v, SQLTypeQor) 
       push!(q.filter, v) # TODO I need process the Qor and Q with _check_filter
@@ -281,7 +288,7 @@ function up_filter(q::SQLType, filter)
       error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
     end
   end
-  return Object(object =q)
+  return q
 end
 
 function _query_select(array::Array{String, 2})
@@ -321,13 +328,12 @@ end
   
 Base.@kwdef mutable struct Object <: SQLObject
   object::SQLType
-  values::Function = (x...) -> up_values(object, x) 
-  filter::Function = (x...) -> up_filter(object, x) 
-  create::Function = (x...) -> up_create(object, x) 
+  values::Function = (x...) -> up_values!(object, x) 
+  filter::Function = (x...) -> up_filter!(object, x) 
+  create::Function = (x...) -> up_create!(object, x) 
   annotate::Function = (x...) -> annotate(object, x) 
   query::Function = () -> query(object)
 end
-
 
 export object
 
@@ -903,7 +909,9 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   end
 end
 
-function build(object::SQLType; connection=CONNECTIONS[end])
+function build(object::SQLType)
+  object.model_name.connect_key |> println
+  connection = CONNECTIONS[object.model_name.connect_key]
   println(connection)
   instruct = InstrucObject(text = "", 
     object = object,

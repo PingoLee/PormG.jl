@@ -13,6 +13,7 @@ export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField
   field_names::Vector{String} = [] # needed to create sql queries with joins
   reverse_fields::Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}} = Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}}() # needed to create sql queries with joins
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
+  connect_key::Union{String, Nothing} = nothing # needed to get the connection
 end
 
 """
@@ -55,8 +56,10 @@ function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
 end
 
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
-function set_models(_module::Module)::Nothing
-  models = get_all_models(_module)
+function set_models(_module::Module, path::String)::Nothing
+  models = get_all_models(_module)  
+  connect_key = split(path, "/")[end-1]
+
   # set the original module in models
   for model in models
     model._module = _module
@@ -65,13 +68,13 @@ function set_models(_module::Module)::Nothing
   for model in models
     dict_tables_c = Dict{String, Int}()
     dict_tables_fiels = Dict{String, Vector{String}}()
-    reverse_fields = Dict{String, Tuple{Symbol, Symbol, Symbol}}()
-    println(model.name)
+    model.connect_key = connect_key
+    # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey
         field_to = getfield(_module, field.to |> Symbol)
         if field_to isa PormGModel
-          println("field_to_", field_to.name)
+          # println("field_to_", field_to.name)
           if haskey(dict_tables_c, field_to.name)
             dict_tables_c[field_to.name] += 1
             push!(dict_tables_fiels[field_to.name], field_name)
@@ -81,9 +84,11 @@ function set_models(_module::Module)::Nothing
           end
           if dict_tables_c[field_to.name] > 1
             if field.related_name === nothing 
-              throw(ArgumentError("The field $field_name in the model $model is a ForeignKey and the related_name is not defined"))
-            elseif haskey(field_to.reverse_fields, field.related_name)
-              throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
+              field.related_name = string(model.name, "_", field_name) |> lowercase
+              @warn("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
+            end
+            if haskey(field_to.reverse_fields, field.related_name)
+              throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
             else
               field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
             end

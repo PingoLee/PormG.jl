@@ -2,7 +2,7 @@ module Dialect
 using SQLite
 using DataFrames
 using LibPQ
-import ..PormG: SQLConn, SQLType, SQLText, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, sqlite_date_format_map, sqlite_type_map_reverse
+import ..PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, sqlite_date_format_map, sqlite_type_map_reverse
 
 # PostgreSQL
 function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
@@ -42,7 +42,7 @@ end
 # # 					output_field=CharField()
 # # 				)))
 function VALUE(value::String, conn::LibPQ.Connection)
-  return "($(value))::text"
+  return "('$(value)')::text"
 end
 function VALUE(value::String, conn::SQLite.DB)
   return "'$(value)'"

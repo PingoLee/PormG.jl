@@ -19,6 +19,7 @@ abstract type SQLTypeF <: SQLType end
 abstract type SQLTypeOper <: SQLType end
 abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
 abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations 
+abstract type SQLTypeField <: SQLType end # Field to be used in the query (values, filters, etc)
 abstract type SQLObject <: PormGAbstractType end
 abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end

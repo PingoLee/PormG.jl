@@ -627,7 +627,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
               continue
             elseif field_type in ["ForeignKey", "OneToOneField" ]              
               # println(related_model, " ", related_model |> typeof)
-              fields_dict[Symbol(string(field_name, "_id"))] = getfield(Models, Symbol(field_type))(related_model; options...)
+              fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(related_model; options...)
             else
               fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
             end
@@ -661,6 +661,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
       else
         if field_type in ["ForeignKey", "OneToOneField" ]
           related_model = replace(key_value[1], "\"" => "") |> string
+          options[:pk_field] = "id"
         end
       end
   end

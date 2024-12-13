@@ -26,6 +26,6 @@ Base.include(PormG, "db/models/automatic_models.jl")
 import PormG.automatic_models as AM
 
 query = AM.Ind_desem_municipio |> object
-query.filter("ibge_id"=>1, "quad_avaliacao_id__@gte"=>202201, "quad_avaliacao_id__@lte"=>202201)
-query.values("quad_avaliacao_id", "quad_avaliacao__curto", "porcentagem", "sim", "total", "indicador__abreviado", "indicador_id")
+query.filter("ibge"=>1, "quad_avaliacao__@gte"=>202201, "quad_avaliacao__@lte"=>202201)
+query.values("quad_avaliacao", "quad_avaliacao__curto", "porcentagem", "sim", "total", "indicador__abreviado", "indicador")
 query.query()

@@ -1,6 +1,6 @@
 module QueryBuilder
 
-import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, SQLTypeText, SQLTypeField, SQLTypeArrays, PormGsuffix, PormGtrasnform, PormGModel, Dialect, PormGField, CONNECTIONS
+import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObject, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGsuffix, PormGtrasnform, PormGModel, Dialect, PormGField, CONNECTIONS, PormGTypeField
 import DataFrames
 import Dates, Intervals
 import ..PormG.Models: CharField, IntegerField
@@ -28,14 +28,13 @@ end
   group::Vector{String} = []  # values to be used in group query
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
-  df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+  # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{Dict{String, Any}} = [] # array of dictionary to be used in join query
   array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   connection::Union{SQLite.DB, LibPQ.LibPQ.Connection, Nothing} = nothing
   array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{String, SQLTypeField} = Dict{String, SQLTypeField}()
-  django::Bool = false
-
+  django::Union{Nothing, String} = nothing
 end
 
 # Return a value to sql query, like value from DjangoSQLText
@@ -54,6 +53,17 @@ mutable struct SQLField <: SQLTypeField
 end
 SQLField(field::String; _as::Union{String, Nothing} = nothing) = SQLField(field, _as)
 Base.copy(x::SQLTypeField) = SQLField(x.field, x._as)
+
+# Return a order of field to sql query
+mutable struct SQLOrder <: SQLTypeOrder
+  field::Union{SQLTypeField, String}
+  order::Union{Int64, Nothing}
+  orientation::String
+  _as::Union{String, Nothing}
+end
+SQLOrder(field::Union{SQLTypeField, String}; order::Union{Int64, Nothing} = nothing, orientation::String = "ASC", _as::Union{String, Nothing} = nothing) = SQLOrder(field, order, orientation, _as)
+Base.copy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as)
+
 #
 # SQLType Objects (main object to build a query)
 #
@@ -65,7 +75,7 @@ mutable struct SQLQuery <: SQLType
   create::Dict{String,Union{Int64, String}}
   limit::Int64
   offset::Int64
-  order::Vector{String}
+  order::Vector{SQLTypeOrder}
   group::Vector{String}
   having::Vector{String}
   list_joins::Vector{String} # is ther a better way to do this?
@@ -82,8 +92,6 @@ end
 export OP
 
 """
-  OperObject <: SQLTypeOper
-
 Mutable struct representing an SQL operator object for using in the filter and annotate.
 That is a internal function, please do not use it.
 
@@ -132,7 +140,7 @@ end
 
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _get_pair_to_oper(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QObject(filters = colect)
 end
 
@@ -153,7 +161,7 @@ end
 
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _get_pair_to_oper(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QorObject(or = colect)
 end
 
@@ -164,20 +172,20 @@ end
 export Sum, Avg, Count, Max, Min, When
 @kwdef mutable struct FObject <: SQLTypeF
   function_name::String
-  column::Union{String, SQLTypeField, N, Vector{N}, Vector{String}, SQLTypeOper, Vector{M}} where {N <: SQLTypeF, M <: SQLType}
+  column::Union{String, SQLTypeField, N, Vector{N}, Vector{String}, SQLTypeOper, SQLTypeQ, SQLTypeQor, Vector{M}} where {N <: SQLTypeF, M <: SQLType} # TODO Vector{M} is needed?
   agregate::Bool = false
   _as::Union{String, Nothing} = nothing
   kwargs::Dict{String, Any} = Dict{String, Any}()
 end
 
-function Sum(x)
-  return FObject(function_name = "SUM", column = x, agregate = true)
+function Sum(x; distinct::Bool = false)
+  return FObject(function_name = "SUM", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end  
-function Avg(x)
-  return FObject(function_name = "AVG", column = x, agregate = true)
+function Avg(x; distinct::Bool = false)
+  return FObject(function_name = "AVG", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
-function Count(x)
-  return FObject(function_name = "COUNT", column = x, agregate = true)
+function Count(x; distinct::Bool = false)
+  return FObject(function_name = "COUNT", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 function Max(x)
   return FObject(function_name = "MAX", column = x, agregate = true)
@@ -201,31 +209,43 @@ function Concat(x::Union{Vector{String}, Vector{N}} where N <: SQLType; output_f
   end
   return FObject(function_name = "CONCAT", column = x, kwargs = Dict{String, Any}("output_field" => output_field, "as" => _as))
 end
-function Extract(x, format::String)
-  return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("format" => format))
+function Extract(x::Union{String, SQLTypeF, Vector{String}}, part::String)
+  return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("part" => part))
 end
-function When(x; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+function Extract(x::Union{String, SQLTypeF, Vector{String}}, part::String, format::String)
+  return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("part" => part, "format" => format))
+end
+function When(x::NTuple{N, Union{Pair{String, Int64}, Pair{String, String}}} where N; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  return When(Q(x), then = then, _else = _else)
+end
+function  When(x::Union{Pair{String, Int64}, Pair{String, Int64}}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  return FObject(function_name = "WHEN", column = x |> _get_pair_to_oper, kwargs = Dict{String, Any}("then" => then, "else" => _else))
+end
+function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  println(x |> typeof, x)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
-function Case(conditions::Vector{N} where N <: SQLTypeF; _else::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+function Case(conditions::Vector{N} where N <: SQLTypeF; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
   end  
-  return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => _else, "output_field" => output_field)) 
+  return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
 end
-# function When(condition::Vector{Union{SQLTypeQ, SQLTypeQor}}; then::Vector{Union{String, Int64, Bool, SQLTypeF}} = [], else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
-#   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => condition, "then" => then, "else_result" => else_result))
-# end
-# function When(condition::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 1, else_result::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
-#   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("condition" => [condition], "then" => [then], "else_result" => else_result))
-# end
+function Case(conditions::SQLTypeF; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+  if isa(output_field, PormGField)
+    output_field = output_field.type
+  end  
+  return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
+end
+function To_char(x::Union{String, SQLTypeF, Vector{String}}, format::String)
+  return FObject(function_name = "TO_CHAR", column = x, kwargs = Dict{String, Any}("format" => format))
+end
 
-Extract_date(x::Union{String, SQLTypeF, Vector{String}}, format::String) = FObject(function_name = "EXTRACT_DATE", column = x, kwargs = Dict{String, Any}("format" => format))
-MONTH(x) = Extract_date(x, "MM")
-YEAR(x) = Extract_date(x, "YYYY")
-DAY(x) = Extract_date(x, "DD")
-Y_M(x) = Extract_date(x, "YYYY-MM")
-DATE(x) = Extract_date(x, "YYYY-MM-DD")
+MONTH(x) = Extract(x, "MONTH")
+YEAR(x) = Extract(x, "YEAR")
+DAY(x) = Extract(x, "DAY")
+Y_M(x) = To_char(x, "YYYY-MM")
+DATE(x) = To_char(x, "YYYY-MM-DD")
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -262,13 +282,13 @@ function _get_pair_list_joins(q::SQLType, v::SQLTypeQor)
   end
 end
 
-#
+# ---
 # Build the object
 #
 
 # Why Vector{String}
 "Agora eu tenho que ver como que eu padronizo todas as variáveis para sair como SQLTypeField"
-function up_values!(q::SQLType, values::NTuple{N, Union{String, Symbol, SQLTypeF, SQLTypeText, SQLTypeField}} where N)
+function up_values!(q::SQLType, values::NTuple{N, Union{String, Symbol, SQLTypeF, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: SQLTypeF)
   # every call of values, reset the values
   q.values = []
   for v in values 
@@ -277,6 +297,10 @@ function up_values!(q::SQLType, values::NTuple{N, Union{String, Symbol, SQLTypeF
       push!(q.values, _check_function(v))
     elseif isa(v, SQLTypeF)
       push!(q.values, SQLField(_check_function(v), v._as))
+    elseif isa(v, Pair) && isa(v.second, SQLTypeF)
+      println(v.second)
+      println(v.second |> typeof)
+      push!(q.values, SQLField(_check_function(v.second), v.first))
     elseif isa(v, String)
       check = String.(split(v, "__@"))
       if size(check, 1) == 1
@@ -293,7 +317,7 @@ function up_values!(q::SQLType, values::NTuple{N, Union{String, Symbol, SQLTypeF
   
   return q
 end
-function up_values!(q::SQLType, values::NTuple{N, Union{Pair, Int }} where N)
+function up_values!(q::SQLType, values)
   @error "Invalid argument: $(values) (::$(typeof(values))); please use a string or a function (Mounth, Year, Day, Y_M ...)"
 end
   
@@ -305,7 +329,7 @@ function up_create!(q::SQLType, values::Tuple{Pair{String, Int64}, Vararg{Pair{S
 end
 
 function up_filter!(q::SQLType, filter)
-  for v in filter
+  for v in filter   
     if isa(v, SQLTypeQ) || isa(v, SQLTypeQor) 
       push!(q.filter, v) # TODO I need process the Qor and Q with _check_filter
     elseif isa(v, Pair)
@@ -318,9 +342,9 @@ function up_filter!(q::SQLType, filter)
 end
 
 function _query_select(array::Vector{SQLTypeField})
-  typeof(array) |> println
-  println(array)
-  println(size(array, 1))
+  # println(typeof(array))
+  # println(array)
+  # println(size(array, 1))
   if !isassigned(array, 1, 1)
     return "*"
   else
@@ -335,27 +359,36 @@ function _query_select(array::Vector{SQLTypeField})
   end   
 end
 
-function query(q::SQLType)
-  instruction = build(q) 
-  println("$(instruction._where |> length > 0 ? "WHERE" : "")")
-  respota = """ Query returned:
-    SELECT
-      $(_query_select(instruction.select ))
-    FROM $(q.model_name.name) as tb
-    $(join(instruction.join, "\n"))
-    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
-    """
-  @info respota
-  # return respota
+function order_by!(q::SQLType, values::NTuple{N, Union{String, SQLTypeOrder}} where N)
+  for v in values 
+    if isa(v, String)
+      # check if v constains - in the first position
+      v[1:1] == "-" ? (orientation = "DESC"; v = v[2:end]) : orientation = "ASC"
+      check = String.(split(v, "__@"))
+      if size(check, 1) == 1
+        push!(q.order, SQLOrder(SQLField(v, v), orientation=orientation))
+      elseif haskey(PormGsuffix, check[end])
+        throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
+      else    
+        push!(q.order, SQLOrder(SQLField(_check_function(check), join(check, "__")), orientation=orientation))
+      end     
+    else
+      push!(q.order, v)
+    end    
+  end   
+  return q  
+end
+function order_by!(q::SQLType, values)
+  throw("Invalid argument: $(values) (::$(typeof(values))); please use a string or a SQLTypeOrder)")
 end
   
 Base.@kwdef mutable struct Object <: SQLObject
   object::SQLType
-  values::Function = (x...) -> up_values!(object, x) 
-  filter::Function = (x...) -> up_filter!(object, x) 
-  create::Function = (x...) -> up_create!(object, x) 
-  annotate::Function = (x...) -> annotate(object, x) 
-  query::Function = () -> query(object)
+  values::Function =    (x...) -> up_values!(object, x) 
+  filter::Function =    (x...) -> up_filter!(object, x) 
+  create::Function =    (x...) -> up_create!(object, x) 
+  annotate::Function =  (x...) -> annotate(object, x) 
+  order_by::Function =  (x...) -> order_by!(object, x)
 end
 
 export object
@@ -397,7 +430,7 @@ function _check_function(f::SQLTypeOper)
   f.column = _check_function(f.column)
   return f
 end
-function _check_function(f::SQLText)
+function _check_function(f::Union{SQLText, SQLField})
   return f
 end
 function _check_function(x::Vector{String})  
@@ -439,12 +472,15 @@ _check_function(x::String) = _check_function(String.(split(x, "__@")))
   # Wharning
   - That is a internal function, please do not use it.
 """
-function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Int64}
- if haskey(PormGsuffix, x.first[end])
+function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Int64, Bool}
+  if haskey(PormGsuffix, x.first[end])
     return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else    
     return OperObject(operator = "=", values = x.second, column = SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end  
+end
+function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Int64, Bool}
+  return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 
 function _check_filter(x::Pair)
@@ -462,21 +498,21 @@ function _get_join_query(array::Vector{String}; array_store::Vector{String}=Stri
   # println(array_store)
   array = copy(array)
   for i in 1: size(array, 1)
-    print(string(i, " - "))
-    print(array[i])
-    print(" ")
+    # print(string(i, " - "))
+    # print(array[i])
+    # print(" ")
     for (k, value) in PormGsuffix
       if endswith(array[i], k)
         array[i] = array[i][1:end-length(k)]          
       end
     end
     for (k, value) in PormGtrasnform
-      print(endswith(array[i], k))
+      # print(endswith(array[i], k))
       if endswith(array[i], k)          
         array[i] = array[i][1:end-length(k)]  
-        print(" ")
-        print(array[i])
-        print(" ")        
+        # print(" ")
+        # print(array[i])
+        # print(" ")        
       end
     end
     # println(array[i])
@@ -535,23 +571,8 @@ function _get_alias_name(row_join::Vector{Dict{String, Any}})
   end
 end
 
-function _insert_join(df::DataFrames.DataFrame, row::Dict{String,String})
-  check = DataFrames.subset(df, DataFrames.AsTable([:a, :b, :key_a, :key_b]) => ( @. r -> 
-  (r.a == row["a"]) && (r.b == row["b"]) && (r.key_a == row["key_a"]) && (r.key_b == row["key_b"])) )
-
-  # check = filter(r -> r.a == row["a"] && r.b == row["b"] && r.key_a == row["key_a"] && r.key_b == row["key_b"], df)
-  # subset(df, :alias_b)
-  if size(check, 1) == 0
-    push!(df, (row["a"], row["b"], row["key_a"], row["key_b"], row["how"], row["alias_b"], row["alias_a"]))
-    return row["alias_b"]
-  else
-    if size(check, 1) > 1
-      throw("Error in join")
-    end
-    return check[1, :alias_b]  
-  end
-end
 function _insert_join(row_join::Vector{Dict{String, Any}}, row::Dict{String,String})
+  # println(row_join)
   if size(row_join, 1) == 0
     push!(row_join, row)
     return row["alias_b"]
@@ -568,7 +589,35 @@ function _insert_join(row_join::Vector{Dict{String, Any}}, row::Dict{String,Stri
     end
   end
 end
-  
+
+"""
+This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
+
+# Arguments
+- `field::String`: The name of the field to be checked.
+- `model::PormGModel`: The model containing the field definitions.
+- `instruct::SQLInstruction`: An instruction object that may influence the field name modification.
+
+# Returns
+- `String`: The validated and modified field name.
+
+# Throws
+- `Error`: If the field is not found in the model's field names.
+
+"""
+function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
+  # check if last_column a field from the model    
+  # println(field)
+  # println(model)
+  if !(field in model.field_names)
+    throw("Error in _build_row_join, the field $(field) not found in $(model.name): $(join(model.field_names, ", "))")
+  end
+  # println(model.fields[field] |> typeof)
+  # println("---", hasfield(model.fields[field] |> typeof, :to))
+  (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
+  # println(field)
+  return field
+end
 
 "build a row to join"
 function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
@@ -589,11 +638,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # println(fields_model)
   last_column::String = ""
 
-  println(instruct.object.model_name.reverse_fields)
-  println("fiels", instruct.object.model_name.fields)  
+  # println(instruct.object.model_name.reverse_fields)
+  # println("fiels", instruct.object.model_name.fields)  
+  # println("table", instruct.object.model_name.name)
   if vector[1] in instruct.object.model_name.field_names # vector moust be a field from the model
     last_column = vector[1]
-    row_join["a"] = instruct.object.model_name.name
+    row_join["a"] = string(instruct.django, instruct.object.model_name.name |> lowercase)
     row_join["alias_a"] = "tb" # TODO maybe when exist more then one sql, the alias must be different
     how = instruct.object.model_name.fields[last_column].how
     if how === nothing
@@ -605,20 +655,20 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(last_column) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = foreign_table_name.table_name
+      row_join["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
     else
-      row_join["b"] = foreign_table_name
+      row_join["b"] = string(instruct.django,  foreign_table_name |> lowercase)
     end
     # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
     row_join["alias_b"] = _get_alias_name(instruct.row_join)
     row_join["key_b"] = instruct.object.model_name.fields[last_column].pk_field::String
-    row_join["key_a"] = last_column
+    row_join["key_a"] = instruct.django !== nothing ? string(last_column, "_id") : last_column
   elseif haskey(instruct.object.model_name.reverse_fields, vector[1])
     reverse_model = getfield(foreing_table_module, instruct.object.model_name.reverse_fields[vector[1]][3])
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.table_name)")
     last_column = vector[2]
-    row_join["a"] = instruct.object.model_name.name
+    row_join["a"] = string(instruct.django, instruct.object.model_name.name |> lowercase)
     row_join["alias_a"] = "tb" # TODO maybe when exist more then one sql, the alias must be different
     how = reverse_model.fields[instruct.object.model_name.reverse_fields[vector[1]][1] |> String].how
     if how === nothing
@@ -630,14 +680,14 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = foreign_table_name.table_name
+      row_join["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
     else
-      row_join["b"] = foreign_table_name
+      row_join["b"] = string(instruct.django,  foreign_table_name |> lowercase)
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join)
     row_join["key_b"] = instruct.object.model_name.reverse_fields[vector[1]][1] |> String
-    row_join["key_a"] = instruct.object.model_name.reverse_fields[vector[1]][4] |> String
+    row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model_name.reverse_fields[vector[1]][4] |> String, "_id") : instruct.object.model_name.reverse_fields[vector[1]][4] |> String
   else
     throw("Error in _build_row_join, the column $(vector[1]) not found in $(instruct.object.model_name.name)")
   end
@@ -648,17 +698,17 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   tb_alias = _insert_join(instruct.row_join, row_join)
   while size(vector, 1) > 1
-    println(foreign_table_name)
-    println(vector)
+    # println(foreign_table_name)
+    # println(vector)
     row_join2 = Dict{String,String}()
     # get new object
     new_object = getfield(foreing_table_module, foreign_table_name |> Symbol)
-    println(new_object.reverse_fields)
-    println(new_object.field_names)
+    # println(new_object.reverse_fields)
+    # println(new_object.field_names)
 
     if vector[1] in new_object.field_names
       !("to" in new_object.field_names) && throw("Error in _build_row_join, the column $(vector[1]) is a field from $(new_object.name), but this field has not a foreign key")
-      println(new_object.fields[vector[1]])
+      # println(new_object.fields[vector[1]])
       last_column = vector[2]
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
@@ -672,13 +722,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = foreign_table_name.table_name
+        row_join2["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
       else
-        row_join2["b"] = foreign_table_name
+        row_join2["b"] = string(instruct.django,  foreign_table_name |> lowercase)
       end
       row_join2["alias_b"] = _get_alias_name(instruct.row_join) # TODO chage by row_join and test the speed
       row_join2["key_b"] = new_object.fields[vector[1]].pk_field::String
-      row_join2["key_a"] = vector[1]
+      row_join2["key_a"] = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
       tb_alias = _insert_join(instruct.row_join, row_join2)
     
     elseif haskey(new_object.reverse_fields, vector[1])
@@ -698,19 +748,19 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = foreign_table_name.table_name
+        row_join2["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
       else
-        row_join2["b"] = foreign_table_name
+        row_join2["b"] = string(instruct.django,  foreign_table_name |> lowercase)
       end
 
       row_join2["alias_b"] = _get_alias_name(instruct.row_join)
       row_join2["key_b"] = new_object.reverse_fields[vector[1]][1] |> String
-      row_join2["key_a"] = new_object.reverse_fields[vector[1]][4] |> String
+      row_join2["key_a"] = instruct.django !== nothing ? string(new_object.reverse_fields[vector[1]][4] |> String, "_id") : new_object.reverse_fields[vector[1]][4] |> String
       tb_alias = _insert_join(instruct.row_join, row_join2)
       vector = vector[2:end]
 
     else
-      println(field)
+      # println(field)
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
     vector = vector[2:end]
@@ -720,18 +770,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # last_column is the last column in the join ex. last_login
   # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
-  # check if last_column a field from the model
-  column = vector[end]
-  println(column)
-  new_model = getfield(foreing_table_module, foreign_table_name |> Symbol)
-  println(new_model)
-  if !(column in new_model.field_names)
-    throw("Error in _build_row_join, the column $(vector[end]) not found in $(new_model.name): $(join(new_model.field_names, ", "))")
-  end
-  (instruct.django && hasfield(new_model.fields[column], :to)) && (column = string(column, "_id"))
-
   # functions must be processed here
-  return string(tb_alias, ".", column) 
+  return string(tb_alias, ".", _solve_field(vector[end], getfield(foreing_table_module, foreign_table_name |> Symbol), instruct))
   
 end
 
@@ -759,17 +799,18 @@ function ISNULL(v::String , value::Bool)
   end
 end
 
-#
+# ---
 # Build the SQLInstruction object
 #
 
 # select
 function _get_select_query(v::SQLText, instruc::SQLInstruction)  
-  println("foi SQLText")
+  # println("foi SQLText")
   return Dialect.VALUE(v.field, instruc.connection)
 end
+
 function _get_select_query(v::Vector{SQLType}, instruc::SQLInstruction)
-  println("foi vector")
+  # println("foi vector")
   resp = []
   for v in v
     push!(resp, _get_select_query(v, instruc))
@@ -777,26 +818,34 @@ function _get_select_query(v::Vector{SQLType}, instruc::SQLInstruction)
   return resp
 end
 # I think that is not the local to build the select query
-function _get_select_query(v::String, instruc::SQLInstruction) # TODO I need Refactor the way to build the "tb" + "." + v
-  println("foi string")
-  println(v)
-  println(instruc.select)
+function _get_select_query(v::String, instruc::SQLInstruction)
+  # println("foi string")
+  # println(v)
+  # println(instruc.select)
   parts = split(v, "__")  
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
-    return string("tb", ".", v)    
+    return string("tb", ".", _solve_field(v, instruc.object.model_name, instruc)) # TODO I need automatize the tb prefix
   end 
   
 end
+function _get_select_query(v::SQLField, instruc::SQLInstruction)
+  return _get_select_query(v.field, instruc)
+end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
-  println("foi SQLTypeOper")
-  column = _get_select_query(v.column, instruc)
-  if isa(v.values, String)
-    value = "'" * v.values * "'"
+  # println("foi SQLTypeOper")
+  if isa(v.column, SQLTypeF) && haskey(v.column.function_name, PormGTypeField)
+    value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
   else
-    value = string(v.values)
+    if isa(v.values, String)
+      value = "'" * v.values * "'"
+    else
+      value = string(v.values)
+    end
   end
+  column = _get_select_query(v.column, instruc)
+ 
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
     return string(column, " ", v.operator, " ", value)
   elseif v.operator in ["in", "not in"]
@@ -808,13 +857,13 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
 end
 function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)  
-  println("foi SQLTypeF")
-  println(v) 
-  println(v.kwargs)
-  println(v.function_name)
-  println(v.column |> typeof)
+  # println("foi SQLTypeF")
+  # println(v) 
+  # println(v.kwargs)
+  # println(v.function_name)
+  # println(v.column |> typeof)
   value = getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
-  println(value)
+  # println(value)
   return value # getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
 end
 
@@ -833,17 +882,37 @@ end
 function get_select_query(values::Vector{Union{SQLTypeText, SQLTypeField}}, instruc::SQLInstruction)
   for i in eachindex(values) # linear indexing
     v_copy = copy(values[i])
-    # check if SQLTypeField exists in cache
-    println(v_copy._as)
-    println(typeof(v_copy))
+    if isa(v_copy.field, SQLTypeF) 
+      if v_copy.field.agregate == false
+        push!(instruc.group, i |> string)
+      end
+    else
+      push!(instruc.group, i |> string)
+    end
+
     if haskey(instruc.cache, v_copy._as)
-      instruc.select[i] = instruc.cache[v_copy]      
+      instruc.select[i] = instruc.cache[v_copy._as]  # TODO That is necessary in get_select_query    
     else
       v_copy.field = _get_select_query(v_copy.field, instruc)
       instruc.select[i] = v_copy
       instruc.cache[v_copy._as] = instruc.select[i]
     end    
   end
+end
+
+function get_order_query(values::Vector{SQLTypeOrder}, instruc::SQLInstruction)
+  for v in values    
+    v_field_copy = copy(v.field)
+    println(v_field_copy)
+    if haskey(instruc.cache, v_field_copy._as)
+      v_field_copy.field = instruc.cache[v_field_copy._as].field # TODO how can i recover the order of the field in select, maybe is better thar use the function in order by
+    else
+      v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
+    end
+    push!(instruc.order, string(v_field_copy.field, " ", v.orientation))
+    instruc.cache[v_field_copy._as] = v_field_copy    
+  end   
+  return nothing  
 end
 
 function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction, )
@@ -860,6 +929,7 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
   end
 end
 
+# PAREI AQUI
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
   contains(v, "@") && return _get_filter_query(split(v, "__@"), instruc)
@@ -867,9 +937,7 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
   else
-    # TODO I need Refactor the way to build the "tb" + "." + v (is important to check if the column is valid)
-
-    return string("tb", ".", v)    
+    return string("tb", ".", _solve_field(v, instruc.object.model_name, instruc))  
   end
   
 end
@@ -882,10 +950,10 @@ end
 #   return _get_select_query(v, instruc)
 # end
 function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
-  println("foi SQLTypeField")
+  # println("foi field3 SQLTypeField")
   # check if SQLTypeField exists in cache
   if haskey(instruc.cache, v._as)
-    return instruc.cache[v._as]      
+    return instruc.cache[v._as].field
   else
     v_copy = copy(v)
     v_copy.field = _get_select_query(v_copy.field, instruc)
@@ -894,14 +962,20 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   end
 end
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
-  # println("foi SQLTypeOper")
-  column = _get_filter_query(v.column, instruc)
-  # println(column)
-  if isa(v.values, String)
-    value = "'" * v.values * "'"
+  println("foi SQLTypeOper")
+  if isa(v.column, SQLTypeF) && haskey(v.column.function_name, PormGTypeField)
+    value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
   else
-    value = string(v.values)
+    if isa(v.values, String)
+      value = "'" * v.values * "'"
+    else
+      value = string(v.values)
+    end
   end
+
+  column = _get_filter_query(v.column, instruc)
+  println(column)
+  
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
     return string(column, " ", v.operator, " ", value)
   elseif v.operator in ["in", "not in"]
@@ -942,10 +1016,11 @@ end
   - `instruc::SQLInstruction`: The SQLInstruction object to which the WHERE query will be added.
 """
 function get_filter_query(object::SQLType, instruc::SQLInstruction)::Nothing 
+  # println("get_filter_query")
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
   for v in object.filter
     if isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper})
-      println("Loc: ", _get_filter_query(v, instruc))
+      # println("Loc: ", _get_filter_query(v, instruc))
       push!(instruc._where, _get_filter_query(v, instruc))
     else
       throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper")
@@ -965,50 +1040,64 @@ function build_row_join_sql_text(instruc::SQLInstruction)
 end
 
 function build(object::SQLType)
-  object.model_name.connect_key |> println
+  # println(object.model_name.connect_key)
   connection = CONNECTIONS[object.model_name.connect_key]
   # println(connection)
   instruct = InstrucObject(text = "", 
     object = object,
     connection = connection,
-    # df_join = DataFrames.DataFrame(a=String[], b=String[], key_a=String[], key_b=String[], how=String[], 
-    # alias_b=String[], alias_a=String[]),
-  )
+    django = "dash_"
+  )   
 
-   
-  
-  # df_sels, df_join, text_on = QueryBuilder.get_join_query(object, connection)
+  # println(instruct)
   
   get_select_query(object.values, instruct)
   get_filter_query(object, instruct)
   build_row_join_sql_text(instruct)
-
-  # println("TESTE")
-  # println(instruct.select)
-  # println(instruct._where)
-  # println(instruct.df_join)
-
-  # filter = QueryBuilder.get_filter_query(object, df_sels)
-
+  get_order_query(object.order, instruct)
   
-  # text_values = [] 
-  # for v in values
-  #   push!(text_values, string(v["text"], " as ", v["value"]))
-  # end
-
-  # filter_Values = []
-  # for v in filter
-  #   push!(filter_Values, v["text"])
-  # end
- 
-  # return """SELECT $(join(text_values, ", ")) FROM $(object.model_name) as tb $text_on WHERE $(join(filter_Values, " AND ")))"""
-
   return instruct
 end
 # function build(object::SQLType)
 #   build(object, config)
 # end
 
+# ---
+# Execute the query
+#
+
+export query
+
+function query(q::SQLObject)
+  instruction = build(q.object) 
+  # println(q.object)
+  # println("$(instruction._where |> length > 0 ? "WHERE" : "")")
+  respota = """ -- Query returned:
+    SELECT
+      $(_query_select(instruction.select ))
+    FROM $(string(instruction.django, q.object.model_name.name |> lowercase)) as tb
+    $(join(instruction.join, "\n"))
+    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
+    $(instruction.select |> length != instruction.group |> length ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
+    $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
+
+    """
+  @info respota
+  return respota
+end
+
+function fetch(connection::LibPQ.Connection, sql::String)
+  return LibPQ.execute(connection, sql)
+end
+
+export list
+# create a function like a list from Django query
+function list(object::SQLObject)
+  conn = CONNECTIONS[object.object.model_name.connect_key]
+
+  sql = query(object)
+  return fetch(conn, sql)
+end
 
 end
 

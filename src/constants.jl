@@ -46,6 +46,13 @@ const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "quarter" => "QUARTER",
 )
 
+# dictionary from function to type of the field
+const PormGTypeField = Dict{String,Symbol}(
+  "COUNT" => :format_number_sql,
+  "EXTRACT" => :format_number_sql,
+  "TO_CHAR" => :format_text_sql,
+)
+
 const CONNECTIONS::Dict{String, Union{SQLite.DB, LibPQ.Connection}} = Dict()
 
 

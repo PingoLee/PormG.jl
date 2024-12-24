@@ -19,13 +19,25 @@ function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::SQLite.DB
 end
 
 function SUM(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
-  return "SUM($(column))"
+  if get(format, "distinct", false)
+    return "SUM(DISTINCT $(column))"
+  else
+    return "SUM($(column))"
+  end
 end
 function AVG(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
-  return "AVG($(column))"
+  if get(format, "distinct", false)
+    return "AVG(DISTINCT $(column))"
+  else
+    return "AVG($(column))"
+  end
 end
 function COUNT(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
-  return "COUNT($(column))"
+  if get(format, "distinct", false)
+    return "COUNT(DISTINCT $(column))"
+  else
+    return "COUNT($(column))"
+  end
 end
 function MAX(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
   return "MAX($(column))"
@@ -60,7 +72,11 @@ function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::SQLite.D
   return "($(join(column, " ||\n")))"
 end
 function EXTRACT(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
-  return "EXTRACT($(format["part"]) FROM $(column))$(format["format"])"  
+  if haskey(format, "format")
+    return "EXTRACT($(format["part"]) FROM $(column))$(format["format"])"  
+  else
+    return "EXTRACT($(format["part"]) FROM $(column))"  
+  end
 end
 function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::LibPQ.Connection)
   if format["output_field"] != ""
@@ -77,6 +93,9 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::LibPQ.Connec
     """
   end
 end
+function CASE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
+  return """CASE $(column) ELSE $(format["else"]) END"""
+end
 function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
   resp::String = """CASE
     $(join(column, "\n"))
@@ -89,6 +108,7 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
     return resp
   end
 end
+
 function WHEN(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
   return "WHEN $(column) THEN $(format["then"])" |> string
 end

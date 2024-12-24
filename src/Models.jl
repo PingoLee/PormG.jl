@@ -279,7 +279,7 @@ function format_text_sql(value::Union{Missing, Nothing})
     return "null"
 end
 function format_text_sql(value::Bool)
-    return value ? "true" : "false"
+    return value ? "'true'" : "'false'"
 end
 function format_text_sql(value::AbstractString)
     return string("'", replace(value, "'" => "`"), "'")    

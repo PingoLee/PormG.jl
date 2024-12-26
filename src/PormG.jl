@@ -11,8 +11,11 @@ using LibPQ
 
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
-abstract type SQLType <: PormGAbstractType end
+abstract type SQLObject <: PormGAbstractType end
+abstract type SQLObjectHandler <: SQLObject end
+abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias
 abstract type SQLInstruction <: PormGAbstractType end # instruction to build a query
+abstract type SQLType <: PormGAbstractType end
 abstract type SQLTypeQ <: SQLType end
 abstract type SQLTypeQor <: SQLType end
 abstract type SQLTypeF <: SQLType end
@@ -21,7 +24,7 @@ abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
 abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations 
 abstract type SQLTypeField <: SQLType end # Field to be used in the query (values, filters, etc)
 abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
-abstract type SQLObject <: PormGAbstractType end
+
 abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
 abstract type PormGField  <: PormGModel end # define the type of the column from the model

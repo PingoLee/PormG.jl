@@ -7,24 +7,24 @@ const APP_PATH        = "app"
 const RESOURCES_PATH  = joinpath(APP_PATH, "resources")
 const TEST_PATH       = "test"
 const DB_PATH         = "db"
-const MODEL_PATH      = joinpath(DB_PATH, "models")
+const MODEL_PATH      = joinpath(DB_PATH)
+const MODEL_FILE      = "models.jl"
 const DBDF_PATH       = joinpath(DB_PATH, DBDF_FOLDER_NAME)
 
-const PORMG_DB_CONFIG_FILE_NAME   = "connection.yml"
-const PORMG_COLS_FILE_NAME        = "columns.xlsx"
-const PORMG_PK_FILE_NAME          = "pk.xlsx"
-const PORMG_DBDF_SQUEMA           = "dbdf_schema"
+const PORMG_DB_CONFIG_FILE_NAME = "connection.yml"
 
 const TEST_FILE_IDENTIFIER = "_test.jl"
 
 const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"
+
+const PORMG_ENV = ENV["PORMG_ENV"]
 
 const reserved_words = [
   "if", "else", "elseif", "while", "for", "begin", "end", "function", "return",
   "break", "continue", "global", "local", "const", "let", "do", "try", "catch",
   "finally", "struct", "mutable", "abstract", "primitive", "type", "quote",
   "macro", "module", "baremodule", "using", "import", "export", "importall",
-  "where", "in", "isa", "throw", "true", "false", "nothing", "missing"
+  "where", "in", "isa", "throw", "true", "false", "nothing", "missing", "id"
 ]
 
 const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
@@ -53,11 +53,7 @@ const PormGTypeField = Dict{String,Symbol}(
   "TO_CHAR" => :format_text_sql,
 )
 
-const CONNECTIONS::Dict{String, Union{SQLite.DB, LibPQ.Connection}} = Dict()
-
-
 # I whant work with dictionary to handle pool connections
-
 
 const sqlite_type_map = Dict{String, Any}(
   "INTEGER" => :IntegerField, 
@@ -104,6 +100,47 @@ const sqlite_date_format_map = Dict{String, String}(
   "HH:MI" => "%H:%M"
 )
 
+const postgres_type_map = Dict{String, String}(
+  "BIGSERIAL" => "bigserial",
+  "SERIAL" => "serial",
+  "BIGINT" => "bigint",
+  "INTEGER" => "integer",
+  "SMALLINT" => "smallint",
+  "DECIMAL" => "decimal",
+  "NUMERIC" => "numeric",
+  "REAL" => "real",
+  "DOUBLE PRECISION" => "double precision",
+  "MONEY" => "money",
+  "CHAR" => "char",
+  "VARCHAR" => "varchar",
+  "TEXT" => "text",
+  "BYTEA" => "bytea",
+  "TIMESTAMP" => "timestamp",
+  "TIMESTAMPTZ" => "timestamptz",
+  "DATE" => "date",
+  "TIME" => "time",
+  "TIMETZ" => "timetz",
+  "INTERVAL" => "interval",
+  "BOOLEAN" => "boolean",
+  "POINT" => "point",
+  "LINE" => "line",
+  "LSEG" => "lseg",
+  "BOX" => "box",
+  "PATH" => "path",
+  "POLYGON" => "polygon",
+  "CIRCLE" => "circle",
+  "CIDR" => "cidr",
+  "INET" => "inet",
+  "MACADDR" => "macaddr",
+  "BIT" => "bit",
+  "VARBIT" => "varbit",
+  "UUID" => "uuid",
+  "XML" => "xml",
+  "JSON" => "json",
+  "JSONB" => "jsonb",
+  "ARRAY" => "array",
+  "HSTORE" => "hstore"
+)
 
 const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoindex"]
 

@@ -2,7 +2,9 @@ module Dialect
 using SQLite
 using DataFrames
 using LibPQ
-import ..PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, sqlite_date_format_map, sqlite_type_map_reverse
+import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField
+import PormG: postgres_type_map, sqlite_date_format_map, sqlite_type_map_reverse
+import PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex
 
 # PostgreSQL
 function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
@@ -114,148 +116,109 @@ function WHEN(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Conne
 end
 
 
-# how generete the quarter
-# SELECT 
-#   "dash_dim_ibge"."cidade", 
-#   CONCAT(
-#     ((EXTRACT(YEAR FROM "dash_tab_vig_sinasc"."dt_nasc"))::varchar)::text, 
-#     (
-#       CONCAT(
-#         (-Q)::text, 
-#         (
-#           CASE 
-#             WHEN EXTRACT(MONTH FROM "dash_tab_vig_sinasc"."dt_nasc") <= 4 THEN 1 
-#             WHEN EXTRACT(MONTH FROM "dash_tab_vig_sinasc"."dt_nasc") <= 8 THEN 2 
-#             WHEN EXTRACT(MONTH FROM "dash_tab_vig_sinasc"."dt_nasc") <= 12 THEN 3 
-#             ELSE NULL 
-#           END
-#         )::text
-#       )
-#     )::text
-#   ) AS "quarter", 
-#   COUNT("dash_tab_vig_sinasc"."id") AS "quant" 
-# FROM 
-#   "dash_tab_vig_sinasc" 
-# INNER JOIN 
-#   "dash_dim_ibge" 
-# ON 
-#   ("dash_tab_vig_sinasc"."id_mn_resi_id" = "dash_dim_ibge"."id") 
-# WHERE 
-#   ("dash_tab_vig_sinasc"."dt_nasc" >= '2014-01-01' AND "dash_tab_vig_sinasc"."id_mn_resi_id" = 172100) 
-# GROUP BY 
-#   "dash_dim_ibge"."cidade", 
-#   2 
-# ORDER BY 
-#   2 ASC
+# postgresql query synopsis
+# CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] table_name ( [
+#   { column_name data_type [ STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN | DEFAULT } ] [ COMPRESSION compression_method ] [ COLLATE collation ] [ column_constraint [ ... ] ]
+#     | table_constraint
+#     | LIKE source_table [ like_option ... ] }
+#     [, ... ]
+# ] )
+# [ INHERITS ( parent_table [, ... ] ) ]
+# [ PARTITION BY { RANGE | LIST | HASH } ( { column_name | ( expression ) } [ COLLATE collation ] [ opclass ] [, ... ] ) ]
+# [ USING method ]
+# [ WITH ( storage_parameter [= value] [, ... ] ) | WITHOUT OIDS ]
+# [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
+# [ TABLESPACE tablespace_name ]
 
-# SQLITE version
-# SELECT 
-#   dash_dim_ibge.cidade, 
-#   (strftime('%Y', dash_tab_vig_sinasc.dt_nasc) || '-Q' || 
-#     CASE 
-#       WHEN strftime('%m', dash_tab_vig_sinasc.dt_nasc) <= '04' THEN '1' 
-#       WHEN strftime('%m', dash_tab_vig_sinasc.dt_nasc) <= '08' THEN '2' 
-#       WHEN strftime('%m', dash_tab_vig_sinasc.dt_nasc) <= '12' THEN '3' 
-#       ELSE NULL 
-#     END
-#   ) AS quarter, 
-#   COUNT(dash_tab_vig_sinasc.id) AS quant 
-# FROM 
-#   dash_tab_vig_sinasc 
-# INNER JOIN 
-#   dash_dim_ibge 
-# ON 
-#   dash_tab_vig_sinasc.id_mn_resi_id = dash_dim_ibge.id 
-# WHERE 
-#   dash_tab_vig_sinasc.dt_nasc >= '2014-01-01' 
-#   AND dash_tab_vig_sinasc.id_mn_resi_id = 172100 
-# GROUP BY 
-#   dash_dim_ibge.cidade, 
-#   quarter 
-# ORDER BY 
-#   quarter ASC;
+# ---
+# Convert PormGField to SQL column string
+# ---
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField
+function field_to_column(col_name::String, field::PormGField, conn::Union{LibPQ.Connection, SQLite.DB}, type_map::Dict{String, String} = postgres_type_map)
+  # Determine the base SQL type for PostgreSQL
+  base_type = ""
+  if field isa sIDField
+      base_type = type_map[field.type]    
+  elseif field isa sCharField
+      max_len = hasproperty(field, :max_length) ? field.max_length : 250
+      base_type = "$(type_map[field.type])($max_len)"
+  elseif field isa sTextField
+      base_type = type_map[field.type]
+  elseif field isa sBooleanField
+      base_type = type_map[field.type]
+  elseif field isa sIntegerField
+      base_type = type_map[field.type]
+  elseif field isa sBigIntegerField
+      base_type = type_map[field.type]
+  elseif field isa sFloatField
+      base_type = type_map[field.type]
+  elseif field isa sDecimalField
+      max_digits = hasproperty(field, :max_digits) ? field.max_digits : 10
+      decimal_places = hasproperty(field, :decimal_places) ? field.decimal_places : 2
+      base_type = "$(type_map[field.type])($max_digits, $decimal_places)"
+  elseif field isa sDateField
+      base_type = type_map[field.type]
+  elseif field isa sDateTimeField
+      base_type = type_map[field.type]
+  elseif field isa sTimeField
+      base_type = type_map[field.type]
+  else
+      # Generic fallback
+      base_type = "TEXT"
+  end
 
-# PormG instructions
-# PormG.QueryBuilder.FObject(
-#   "CONCAT", 
-#   PormG.SQLType[
-#     PormG.QueryBuilder.FObject(
-#       "CAST", 
-#       PormG.QueryBuilder.FObject(
-#         "TO_CHAR", 
-#         ["dn1"], 
-#         false, 
-#         nothing, 
-#         Dict{String, Any}("format" => "YYYY")
-#       ), 
-#       false, 
-#       nothing, 
-#       Dict{String, Any}("type" => "VARCHAR")
-#     ), 
-#     PormG.QueryBuilder.SQLText("-Q", nothing), 
-#     PormG.QueryBuilder.FObject(
-#       "CASE", 
-#       PormG.QueryBuilder.FObject[
-#         PormG.QueryBuilder.FObject(
-#           "WHEN", 
-#           PormG.QueryBuilder.OperObject(
-#             "<=", 
-#             4, 
-#             PormG.QueryBuilder.FObject(
-#               "TO_CHAR", 
-#               ["dn1"], 
-#               false, 
-#               nothing, 
-#               Dict{String, Any}("format" => "MM")
-#             )
-#           ), 
-#           false, 
-#           nothing, 
-#           Dict{String, Any}("else" => missing, "then" => 1)
-#         ), 
-#         PormG.QueryBuilder.FObject(
-#           "WHEN", 
-#           PormG.QueryBuilder.OperObject(
-#             "<=", 
-#             8, 
-#             PormG.QueryBuilder.FObject(
-#               "TO_CHAR", 
-#               ["dn1"], 
-#               false, 
-#               nothing, 
-#               Dict{String, Any}("format" => "MM")
-#             )
-#           ), 
-#           false, 
-#           nothing, 
-#           Dict{String, Any}("else" => missing, "then" => 2)
-#         ), 
-#         PormG.QueryBuilder.FObject(
-#           "WHEN", 
-#           PormG.QueryBuilder.OperObject(
-#             "<=", 
-#             12, 
-#             PormG.QueryBuilder.FObject(
-#               "TO_CHAR", 
-#               ["dn1"], 
-#               false, 
-#               nothing, 
-#               Dict{String, Any}("format" => "MM")
-#             )
-#           ), 
-#           false, 
-#           nothing, 
-#           Dict{String, Any}("else" => missing, "then" => 3)
-#         )
-#       ], 
-#       false, 
-#       nothing, 
-#       Dict{String, Any}("else" => "NULL", "output_field" => "VARCHAR")
-#     )
-#   ], 
-#   false, 
-#   "dn1__quarter", 
-#   Dict{String, Any}("as" => "[\"dn1\"]__quarter", "output_field" => "VARCHAR")
-# )
+  # Build constraints
+  constraints = String[]
+  # Primary key
+  if hasproperty(field, :primary_key) && getfield(field, :primary_key)
+    push!(constraints, "PRIMARY KEY")
+  end
+  # Unique
+  field.unique && push!(constraints, "UNIQUE")
+  # Nullability (default is NOT NULL if 'null' is false)
+  if hasproperty(field, :null) && field.null
+      push!(constraints, "NULL")
+  else
+      push!(constraints, "NOT NULL")
+  end
+
+  # # Default was managed by PormG, like Django
+  # if field.default !== nothing
+  #     push!(constraints, "DEFAULT $(field.default |> field.formater)")
+  # end
+
+  # Generated by default as identity
+  if hasproperty(field, :generated) && getfield(field, :generated)
+    push!(constraints, "GENERATED BY DEFAULT AS IDENTITY")
+  end
+
+  # Combine everything into a single string: "col_name base_type constraints..."
+  return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
+end
+
+
+# ---
+# Functions to create migrations
+#
+function create_table(conn::LibPQ.Connection, model::PormGModel; model_sql::Union{PormGModel, Nothing} = nothing)
+  columns = []
+  for (field_name, field) in model.fields    
+    push!(columns, field_to_column(field_name, field, conn))
+  end
+  println("type: ", typeof(model.name), " data: ", model.name)
+  println("type: ", typeof(columns), " data: ", columns)
+  return CreateTable(model.name, columns)
+end
+
+
+# ---
+# Functions to create migration queries
+#
+function create_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
+  return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
+    )""" #|> x -> replace(x, "\\\"" => "\"")
+end
+
+
 
 end

@@ -1,6 +1,6 @@
 module QueryBuilder
 
-import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGsuffix, PormGtrasnform, PormGModel, Dialect, PormGField, CONNECTIONS, PormGTypeField
+import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGsuffix, PormGtrasnform, PormGModel, Dialect, PormGField, PormGTypeField
 import DataFrames
 import Dates, Intervals
 import ..PormG.Models: CharField, IntegerField
@@ -1087,7 +1087,7 @@ end
 
 function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
   # println(object.model_name.connect_key)
-  connection === nothing && (connection = CONNECTIONS[object.model_name.connect_key])
+  connection === nothing && (connection = config[object.model_name.connect_key].connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
   # println(connection)
   instruct = InstrucObject(text = "", 
@@ -1109,6 +1109,27 @@ function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 end
 
 # ---
+# Pagination functions
+#
+
+export page
+
+function page(object::SQLObjectHandler; limit::Int64 = 10, offset::Int64 = 0)
+  object.object.limit = limit
+  object.object.offset = offset
+  return object
+end
+function page(object::SQLObjectHandler, limit::Int64)
+  object.object.limit = limit
+  return object
+end
+function page(object::SQLObjectHandler, limit::Int64, offset::Int64)
+  object.object.limit = limit
+  object.object.offset = offset
+  return object
+end
+
+# ---
 # Execute the query
 #
 
@@ -1118,7 +1139,7 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
   # println(q.object)
   # println("$(instruction._where |> length > 0 ? "WHERE" : "")")
-  respota = """ -- Query returned:
+  respota = """
     SELECT
       $(_query_select(instruction.select ))
     FROM $(string(instruction.django, q.object.model_name.name |> lowercase)) as $(instruction.alias)
@@ -1126,7 +1147,8 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
-
+    $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
+    $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
     """
   @info respota
   return respota
@@ -1140,10 +1162,10 @@ end
 export list
 # create a function like a list from Django query
 function list(object::SQLObjectHandler)
-  conn = CONNECTIONS[object.object.model_name.connect_key]
+  connection = config[object.model_name.connect_key].connections
 
-  sql = query(object)
-  return fetch(conn, sql)
+  sql = query(object, connection=connection)
+  return fetch(connection, sql)
 end
 
 end

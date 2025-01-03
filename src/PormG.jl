@@ -1,5 +1,7 @@
 module PormG
 
+__precompile__()
+
 using Revise
 
 import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
@@ -29,13 +31,15 @@ abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
 abstract type PormGField  <: PormGModel end # define the type of the column from the model
 
+abstract type Migration <: PormGAbstractType end
 
-function build()
+const config::Dict{String,SQLConn} = Dict()
+
+if !haskey(ENV, "PORMG_ENV")
+  ENV["PORMG_ENV"] = "dev"
 end
 
 include("constants.jl")
-
-haskey(ENV, "PORMG_ENV") || (ENV["PORMG_ENV"] = "dev")
 
 include("Generator.jl")
 using .Generator
@@ -51,13 +55,10 @@ using .Models
 include("Dialect.jl")
 import .Dialect
 
-const config =  Configuration.Settings(app_env = ENV["PORMG_ENV"])
-
 export object, show_query, list
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, query, list
-
+import .QueryBuilder: object, query, list, page
 show_query = query
 
 include("Migrations.jl")

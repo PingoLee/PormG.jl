@@ -25,11 +25,11 @@ PormG.connection()
 Base.include(PormG, "db/models/automatic_models.jl")
 import PormG.automatic_models as AM
 
-# query = AM.Ind_desem_municipio |> object
-# query.filter("ibge"=>172100, "quad_avaliacao__@gte"=>202401, "quad_avaliacao__@lte"=>202401)
-# query.values("quad_avaliacao", "quad_avaliacao__curto", "porcentagem", "sim", "total", "indicador__abreviado", "indicador")
-# query |> show_query
-# query |> list |> DataFrame
+query = AM.Ind_desem_municipio |> object
+query.filter("ibge"=>172100, "quad_avaliacao__@gte"=>202401, "quad_avaliacao__@lte"=>202401)
+query.values("quad_avaliacao", "quad_avaliacao__curto", "porcentagem", "sim", "total", "indicador__abreviado", "indicador")
+query |> show_query
+query |> list |> DataFrame
 
 
 # Tb_relc_bolsa_familia.objects.filter(ibge_id=request.user.municipio_id).order_by('-vigencia')
@@ -63,15 +63,15 @@ import PormG.automatic_models as AM
                                   # .order_by('dt_diag__month')
 
 
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, page
 
-# query = AM.Tab_vig_hanseniase |> object
-# query.filter("modoentr"=>1, "muniresat"=>172100, "check_ind"=>true, "ibge"=>172100)
-# query.filter(Qor(Q("classatual"=>1, "dt_diag__@year"=>2022, "esq_atu_n"=>1), Q("classatual"=>2, "dt_diag__@year"=>2021, "esq_atu_n"=>2)))
-# query.values("dt_diag__@month", "ibge__nome", "denominador" => Count("dt_diag"), "numerador" => Sum(Case(When("tpalta_n"=>1, then=1), default=0)))
-# query.order_by("dt_diag__@month")
-# query |> show_query
-# query |> list |> DataFrame
+query = AM.Tab_vig_hanseniase |> object
+query.filter("modoentr"=>1, "muniresat"=>172100, "check_ind"=>true, "ibge"=>172100)
+query.filter(Qor(Q("classatual"=>1, "dt_diag__@year"=>2022, "esq_atu_n"=>1), Q("classatual"=>2, "dt_diag__@year"=>2021, "esq_atu_n"=>2)))
+query.values("dt_diag__@month", "ibge__nome", "denominador" => Count("dt_diag"), "numerador" => Sum(Case(When("tpalta_n"=>1, then=1), default=0)))
+query.order_by("dt_diag__@month")
+query |> show_query
+query |> list |> DataFrame
 
 # SELECT 
 #     "dash_dim_municipio"."nome", 
@@ -159,7 +159,8 @@ sub_query.values("co_cid__pront")
 sub_query.filter("ibge"=>172100, "vigencia"=>202402)
 query.filter("pront__@in"=>sub_query)
 query.order_by("id")
-query |> show_query
+# query |> show_query
+page(query, 10) |> list |> DataFrame
 query |> list |> DataFrame
 
 

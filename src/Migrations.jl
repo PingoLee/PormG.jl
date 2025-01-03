@@ -2,313 +2,367 @@
 # Implement a system for database migrations to manage schema changes over time.
 # This could involve creating a separate set of scripts or modules that can apply versioned schema changes to the database.
 module Migrations
-  using DataFrames
-  using CSV
-  using Dates
-  using JSON
-  using SQLite
-  using LibPQ
+using DataFrames
+using CSV
+using Dates
+using JSON
+using SQLite
+using LibPQ
 
-  import PormG: Models, connection, sqlite_type_map, PormGModel, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table
-  import PormG.Generator: generate_models_from_db
+import ..PormG: Models, connection, config, sqlite_type_map, postgres_type_map, PormGModel, SQLConn, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table, Migration, Dialect
+import ..PormG.Generator: generate_models_from_db, generate_migration_plan
 
-  abstract type Migration end
 
-  struct CreateTable <: Migration
-    table_name::String
-    columns::Vector{Tuple{String, String}}
+# ---
+# Define the migration types
+#
+
+# Moved to Models.jl to impruve loading code
+import ..PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex
+
+
+# ---
+# Functions to apply migrations
+#
+
+function apply_migration(db::Union{SQLite.DB, LibPQ.Connection}, migration::CreateTable)
+  return Dialect.create_string_query(db, migration.table_name, migration.columns)
+end
+
+function apply_migration(db::SQLite.DB, migration::DropTable)
+  query = "DROP TABLE IF EXISTS $(migration.table_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::AddColumn)
+  query = "ALTER TABLE $(migration.table_name) ADD COLUMN $(migration.column_name) $(migration.column_type)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::DropColumn)
+  query = "ALTER TABLE $(migration.table_name) DROP COLUMN $(migration.column_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::RenameColumn)
+  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.old_column_name) TO $(migration.new_column_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::AlterColumn)
+  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.column_name) TO $(migration.new_column_name); ALTER TABLE $(migration.table_name) ALTER COLUMN $(migration.new_column_name) TYPE $(migration.new_column_type)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::AddForeignKey)
+  query = "ALTER TABLE $(migration.table_name) ADD FOREIGN KEY ($(migration.column_name)) REFERENCES $(migration.foreign_table_name)($(migration.foreign_column_name))"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::DropForeignKey)
+  query = "ALTER TABLE $(migration.table_name) DROP FOREIGN KEY $(migration.column_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::AddIndex)
+  query = "CREATE INDEX IF NOT EXISTS $(migration.table_name)_$(migration.column_name)_index ON $(migration.table_name) ($(migration.column_name))"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::DropIndex)
+  query = "DROP INDEX IF EXISTS $(migration.table_name)_$(migration.column_name)_index"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::Migration)
+  @warn "Migration type not recognized"
+end
+
+function apply_migrations(db::SQLite.DB, migrations::Vector{Migration})
+  for migration in migrations
+    apply_migration(db, migration)
   end
+end
 
-  struct DropTable <: Migration
-    table_name::String
+# functions to repreoduce the makemigrations from django
+
+
+
+
+function import_models_from_sqlite(;db::SQLite.DB = connection(), 
+                                  force_replace::Bool=false, 
+                                  ignore_schema::Vector{String} = sqlite_ignore_schema,
+                                  file::String="automatic_models.jl")
+
+  # check if db/models/automatic_models.jl exists
+  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
+    @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
+    return
+  elseif !ispath(joinpath(MODEL_PATH))
+    mkdir(joinpath(MODEL_PATH))
   end
-
-  struct AddColumn <: Migration
-    table_name::String
-    column_name::String
-    column_type::String
-  end
-
-  struct DropColumn <: Migration
-    table_name::String
-    column_name::String
-  end
-
-  struct RenameColumn <: Migration
-    table_name::String
-    old_column_name::String
-    new_column_name::String
-  end
-
-  struct AlterColumn <: Migration
-    table_name::String
-    column_name::String
-    new_column_name::String
-    new_column_type::String
-  end
-
-  struct AddForeignKey <: Migration
-    table_name::String
-    column_name::String
-    foreign_table_name::String
-    foreign_column_name::String
-  end
-
-  struct DropForeignKey <: Migration
-    table_name::String
-    column_name::String
-  end
-
-  struct AddIndex <: Migration
-    table_name::String
-    column_name::String
-  end
-
-  struct DropIndex <: Migration
-    table_name::String
-    column_name::String
-  end
-
-  function apply_migration(db::SQLite.DB, migration::CreateTable)
-    query = "CREATE TABLE IF NOT EXISTS $(migration.table_name) ($(join([col[1] * " " * col[2] for col in migration.columns], ", ")))"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::DropTable)
-    query = "DROP TABLE IF EXISTS $(migration.table_name)"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::AddColumn)
-    query = "ALTER TABLE $(migration.table_name) ADD COLUMN $(migration.column_name) $(migration.column_type)"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::DropColumn)
-    query = "ALTER TABLE $(migration.table_name) DROP COLUMN $(migration.column_name)"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::RenameColumn)
-    query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.old_column_name) TO $(migration.new_column_name)"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::AlterColumn)
-    query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.column_name) TO $(migration.new_column_name); ALTER TABLE $(migration.table_name) ALTER COLUMN $(migration.new_column_name) TYPE $(migration.new_column_type)"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::AddForeignKey)
-    query = "ALTER TABLE $(migration.table_name) ADD FOREIGN KEY ($(migration.column_name)) REFERENCES $(migration.foreign_table_name)($(migration.foreign_column_name))"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::DropForeignKey)
-    query = "ALTER TABLE $(migration.table_name) DROP FOREIGN KEY $(migration.column_name)"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::AddIndex)
-    query = "CREATE INDEX IF NOT EXISTS $(migration.table_name)_$(migration.column_name)_index ON $(migration.table_name) ($(migration.column_name))"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::DropIndex)
-    query = "DROP INDEX IF EXISTS $(migration.table_name)_$(migration.column_name)_index"
-    SQLite.execute(db, query)
-  end
-
-  function apply_migration(db::SQLite.DB, migration::Migration)
-    @warn "Migration type not recognized"
-  end
-
-  function apply_migrations(db::SQLite.DB, migrations::Vector{Migration})
-    for migration in migrations
-      apply_migration(db, migration)
-    end
-  end
-
-  # functions to repreoduce the makemigrations from django
   
+  # Get all schema
+  schemas = get_database_schema(db)
 
-  
+  # Colect all create instructions
+  Instructions::Vector{Any} = []
+  for schema in schemas
+    schema[2]["type"] == "index" && continue    
+    schema[1] in ignore_schema && continue
+    println(schema[2]["sql"])
+    push!(Instructions, convertSQLToModel(schema[2]["sql"]) |> Models.Model_to_str)
+  end
 
-  function import_models_from_sqlite(;db::SQLite.DB = connection(), 
-                                    force_replace::Bool=false, 
-                                    ignore_schema::Vector{String} = sqlite_ignore_schema,
-                                    file::String="automatic_models.jl")
+  generate_models_from_db(db, file, Instructions)
 
-    # check if db/models/automatic_models.jl exists
-    if isfile(joinpath(MODEL_PATH, file)) && !force_replace
-      @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
-      return
-    elseif !ispath(joinpath(MODEL_PATH))
-      mkdir(joinpath(MODEL_PATH))
+
+end
+
+
+
+function get_database_schema(db::SQLite.DB)
+  # Query the sqlite_master table to get the schema information
+  schema_query = "SELECT type, name, sql FROM sqlite_master WHERE type='table' OR type='index';"
+  schema_info = SQLite.DBInterface.execute(db, schema_query)
+
+  # Initialize a dictionary to hold the schema data
+  schema_data = Dict{String, Any}()
+
+  for row in schema_info
+      # For each row, store the type, name, and SQL in the schema_data dictionary
+      table_name = row[:name]
+      schema_data[table_name] = Dict(
+          "type" => row[:type],
+          "sql" => row[:sql]
+      )
+  end
+
+  return schema_data
+end
+
+"""
+  convertSQLToModel(sql::String)
+
+Converts a SQL CREATE TABLE statement into a model definition in PormGModel.
+
+# Arguments
+- `sql::String`: The SQL CREATE TABLE statement.
+
+# Returns
+- `PormGModel`: The model definition.
+
+# Example"""
+function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_type_map)   
+
+  # Extract table name
+  table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
+  table_name = table_name_match !== nothing ? table_name_match.captures[1] : error("Table name not found")
+
+  # Define a dictionary to map SQL types to Models.jl field types
+  fk_map::Dict{String, Any} = Dict{String, Any}()
+  pk_map::Dict{String, Any} = Dict{String, Any}()
+
+  # Extract any primary key constraints
+  # primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)", sql)
+  primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)?\s*(AUTOINCREMENT)?\)", sql)
+  for match in primary_key_regex
+    primary_keys = match.captures[1]
+    primary_keys = replace(primary_keys, r"\"" => "") 
+    primary_keys = split(primary_keys, ",")
+    auto_increment = isnothing(match.captures[2]) ? false : true
+    println(primary_keys)
+    for key in primary_keys
+      key = strip(key) |> String
+      pk_map[key] = Dict("primary_keys" => key, "auto_increment" => auto_increment)
     end
-    
-    # Get all schema
-    schemas = get_database_schema(db)
+  end
 
-    # Colect all create instructions
-    Instructions::Vector{Any} = []
-    for schema in schemas
-      schema[2]["type"] == "index" && continue    
-      schema[1] in ignore_schema && continue
-      println(schema[2]["sql"])
-      push!(Instructions, convertSQLToModel(schema[2]["sql"]) |> Models.Model_to_str)
-    end
-
-    generate_models_from_db(db, file, Instructions)
-
-
+  # Extract any foreign key constraints
+  foreign_key_matches = eachmatch(r"FOREIGN KEY\(\"(\w+)\"\) REFERENCES \"(\w+)\"\(\"(\w+)\"\)(?: ON DELETE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: ON UPDATE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: DEFERRABLE INITIALLY (DEFERRED|IMMEDIATE))?", sql)
+  for match in foreign_key_matches
+    column_name, fk_table, fk_column, on_delete, on_update, on_deferable = match.captures
+    println(match.captures)
+    typeof(column_name |> String) |> println
+    fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete, "on_update" => on_update, "on_deferable" => on_deferable)
   end
 
   
-
-  function get_database_schema(db::SQLite.DB)
-    # Query the sqlite_master table to get the schema information
-    schema_query = "SELECT type, name, sql FROM sqlite_master WHERE type='table' OR type='index';"
-    schema_info = SQLite.DBInterface.execute(db, schema_query)
-
-    # Initialize a dictionary to hold the schema data
-    schema_data = Dict{String, Any}()
-
-    for row in schema_info
-        # For each row, store the type, name, and SQL in the schema_data dictionary
-        table_name = row[:name]
-        schema_data[table_name] = Dict(
-            "type" => row[:type],
-            "sql" => row[:sql]
-        )
+  # Extend regex to capture PRIMARY KEY and FOREIGN KEY constraints
+  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[^,]*))?", sql)
+  # Initialize fields dictionary
+  fields_dict = Dict{Symbol, Any}()
+  str_fields_dict = Dict{String, Any}()
+  for match in column_matches
+    # println(match.captures)
+    column_name, column_type, nullable, default_value = match.captures
+    # check if column_name is a primary key
+    if haskey(pk_map, column_name)
+      field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
+    elseif haskey(fk_map, column_name)
+      field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
+      on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
+    else
+      field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value === nothing ? default_value : replace(default_value, "'" => ""))
     end
-
-    return schema_data
+            
+    fields_dict[Symbol(column_name)] = field_instance
   end
 
-  """
-    convertSQLToModel(sql::String)
+  # Construct and return the model
+  # Dict(:models => Models.Model(table_name, fields_dict), :str_models => Models.Model(table_name, str_fields_dict))
+  println(fields_dict)
+  println(typeof(table_name))
+  return Models.Model(table_name, fields_dict)
+end
 
-  Converts a SQL CREATE TABLE statement into a model definition in PormGModel.
-
-  # Arguments
-  - `sql::String`: The SQL CREATE TABLE statement.
-
-  # Returns
-  - `PormGModel`: The model definition.
-
-  # Example"""
-  function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_type_map)   
-
-    # Extract table name
-    table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
-    table_name = table_name_match !== nothing ? table_name_match.captures[1] : error("Table name not found")
-
-    # Define a dictionary to map SQL types to Models.jl field types
-    fk_map::Dict{String, Any} = Dict{String, Any}()
-    pk_map::Dict{String, Any} = Dict{String, Any}()
-
-    # Extract any primary key constraints
-    # primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)", sql)
-    primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)?\s*(AUTOINCREMENT)?\)", sql)
-    for match in primary_key_regex
-      primary_keys = match.captures[1]
-      primary_keys = replace(primary_keys, r"\"" => "") 
-      primary_keys = split(primary_keys, ",")
-      auto_increment = isnothing(match.captures[2]) ? false : true
-      println(primary_keys)
-      for key in primary_keys
-        key = strip(key) |> String
-        pk_map[key] = Dict("primary_keys" => key, "auto_increment" => auto_increment)
-      end
+# Compare model definitions to the current database schema
+function get_migration_plan(models, current_schema, conn)
+  migration_plan = Dict()
+  # models is empty set all models to migration_plan
+  if isempty(models)
+    for (model_name, model) in current_schema
+      migration_plan[model_name] = Dict{String, Any}(
+        "Plan" => "New model",     
+        "SQL" => apply_migration(conn, Dialect.create_table(conn, model))
+      )
     end
-
-    # Extract any foreign key constraints
-    foreign_key_matches = eachmatch(r"FOREIGN KEY\(\"(\w+)\"\) REFERENCES \"(\w+)\"\(\"(\w+)\"\)(?: ON DELETE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: ON UPDATE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: DEFERRABLE INITIALLY (DEFERRED|IMMEDIATE))?", sql)
-    for match in foreign_key_matches
-      column_name, fk_table, fk_column, on_delete, on_update, on_deferable = match.captures
-      println(match.captures)
-      typeof(column_name |> String) |> println
-      fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete, "on_update" => on_update, "on_deferable" => on_deferable)
-    end
-
-    
-    # Extend regex to capture PRIMARY KEY and FOREIGN KEY constraints
-    column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[^,]*))?", sql)
-    # Initialize fields dictionary
-    fields_dict = Dict{Symbol, Any}()
-    str_fields_dict = Dict{String, Any}()
-    for match in column_matches
-      # println(match.captures)
-      column_name, column_type, nullable, default_value = match.captures
-      # check if column_name is a primary key
-      if haskey(pk_map, column_name)
-        field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
-      elseif haskey(fk_map, column_name)
-        field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
-        on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
-      else
-        field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value === nothing ? default_value : replace(default_value, "'" => ""))
-      end
-              
-      fields_dict[Symbol(column_name)] = field_instance
-    end
-
-    # Construct and return the model
-    # Dict(:models => Models.Model(table_name, fields_dict), :str_models => Models.Model(table_name, str_fields_dict))
-    println(fields_dict)
-    println(typeof(table_name))
-    return Models.Model(table_name, fields_dict)
+    return migration_plan
   end
 
-  # Compare model definitions to the current database schema
-  function compare_schemas(models, current_schema)
-    differences = Dict()
-    for model in models
-        model_name = model.name
-        if haskey(current_schema, model_name)
-            # Compare fields
-            for (field_name, field_type) in model.fields
-                if !haskey(current_schema[model_name], field_name)
-                    differences[model_name] = "New field: $field_name"
-                end
-                # Additional comparisons for field changes
-            end
-        else
-            differences[model_name] = "New model"
+  for model in models
+    model_name = model.name
+    if haskey(current_schema, model_name)
+      # Compare fields
+      for (field_name, field_type) in model.fields
+        if !haskey(current_schema[model_name], field_name)     
+          migration_plan[model_name] = Dict{String, Any}(
+            "Plan" => "New field: $field_name",
+            "Column" => field_type,
+            "SQL" => Dialect.add_column(connection, model_name, field_name, field_type)
+          )
         end
+        # check if just a name of the field changed
+        
+        # Additional comparisons for field changes
+      end
+    else
+      migration_plan[model_name] = "New model"
     end
-    return differences
   end
 
-  # Generate migration plan based on differences
-  function generate_migration_plan(differences)
-    plan = []
-    for (model_name, change) in differences
-        push!(plan, "Apply change to $model_name: $change")
+  # Check for models in the current schema that are not in the models
+  for (model_name, model) in current_schema
+    if !haskey(models, model_name)
+      migration_plan[model_name] = "Delete table"
     end
-    return plan
   end
 
-  # # Main function to simulate makemigrations
-  # function makemigrations()
-  #   models = get_all_models()
-  #   current_schema = get_current_db_schema()
-  #   differences = compare_schemas(models, current_schema)
-  #   migration_plan = generate_migration_plan(differences)
-  #   # Here you would write the migration_plan to a file or directly apply it
-  #   println("Migration plan: ", migration_plan)
-  # end
-
-  # # Example usage
-  # makemigrations()
+  # how detect changes in name of the models?
 
 
-#   # sugestion to PostgreSQL
+  return migration_plan
+end
+
+
+#
+# Makemigrations -- Do instructions to create a migration plan
+#
+
+
+# Main function to simulate makemigrations
+function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+  models_array::Vector{Any} = []
+  try
+    models_array = convert_schema_to_models(connection)
+  catch e
+    error_message = sprint(showerror, e)
+    if occursin("Table definition not found", error_message)
+      @info("The database is empty, that is migrate all tables") # TODO, impruve this message
+    else
+      println("Error: ", e)
+      @error("Error: ", e)
+      return
+    end
+  end
+  # get module from the path
+  println(models_array)
+  current_models = get_current_models(include(path))
+  println(current_models |> length)
+  
+  println("compare")
+  migration_plan = get_migration_plan(models_array, current_models, connection)
+
+  # store migration_plan as pending_migrations.jl file
+  path = joinpath(settings.db_def_folder, "migrations")
+  if !ispath(path)
+    mkdir(path)
+  end
+  generate_migration_plan("pending_migrations.jl", migration_plan, path)
+
+
+  # migration_plan = generate_migration_plan(differences)
+  # # Here you would write the migration_plan to a file or directly apply it
+  # println("Migration plan: ", migration_plan)
+end
+function makemigrations(db::String; config::Dict{String,SQLConn} = config)
+  settings = config[db]
+  path = joinpath(db, settings.model_file)
+  isfile(path) || error("The file $(path) does not exists")
+  makemigrations(settings.connections, settings, path=path)
+end
+
+# Get all models from a module
+function get_current_models(mod::Module)
+  models = Dict{Symbol, Any}()
+  for name in names(mod, all = true)
+      if isdefined(mod, name)
+          obj = getfield(mod, name)
+          if isa(obj, PormGModel)
+              models[name] = obj
+          end
+      end
+  end
+  return models
+end
+
+
 
 #
 # IMPORT MODELS FROM DATABASE POSTGRESQL
 #
+
+"""
+  convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{String} = postgres_ignore_table)
+
+Convert the database schema to models.
+
+# Arguments
+- `db::LibPQ.Connection`: The database connection.
+- `ignore_table::Vector{String}`: A vector of table names to ignore. Defaults to `postgres_ignore_table`.
+
+# Returns
+- `models_array::Vector{Any}`: A vector containing the converted models.
+
+# Description
+This function retrieves the database schema and converts it to models. It collects all create instructions and skips tables specified in the `ignore_table` vector. The function prints the type of each schema and returns the schema for debugging purposes. It stops processing after the fifth schema.
+"""
+function convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{String} = postgres_ignore_table)
+  # Get all schema
+  schemas = get_database_schema(db)
+  # Colect all create instructions
+  models_array::Vector{Any} = []
+  for (index, schema) in enumerate(eachrow(schemas))
+    # check if each ignore_table value is contained in the schema.table_name
+    any(ignored -> occursin(ignored, schema.table_name), ignore_table) && continue
+    println(typeof(schema))
+    return schema
+    convertSQLToModel(schema) |> println
+    # push!(Instructions, convertSQLToModel(schema) |> Models.Model_to_str)
+    index > 4 && break
+  end  
+  return models_array
+end
 
   
 function import_models_from_postgres(;db::LibPQ.Connection = connection(), 
@@ -324,28 +378,17 @@ function import_models_from_postgres(;db::LibPQ.Connection = connection(),
       mkdir(joinpath(MODEL_PATH))
   end
   
-  # Get all schema
-  schemas = get_database_schema(db)
+  models_array = convert_schema_to_models(db, ignore_table=ignore_table)
 
-  # Collect all create instructions
-  Instructions::Vector{Any} = []
-  # schemas is a DataFrame
-  #   Row │ table_schema  table_name                         columns                            primary_keys  foreign_keys              foreign_tables                     indexes 
-  #       │ String?       String?                            String?                            String?       String?                   String?                            String? 
-  #  ─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  #     1 │ public        auth_group                         id integer NOT NULL DEFAULT next…  id            missing                   missing                            missing 
-  #     2 │ public        auth_group_permissions             id bigint NOT NULL DEFAULT nextv…  id            group_id, permission_id   public.auth_group, public.auth_p…  missing 
-  for (index, schema) in enumerate(eachrow(schemas))
-    # check if each ignore_table value is contained in the schema.table_name
-    any(ignored -> occursin(ignored, schema.table_name), ignore_table) && continue
-    println(typeof(schema))
-    return schema
-    convertSQLToModel(schema) |> println
-    # push!(Instructions, convertSQLToModel(schema) |> Models.Model_to_str)
-    index > 4 && break
-  end
+  println(models_array)
 
   # generate_models_from_db(db, file, Instructions)
+end
+function import_models_from_postgres(db::String;
+  force_replace::Bool=false, 
+  ignore_table::Vector{String} = postgres_ignore_table,
+  file::String="automatic_models.jl")
+  import_models_from_postgres(db=connection(key=db), force_replace=force_replace, ignore_table=ignore_table, file=file)
 end
 
 function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)

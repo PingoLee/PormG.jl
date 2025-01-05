@@ -1168,5 +1168,12 @@ function list(object::SQLObjectHandler)
   return fetch(connection, sql)
 end
 
+# ---
+# Execute transaction functions
+#
+
+
+
+
 end
 

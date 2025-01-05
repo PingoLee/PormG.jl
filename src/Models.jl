@@ -347,6 +347,150 @@ function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, 
   ) 
 end
 
+@kwdef mutable struct sForeignKey <: PormGField
+  verbose_name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  unique::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Int64, Nothing} = nothing
+  editable::Bool = false
+  to::Union{String, PormGModel, Nothing} = nothing
+  pk_field::Union{String, Symbol, Nothing} = nothing
+  on_delete::Union{String, Nothing} = nothing
+  on_update::Union{String, Nothing} = nothing
+  deferrable::Bool = false
+  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
+  related_name::Union{String, Nothing} = nothing
+  type::String = "BIGINT"
+  formater::Function = format_number_sql
+  db_constraint::Bool = true
+end
+
+function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
+  # println(on_delete |> typeof)
+  # Validate 'to' parameter
+  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
+  # Validate optional string parameters
+  !(pk_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
+  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
+  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
+  # resolve db_index
+  db_index = db_index || !db_constraint
+  # Return the field instance
+  return sForeignKey(
+    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
+    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint
+  )  
+end
+
+
+@kwdef mutable struct sOneToOneField <: PormGField
+  # Same fields as sForeignKey but with unique=true by default
+  unique::Bool = true
+  verbose_name::Union{String, Nothing} = nothing
+  primary_key::Bool = false
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Int64, Nothing} = nothing
+  editable::Bool = false
+  to::Union{String, PormGModel, Nothing} = nothing
+  pk_field::Union{String, Symbol, Nothing} = nothing
+  on_delete::Union{String, Nothing} = nothing
+  on_update::Union{String, Nothing} = nothing
+  deferrable::Bool = false
+  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
+  related_name::Union{String, Nothing} = nothing
+  type::String = "BIGINT"
+  formater::Function = format_number_sql
+  db_constraint::Bool = true
+end
+
+function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
+  # Similar validation as in ForeignKey
+  # Validate 'to' parameter
+  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
+  # Validate optional string parameters
+  !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
+  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
+  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
+  # resolve db_index
+  db_index = db_index || !db_constraint
+  # Return the field instance
+  return sOneToOneField(
+    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
+    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
+    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint
+  )
+end
+
+@kwdef mutable struct sAutoField <: PormGField
+  verbose_name::Union{String, Nothing} = nothing
+  primary_key::Bool = true
+  auto_increment::Bool = true
+  unique::Bool = true
+  blank::Bool = false
+  null::Bool = false
+  db_index::Bool = false
+  default::Union{Int64, Nothing} = nothing
+  editable::Bool = false
+  type::String = "INTEGER"
+  formater::Function = format_number_sql
+end
+
+function AutoField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(auto_increment isa Bool) && throw(ArgumentError("The 'auto_increment' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  # Validate default
+  default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
+  # Return the field instance
+  return sAutoField(
+    verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment,
+    unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable
+  )
+end
+
 @kwdef mutable struct sCharField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
   primary_key::Bool = false
@@ -507,58 +651,6 @@ function BigIntegerField(; verbose_name=nothing, unique=false, blank=false, null
   )  
 end
 
-@kwdef mutable struct sForeignKey <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  to::Union{String, PormGModel, Nothing} = nothing
-  pk_field::Union{String, Symbol, Nothing} = nothing
-  on_delete::Union{String, Nothing} = nothing
-  on_update::Union{String, Nothing} = nothing
-  deferrable::Bool = false
-  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
-  related_name::Union{String, Nothing} = nothing
-  type::String = "BIGINT"
-  formater::Function = format_number_sql
-  db_constraint::Bool = true
-end
-
-function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
-  # println(on_delete |> typeof)
-  # Validate 'to' parameter
-  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
-  # Validate default
-  default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
-  # Validate optional string parameters
-  !(pk_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
-  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
-  !(how isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'how' must be a String or nothing"))
-  !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
-  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
-  # Return the field instance
-  return sForeignKey(
-    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
-    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint
-  )  
-end
-
 @kwdef mutable struct sBooleanField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
   primary_key::Bool = false
@@ -571,6 +663,7 @@ end
   type::String = "BOOLEAN"
   formater::Function = format_bool_sql
 end
+
 
 function BooleanField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
   # Validate verbose_name
@@ -924,93 +1017,6 @@ function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=fal
   )
 end
 
-@kwdef mutable struct sOneToOneField <: PormGField
-  # Same fields as sForeignKey but with unique=true by default
-  unique::Bool = true
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  to::Union{String, PormGModel, Nothing} = nothing
-  pk_field::Union{String, Symbol, Nothing} = nothing
-  on_delete::Union{String, Nothing} = nothing
-  on_update::Union{String, Nothing} = nothing
-  deferrable::Bool = false
-  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
-  related_name::Union{String, Nothing} = nothing
-  type::String = "BIGINT"
-  formater::Function = format_number_sql
-  db_constraint::Bool = true
-end
-
-function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, how=nothing, related_name=nothing, db_constraint=true)
-  # Similar validation as in ForeignKey
-  # Validate 'to' parameter
-  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
-  # Validate default
-  default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
-  # Validate optional string parameters
-  !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
-  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
-  !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
-  !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
-  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
-  # Return the field instance
-  return sOneToOneField(
-    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
-    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint
-  )
-end
-
-@kwdef mutable struct sAutoField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = true
-  auto_increment::Bool = true
-  unique::Bool = true
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  type::String = "INTEGER"
-  formater::Function = format_number_sql
-end
-
-function AutoField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(auto_increment isa Bool) && throw(ArgumentError("The 'auto_increment' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  # Validate default
-  default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
-  # Return the field instance
-  return sAutoField(
-    verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment,
-    unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable
-  )
-end
-
 @kwdef mutable struct sDurationField <: PormGField
   verbose_name::Union{String, Nothing} = nothing
   primary_key::Bool = false
@@ -1141,6 +1147,7 @@ end
 struct AddForeignKey <: Migration
   table_name::String
   column_name::String
+  constraint_name::Union{String, Nothing}
   foreign_table_name::String
   foreign_column_name::String
 end
@@ -1151,6 +1158,7 @@ struct DropForeignKey <: Migration
 end
 
 struct AddIndex <: Migration
+  index_name::String
   table_name::String
   column_name::String
 end
@@ -1160,7 +1168,24 @@ struct DropIndex <: Migration
   column_name::String
 end
 
+# ---
+# Define function to manage on_delete
+#
 
+function on_delete(action::Symbol, model::PormGModel)
+    if action == :CASCADE
+        cascade(model)
+    elseif action == :SET_NULL
+        # Implement logic to set foreign key fields to null
+    elseif action == :RESTRICT
+        # Implement logic to prevent deleting if there are related objects
+    else
+        # DO_NOTHING or other custom behaviors
+    end
+end
 
-  
+function cascade(model::PormGModel)
+    # Here, implement the actual cascade logic for related objects
+end
+
 end

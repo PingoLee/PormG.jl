@@ -8,6 +8,7 @@ using Dates
 using JSON
 using SQLite
 using LibPQ
+using OrderedCollections
 
 import ..PormG: Models, connection, config, sqlite_type_map, postgres_type_map, PormGModel, SQLConn, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table, Migration, Dialect
 import ..PormG.Generator: generate_models_from_db, generate_migration_plan
@@ -18,76 +19,17 @@ import ..PormG.Generator: generate_models_from_db, generate_migration_plan
 #
 
 # Moved to Models.jl to impruve loading code
-import ..PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex
 
 
 # ---
 # Functions to apply migrations
 #
 
-function apply_migration(db::Union{SQLite.DB, LibPQ.Connection}, migration::CreateTable)
-  return Dialect.create_string_query(db, migration.table_name, migration.columns)
-end
+# Moved to Models.jl to Dialect.jl to impruve loading code
 
-function apply_migration(db::SQLite.DB, migration::DropTable)
-  query = "DROP TABLE IF EXISTS $(migration.table_name)"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::AddColumn)
-  query = "ALTER TABLE $(migration.table_name) ADD COLUMN $(migration.column_name) $(migration.column_type)"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::DropColumn)
-  query = "ALTER TABLE $(migration.table_name) DROP COLUMN $(migration.column_name)"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::RenameColumn)
-  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.old_column_name) TO $(migration.new_column_name)"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::AlterColumn)
-  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.column_name) TO $(migration.new_column_name); ALTER TABLE $(migration.table_name) ALTER COLUMN $(migration.new_column_name) TYPE $(migration.new_column_type)"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::AddForeignKey)
-  query = "ALTER TABLE $(migration.table_name) ADD FOREIGN KEY ($(migration.column_name)) REFERENCES $(migration.foreign_table_name)($(migration.foreign_column_name))"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::DropForeignKey)
-  query = "ALTER TABLE $(migration.table_name) DROP FOREIGN KEY $(migration.column_name)"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::AddIndex)
-  query = "CREATE INDEX IF NOT EXISTS $(migration.table_name)_$(migration.column_name)_index ON $(migration.table_name) ($(migration.column_name))"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::DropIndex)
-  query = "DROP INDEX IF EXISTS $(migration.table_name)_$(migration.column_name)_index"
-  SQLite.execute(db, query)
-end
-
-function apply_migration(db::SQLite.DB, migration::Migration)
-  @warn "Migration type not recognized"
-end
-
-function apply_migrations(db::SQLite.DB, migrations::Vector{Migration})
-  for migration in migrations
-    apply_migration(db, migration)
-  end
-end
-
-# functions to repreoduce the makemigrations from django
-
-
-
+# ---
+# Functions to import models from a SQLite database
+#
 
 function import_models_from_sqlite(;db::SQLite.DB = connection(), 
                                   force_replace::Bool=false, 
@@ -118,8 +60,6 @@ function import_models_from_sqlite(;db::SQLite.DB = connection(),
 
 
 end
-
-
 
 function get_database_schema(db::SQLite.DB)
   # Query the sqlite_master table to get the schema information
@@ -216,16 +156,50 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_typ
   return Models.Model(table_name, fields_dict)
 end
 
+#
+# Makemigrations -- Do instructions to create a migration plan
+#
+
+function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, key::String, value::String)
+  if !haskey(migration_plan, model_name)
+    migration_plan[model_name] = OrderedDict{String, String}(key => value)
+  else
+    migration_plan[model_name][key] = value
+  end
+end
+
 # Compare model definitions to the current database schema
 function get_migration_plan(models, current_schema, conn)
-  migration_plan = Dict()
+  migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
   # models is empty set all models to migration_plan
   if isempty(models)
     for (model_name, model) in current_schema
-      migration_plan[model_name] = Dict{String, Any}(
-        "Plan" => "New model",     
-        "SQL" => apply_migration(conn, Dialect.create_table(conn, model))
-      )
+      _configure_order_dict_migration_plan(migration_plan, model_name, "New model", apply_migration(conn, Dialect.create_table(conn, model)))
+      for (field_name, field) in model.fields       
+        _hash = randstring(8)
+        name = "$(model_name)_$field_name"
+        if length(name) + length(_hash) > 63
+          name = name[1:63 - length(_hash)]
+        end
+        
+
+        # If new field is a foreign key
+        if hasfield(field |> typeof, :to) && !field.db_constraint
+          constraint_name = name * "_$_hash" * "_fk"
+          _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
+          apply_migration(conn, Dialect.add_foreign_key(conn, model, "\"$field_name\"", "\"$constraint_name\"", "\"$(field.to)\"", "\"$(field.pk_field)\"")))
+        end
+
+        # If new field is also indexed
+        if field.db_index 
+          index_name = name * "_$_hash"
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
+          apply_migration(conn, Dialect.add_index(conn, model, "\"$index_name\"", "\"$model_name\"", ["\"$field_name\""])))
+        end
+      
+        
+      end
+
     end
     return migration_plan
   end
@@ -263,12 +237,6 @@ function get_migration_plan(models, current_schema, conn)
 
   return migration_plan
 end
-
-
-#
-# Makemigrations -- Do instructions to create a migration plan
-#
-
 
 # Main function to simulate makemigrations
 function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
@@ -326,6 +294,75 @@ function get_current_models(mod::Module)
   return models
 end
 
+# ---
+# Functions to apply migrations
+#
+
+function get_current_dicts(mod::Module)
+  ordered_dicts = []
+  for name in names(mod, all = true)
+      if isdefined(mod, name)
+          obj = getfield(mod, name)
+          if isa(obj, OrderedDict)
+            push!(ordered_dicts, obj)
+          end
+      end
+  end
+  return ordered_dicts
+end
+
+function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+  # Load the migration plan
+  migration_plan = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")) |> get_current_dicts
+
+  # build the transaction to apply the migration plan
+  fisrt_execution::Vector{String} = []
+  last_execution::Vector{String} = []
+
+  for dict_instructs in migration_plan
+    println("Executing: $dict_instructs")
+    for (key, value) in dict_instructs
+      if value == "New model"
+        push!(fisrt_execution, key)
+      else
+        push!(last_execution, key)
+      end
+    end
+  
+  end
+
+  return migration_plan
+  
+
+  # Begin a transaction
+  LibPQ.execute(connection, "BEGIN;")
+
+  try
+      # Iterate over the migration plan and execute each SQL statement
+      for (model_name, actions) in migration_plan
+          for (action, sql) in actions
+              println("Executing: $sql")
+              LibPQ.execute(connection, sql)
+          end
+      end
+
+      # Commit the transaction
+      LibPQ.execute(connection, "COMMIT;")
+      println("Migrations applied successfully.")
+  catch e
+      # Rollback the transaction in case of an error
+      LibPQ.execute(connection, "ROLLBACK;")
+      println("Error applying migrations: ", e)
+      @error("Error applying migrations: ", e)
+  end
+
+  
+end
+function migrate(db::String; config::Dict{String,SQLConn} = config)
+  settings = config[db]
+  migrate(settings.connections, settings)
+end
+  
 
 
 #

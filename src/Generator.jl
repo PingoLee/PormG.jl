@@ -2,6 +2,7 @@ module Generator
 
 import PormG: MODEL_PATH, SQLConn
 using SQLite, LibPQ
+import OrderedCollections: OrderedDict
 
 # I want generate files with db models, can you help me?
 # example:
@@ -46,7 +47,7 @@ function generate_models_from_db(db::Union{SQLite.DB, LibPQ.LibPQ.Connection }, 
   nothing
 end
 
-function dict_to_jl_str(d::Dict{String,Any})::String
+function dict_to_jl_str(d::OrderedDict{String, String})::String
   entries = String[]
   for (k, v) in d
       # Escape any internal quotes in keys
@@ -55,14 +56,8 @@ function dict_to_jl_str(d::Dict{String,Any})::String
       # If the value is a string, we might wrap it in triple quotes if it has newlines
       if v isa String
           val_str = string(v)
-          if occursin('\n', val_str)
-              # Use triple-quoted string to preserve newlines nicely
-              val_str = "\"\"\"$(val_str))\"\"\""
-          else
-              # Escape quotes for simpler single-line strings
-              val_str = "\"" * replace(val_str, "\"" => "\\\"") * "\""
-          end
-          push!(entries, "\"$key_str\" => $val_str")
+          val_str = "\"\"\"$(val_str))\"\"\""          
+          push!(entries, "\n\"$key_str\" =>\n $val_str")
       else
           # For non-string values, just string-ify them
           val_str = replace(string(v), "\"" => "\\\"")
@@ -71,40 +66,23 @@ function dict_to_jl_str(d::Dict{String,Any})::String
   end
   
   # Join the key-value pairs into a Dict( ... )
-  return "Dict{String, Any}(" * join(entries, ",\n ") * ")"
+  return "OrderedDict{String, String}(" * join(entries, ",\n ") * ")"
 end
 
-# function generate_migration_plan(file::String, migration_plan::Dict{Any,Any}, path::String) :: Nothing
-#   println(path)
-#   open(joinpath(path, file), "w") do f
-#     write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
-#     import PormG.Migrations
-#     """)
-#     for (key, value) in migration_plan
-#       write(f, 
-#       """# table: $(key)
-#       $(value)
-#       \n""")            
-#     end
-#     write(f, "\n\nend\n")
-#   end
-
-#   nothing
-# end
-
-function generate_migration_plan(file::String, migration_plan::Dict{Any,Any}, path::String) :: Nothing
+function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String) :: Nothing
   open(joinpath(path, file), "w") do f
       module_name = replace(basename(file), ".jl" => "")
       write(f, """
           module $module_name
 
           import PormG.Migrations
+          import OrderedCollections: OrderedDict
 
           """)
       for (key, value) in migration_plan
           write(f, "# table: $key\n")
 
-          if value isa Dict{String,Any}
+          if value isa OrderedDict{String, String}
               # Convert this dictionary into parseable Julia code
               jl_code_str = dict_to_jl_str(value)
               write(f, "$key = $jl_code_str\n\n")

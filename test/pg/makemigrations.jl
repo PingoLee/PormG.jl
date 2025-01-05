@@ -16,3 +16,5 @@ PormG.Configuration.load("db_2")
 PormG.Migrations.makemigrations("db_2")
 
 # i stoped in compare_schemas
+
+PormG.Migrations.migrate("db_2")

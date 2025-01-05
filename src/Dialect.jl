@@ -205,20 +205,90 @@ function create_table(conn::LibPQ.Connection, model::PormGModel; model_sql::Unio
   for (field_name, field) in model.fields    
     push!(columns, field_to_column(field_name, field, conn))
   end
-  println("type: ", typeof(model.name), " data: ", model.name)
-  println("type: ", typeof(columns), " data: ", columns)
+  # println("type: ", typeof(model.name), " data: ", model.name)
+  # println("type: ", typeof(columns), " data: ", columns)
   return CreateTable(model.name, columns)
 end
+
+function add_index(conn::LibPQ.Connection, model::PormGModel, index_name::String, table_name::String, columns::Vector{String})
+  return AddIndex(model.name, index_name, table_name, columns)
+end
+
+function add_foreign_key(conn::LibPQ.Connection, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
+  return AddForeignKey(model.name, field_name, constraint_name, ref_model.name, ref_field_name)
+end
+
 
 
 # ---
 # Functions to create migration queries
 #
-function create_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
+import ..PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex, Migration
+
+
+function create_table_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
   return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
     )""" #|> x -> replace(x, "\\\"" => "\"")
 end
+function create_table_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, migration::CreateTable)
+  return create_table_string_query(conn, migration.table_name, migration.columns)
+end
 
+function create_index_string_query(conn::LibPQ.Connection, index_name::String, table_name::String, columns::Vector{String})
+  return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")))"""
+end
+function create_index_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, migration::AddIndex)
+  return create_index_string_query(conn, migration.index_name, migration.table_name, migration.column_name)
+end
+
+function add_foreign_key_string_query(conn::LibPQ.Connection, table_name::String, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
+  return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name) DEFERRABLE INITIALLY DEFERRED;"""
+end
+function add_foreign_key_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, migration::AddForeignKey)
+  return add_foreign_key_string_query(conn, migration.table_name, migration.constraint_name, migration.column_name, migration.foreign_table_name, migration.foreign_column_name)
+end
+
+
+function apply_migration(db::SQLite.DB, migration::DropTable)
+  query = "DROP TABLE IF EXISTS $(migration.table_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::AddColumn)
+  query = "ALTER TABLE $(migration.table_name) ADD COLUMN $(migration.column_name) $(migration.column_type)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::DropColumn)
+  query = "ALTER TABLE $(migration.table_name) DROP COLUMN $(migration.column_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::RenameColumn)
+  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.old_column_name) TO $(migration.new_column_name)"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::AlterColumn)
+  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.column_name) TO $(migration.new_column_name); ALTER TABLE $(migration.table_name) ALTER COLUMN $(migration.new_column_name) TYPE $(migration.new_column_type)"
+  SQLite.execute(db, query)
+end
+
+
+function apply_migration(db::SQLite.DB, migration::DropForeignKey)
+  query = "ALTER TABLE $(migration.table_name) DROP FOREIGN KEY $(migration.column_name)"
+  SQLite.execute(db, query)
+end
+
+
+function apply_migration(db::SQLite.DB, migration::DropIndex)
+  query = "DROP INDEX IF EXISTS $(migration.table_name)_$(migration.column_name)_index"
+  SQLite.execute(db, query)
+end
+
+function apply_migration(db::SQLite.DB, migration::Migration)
+  @warn "Migration type not recognized"
+end
 
 
 end

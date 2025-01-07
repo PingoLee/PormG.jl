@@ -56,7 +56,7 @@ function dict_to_jl_str(d::OrderedDict{String, String})::String
       # If the value is a string, we might wrap it in triple quotes if it has newlines
       if v isa String
           val_str = string(v)
-          val_str = "\"\"\"$(val_str))\"\"\""          
+          val_str = "\"\"\"$(val_str)\"\"\""          
           push!(entries, "\n\"$key_str\" =>\n $val_str")
       else
           # For non-string values, just string-ify them
@@ -80,16 +80,15 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
 
           """)
       for (key, value) in migration_plan
-          write(f, "# table: $key\n")
-
-          if value isa OrderedDict{String, String}
-              # Convert this dictionary into parseable Julia code
-              jl_code_str = dict_to_jl_str(value)
-              write(f, "$key = $jl_code_str\n\n")
-          else
-              # If it's not a Dict, just write it plainly (or handle differently)
-              write(f, "# (Not a Dict) $value\n\n")
-          end
+        write(f, "# table: $key\n")
+        if value isa OrderedDict{String, String}
+          # Convert this dictionary into parseable Julia code
+          jl_code_str = dict_to_jl_str(value)
+          write(f, "$key = $jl_code_str\n\n")
+        else
+          # If it's not a Dict, just write it plainly (or handle differently)
+          write(f, "# (Not a Dict) $value\n\n")
+        end
       end
 
       write(f, "end\n")

@@ -133,35 +133,37 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sForeignKey
 function field_to_column(col_name::String, field::PormGField, conn::Union{LibPQ.Connection, SQLite.DB}, type_map::Dict{String, String} = postgres_type_map)
   # Determine the base SQL type for PostgreSQL
   base_type = ""
   if field isa sIDField
-      base_type = type_map[field.type]    
+    base_type = type_map[field.type]    
   elseif field isa sCharField
-      max_len = hasproperty(field, :max_length) ? field.max_length : 250
-      base_type = "$(type_map[field.type])($max_len)"
+    max_len = hasproperty(field, :max_length) ? field.max_length : 250
+    base_type = "$(type_map[field.type])($max_len)"
   elseif field isa sTextField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sBooleanField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sIntegerField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sBigIntegerField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sFloatField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sDecimalField
-      max_digits = hasproperty(field, :max_digits) ? field.max_digits : 10
-      decimal_places = hasproperty(field, :decimal_places) ? field.decimal_places : 2
-      base_type = "$(type_map[field.type])($max_digits, $decimal_places)"
+    max_digits = hasproperty(field, :max_digits) ? field.max_digits : 10
+    decimal_places = hasproperty(field, :decimal_places) ? field.decimal_places : 2
+    base_type = "$(type_map[field.type])($max_digits, $decimal_places)"
   elseif field isa sDateField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sDateTimeField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
   elseif field isa sTimeField
-      base_type = type_map[field.type]
+    base_type = type_map[field.type]
+  elseif field isa sForeignKey
+    base_type = type_map[field.type]
   else
       # Generic fallback
       base_type = "TEXT"
@@ -196,57 +198,36 @@ function field_to_column(col_name::String, field::PormGField, conn::Union{LibPQ.
   return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
 end
 
-
-# ---
-# Functions to create migrations
-#
-function create_table(conn::LibPQ.Connection, model::PormGModel; model_sql::Union{PormGModel, Nothing} = nothing)
-  columns = []
-  for (field_name, field) in model.fields    
-    push!(columns, field_to_column(field_name, field, conn))
-  end
-  # println("type: ", typeof(model.name), " data: ", model.name)
-  # println("type: ", typeof(columns), " data: ", columns)
-  return CreateTable(model.name, columns)
-end
-
-function add_index(conn::LibPQ.Connection, model::PormGModel, index_name::String, table_name::String, columns::Vector{String})
-  return AddIndex(model.name, index_name, table_name, columns)
-end
-
-function add_foreign_key(conn::LibPQ.Connection, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
-  return AddForeignKey(model.name, field_name, constraint_name, ref_model.name, ref_field_name)
-end
-
-
-
 # ---
 # Functions to create migration queries
 #
 import ..PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex, Migration
 
 
-function create_table_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
+function create_table(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
   return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
-    )""" #|> x -> replace(x, "\\\"" => "\"")
+    );""" #|> x -> replace(x, "\\\"" => "\"")
 end
-function create_table_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, migration::CreateTable)
-  return create_table_string_query(conn, migration.table_name, migration.columns)
-end
-
-function create_index_string_query(conn::LibPQ.Connection, index_name::String, table_name::String, columns::Vector{String})
-  return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")))"""
-end
-function create_index_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, migration::AddIndex)
-  return create_index_string_query(conn, migration.index_name, migration.table_name, migration.column_name)
+function create_table(conn::LibPQ.Connection, model::PormGModel)
+  columns::Vector{String} = []
+  for (field_name, field) in model.fields    
+    push!(columns, field_to_column(field_name, field, conn))
+  end
+  return create_table(conn, model.name |> lowercase, columns)
 end
 
-function add_foreign_key_string_query(conn::LibPQ.Connection, table_name::String, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
+
+function create_index(conn::Union{SQLite.DB, LibPQ.Connection}, index_name::String, table_name::String, columns::Vector{String})
+  return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+end
+
+
+function add_foreign_key(conn::LibPQ.Connection, table_name::String, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
   return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name) DEFERRABLE INITIALLY DEFERRED;"""
 end
-function add_foreign_key_string_query(conn::Union{SQLite.DB, LibPQ.Connection}, migration::AddForeignKey)
-  return add_foreign_key_string_query(conn, migration.table_name, migration.constraint_name, migration.column_name, migration.foreign_table_name, migration.foreign_column_name)
-end
+# function add_foreign_key(conn::LibPQ.Connection, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
+#   return add_foreign_key(model.name, model.name, constraint_name, field_name, ref_model.name, ref_field_name)
+# end
 
 
 function apply_migration(db::SQLite.DB, migration::DropTable)

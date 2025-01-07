@@ -8,7 +8,8 @@ using Dates
 using JSON
 using SQLite
 using LibPQ
-using OrderedCollections
+import OrderedCollections: OrderedDict
+import Random: randstring
 
 import ..PormG: Models, connection, config, sqlite_type_map, postgres_type_map, PormGModel, SQLConn, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table, Migration, Dialect
 import ..PormG.Generator: generate_models_from_db, generate_migration_plan
@@ -174,9 +175,9 @@ function get_migration_plan(models, current_schema, conn)
   # models is empty set all models to migration_plan
   if isempty(models)
     for (model_name, model) in current_schema
-      _configure_order_dict_migration_plan(migration_plan, model_name, "New model", apply_migration(conn, Dialect.create_table(conn, model)))
+      _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
       for (field_name, field) in model.fields       
-        _hash = randstring(8)
+        _hash = randstring(8) 
         name = "$(model_name)_$field_name"
         if length(name) + length(_hash) > 63
           name = name[1:63 - length(_hash)]
@@ -185,16 +186,16 @@ function get_migration_plan(models, current_schema, conn)
 
         # If new field is a foreign key
         if hasfield(field |> typeof, :to) && !field.db_constraint
-          constraint_name = name * "_$_hash" * "_fk"
+          constraint_name = name * "_$_hash" * "_fk" |> lowercase
           _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-          apply_migration(conn, Dialect.add_foreign_key(conn, model, "\"$field_name\"", "\"$constraint_name\"", "\"$(field.to)\"", "\"$(field.pk_field)\"")))
+          Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> lowercase)\"", "\"$(field.pk_field)\""))
         end
 
         # If new field is also indexed
         if field.db_index 
-          index_name = name * "_$_hash"
+          index_name = name * "_$_hash" |> lowercase
           _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
-          apply_migration(conn, Dialect.add_index(conn, model, "\"$index_name\"", "\"$model_name\"", ["\"$field_name\""])))
+          Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
         end
       
         
@@ -255,7 +256,7 @@ function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::S
   end
   # get module from the path
   println(models_array)
-  current_models = get_current_models(include(path))
+  current_models = get_all_models(include(path))
   println(current_models |> length)
   
   println("compare")
@@ -280,16 +281,16 @@ function makemigrations(db::String; config::Dict{String,SQLConn} = config)
   makemigrations(settings.connections, settings, path=path)
 end
 
-# Get all models from a module
-function get_current_models(mod::Module)
+function get_all_models(mod::Module)
+  # Get all models from a module
   models = Dict{Symbol, Any}()
   for name in names(mod, all = true)
-      if isdefined(mod, name)
-          obj = getfield(mod, name)
-          if isa(obj, PormGModel)
-              models[name] = obj
-          end
+    if isdefined(mod, name)
+      obj = getfield(mod, name)
+      if isa(obj, PormGModel)
+        models[name] = obj
       end
+    end
   end
   return models
 end
@@ -298,22 +299,22 @@ end
 # Functions to apply migrations
 #
 
-function get_current_dicts(mod::Module)
+function get_all_dicts(mod::Module)
   ordered_dicts = []
   for name in names(mod, all = true)
-      if isdefined(mod, name)
-          obj = getfield(mod, name)
-          if isa(obj, OrderedDict)
-            push!(ordered_dicts, obj)
-          end
+    if isdefined(mod, name)
+      obj = getfield(mod, name)
+      if isa(obj, OrderedDict)
+        push!(ordered_dicts, obj)
       end
+    end
   end
   return ordered_dicts
 end
 
 function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
   # Load the migration plan
-  migration_plan = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")) |> get_current_dicts
+  migration_plan = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")) |> get_all_dicts
 
   # build the transaction to apply the migration plan
   fisrt_execution::Vector{String} = []
@@ -322,38 +323,36 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
   for dict_instructs in migration_plan
     println("Executing: $dict_instructs")
     for (key, value) in dict_instructs
-      if value == "New model"
-        push!(fisrt_execution, key)
+      if key == "New model"
+        push!(fisrt_execution, value)
       else
-        push!(last_execution, key)
+        push!(last_execution, value)
       end
     end
   
   end
 
-  return migration_plan
-  
-
   # Begin a transaction
   LibPQ.execute(connection, "BEGIN;")
 
   try
-      # Iterate over the migration plan and execute each SQL statement
-      for (model_name, actions) in migration_plan
-          for (action, sql) in actions
-              println("Executing: $sql")
-              LibPQ.execute(connection, sql)
-          end
-      end
-
-      # Commit the transaction
-      LibPQ.execute(connection, "COMMIT;")
-      println("Migrations applied successfully.")
+    # Iterate over the migration plan and execute each SQL statement
+    for action in fisrt_execution
+      println("Executing: $action")
+      LibPQ.execute(connection, action)
+    end
+    for action in last_execution
+      println("Executing: $action")
+      LibPQ.execute(connection, action)
+    end
+    # Commit the transaction
+    LibPQ.execute(connection, "COMMIT;")
+    println("Migrations applied successfully.")
   catch e
-      # Rollback the transaction in case of an error
-      LibPQ.execute(connection, "ROLLBACK;")
-      println("Error applying migrations: ", e)
-      @error("Error applying migrations: ", e)
+    # Rollback the transaction in case of an error
+    LibPQ.execute(connection, "ROLLBACK;")
+    println("Error applying migrations: ", e)
+    @error("Error applying migrations: ", e)
   end
 
   

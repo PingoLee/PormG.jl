@@ -55,7 +55,7 @@ const PormGTypeField = Dict{String,Symbol}(
 
 # I whant work with dictionary to handle pool connections
 
-const sqlite_type_map = Dict{String, Any}(
+const sqlite_type_map = Dict{String, Symbol}(
   "INTEGER" => :IntegerField, 
   "INT" => :BigIntegerField,
   "TEXT" => :CharField,
@@ -67,6 +67,20 @@ const sqlite_type_map = Dict{String, Any}(
   "DATE" => :DateField,
   "BLOB" => :BinaryField,
   "BOOLEAN" => :BooleanField
+)
+
+const postgres_type_map = Dict{String, Symbol}(
+  "integer" => :IntegerField,
+  "bigint" => :BigIntegerField,
+  "boolean" => :BooleanField,
+  "date" => :DateField,
+  "timestamp" => :DateTimeField,
+  "decimal" => :DecimalField,
+  "varchar" => :CharField,
+  "text" => :TextField,
+  "float" => :FloatField,
+  "time" => :TimeField,
+  "blob" => :BinaryField
 )
 
 const sqlite_type_map_reverse = Dict{String, String}(
@@ -100,47 +114,47 @@ const sqlite_date_format_map = Dict{String, String}(
   "HH:MI" => "%H:%M"
 )
 
-const postgres_type_map = Dict{String, String}(
-  "BIGSERIAL" => "bigserial",
-  "SERIAL" => "serial",
-  "BIGINT" => "bigint",
-  "INTEGER" => "integer",
-  "SMALLINT" => "smallint",
-  "DECIMAL" => "decimal",
-  "NUMERIC" => "numeric",
-  "REAL" => "real",
-  "DOUBLE PRECISION" => "double precision",
-  "MONEY" => "money",
-  "CHAR" => "char",
-  "VARCHAR" => "varchar",
-  "TEXT" => "text",
-  "BYTEA" => "bytea",
-  "TIMESTAMP" => "timestamp",
-  "TIMESTAMPTZ" => "timestamptz",
-  "DATE" => "date",
-  "TIME" => "time",
-  "TIMETZ" => "timetz",
-  "INTERVAL" => "interval",
-  "BOOLEAN" => "boolean",
-  "POINT" => "point",
-  "LINE" => "line",
-  "LSEG" => "lseg",
-  "BOX" => "box",
-  "PATH" => "path",
-  "POLYGON" => "polygon",
-  "CIRCLE" => "circle",
-  "CIDR" => "cidr",
-  "INET" => "inet",
-  "MACADDR" => "macaddr",
-  "BIT" => "bit",
-  "VARBIT" => "varbit",
-  "UUID" => "uuid",
-  "XML" => "xml",
-  "JSON" => "json",
-  "JSONB" => "jsonb",
-  "ARRAY" => "array",
-  "HSTORE" => "hstore"
-)
+# const postgres_type_map = Dict{String, String}(
+#   "BIGSERIAL" => "bigserial",
+#   "SERIAL" => "serial",
+#   "BIGINT" => "bigint",
+#   "INTEGER" => "integer",
+#   "SMALLINT" => "smallint",
+#   "DECIMAL" => "decimal",
+#   "NUMERIC" => "numeric",
+#   "REAL" => "real",
+#   "DOUBLE PRECISION" => "double precision",
+#   "MONEY" => "money",
+#   "CHAR" => "char",
+#   "VARCHAR" => "varchar",
+#   "TEXT" => "text",
+#   "BYTEA" => "bytea",
+#   "TIMESTAMP" => "timestamp",
+#   "TIMESTAMPTZ" => "timestamptz",
+#   "DATE" => "date",
+#   "TIME" => "time",
+#   "TIMETZ" => "timetz",
+#   "INTERVAL" => "interval",
+#   "BOOLEAN" => "boolean",
+#   "POINT" => "point",
+#   "LINE" => "line",
+#   "LSEG" => "lseg",
+#   "BOX" => "box",
+#   "PATH" => "path",
+#   "POLYGON" => "polygon",
+#   "CIRCLE" => "circle",
+#   "CIDR" => "cidr",
+#   "INET" => "inet",
+#   "MACADDR" => "macaddr",
+#   "BIT" => "bit",
+#   "VARBIT" => "varbit",
+#   "UUID" => "uuid",
+#   "XML" => "xml",
+#   "JSON" => "json",
+#   "JSONB" => "jsonb",
+#   "ARRAY" => "array",
+#   "HSTORE" => "hstore"
+# )
 
 const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoindex"]
 

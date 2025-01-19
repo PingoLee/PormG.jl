@@ -11,7 +11,7 @@ using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
 
-import ..PormG: Models, connection, config, sqlite_type_map, postgres_type_map, PormGModel, SQLConn, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table, Migration, Dialect
+import ..PormG: Models, connection, config, sqlite_type_map, postgres_type_map, PormGModel, SQLConn, PormGField, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table, Migration, Dialect
 import ..PormG.Generator: generate_models_from_db, generate_migration_plan
 
 
@@ -170,7 +170,7 @@ function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol
 end
 
 # Compare model definitions to the current database schema
-function get_migration_plan(models, current_schema, conn)
+function get_migration_plan(models, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)
   migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
   # models is empty set all models to migration_plan
   if isempty(models)
@@ -205,24 +205,24 @@ function get_migration_plan(models, current_schema, conn)
     return migration_plan
   end
 
+  println("-------------------------------------")
   for model in models
     model_name = model.name
+    println("Model: ", model_name)
     if haskey(current_schema, model_name)
-      # Compare fields
-      for (field_name, field_type) in model.fields
-        if !haskey(current_schema[model_name], field_name)     
-          migration_plan[model_name] = Dict{String, Any}(
-            "Plan" => "New field: $field_name",
-            "Column" => field_type,
-            "SQL" => Dialect.add_column(connection, model_name, field_name, field_type)
-          )
+      if Models.are_model_fields_equal(model, current_schema[model_name][:model])
+        println("Fields are equal")
+      else
+        println("Fields are not equal")
+        # Compare fields
+        for (field_name, field_type) in model.fields
+          if !Models.are_model_fields_equal(model.fileds, current_schema[model_name][:model].fileds)
+            
+          end         
         end
-        # check if just a name of the field changed
-        
-        # Additional comparisons for field changes
-      end
+      end      
     else
-      migration_plan[model_name] = "New model"
+      migration_plan[model.name] = "New model"
     end
   end
 
@@ -241,21 +241,24 @@ end
 
 # Main function to simulate makemigrations
 function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
-  models_array::Vector{Any} = []
-  try
-    models_array = convert_schema_to_models(connection)
-  catch e
-    error_message = sprint(showerror, e)
-    if occursin("Table definition not found", error_message)
-      @info("The database is empty, that is migrate all tables") # TODO, impruve this message
-    else
-      println("Error: ", e)
-      @error("Error: ", e)
-      return
-    end
-  end
+  # models_array::Vector{Any} = []
+  models_array = convert_schema_to_models(connection)
+  # println(models_array |> typeof)
+
+  # try
+  #   models_array = convert_schema_to_models(connection)
+  # catch e
+  #   error_message = sprint(showerror, e)
+  #   if occursin("Table definition not found", error_message)
+  #     @info("The database is empty, that is migrate all tables") # TODO, impruve this message
+  #   else
+  #     println("Error: ", e)
+  #     @error("Error: ", e)
+  #     return
+  #   end
+  # end
   # get module from the path
-  println(models_array)
+  # println(models_array)
   current_models = get_all_models(include(path))
   println(current_models |> length)
   
@@ -281,14 +284,14 @@ function makemigrations(db::String; config::Dict{String,SQLConn} = config)
   makemigrations(settings.connections, settings, path=path)
 end
 
-function get_all_models(mod::Module)
+function get_all_models(mod::Module)::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}
   # Get all models from a module
-  models = Dict{Symbol, Any}()
+  models = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}()
   for name in names(mod, all = true)
     if isdefined(mod, name)
       obj = getfield(mod, name)
       if isa(obj, PormGModel)
-        models[name] = obj
+        models[name] = Dict{Symbol, Union{Bool, PormGModel}}(:model => obj, :exist => false)
       end
     end
   end
@@ -387,16 +390,21 @@ function convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{Str
   # Get all schema
   schemas = get_database_schema(db)
   # Colect all create instructions
-  models_array::Vector{Any} = []
+
+  # println("-----------------------------------------")
+  
+  models_array::Vector{PormGModel} = []
   for (index, schema) in enumerate(eachrow(schemas))
+    # println(schema |> typeof)
+    # println(schema)
     # check if each ignore_table value is contained in the schema.table_name
     any(ignored -> occursin(ignored, schema.table_name), ignore_table) && continue
-    println(typeof(schema))
-    return schema
-    convertSQLToModel(schema) |> println
-    # push!(Instructions, convertSQLToModel(schema) |> Models.Model_to_str)
-    index > 4 && break
+    # println(typeof(schema), " ", convertSQLToModel(schema) |> println)
+    
+    push!(models_array, convertSQLToModel(schema))
+    # index > 4 && break
   end  
+  # println(models_array)
   return models_array
 end
 
@@ -428,77 +436,197 @@ function import_models_from_postgres(db::String;
 end
 
 function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
+  # Modified query that adds identity info and checks single-column UNIQUE constraints
   query = """
-  SELECT
-      n.nspname AS table_schema,
-      c.relname AS table_name,
-      array_to_string(array_agg(quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod) ||
-                                CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END ||
-                                CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END), ', ') AS columns,
-      pk.pk_cols AS primary_keys,
-      fk.fk_cols AS foreign_keys,
-      fk.fk_tables AS foreign_tables,
-      ix.indexes AS indexes
-  FROM pg_class c
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_attribute a ON a.attrelid = c.oid
-  LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-  LEFT JOIN (
-      SELECT i.indrelid, array_to_string(array_agg(quote_ident(a.attname)), ', ') AS pk_cols
-      FROM pg_index i
-      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-      WHERE i.indisprimary
-      GROUP BY i.indrelid
-  ) pk ON pk.indrelid = c.oid
-  LEFT JOIN (
-      SELECT con.conrelid, 
-             array_to_string(array_agg(quote_ident(att2.attname)), ', ') AS fk_cols,
-             array_to_string(array_agg(quote_ident(nf.nspname) || '.' || quote_ident(cf.relname)), ', ') AS fk_tables
-      FROM pg_constraint con
-      JOIN pg_attribute att2 ON att2.attnum = ANY(con.conkey) AND att2.attrelid = con.conrelid
-      JOIN pg_class cf ON cf.oid = con.confrelid
-      JOIN pg_namespace nf ON nf.oid = cf.relnamespace
-      WHERE con.contype = 'f'
-      GROUP BY con.conrelid
-  ) fk ON fk.conrelid = c.oid
-  LEFT JOIN (
-      SELECT i.indexrelid, array_to_string(array_agg(quote_ident(att2.attname)), ', ') AS indexes
-      FROM pg_index i
-      JOIN pg_class idx ON idx.oid = i.indexrelid
-      JOIN pg_attribute att2 ON att2.attnum = ANY(i.indkey) AND att2.attrelid = i.indrelid
-      GROUP BY i.indexrelid
-  ) ix ON ix.indexrelid = c.oid
-  WHERE c.relkind = 'r'
-    $(schema === nothing ? "" : "AND n.nspname = '" * schema * "'" )
-    $(table === nothing ? "" : "AND c.relname = '" * table * "'" )
-    AND a.attnum > 0
-    AND NOT a.attisdropped
-  GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, ix.indexes;
-  """
-  result = LibPQ.execute(db, query) |> DataFrame
-  if nrow(result) == 0
-      error("Table definition not found")
+    WITH unique_constraints AS (
+        SELECT
+            con.conrelid AS table_oid,
+            array_agg(a.attname) AS unique_cols
+        FROM pg_constraint con
+        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+        WHERE con.contype = 'u'
+        GROUP BY con.conrelid
+    ),
+    foreign_keys AS (
+        SELECT
+            con.conrelid,
+            array_to_string(array_agg(quote_ident(att2.attname)), ', ') AS fk_cols,
+            array_to_string(array_agg(quote_ident(cf.relname)), ', ') AS fk_tables,
+            array_to_string(array_agg(quote_ident(pk_att.attname)), ', ') AS referenced_primary_keys,
+            array_to_string(array_agg(con.condeferrable::text), ', ') AS deferrable,
+            array_to_string(array_agg(con.condeferred::text), ', ') AS initially_deferred
+        FROM pg_constraint con
+        JOIN pg_attribute att2 ON att2.attnum = ANY(con.conkey) AND att2.attrelid = con.conrelid
+        JOIN pg_class cf ON cf.oid = con.confrelid
+        JOIN pg_namespace nf ON nf.oid = cf.relnamespace
+        JOIN pg_index pk_idx ON pk_idx.indrelid = cf.oid AND pk_idx.indisprimary
+        JOIN pg_attribute pk_att ON pk_att.attrelid = pk_idx.indrelid AND pk_att.attnum = ANY(pk_idx.indkey)
+        WHERE con.contype = 'f'
+        GROUP BY con.conrelid
+    ),
+    indexes AS (
+        SELECT
+            i.indrelid AS table_oid,
+            array_to_string(array_agg(quote_ident(a.attname)), ', ') AS index_columns,
+            array_to_string(array_agg(quote_ident(c.relname)), ', ') AS index_names
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE NOT i.indisprimary
+        GROUP BY i.indrelid
+    )
+    SELECT
+        n.nspname AS table_schema,
+        c.relname AS table_name,
+        array_to_string(array_agg(
+            quote_ident(a.attname)
+            || ' ' || format_type(a.atttypid, a.atttypmod)
+            || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
+            || CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END
+            || CASE
+                WHEN a.attidentity = 'a' THEN ' GENE_ALWAYS_IDENTITY'
+                WHEN a.attidentity = 'd' THEN ' GENE_BY_DEF_IDENTITY'
+                ELSE ''
+               END
+            || CASE
+                WHEN array_length(u.unique_cols, 1) = 1
+                     AND a.attname = ANY(u.unique_cols) THEN ' UNIQUE'
+                ELSE ''
+               END
+        ), ', ') AS columns,
+        pk.pk_cols AS primary_keys,
+        fk.fk_cols AS foreign_keys,
+        fk.fk_tables AS foreign_tables,
+        fk.referenced_primary_keys AS referenced_primary_keys,
+        fk.deferrable AS deferrable,
+        fk.initially_deferred AS initially_deferred,
+        ix.index_columns AS index_columns,
+        ix.index_names AS index_names
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid
+    LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+    LEFT JOIN (
+        SELECT i.indrelid, array_to_string(array_agg(quote_ident(a.attname)), ', ') AS pk_cols
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indisprimary
+        GROUP BY i.indrelid
+    ) pk ON pk.indrelid = c.oid
+    LEFT JOIN foreign_keys fk ON fk.conrelid = c.oid
+    LEFT JOIN indexes ix ON ix.table_oid = c.oid
+    LEFT JOIN unique_constraints u ON u.table_oid = c.oid
+    WHERE c.relkind = 'r'
+      $(schema === nothing ? "" : "AND n.nspname = '$(schema)'")
+      $(table === nothing ? "" : "AND c.relname = '$(table)'")
+      AND a.attnum > 0
+      AND NOT a.attisdropped
+    GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, fk.referenced_primary_keys, fk.deferrable, fk.initially_deferred, ix.index_columns, ix.index_names, u.unique_cols
+    ORDER BY table_schema, table_name;
+    """
+
+  df = DataFrame(LibPQ.execute(db, query))
+  if nrow(df) == 0
+      error("No matching table definitions found.")
   end
-  println(result)
-  return result
+
+  println(df)
+
+  return df
 end
 
-function convertSQLToModel(row::DataFrameRow)
-    # Implement the conversion logic here
 
-    table_name = row[:table_name]
-    columns = split(row[:columns], ", ")
-    # SubString{String}["denominador numeric(5,1)", "meta numeric(5,1)", "perc numeric(5,1)", "perc_cat boolean NOT NULL", "apto_id bigint", "cat_cbo_id bigint", "ibge_id bigint NOT NULL", "tipologia_id bigint NOT NULL", "vinculo_id bigint NOT NULL", "encer boolean NOT NULL", "recalc boolean NOT NULL", "nu_cnes_id bigint", "mat_rh_id bigint", "tipo_id bigint NOT NULL", "metac numeric(5,1)", "dias_n_c integer", "id bigint NOT NULL DEFAULT nextval('dash_aval_avaliacao_mensal_id_seq'::regclass)", "periodo_id bigint", "mes integer", "ano integer", "n_apt_mot character varying(250)", "numerador numeric(5,1)", "resultado numeric(5,1)", "indicador_id bigint", "nu_ine_id bigint", "prof_id bigint"]
-    println(columns)
+function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_map::Dict{String, Symbol} = postgres_type_map)
+  table_name = row[:table_name]
+  columns = split(row[:columns], ", ")
+  # println("Table Name: ", table_name)
+  # println("Columns: ", columns)
+  
+  # Initialize fields dictionary
+  fields_dict = Dict{String, PormGField}()
+
+  # Extract primary key constraints
+  pk_set = Set(split(row[:primary_keys], ", "))
     
-    # Define a dictionary to map SQL types to Models.jl field types
-    fk_map::Dict{String, Any} = Dict{String, Any}()
-    pk_map::Dict{String, Any} = Dict{String, Any}()
+  # Extract foreign key constraints
+  fk_map = Dict{String, Tuple{String, String}}()
+  if row[:foreign_keys] |> !ismissing
+    fk_columns = split(row[:foreign_keys], ", ")
+    fk_tables = split(row[:foreign_tables], ", ")
+    fk_pk_columns = split(row[:referenced_primary_keys], ", ")  
+    for (fk_col, fk_table, fk_pk) in zip(fk_columns, fk_tables, fk_pk_columns)
+        fk_map[fk_col] = (fk_table, fk_pk) 
+    end
+  end
+   
+  # Parse each column definition
+  for col in columns
+      col_parts = split(col, " ")
+      col_name = Symbol(col_parts[1])
+      col_type = lowercase(col_parts[2])
+      generated::Bool = false
+      
+      # Determine field type
+      field_type = getfield(Models, haskey(type_map, col_type) ? type_map[col_type] : :TextField)
+      
+      # Determine field constraints
+      primary_key::Bool = col_name in pk_set
+      unique::Bool = occursin("UNIQUE", col)
+      not_null::Bool = occursin("NOT NULL", col)
+      default_value = nothing
+      default_value = nothing
+      if occursin("DEFAULT", col)
+          default_match = match(r"DEFAULT\s+([^ ]+)", col)
+          if default_match !== nothing
+              default_value = default_match.captures[1]
+          end
+      end
+      if primary_key
+        if occursin("GENE_BY_DEF_IDENTITY", col)
+          generated = true
+          gererated_always = false
+        elseif occursin("GENE_ALWAYS_IDENTITY", col)
+          generated = true
+          gererated_always = true
+        else 
+          generated = false
+          gererated_always = false
+        end
+      end
 
-    # Extract any primary key constraints
+      # println("Col", col)
+      # println("Column Name: ", col_name)
+      # println("Column Type: ", col_type)
+      # println("Primary Key: ", primary_key)
+      # println("Unique: ", unique)
+      # println("Not Null: ", not_null)
+      # println("Default Value: ", default_value)
+      # println("Generated: ", generated)
+      
+      # Create field instance
+      field = if primary_key
+        IDField(generated=generated, gererated_always=gererated_always)
+      elseif haskey(fk_map, col_name)
+        fk_table, fk_column = fk_map[col_name]
+        ForeignKey(fk_table, pk_field=fk_column, null=!not_null, default=default_value)
+        if unique
+          OneToOneField(fk_table, pk_field=fk_column, null=!not_null, default=default_value)
+        else
+          ForeignKey(fk_table, pk_field=fk_column, null=!not_null, default=default_value)
+        end
+      else
+        field_type(unique=unique, null=!not_null, default=default_value)
+      end
+      
+      # Add field to fields dictionary
+      fields_dict[col_name |> string] = field
+  end
 
+  println(fields_dict)
+  println(fields_dict |> typeof)
 
-    return row
+  # Construct and return the model
+  return Models.Model(table_name, fields_dict)
 end
 
 # function generate_models_from_db(db::LibPQ.Connection, file::String, instructions::Vector{Any})
@@ -563,14 +691,14 @@ This function checks if the specified models file already exists and creates it 
 import_models_from_django(django_to_string("/home/user/models.py"))
 """
 function import_models_from_django(
-  model_py_string::String;
-  db::Union{SQLite.DB, LibPQ.Connection} = connection(),
-  force_replace::Bool = false,
-  ignore_table::Vector{String} = postgres_ignore_table,
-  file::String = "automatic_models.jl",
-  autofields_ignore::Vector{String} = ["Manager"],
-  parameters_ignore::Vector{String} = ["help_text"]
-)
+    model_py_string::String;
+    db::Union{SQLite.DB, LibPQ.Connection} = connection(),
+    force_replace::Bool = false,
+    ignore_table::Vector{String} = postgres_ignore_table,
+    file::String = "automatic_models.jl",
+    autofields_ignore::Vector{String} = ["Manager"],
+    parameters_ignore::Vector{String} = ["help_text"]
+  )
   # Check if db/models/automatic_models.jl exists
   if isfile(joinpath(MODEL_PATH, file)) && !force_replace
       @warn(

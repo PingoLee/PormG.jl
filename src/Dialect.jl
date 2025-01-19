@@ -4,7 +4,7 @@ using DataFrames
 using LibPQ
 import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField
 import PormG: postgres_type_map, sqlite_date_format_map, sqlite_type_map_reverse
-import PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex
+import PormG.Models: Migration
 
 # PostgreSQL
 function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
@@ -201,8 +201,6 @@ end
 # ---
 # Functions to create migration queries
 #
-import ..PormG.Models: CreateTable, DropTable, AddColumn, DropColumn, RenameColumn, AlterColumn, AddForeignKey, DropForeignKey, AddIndex, DropIndex, Migration
-
 
 function create_table(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
   return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
@@ -230,46 +228,46 @@ end
 # end
 
 
-function apply_migration(db::SQLite.DB, migration::DropTable)
-  query = "DROP TABLE IF EXISTS $(migration.table_name)"
-  SQLite.execute(db, query)
-end
+# function apply_migration(db::SQLite.DB, migration::DropTable)
+#   query = "DROP TABLE IF EXISTS $(migration.table_name)"
+#   SQLite.execute(db, query)
+# end
 
-function apply_migration(db::SQLite.DB, migration::AddColumn)
-  query = "ALTER TABLE $(migration.table_name) ADD COLUMN $(migration.column_name) $(migration.column_type)"
-  SQLite.execute(db, query)
-end
+# function apply_migration(db::SQLite.DB, migration::AddColumn)
+#   query = "ALTER TABLE $(migration.table_name) ADD COLUMN $(migration.column_name) $(migration.column_type)"
+#   SQLite.execute(db, query)
+# end
 
-function apply_migration(db::SQLite.DB, migration::DropColumn)
-  query = "ALTER TABLE $(migration.table_name) DROP COLUMN $(migration.column_name)"
-  SQLite.execute(db, query)
-end
+# function apply_migration(db::SQLite.DB, migration::DropColumn)
+#   query = "ALTER TABLE $(migration.table_name) DROP COLUMN $(migration.column_name)"
+#   SQLite.execute(db, query)
+# end
 
-function apply_migration(db::SQLite.DB, migration::RenameColumn)
-  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.old_column_name) TO $(migration.new_column_name)"
-  SQLite.execute(db, query)
-end
+# function apply_migration(db::SQLite.DB, migration::RenameColumn)
+#   query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.old_column_name) TO $(migration.new_column_name)"
+#   SQLite.execute(db, query)
+# end
 
-function apply_migration(db::SQLite.DB, migration::AlterColumn)
-  query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.column_name) TO $(migration.new_column_name); ALTER TABLE $(migration.table_name) ALTER COLUMN $(migration.new_column_name) TYPE $(migration.new_column_type)"
-  SQLite.execute(db, query)
-end
-
-
-function apply_migration(db::SQLite.DB, migration::DropForeignKey)
-  query = "ALTER TABLE $(migration.table_name) DROP FOREIGN KEY $(migration.column_name)"
-  SQLite.execute(db, query)
-end
+# function apply_migration(db::SQLite.DB, migration::AlterColumn)
+#   query = "ALTER TABLE $(migration.table_name) RENAME COLUMN $(migration.column_name) TO $(migration.new_column_name); ALTER TABLE $(migration.table_name) ALTER COLUMN $(migration.new_column_name) TYPE $(migration.new_column_type)"
+#   SQLite.execute(db, query)
+# end
 
 
-function apply_migration(db::SQLite.DB, migration::DropIndex)
-  query = "DROP INDEX IF EXISTS $(migration.table_name)_$(migration.column_name)_index"
-  SQLite.execute(db, query)
-end
+# function apply_migration(db::SQLite.DB, migration::DropForeignKey)
+#   query = "ALTER TABLE $(migration.table_name) DROP FOREIGN KEY $(migration.column_name)"
+#   SQLite.execute(db, query)
+# end
 
-function apply_migration(db::SQLite.DB, migration::Migration)
-  @warn "Migration type not recognized"
-end
+
+# function apply_migration(db::SQLite.DB, migration::DropIndex)
+#   query = "DROP INDEX IF EXISTS $(migration.table_name)_$(migration.column_name)_index"
+#   SQLite.execute(db, query)
+# end
+
+# function apply_migration(db::SQLite.DB, migration::Migration)
+#   @warn "Migration type not recognized"
+# end
 
 
 end

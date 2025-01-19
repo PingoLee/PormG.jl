@@ -1,4 +1,4 @@
-module automatic_models
+module models
 
 import PormG.Models
 

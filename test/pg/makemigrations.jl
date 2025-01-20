@@ -2,6 +2,7 @@ using Pkg
 Pkg.activate(".")
 
 using Revise
+using Infiltrator
 ENV["PORMG_ENV"] = "dev"
 using PormG
 using DataFrames
@@ -13,14 +14,12 @@ cd("pg")
 PormG.Configuration.load("db_2")
 
 # teste compation of fields
-Base.include(PormG, "db_2/models.jl")
-import PormG.models as AM
+import PormG: Models, Dialect
 
-
-PormG.Models.get_all_fields(AM.Dim_municipio)
-
-PormG.Models.compare_model_fields(AM.Dim_municipio,AM.Dim_municipio)
-
+model = safehouse.model
+field_name = safehouse.field_name
+field = safehouse.field
+current_schema = safehouse.current_schema
 
 
 

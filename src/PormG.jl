@@ -3,6 +3,7 @@ module PormG
 __precompile__()
 
 using Revise
+using Infiltrator
 
 import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
 import DataFrames.DataFrame

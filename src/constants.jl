@@ -96,6 +96,48 @@ const sqlite_type_map_reverse = Dict{String, String}(
   "BLOB" => "BLOB",
 )
 
+const postgres_type_map_reverse = Dict{String, String}(
+  "BIGSERIAL" => "bigserial",
+  "SERIAL" => "serial",
+  "BIGINT" => "bigint",
+  "INTEGER" => "integer",
+  "SMALLINT" => "smallint",
+  "DECIMAL" => "decimal",
+  "NUMERIC" => "numeric",
+  "REAL" => "real",
+  "DOUBLE PRECISION" => "double precision",
+  "MONEY" => "money",
+  "CHAR" => "char",
+  "VARCHAR" => "varchar",
+  "TEXT" => "text",
+  "BYTEA" => "bytea",
+  "TIMESTAMP" => "timestamp",
+  "TIMESTAMPTZ" => "timestamptz",
+  "DATE" => "date",
+  "TIME" => "time",
+  "TIMETZ" => "timetz",
+  "INTERVAL" => "interval",
+  "BOOLEAN" => "boolean",
+  "POINT" => "point",
+  "LINE" => "line",
+  "LSEG" => "lseg",
+  "BOX" => "box",
+  "PATH" => "path",
+  "POLYGON" => "polygon",
+  "CIRCLE" => "circle",
+  "CIDR" => "cidr",
+  "INET" => "inet",
+  "MACADDR" => "macaddr",
+  "BIT" => "bit",
+  "VARBIT" => "varbit",
+  "UUID" => "uuid",
+  "XML" => "xml",
+  "JSON" => "json",
+  "JSONB" => "jsonb",
+  "ARRAY" => "array",
+  "HSTORE" => "hstore"
+)
+
 const sqlite_date_format_map = Dict{String, String}(
   "YYYY" => "%Y",
   "MM" => "%m",
@@ -114,47 +156,7 @@ const sqlite_date_format_map = Dict{String, String}(
   "HH:MI" => "%H:%M"
 )
 
-# const postgres_type_map = Dict{String, String}(
-#   "BIGSERIAL" => "bigserial",
-#   "SERIAL" => "serial",
-#   "BIGINT" => "bigint",
-#   "INTEGER" => "integer",
-#   "SMALLINT" => "smallint",
-#   "DECIMAL" => "decimal",
-#   "NUMERIC" => "numeric",
-#   "REAL" => "real",
-#   "DOUBLE PRECISION" => "double precision",
-#   "MONEY" => "money",
-#   "CHAR" => "char",
-#   "VARCHAR" => "varchar",
-#   "TEXT" => "text",
-#   "BYTEA" => "bytea",
-#   "TIMESTAMP" => "timestamp",
-#   "TIMESTAMPTZ" => "timestamptz",
-#   "DATE" => "date",
-#   "TIME" => "time",
-#   "TIMETZ" => "timetz",
-#   "INTERVAL" => "interval",
-#   "BOOLEAN" => "boolean",
-#   "POINT" => "point",
-#   "LINE" => "line",
-#   "LSEG" => "lseg",
-#   "BOX" => "box",
-#   "PATH" => "path",
-#   "POLYGON" => "polygon",
-#   "CIRCLE" => "circle",
-#   "CIDR" => "cidr",
-#   "INET" => "inet",
-#   "MACADDR" => "macaddr",
-#   "BIT" => "bit",
-#   "VARBIT" => "varbit",
-#   "UUID" => "uuid",
-#   "XML" => "xml",
-#   "JSON" => "json",
-#   "JSONB" => "jsonb",
-#   "ARRAY" => "array",
-#   "HSTORE" => "hstore"
-# )
+
 
 const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoindex"]
 

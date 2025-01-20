@@ -401,7 +401,7 @@ end
   unique::Bool = false
   blank::Bool = false
   null::Bool = false
-  db_index::Bool = false
+  db_index::Bool = true
   default::Union{Int64, Nothing} = nothing
   editable::Bool = false
   to::Union{String, PormGModel, Nothing} = nothing
@@ -417,7 +417,7 @@ end
   initially_deferred::Bool = true
 end
 
-function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, initially_deferred=false, how=nothing, related_name=nothing, db_constraint=true)
+function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=true, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, initially_deferred=false, how=nothing, related_name=nothing, db_constraint=true)
   # println(on_delete |> typeof)
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))

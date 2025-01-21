@@ -14,6 +14,7 @@ export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField
   reverse_fields::Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}} = Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}}() # needed to create sql queries with joins
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
   connect_key::Union{String, Nothing} = nothing # needed to get the connection
+  cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
 end
 
 """
@@ -342,10 +343,14 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
     # Check if field exists in old_field
     if !(field_name in fieldnames(typeof(old_field)))
       return false
+    elseif field_name == :to && lowercase(getfield(new_field, field_name)) == lowercase(getfield(old_field, field_name))
+      continue
+    elseif field_name == :on_delete
+      continue  # Skip comparison for :on_delete attribute
     elseif getfield(new_field, field_name) != getfield(old_field, field_name)
-      return false    
+      return false
     end
-  end  
+  end
   return true
 end
 function _compare_model_field(new_field::Dict{String, PormGField}, old_field::Dict{String, PormGField})
@@ -364,7 +369,7 @@ end
   unique::Bool = true
   blank::Bool = false
   null::Bool = false
-  db_index::Bool = false
+  db_index::Bool = true
   default::Union{Int64, Nothing} = nothing
   editable::Bool = false
   type::String = "BIGINT"
@@ -373,7 +378,7 @@ end
   generated_always::Bool = false # New field to indicate GENERATED ALWAYS AS IDENTITY
 end
 
-function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false, generated=true, generated_always=false)
+function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=true, default=nothing, editable=false, generated=true, generated_always=false)
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate other parameters
@@ -548,16 +553,15 @@ end
   primary_key::Bool = false
   max_length::Int = 250
   unique::Bool = false
-  blank::Bool = false
+  blank::Bool = false # TODO: check if blank is usefull, i think it is not
   null::Bool = false
   db_index::Bool = false
   db_column::Union{String, Nothing} = nothing
   default::Union{String, Nothing} = nothing
-  editable::Bool = false
+  editable::Bool = true
   type::String = "VARCHAR"
   formater::Function = format_text_sql
-  choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N = nothing
-  
+  choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N = nothing  
 end
 
 function parse_choices(choices_str::String)
@@ -579,7 +583,7 @@ function parse_choices(choices_str::String)
   return choices
 end
 
-function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, db_column=nothing, default=nothing, choices=nothing, editable=false)  
+function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, db_column=nothing, default=nothing, choices=nothing, editable=true)  
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(ArgumentError("The max_length must be an integer"))

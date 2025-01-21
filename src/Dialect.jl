@@ -311,6 +311,14 @@ function drop_index(conn::SQLite.DB, index_name::String)
   return """DROP INDEX IF EXISTS "$index_name";"""  
 end
 
+function rename_table(conn::Union{SQLite.DB, LibPQ.Connection}, old_table_name::String, new_table_name::String)
+  return """ALTER TABLE "$old_table_name" RENAME TO "$new_table_name";"""  
+end
+
+function drop_table(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String)
+  return """DROP TABLE IF EXISTS "$table_name";"""
+end
+
 
 # function apply_migration(db::SQLite.DB, migration::DropTable)
 #   query = "DROP TABLE IF EXISTS $(migration.table_name)"

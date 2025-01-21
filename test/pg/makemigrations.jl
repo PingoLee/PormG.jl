@@ -16,10 +16,10 @@ PormG.Configuration.load("db_2")
 # teste compation of fields
 import PormG: Models, Dialect
 
-model = safehouse.model
-field_name = safehouse.field_name
-field = safehouse.field
-current_schema = safehouse.current_schema
+# model = safehouse.model
+# field_name = safehouse.field_name
+# field = safehouse.field
+# current_schema = safehouse.current_schema
 
 
 

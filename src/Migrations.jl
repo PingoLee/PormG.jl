@@ -11,10 +11,14 @@ using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
 
-import ..PormG.Infiltrator: @infiltrate
+import PormG.Infiltrator: @infiltrate
 
-import ..PormG: Models, connection, config, sqlite_type_map, postgres_type_map, PormGModel, SQLConn, PormGField, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table, Migration, Dialect
-import ..PormG.Generator: generate_models_from_db, generate_migration_plan
+import PormG: Models, Migration, Dialect
+import PormG: connection, config, get_constraints_pk, get_constraints_unique
+import PormG: PormGModel, PormGField, SQLConn
+import PormG: sqlite_type_map, postgres_type_map, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table
+
+import PormG.Generator: generate_models_from_db, generate_migration_plan
 
 
 # ---
@@ -55,7 +59,7 @@ function import_models_from_sqlite(;db::SQLite.DB = connection(),
   for schema in schemas
     schema[2]["type"] == "index" && continue    
     schema[1] in ignore_schema && continue
-    println(schema[2]["sql"])
+    # println(schema[2]["sql"])
     push!(Instructions, convertSQLToModel(schema[2]["sql"]) |> Models.Model_to_str)
   end
 
@@ -114,7 +118,7 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_typ
     primary_keys = replace(primary_keys, r"\"" => "") 
     primary_keys = split(primary_keys, ",")
     auto_increment = isnothing(match.captures[2]) ? false : true
-    println(primary_keys)
+    # println(primary_keys)
     for key in primary_keys
       key = strip(key) |> String
       pk_map[key] = Dict("primary_keys" => key, "auto_increment" => auto_increment)
@@ -125,8 +129,8 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_typ
   foreign_key_matches = eachmatch(r"FOREIGN KEY\(\"(\w+)\"\) REFERENCES \"(\w+)\"\(\"(\w+)\"\)(?: ON DELETE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: ON UPDATE (CASCADE|SET NULL|NO ACTION|RESTRICT|SET DEFAULT))?(?: DEFERRABLE INITIALLY (DEFERRED|IMMEDIATE))?", sql)
   for match in foreign_key_matches
     column_name, fk_table, fk_column, on_delete, on_update, on_deferable = match.captures
-    println(match.captures)
-    typeof(column_name |> String) |> println
+    # println(match.captures)
+    # typeof(column_name |> String) |> println
     fk_map[column_name |> String] = Dict("column_name" => column_name, "fk_table" => fk_table, "fk_column" => fk_column, "on_delete" => on_delete, "on_update" => on_update, "on_deferable" => on_deferable)
   end
 
@@ -154,8 +158,8 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_typ
 
   # Construct and return the model
   # Dict(:models => Models.Model(table_name, fields_dict), :str_models => Models.Model(table_name, str_fields_dict))
-  println(fields_dict)
-  println(typeof(table_name))
+  # println(fields_dict)
+  # println(typeof(table_name))
   return Models.Model(table_name, fields_dict)
 end
 
@@ -173,6 +177,7 @@ function _hash_field_name(model_name::Symbol, field_name::String; apend_number::
 end
 
 function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, key::String, value::String)
+  value == "" && return
   if !haskey(migration_plan, model_name)
     migration_plan[model_name] = OrderedDict{String, String}(key => value)
   else
@@ -182,9 +187,12 @@ end
 
 function _drop_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
   if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (!hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
-    constraint_name = get_constraints(conn, model_name)
+    constraint_name = get_constraints_fk(conn, model_name, field_name)
+    if constraint_name === nothing
+      return nothing
+    end
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove foreign key: $field_name", 
-    Dialect.drop_foreign_key(conn, model_name, "\"$(constraint_name[1][1])\""))
+    Dialect.drop_foreign_key(conn, model_name, constraint_name))
   end
   return nothing
 end
@@ -228,13 +236,9 @@ function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict
     @infiltrate false
     for (field_name, field) in  current_schema[model_name][:model].fields
       if haskey(model.fields, field_name)
-        println("Fields $field_name")
-        @infiltrate false
-       
-        if model.fields[field_name] |> typeof == field |> typeof && Models._compare_model_field(field, model.fields[field_name])
-          println("Fields $field_name are equal")
-
-        else              
+        # println("Fields $field_name")
+        @infiltrate false       
+                     
           # check if the field is diferent
           colect_not_equal::Vector{Symbol} = []
           if model.fields[field_name] |> typeof == field |> typeof                          
@@ -244,14 +248,22 @@ function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict
               old_var = getfield(model.fields[field_name], attr)
               if new_var != old_var
                 (attr == :to && new_var |> lowercase == old_var |> lowercase) && continue
-                attr == :on_delete && continue # TODO: on_delete does managede by application ?
+                attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
                 push!(colect_not_equal, attr)
               end
+            end
+          else
+            # check is db_constraint is false in field
+            if field |> typeof == Models.sForeignKey && !field.db_constraint &&  model.fields[field_name] |> typeof == Models.sBigIntegerField
+              continue
+            else
+              push!(colect_not_equal, :type)
             end
           end
           
           isempty(colect_not_equal) && continue
-          @infiltrate false
+          
+          @infiltrate
 
           # Check if is needed remove the foreign key
           name::String = _hash_field_name(model_name, field_name) 
@@ -259,10 +271,16 @@ function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict
           _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
           
           _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name",
-          Dialect.alter_field(conn, model_name |> string, field_name, field))
+          Dialect.alter_field(conn, model_name |> string, field_name, field, colect_not_equal))
 
           # Check if the field is a foreign key
           _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
+
+          # Check if the foreign key changed to another table
+          if hasfield(field |> typeof, :to) && hasfield(model.fields[field_name] |> typeof, :to) && field.to != model.fields[field_name].to
+            _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
+            _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
+          end
 
           # Check if the field is also indexed
           if field.db_index && !model.fields[field_name].db_index
@@ -280,7 +298,7 @@ function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict
             Dialect.drop_index(conn, "\"$index_name\""))
           end
 
-        end 
+         
       else
       end
     end
@@ -371,7 +389,7 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
     end
   end
 
-  println(migration_plan)
+  # println(migration_plan)
 
 
   return migration_plan
@@ -398,9 +416,9 @@ function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::S
   # get module from the path
   # println(models_array)
   current_models = get_all_models(include(path))
-  println(current_models |> length)
+  # println(current_models |> length)
   
-  println("compare")
+  # println("compare")
   migration_plan = get_migration_plan(models_array, current_models, connection)
 
   # store migration_plan as pending_migrations.jl file
@@ -462,7 +480,7 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
   last_execution::Vector{String} = []
 
   for dict_instructs in migration_plan
-    println("Executing: $dict_instructs")
+    # println("Executing: $dict_instructs")
     for (key, value) in dict_instructs
       if key == "New model"
         push!(fisrt_execution, value)
@@ -562,7 +580,7 @@ function import_models_from_postgres(;db::LibPQ.Connection = connection(),
   
   models_array = convert_schema_to_models(db, ignore_table=ignore_table)
 
-  println(models_array)
+  # println(models_array)
 
   # generate_models_from_db(db, file, Instructions)
 end
@@ -673,7 +691,7 @@ function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing
   return df
 end
 
-function get_constraints(conn::LibPQ.Connection, table_name::Symbol)::Vector{Tuple{String, String, String}}
+function get_constraints_fk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )
   query = """
   SELECT
       tc.constraint_name, kcu.column_name,
@@ -685,12 +703,48 @@ function get_constraints(conn::LibPQ.Connection, table_name::Symbol)::Vector{Tup
         ON tc.constraint_name = kcu.constraint_name
       JOIN information_schema.constraint_column_usage AS ccu
         ON ccu.constraint_name = tc.constraint_name
-  WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'FOREIGN KEY';
+  WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'FOREIGN KEY' AND kcu.column_name = '$field_name';
   """
   result = LibPQ.execute(conn, query) |> DataFrame
-  return [(row[1], row[2], row[3]) for row in eachrow(result)]
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :constraint_name]
 end
-
+function get_constraints_pk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )
+  query = """
+  SELECT
+      tc.constraint_name, kcu.column_name,
+      ccu.table_name AS foreign_table_name,
+      ccu.column_name AS foreign_column_name
+  FROM 
+      information_schema.table_constraints AS tc 
+      JOIN information_schema.key_column_usage AS kcu
+        ON tc.constraint_name = kcu.constraint_name
+      JOIN information_schema.constraint_column_usage AS ccu
+        ON ccu.constraint_name = tc.constraint_name
+  WHERE tc.constraint_type = 'PRIMARY KEY' AND kcu.column_name = '$field_name' AND ccu.table_name = '$table_name';
+  """
+  result = LibPQ.execute(conn, query) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :constraint_name]
+end
+function get_constraints_unique(conn::LibPQ.Connection, table_name::String, field_name::String)::String
+  query = """
+  SELECT constraint_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.constraint_column_usage ccu
+  ON tc.constraint_name = ccu.constraint_name
+  WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'UNIQUE' AND ccu.column_name = '$field_name';
+  """
+  result = LibPQ.execute(conn, query) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :constraint_name]
+end
 
 function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_map::Dict{String, Symbol} = postgres_type_map)
   table_name = row[:table_name]
@@ -739,11 +793,20 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # Detect if the column is indexed
       db_index = haskey(index_map, col_name |> Symbol)
 
+      @infiltrate false
+
       # Extract max_length if it exists
-      if occursin(r"varchar\((\d+)\)", col_type) || occursin(r"char\((\d+)\)", col_type)
+      if occursin(r"varchar\((\d+)\)", col_type) || occursin(r"char\((\d+)\)", col_type) 
         max_length_match = match(r"\((\d+)\)", col_type)
         if max_length_match !== nothing
-            max_length = parse(Int, max_length_match.captures[1])
+          max_length = parse(Int, max_length_match.captures[1])
+          col_type = "varchar"
+        end
+      elseif occursin(r"character varying\((\d+)\)", col)
+        max_length_match = match(r"character varying\((\d+)\)", col)
+        if max_length_match !== nothing
+          max_length = parse(Int, max_length_match.captures[1])
+          col_type = "varchar"
         end
       end
 
@@ -924,8 +987,8 @@ function import_models_from_django(
     base_class = class["class_type"]  # Extract the base class (models.Model or AbstractUser)
     class_content = class["class_content"]  # Extract the class content
 
-    println("Processing class: ", class_name)
-    println(class["original_class"])
+    # println("Processing class: ", class_name)
+    # println(class["original_class"])
 
     # Initialize fields_dict
     fields_dict = Dict{Symbol, Any}()
@@ -936,7 +999,7 @@ function import_models_from_django(
 
     # Insert IDField if no primary key is defined
     if !has_primary_key
-        println("No primary key found in class '$class_name'. Adding an IDField named 'id'.")
+        # println("No primary key found in class '$class_name'. Adding an IDField named 'id'.")
         fields_dict[:id] = Models.IDField()
     end
 

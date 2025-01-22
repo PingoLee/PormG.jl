@@ -78,6 +78,7 @@ const postgres_type_map = Dict{String, Symbol}(
   "decimal" => :DecimalField,
   "numeric" => :DecimalField,
   "varchar" => :CharField,
+  "character" => :CharField,
   "text" => :TextField,
   "float" => :FloatField,
   "time" => :TimeField,

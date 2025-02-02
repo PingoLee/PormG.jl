@@ -1,10 +1,15 @@
 module QueryBuilder
 
-import ..PormG: config, SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGsuffix, PormGtrasnform, PormGModel, Dialect, PormGField, PormGTypeField
-import DataFrames
-import Dates, Intervals
-import ..PormG.Models: CharField, IntegerField
+import DataFrames, Tables
+using Dates, TimeZones, Intervals
 using SQLite, LibPQ
+
+import PormG.Models: CharField, IntegerField
+import PormG: Dialect
+import PormG: config
+import PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: PormGsuffix, PormGtrasnform
+import PormG.Infiltrator: @infiltrate
 
 #
 # SQLTypeArrays Objects
@@ -85,10 +90,10 @@ Base.copy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as)
 #
 
 mutable struct SQLObjectQuery <: SQLObject
-  model_name::PormGModel
+  model::PormGModel
   values::Vector{Union{SQLTypeText, SQLTypeField}}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}}
-  create::Dict{String,Union{Int64, String}}
+  insert::Dict{String, Any} # values to be used to create or insert
   limit::Int64
   offset::Int64
   order::Vector{SQLTypeOrder}
@@ -97,9 +102,9 @@ mutable struct SQLObjectQuery <: SQLObject
   list_joins::Vector{String} # is ther a better way to do this?
   row_join::Vector{Dict{String, Any}}  
 
-  SQLObjectQuery(; model_name=nothing, values = [],  filter = [], create = Dict(), limit = 0, offset = 0,
+  SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = [], row_join = []) =
-    new(model_name, values, filter, create, limit, offset, order, group, having, list_joins, row_join)
+    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join)
 end
 
 #
@@ -337,11 +342,22 @@ function up_values!(q::SQLObject, values)
   @error "Invalid argument: $(values) (::$(typeof(values))); please use a string or a function (Mounth, Year, Day, Y_M ...)"
 end
   
-function up_create!(q::SQLObject, values::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}})
+function up_create!(q::SQLObject, values::NTuple{N, Union{Pair{String, String}, Pair{String, Int64}}} where N)
+  q.insert = Dict()
   for (k,v) in values   
-    q.values[k] = v 
-  end
-  return q
+    q.insert[k] = v 
+  end  
+
+  return insert(q)
+end
+
+function up_update!(q::SQLObject, values::NTuple{N, Union{Pair{String, String}, Pair{String, Int64}}} where N)
+  q.insert = Dict()
+  for (k,v) in values   
+    q.insert[k] = v 
+  end  
+
+  return update(q)
 end
 
 function up_filter!(q::SQLObject, filter)
@@ -398,25 +414,35 @@ function order_by!(q::SQLObject, values)
   throw("Invalid argument: $(values) (::$(typeof(values))); please use a string or a SQLTypeOrder)")
 end
   
-Base.@kwdef mutable struct ObjectHandler <: SQLObjectHandler
+mutable struct ObjectHandler <: SQLObjectHandler
   object::SQLObject
-  values::Function =    (x...) -> up_values!(object, x) 
-  filter::Function =    (x...) -> up_filter!(object, x) 
-  create::Function =    (x...) -> up_create!(object, x) 
-  annotate::Function =  (x...) -> annotate(object, x) 
-  order_by::Function =  (x...) -> order_by!(object, x)
+  values::Function
+  filter::Function
+  create::Function
+  update::Function
+  order_by::Function
+
+  # Constructor with keyword arguments
+  function ObjectHandler(; object::SQLObject, 
+                          values::Function = (x...) -> up_values!(object, x), 
+                          filter::Function = (x...) -> up_filter!(object, x), 
+                          create::Function = (x...) -> up_create!(object, x), 
+                          update::Function = (x...) -> up_update!(object, x), 
+                          order_by::Function = (x...) -> order_by!(object, x))
+      return new(object, values, filter, create, update, order_by)
+  end
 end
 
 export object
 
-function object(model_name::PormGModel)
-  return ObjectHandler(object = SQLObjectQuery(model_name = model_name))
+function object(model::PormGModel)
+  return ObjectHandler(object = SQLObjectQuery(model = model))
 end
-# function object(model_name::String)
-#   return object(getfield(Models, Symbol(model_name)))
+# function object(model::String)
+#   return object(getfield(Models, Symbol(model)))
 # end
-# function object(model_name::Symbol)
-#   return object(getfield(Models, model_name))
+# function object(model::Symbol)
+#   return object(getfield(Models, model))
 # end
  
 ### string(q::SQLObjectQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)
@@ -651,28 +677,28 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   println("_build_row_join")
   println(vector)
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
-  foreing_table_module::Module = instruct.object.model_name._module::Module
+  foreing_table_module::Module = instruct.object.model._module::Module
   row_join = Dict{String,String}()
   # println(vector)
 
-  # fields_model = instruct.object.model_name.field_names
+  # fields_model = instruct.object.model.field_names
   # println(fields_model)
   last_column::String = ""
 
-  # println(instruct.object.model_name.reverse_fields)
-  # println("fiels", instruct.object.model_name.fields)  
-  # println("table", instruct.object.model_name.name)
-  if vector[1] in instruct.object.model_name.field_names # vector moust be a field from the model
+  # println(instruct.object.model.reverse_fields)
+  # println("fiels", instruct.object.model.fields)  
+  # println("table", instruct.object.model.name)
+  if vector[1] in instruct.object.model.field_names # vector moust be a field from the model
     last_column = vector[1]
-    row_join["a"] = string(instruct.django, instruct.object.model_name.name |> lowercase)
+    row_join["a"] = string(instruct.django, instruct.object.model.name |> lowercase)
     row_join["alias_a"] = instruct.alias
-    how = instruct.object.model_name.fields[last_column].how
+    how = instruct.object.model.fields[last_column].how
     if how === nothing
-      row_join["how"] = instruct.object.model_name.fields[last_column].null == "YES" ? "LEFT" : "INNER"
+      row_join["how"] = instruct.object.model.fields[last_column].null == "YES" ? "LEFT" : "INNER"
     else
       row_join["how"] = how
     end
-    foreign_table_name = instruct.object.model_name.fields[last_column].to
+    foreign_table_name = instruct.object.model.fields[last_column].to
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(last_column) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
@@ -682,22 +708,22 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
     # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model_name.fields[last_column].pk_field::String
+    row_join["key_b"] = instruct.object.model.fields[last_column].pk_field::String
     row_join["key_a"] = instruct.django !== nothing ? string(last_column, "_id") : last_column
-  elseif haskey(instruct.object.model_name.reverse_fields, vector[1])
-    reverse_model = getfield(foreing_table_module, instruct.object.model_name.reverse_fields[vector[1]][3])
+  elseif haskey(instruct.object.model.reverse_fields, vector[1])
+    reverse_model = getfield(foreing_table_module, instruct.object.model.reverse_fields[vector[1]][3])
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.table_name)")
     last_column = vector[2]
-    row_join["a"] = string(instruct.django, instruct.object.model_name.name |> lowercase)
+    row_join["a"] = string(instruct.django, instruct.object.model.name |> lowercase)
     row_join["alias_a"] = instruct.alias
-    how = reverse_model.fields[instruct.object.model_name.reverse_fields[vector[1]][1] |> String].how
+    how = reverse_model.fields[instruct.object.model.reverse_fields[vector[1]][1] |> String].how
     if how === nothing
-      row_join["how"] = instruct.object.model_name.fields[instruct.object.model_name.reverse_fields[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
+      row_join["how"] = instruct.object.model.fields[instruct.object.model.reverse_fields[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
     else
       row_join["how"] = how
     end
-    foreign_table_name = instruct.object.model_name.reverse_fields[vector[1]][3] |> String
+    foreign_table_name = instruct.object.model.reverse_fields[vector[1]][3] |> String
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
@@ -707,10 +733,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model_name.reverse_fields[vector[1]][1] |> String
-    row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model_name.reverse_fields[vector[1]][4] |> String, "_id") : instruct.object.model_name.reverse_fields[vector[1]][4] |> String
+    row_join["key_b"] = instruct.object.model.reverse_fields[vector[1]][1] |> String
+    row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model.reverse_fields[vector[1]][4] |> String, "_id") : instruct.object.model.reverse_fields[vector[1]][4] |> String
   else
-    throw("Error in _build_row_join, the column $(vector[1]) not found in $(instruct.object.model_name.name)")
+    throw("Error in _build_row_join, the column $(vector[1]) not found in $(instruct.object.model.name)")
   end
   
   # println(row_join)
@@ -847,7 +873,7 @@ function _get_select_query(v::String, instruc::SQLInstruction)
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
-    return string(instruc.alias, ".", _solve_field(v, instruc.object.model_name, instruc))
+    return string(instruc.alias, ".", _solve_field(v, instruc.object.model, instruc))
   end 
   
 end
@@ -976,7 +1002,7 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
   else
-    return string(instruc.alias, ".", _solve_field(v, instruc.object.model_name, instruc))  
+    return string(instruc.alias, ".", _solve_field(v, instruc.object.model, instruc))  
   end
   
 end
@@ -1086,8 +1112,8 @@ function build_row_join_sql_text(instruc::SQLInstruction)
 end
 
 function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
-  # println(object.model_name.connect_key)
-  connection === nothing && (connection = config[object.model_name.connect_key].connections) # TODO -- i need create a mode to handle with pools
+  # println(object.model.connect_key)
+  connection === nothing && (connection = config[object.model.connect_key].connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
   # println(connection)
   instruct = InstrucObject(text = "", 
@@ -1142,7 +1168,7 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   respota = """
     SELECT
       $(_query_select(instruction.select ))
-    FROM $(string(instruction.django, q.object.model_name.name |> lowercase)) as $(instruction.alias)
+    FROM $(string(instruction.django, q.object.model.name |> lowercase)) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
@@ -1154,6 +1180,181 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   return respota
 end
 
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+  model = objct.model
+  settings = config[model.connect_key]
+  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+  
+  # colect name of the fields
+  fields = model.field_names
+  
+  # check if is allowed to insert
+  !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  
+  # check if the fields are in objct.insert
+  for field in fields
+    if !haskey(objct.insert, field)
+      # check if field allow null or if exist a default value
+      if model.fields[field].default !== nothing
+        objct.insert[field] = model.fields[field].default
+      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
+      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        objct.insert[field] = model.fields[field].formater(today())
+      elseif model.fields[field].null || model.fields[field].primary_key
+        continue
+      else
+        @infiltrate
+        throw(ArgumentError("Error in insert, the field \e[4m\e[31m$(field)\e[0m not allow null"))
+      end
+    end
+  end
+
+  pk_exist::Bool = false
+  pk_field::Vector{String} = []
+  for field in keys(objct.insert)
+    # check if the insert has a field that not exist in the model
+    in(field, fields) || throw("""Error in insert, the field "$(field)" not found in $(model.name)""")
+    # check if the field is a primary key
+    model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
+    # check if the field has max_length and validate
+    hasfield(typeof(model.fields[field]), :max_length) && length(objct.insert[field]) > model.fields[field].max_length && error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(objct.create[field]))\e[0m""")
+    # check if the field has max_digits and validate
+    if hasfield(typeof(model.fields[field]), :max_digits)
+      value_str = string(objct.insert[field])
+      integer_part, fractional_part = split(value_str, ".")
+      total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
+      if total_digits > model.fields[field].max_digits
+        error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
+      end
+    end
+  end
+
+  # insert
+  fields_columns = join([field for field in keys(objct.insert)], ", ")
+
+  # values
+  values_insert = join([objct.insert[field] |> model.fields[field].formater for field in keys(objct.insert)], ", ")
+
+  # TODO: insert a function to handle with the different types of connection and modulate the code
+
+  # construct the SQL statement
+  sql = """
+  INSERT INTO $(string(model.name)) (
+    $(fields_columns)
+  ) VALUES (
+    $(values_insert)
+  )
+  """
+
+  @info sql
+
+  # execute the SQL statement
+  if connection isa LibPQ.Connection
+    result = LibPQ.execute(connection, sql * " RETURNING *;")
+  elseif connection isa SQLite.DB
+    SQLite.execute(connection, sql)
+    # Assuming the table has an auto-increment primary key named "id"
+    last_id = SQLite.last_insert_rowid(connection)
+    result = SQLite.Query(connection, "SELECT * FROM $(string(model.name)) WHERE id = $last_id;")
+  else
+    throw("Unsupported connection type")
+  end
+
+  pk_exist && _update_sequence(model, connection, pk_field)
+
+  return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+
+end
+
+function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String})
+  for field in pk_field
+    LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+  end
+end
+# function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String})
+#   sequences = LibPQ.execute(connection, """SELECT *
+#       FROM pg_sequences
+#       WHERE sequencename LIKE '$(model.name |> lowercase)%';""") |> DataFrames.DataFrame
+#   for row in eachrow(sequences)
+#     if row.sequenceowner == model.name
+#       LibPQ.execute(connection, "SELECT setval('$(row.sequencename)', (SELECT MAX($(pk_field[1])) FROM $(model.name)), true);")
+#     end
+#   end
+# end
+function _update_sequence(model::PormGModel, connection::SQLite.DB, pk_field::Vector{String})
+  for field in pk_field
+    max_id_query = "SELECT MAX($(field)) FROM $(string(model.name |> lowercase));"
+    max_id_result = SQLite.Query(connection, max_id_query) |> DataFrame
+    max_id = max_id_result[1, 1]
+    if !isnothing(max_id)
+      update_sequence_sql = "UPDATE sqlite_sequence SET seq = $(max_id + 1) WHERE name = '$(string(model.name |> lowercase))';"
+      SQLite.execute(connection, update_sequence_sql)
+    end
+  end
+end
+
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+  model = objct.model
+  settings = config[model.connect_key]
+  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+ 
+  instruction = build(objct, table_alias=table_alias, connection=connection) 
+
+  @infiltrate
+
+  # raize error if is used join in update
+  instruction.row_join |> isempty || throw("Error in update, the join is not allowed in update")
+
+  # check if is allowed to insert
+  !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
+
+  # don't allow to update a field without filter
+  instruction._where |> isempty && throw("Error in update, the update must have a filter")
+  
+  # colect name of the fields
+  fields = model.field_names
+
+  # check if the fields are in objct.insert
+  for field in keys(objct.insert)
+    # check if field is a primary key and not allow to update
+    model.fields[field].primary_key && throw("Error in update, the field \e[4m\e[31m$(field)\e[0m is a primary key and not allow to update")
+    # check if the create has a field that not exist in the model
+    in(field, fields) || throw("""Error in update, the field "$(field)" not found in $(model.name)""")
+    # check if the field has max_length and validate
+    hasfield(typeof(model.fields[field]), :max_length) && length(q.object.create[field]) > model.fields[field].max_length && error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(q.object.create[field]))\e[0m""")
+    # check if the field has max_digits and validate
+    if hasfield(typeof(model.fields[field]), :max_digits)
+      value_str = string(q.object.create[field])
+      integer_part, fractional_part = split(value_str, ".")
+      total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
+      if total_digits > model.fields[field].max_digits
+        error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
+      end
+    end
+  end
+
+  # create
+  fields_columns = join([field for field in keys(q.object.create)], ", ")
+
+  # values
+  values_insert = join([q.object.create[field] |> model.fields[field].formater for field in keys(q.object.create)], ", ")
+
+  # construct the SQL statement
+  sql = """
+  UPDATE $(string(model.name)) SET
+    $(join([field * " = " * q.object.create[field] |> model.fields[field].formater for field in keys(q.object.create)], ", "))
+  WHERE
+    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
+  """
+
+  @info sql
+
+
+  
+end
+  
+
 
 function fetch(connection::LibPQ.Connection, sql::String)
   return LibPQ.execute(connection, sql)
@@ -1161,15 +1362,15 @@ end
 
 export list
 # create a function like a list from Django query
-function list(object::SQLObjectHandler)
-  connection = config[object.model_name.connect_key].connections
+function list(objct::SQLObjectHandler)
+  connection = config[objct.object.model.connect_key].connections
 
-  sql = query(object, connection=connection)
+  sql = query(objct, connection=connection)
   return fetch(connection, sql)
 end
 
 # ---
-# Execute transaction functions
+# Execute insertion functions
 #
 
 

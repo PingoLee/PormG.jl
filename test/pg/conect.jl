@@ -22,7 +22,7 @@ PormG.connection()
 # prod.values('quad_avaliacao_id', 'quad_avaliacao__curto', 'porcentagem', 'sim', 'total', 'indicador__abreviado', 'indicador_id').order_by('indicador_id')		
 
 
-Base.include(PormG, "db/models/automatic_models.jl")
+Base.include(PormG, "db/automatic_models.jl")
 import PormG.automatic_models as AM
 
 query = AM.Ind_desem_municipio |> object

@@ -1,8 +1,10 @@
 # I want recreate the Django models in Julia
 module Models
-using Dates
-using TimeZones
-using PormG: PormGField, PormGModel, reserved_words, Migration
+using Dates, TimeZones
+import PormG: PormGField, PormGModel, reserved_words, Migration
+import PormG: DATETIME_FORMAT
+
+import PormG.Infiltrator: @infiltrate
 
 export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField, IDField, BigIntegerField, OneToOneField, AutoField
 
@@ -59,7 +61,7 @@ end
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 function set_models(_module::Module, path::String)::Nothing
   models = get_all_models(_module)  
-  connect_key = split(path, "/")[end-1]
+  connect_key = split(path, "/")[end]
 
   # set the original module in models
   for model in models
@@ -221,46 +223,8 @@ function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   
 end
 
-# function map_field_to_sql_type(db::SQLite.DB, field::PormGField)
-#   # properties
-#   # verbose_name::Union{String, Nothing} = nothing
-#   # name::Union{String, Nothing} = nothing
-#   # primary_key::Bool = false
-#   # max_length::Int = 250
-#   # unique::Bool = false
-#   # blank::Bool = false
-#   # null::Bool = false
-#   # db_index::Bool = false
-#   # default::Union{String, Nothing} = nothing
-#   # editable::Bool = false
-#   sql_type = ""
-#   # Check if the field is a CharField and not a primary key
-#   if field isa sCharField && !field.primary_key
-#     # Check the max_length attribute of the field
-#     if hasproperty(field, :max_length) && field.max_length <= 255
-#       # If max_length is defined and less than or equal to 255, use VARCHAR
-#       sql_type = "VARCHAR($(field.max_length))"
-#     else
-#       # If max_length is not defined or greater than 255, default to TEXT
-#       sql_type = "TEXT"
-#     end
-#   elseif field.primary_key
-#     # Handle primary key case, assuming it's an integer
-#     sql_type = "INTEGER PRIMARY KEY AUTOINCREMENT"
-#   end
-#   # Add more conditions for other field types and attributes as needed
 
-#   # Check if the field is nullable
-#   if hasproperty(field, :null) && !field.null
-#     sql_type *= " NULL"
-#   else
-#     sql_type *= " NOT NULL"
-#   end
-
-#   return sql_type
-# end
-
-#
+# ---
 # Formaters
 #
 
@@ -303,6 +267,22 @@ function format_bool_sql(value::Bool)
     return value ? "true" : "false"
 end
 
+function format_timezone_sql(value::String; format::String=DATETIME_FORMAT)
+  return validate_timezone(value, format) ? string("'", value, "'") : throw(ArgumentError("The timezone $value is invalid"))  
+end
+function format_timezone_sql(value::Union{Missing, Nothing})
+    return "null"
+end
+function format_timezone_sql(value::ZonedDateTime)
+    return string("'", value, "'")    
+end
+function format_timezone_sql(value::DateTime, timezone::String)
+  # function used just in create 
+  return ZonedDateTime(value, TimeZone(timezone))
+end
+
+    
+
 # ---
 # Tools to comparisons
 #
@@ -312,7 +292,7 @@ end
 Compares the fields of two `PormGModel` instances to determine if they are equal.
 """
 function are_model_fields_equal(new_model::PormGModel, old_model::PormGModel)::Bool
-  new_fields = new_model.fields |> _compare_model_fields_prepare_fields
+  new_fields = nesw_model.fields |> _compare_model_fields_prepare_fields
   old_fields = old_model.fields |> _compare_model_fields_prepare_fields
 
   for (field_name, field) in new_fields
@@ -362,20 +342,20 @@ end
 # Fields
 #
 
-@kwdef mutable struct sIDField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = true
-  auto_increment::Bool = true
-  unique::Bool = true
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = true
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  type::String = "BIGINT"
-  formater::Function = format_number_sql
-  generated::Bool = true  # New field to indicate GENERATED ... AS IDENTITY
-  generated_always::Bool = false # New field to indicate GENERATED ALWAYS AS IDENTITY
+mutable struct sIDField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  auto_increment::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+  generated::Bool  # New field to indicate GENERATED ... AS IDENTITY
+  generated_always::Bool # New field to indicate GENERATED ALWAYS AS IDENTITY
 end
 
 function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=true, default=nothing, editable=false, generated=true, generated_always=false)
@@ -395,9 +375,8 @@ function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, 
   default = validate_default(default, Union{Int64, Nothing}, "IDField", format2int64)
   # Return the field instance
   return sIDField(
-    verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment,
-    unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable, generated=generated, generated_always=generated_always
-  ) 
+    verbose_name, primary_key, auto_increment, unique, blank, null, db_index, default, editable, "BIGINT", format_number_sql, generated, generated_always
+  )
 end
 
 @kwdef mutable struct sForeignKey <: PormGField
@@ -514,18 +493,18 @@ function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, prim
   )
 end
 
-@kwdef mutable struct sAutoField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = true
-  auto_increment::Bool = true
-  unique::Bool = true
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  type::String = "INTEGER"
-  formater::Function = format_number_sql
+mutable struct sAutoField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  auto_increment::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
 function AutoField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
@@ -542,27 +521,26 @@ function AutoField(; verbose_name=nothing, primary_key=true, auto_increment=true
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
   # Return the field instance
-  return sAutoField(
-    verbose_name=verbose_name, primary_key=primary_key, auto_increment=auto_increment,
-    unique=unique, blank=blank, null=null, db_index=db_index, default=default, editable=editable
-  )
+
+  return sAutoField(verbose_name, primary_key, auto_increment, unique, blank, null, db_index, default, editable, "INTEGER", format_number_sql)
 end
 
-@kwdef mutable struct sCharField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  max_length::Int = 250
-  unique::Bool = false
-  blank::Bool = false # TODO: check if blank is usefull, i think it is not
-  null::Bool = false
-  db_index::Bool = false
-  db_column::Union{String, Nothing} = nothing
-  default::Union{String, Nothing} = nothing
-  editable::Bool = true
-  type::String = "VARCHAR"
-  formater::Function = format_text_sql
-  choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N = nothing  
+mutable struct sCharField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  max_length::Int
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  db_column::Union{String, Nothing}
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+  choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N
 end
+
 
 function parse_choices(choices_str::String)
   # Parse a string into a tuple of tuples
@@ -625,7 +603,7 @@ function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=f
       end
     end
   end
-  return sCharField(verbose_name=verbose_name, max_length=max_length, unique=unique, blank=blank, null=null, db_index=db_index, db_column=db_column, default=default, choices=choices, editable=editable)  
+  return sCharField(verbose_name, false, max_length, unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices)
 end
 
 
@@ -750,12 +728,11 @@ end
   editable::Bool = false
   auto_now::Bool = false
   auto_now_add::Bool = false
-  auto_created::Bool = false
   type::String = "DATE"
   formater::Function = format_text_sql
 end
 
-function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false, auto_created=false)
+function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false)
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
@@ -768,12 +745,10 @@ function DateField(; verbose_name=nothing, unique=false, blank=false, null=false
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
-  # Validate auto_created
-  !(auto_created isa Bool) && throw(ArgumentError("The 'auto_created' must be a Boolean"))
   # Return the field instance
   return sDateField(
     verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add, auto_created=auto_created
+    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add
   )  
 end
 
@@ -788,12 +763,11 @@ end
   editable::Bool = false
   auto_now::Bool = false
   auto_now_add::Bool = false
-  auto_created::Bool = false
-  type::String = "DATETIME"
-  formater::Function = format_text_sql
+  type::String = "TIMESTAMPTZ"
+  formater::Function = format_timezone_sql 
 end
 
-function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false, auto_created=false)
+function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false)
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
@@ -806,12 +780,10 @@ function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=f
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
-  # Validate auto_created
-  !(auto_created isa Bool) && throw(ArgumentError("The 'auto_created' must be a Boolean"))
   # Return the field instance
   return sDateTimeField(
     verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add, auto_created=auto_created
+    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add
   )  
 end
 
@@ -1162,67 +1134,14 @@ function validate_default(default, expected_type::Type, field_name::String, conv
   end
 end
 
+function validate_timezone(value::String, format::String)
+  try
+    return DateTime(value, format) |> string
+  catch e
+    throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
+  end
+end
 
-# # ---
-# # Define the migration types
-# #
-
-# struct CreateTable <: Migration
-#   table_name::String
-#   columns::Vector{String}
-# end
-
-# struct DropTable <: Migration
-#   table_name::String
-# end
-
-# struct AddColumn <: Migration
-#   table_name::String
-#   column_name::String
-#   column_type::String
-# end
-
-# struct DropColumn <: Migration
-#   table_name::String
-#   column_name::String
-# end
-
-# struct RenameColumn <: Migration
-#   table_name::String
-#   old_column_name::String
-#   new_column_name::String
-# end
-
-# struct AlterColumn <: Migration
-#   table_name::String
-#   column_name::String
-#   new_column_name::String
-#   new_column_type::String
-# end
-
-# struct AddForeignKey <: Migration
-#   table_name::String
-#   column_name::String
-#   constraint_name::Union{String, Nothing}
-#   foreign_table_name::String
-#   foreign_column_name::String
-# end
-
-# struct DropForeignKey <: Migration
-#   table_name::String
-#   column_name::String
-# end
-
-# struct AddIndex <: Migration
-#   index_name::String
-#   table_name::String
-#   column_name::String
-# end
-
-# struct DropIndex <: Migration
-#   table_name::String
-#   column_name::String
-# end
 
 # ---
 # Define function to manage on_delete

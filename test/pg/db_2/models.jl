@@ -56,7 +56,7 @@ Dim_municipio = Models.Model("Dim_municipio",
   ibge2 = Models.IntegerField(blank=true, null=true, default=0),
   nome = Models.CharField(blank=true, null=true),
   origem = Models.CharField(blank=true, null=true),
-  servidor = Models.ForeignKey("Dim_servidor", null=true, pk_field="id", on_delete="models.RESTRICT", db_constraint=false))
+  servidor = Models.ForeignKey("Dim_servidor", null=true, pk_field="id", on_delete="models.RESTRICT"))
 
 Dim_municipio_populacao_hist = Models.Model("Dim_municipio_populacao_hist",
   id = Models.IDField(),
@@ -66,6 +66,10 @@ Dim_municipio_populacao_hist = Models.Model("Dim_municipio_populacao_hist",
   pop_15 = Models.IntegerField(null=true),
   populacao = Models.IntegerField(default=0))
 
+Dim_teste_timezone = Models.Model("Dim_teste_timezone",
+  id = Models.IDField(),
+  texto = Models.CharField(),
+  data2 = Models.DateTimeField(auto_now=true))
 
 Models.set_models(@__MODULE__, @__DIR__)
 

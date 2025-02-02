@@ -19,6 +19,10 @@ const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"
 
 const PORMG_ENV = ENV["PORMG_ENV"]
 
+# Constants for dealing with datetime in UTC
+const DATETIME_FORMAT = "yyyy-mm-ddTHH:MM:SS.ssszzzz"
+const UTC_TIMEZONE = "UTC"
+
 const reserved_words = [
   "if", "else", "elseif", "while", "for", "begin", "end", "function", "return",
   "break", "continue", "global", "local", "const", "let", "do", "try", "catch",
@@ -113,11 +117,9 @@ const postgres_type_map_reverse = Dict{String, String}(
   "VARCHAR" => "varchar",
   "TEXT" => "text",
   "BYTEA" => "bytea",
-  "TIMESTAMP" => "timestamp",
   "TIMESTAMPTZ" => "timestamptz",
   "DATE" => "date",
-  "TIME" => "time",
-  "TIMETZ" => "timetz",
+  "TIME" => "time",  
   "INTERVAL" => "interval",
   "BOOLEAN" => "boolean",
   "POINT" => "point",

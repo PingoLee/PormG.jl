@@ -29,12 +29,6 @@ import PormG.Generator: generate_models_from_db, generate_migration_plan
 
 
 # ---
-# Functions to apply migrations
-#
-
-# Moved to Models.jl to Dialect.jl to impruve loading code
-
-# ---
 # Functions to import models from a SQLite database
 #
 
@@ -163,149 +157,150 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_typ
   return Models.Model(table_name, fields_dict)
 end
 
-#
+# ---
 # Makemigrations -- Do instructions to create a migration plan
 #
-
-function _hash_field_name(model_name::Symbol, field_name::String; apend_number::Int64=5)::String
-  _hash = randstring(8) 
-  name = "$(model_name)_$field_name"
-  if length(name) + 8 + apend_number > 63
-    name = name[1:63 - length(_hash)]
-  end
-  return "$(name)_$_hash" |> lowercase
-end
-
-function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, key::String, value::String)
-  value == "" && return
-  if !haskey(migration_plan, model_name)
-    migration_plan[model_name] = OrderedDict{String, String}(key => value)
-  else
-    migration_plan[model_name][key] = value
-  end
-end  
-
-function _drop_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
-  if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (!hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
-    constraint_name = get_constraints_fk(conn, model_name, field_name)
-    if constraint_name === nothing
-      return nothing
+# functions helpings to makemigrations
+  function _hash_field_name(model_name::Symbol, field_name::String; apend_number::Int64=5)::String
+    _hash = randstring(8) 
+    name = "$(model_name)_$field_name"
+    if length(name) + 8 + apend_number > 63
+      name = name[1:63 - length(_hash)]
     end
-    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove foreign key: $field_name", 
-    Dialect.drop_foreign_key(conn, model_name, constraint_name))
+    return "$(name)_$_hash" |> lowercase
   end
-  return nothing
-end
 
-function _add_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
-  if hasfield(new_field |> typeof, :to) && new_field.db_constraint && (!hasfield(old_field |> typeof, :to) || !old_field.db_constraint)
-    constraint_name = "$(name)_fk" |> lowercase
-    _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> lowercase)\"", "\"$(new_field.pk_field)\""))
+  function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, key::String, value::String)
+    value == "" && return
+    if !haskey(migration_plan, model_name)
+      migration_plan[model_name] = OrderedDict{String, String}(key => value)
+    else
+      migration_plan[model_name][key] = value
+    end
+  end  
+
+  function _drop_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
+    if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (!hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
+      constraint_name = get_constraints_fk(conn, model_name, field_name)
+      if constraint_name === nothing
+        return nothing
+      end
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Remove foreign key: $field_name", 
+      Dialect.drop_foreign_key(conn, model_name, constraint_name))
+    end
+    return nothing
   end
-  return nothing
-end
 
-function _add_new_table(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
-  _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
-  for (field_name, field) in model.fields       
-    name = _hash_field_name(model_name, field_name)        
-
-    # If the new field is a foreign key
-    if hasfield(field |> typeof, :to) && field.db_constraint
-      constraint_name = name * "_fk" |> lowercase
+  function _add_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
+    if hasfield(new_field |> typeof, :to) && new_field.db_constraint && (!hasfield(old_field |> typeof, :to) || !old_field.db_constraint)
+      constraint_name = "$(name)_fk" |> lowercase
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> lowercase)\"", "\"$(field.pk_field)\""))
+      Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> lowercase)\"", "\"$(new_field.pk_field)\""))
     end
-
-    # If the new field is also indexed
-    if field.db_index 
-      index_name = name * "_idx" |> lowercase
-      _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
-      Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
-    end    
+    return nothing
   end
-  return nothing
-end
 
-function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}})::Nothing
-  if Models.are_model_fields_equal(model, current_schema[model_name][:model])
-    println("Model $model_name are equal")
-  else        
-    # Compare fields
-    @infiltrate false
-    for (field_name, field) in  current_schema[model_name][:model].fields
-      if haskey(model.fields, field_name)
-        # println("Fields $field_name")
-        @infiltrate false       
-                     
-          # check if the field is diferent
-          colect_not_equal::Vector{Symbol} = []
-          if model.fields[field_name] |> typeof == field |> typeof                          
-            # Check if all attributes are equal                
-            for attr in fieldnames(typeof(field))
-              new_var = getfield(field, attr)
-              old_var = getfield(model.fields[field_name], attr)
-              if new_var != old_var
-                (attr == :to && new_var |> lowercase == old_var |> lowercase) && continue
-                attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
-                push!(colect_not_equal, attr)
+  function _add_new_table(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
+    _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
+    for (field_name, field) in model.fields       
+      name = _hash_field_name(model_name, field_name)        
+
+      # If the new field is a foreign key
+      if hasfield(field |> typeof, :to) && field.db_constraint
+        constraint_name = name * "_fk" |> lowercase
+        _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
+        Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> lowercase)\"", "\"$(field.pk_field)\""))
+      end
+
+      # If the new field is also indexed
+      if field.db_index 
+        index_name = name * "_idx" |> lowercase
+        _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
+        Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
+      end    
+    end
+    return nothing
+  end
+
+  function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}})::Nothing
+    if Models.are_model_fields_equal(model, current_schema[model_name][:model])
+      println("Model $model_name are equal")
+    else        
+      # Compare fields
+      @infiltrate false
+      for (field_name, field) in  current_schema[model_name][:model].fields
+        if haskey(model.fields, field_name)
+          # println("Fields $field_name")
+          @infiltrate false       
+                      
+            # check if the field is diferent
+            colect_not_equal::Vector{Symbol} = []
+            if model.fields[field_name] |> typeof == field |> typeof                          
+              # Check if all attributes are equal                
+              for attr in fieldnames(typeof(field))
+                new_var = getfield(field, attr)
+                old_var = getfield(model.fields[field_name], attr)
+                if new_var != old_var
+                  (attr == :to && new_var |> lowercase == old_var |> lowercase) && continue
+                  attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
+                  push!(colect_not_equal, attr)
+                end
+              end
+            else
+              # check is db_constraint is false in field
+              if field |> typeof == Models.sForeignKey && !field.db_constraint &&  model.fields[field_name] |> typeof == Models.sBigIntegerField
+                continue
+              else
+                push!(colect_not_equal, :type)
               end
             end
-          else
-            # check is db_constraint is false in field
-            if field |> typeof == Models.sForeignKey && !field.db_constraint &&  model.fields[field_name] |> typeof == Models.sBigIntegerField
-              continue
-            else
-              push!(colect_not_equal, :type)
-            end
-          end
-          
-          isempty(colect_not_equal) && continue
-          
-          @infiltrate
-
-          # Check if is needed remove the foreign key
-          name::String = _hash_field_name(model_name, field_name) 
-
-          _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
-          
-          _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name",
-          Dialect.alter_field(conn, model_name |> string, field_name, field, colect_not_equal))
-
-          # Check if the field is a foreign key
-          _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
-
-          # Check if the foreign key changed to another table
-          if hasfield(field |> typeof, :to) && hasfield(model.fields[field_name] |> typeof, :to) && field.to != model.fields[field_name].to
-            _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
-            _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
-          end
-
-          # Check if the field is also indexed
-          if field.db_index && !model.fields[field_name].db_index
-            @infiltrate false
-            index_name = "$(name)_idx"
-            _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
-            Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
-          end
-
-          # Check if is need to remove the index
-          if model.fields[field_name].db_index && !field.db_index
+            
+            isempty(colect_not_equal) && continue
+            
             @infiltrate
-            index_name = model.cache["index"][field_name]
-            _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
-            Dialect.drop_index(conn, "\"$index_name\""))
-          end
 
-         
-      else
+            # Check if is needed remove the foreign key
+            name::String = _hash_field_name(model_name, field_name) 
+
+            _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
+            
+            _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name",
+            Dialect.alter_field(conn, model_name |> string, field_name, field, colect_not_equal))
+
+            # Check if the field is a foreign key
+            _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
+
+            # Check if the foreign key changed to another table
+            if hasfield(field |> typeof, :to) && hasfield(model.fields[field_name] |> typeof, :to) && field.to != model.fields[field_name].to
+              _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
+              _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
+            end
+
+            # Check if the field is also indexed
+            if field.db_index && !model.fields[field_name].db_index
+              @infiltrate false
+              index_name = "$(name)_idx"
+              _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
+              Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
+            end
+
+            # Check if is need to remove the index
+            if model.fields[field_name].db_index && !field.db_index
+              @infiltrate
+              index_name = model.cache["index"][field_name]
+              _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
+              Dialect.drop_index(conn, "\"$index_name\""))
+            end
+
+          
+        else
+        end
       end
-    end
 
-  
-  end     
-end
+    
+    end     
+  end
+
 
 # Compare model definitions to the current database schema
 function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)
@@ -433,6 +428,7 @@ function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::S
   # # Here you would write the migration_plan to a file or directly apply it
   # println("Migration plan: ", migration_plan)
 end
+
 function makemigrations(db::String; config::Dict{String,SQLConn} = config)
   settings = config[db]
   path = joinpath(db, settings.model_file)
@@ -516,14 +512,13 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
 
   
 end
+
 function migrate(db::String; config::Dict{String,SQLConn} = config)
   settings = config[db]
   migrate(settings.connections, settings)
 end
   
-
-
-#
+# ---
 # IMPORT MODELS FROM DATABASE POSTGRESQL
 #
 
@@ -563,7 +558,6 @@ function convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{Str
   # println(models_array)
   return models_array
 end
-
   
 function import_models_from_postgres(;db::LibPQ.Connection = connection(), 
                                   force_replace::Bool=false, 
@@ -584,6 +578,7 @@ function import_models_from_postgres(;db::LibPQ.Connection = connection(),
 
   # generate_models_from_db(db, file, Instructions)
 end
+
 function import_models_from_postgres(db::String;
   force_replace::Bool=false, 
   ignore_table::Vector{String} = postgres_ignore_table,
@@ -691,6 +686,10 @@ function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing
   return df
 end
 
+function get_database_schema(;pickup::Union{SQLite.DB, LibPQ.Connection} = connection())  
+  return get_database_schema(pickup)
+end
+
 function get_constraints_fk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )
   query = """
   SELECT
@@ -711,6 +710,7 @@ function get_constraints_fk(conn::LibPQ.Connection, table_name::Symbol, field_na
   end
   return result[1, :constraint_name]
 end
+
 function get_constraints_pk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )
   query = """
   SELECT
@@ -731,6 +731,7 @@ function get_constraints_pk(conn::LibPQ.Connection, table_name::Symbol, field_na
   end
   return result[1, :constraint_name]
 end
+
 function get_constraints_unique(conn::LibPQ.Connection, table_name::String, field_name::String)::String
   query = """
   SELECT constraint_name
@@ -887,19 +888,6 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
 
 end
 
-# function generate_models_from_db(db::LibPQ.Connection, file::String, instructions::Vector{Any})
-#     # Implement the model generation logic here
-#     open(joinpath(MODEL_PATH, file), "w") do f
-#         for instruction in instructions
-#             println(f, instruction)
-#         end
-#     end
-# end
-
-  
-function get_database_schema(;pickup::Union{SQLite.DB, LibPQ.Connection} = connection())  
-  return get_database_schema(pickup)
-end
 
 #
 # IMPORT MODELS FROM model.py

@@ -1,7 +1,11 @@
 module Configuration
 
 import YAML, Logging
-import ..PormG: SQLConn, PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, config
+import PormG: SQLConn, config
+import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT
+
+import PormG.Infiltrator: @infiltrate
+
 import SQLite
 import LibPQ
 
@@ -128,6 +132,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", settings.db_config_settings[key]))
     end
 
+    # @infiltrate
 
     # get!(settings.db_config_settings, "database", get(ENV, "SEARCHLIGHT_DATABASE", nothing))
     get!(settings.db_config_settings, "database", nothing)
@@ -136,8 +141,6 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     # get!(settings.db_config_settings, "username", get(ENV, "SEARCHLIGHT_USERNAME", nothing))
     get!(settings.db_config_settings, "username", nothing)
     settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", settings.db_config_settings["username"]))
-
-    dns |> println
 
     settings.connections = LibPQ.Connection(join(dns, " "))
 
@@ -217,6 +220,7 @@ mutable struct Settings <: SQLConn
   change_db::Bool # Enable makemigrations and migrations functionality in the app
   change_data::Bool # Enable the change of the database (upgrade, delete) in the app
   connections::Union{Nothing, SQLite.DB, LibPQ.Connection} # Store multiple database connections
+  time_zone::String
 
   Settings(;
       app_env             = ENV["PORMG_ENV"],           
@@ -228,7 +232,8 @@ mutable struct Settings <: SQLConn
       log_to_file         = true,
       change_db           = false,
       change_data         = false,
-      connections         = nothing
+      connections         = nothing,
+      time_zone            = DATETIME_FORMAT
   ) =
   new(
       app_env,
@@ -240,7 +245,8 @@ mutable struct Settings <: SQLConn
       log_to_file,
       change_db,
       change_data,
-      connections
+      connections,
+      time_zone
   )
 end
 

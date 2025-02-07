@@ -1301,8 +1301,6 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
  
   instruction = build(objct, table_alias=table_alias, connection=connection) 
 
-  @infiltrate
-
   # raize error if is used join in update
   instruction.row_join |> isempty || throw("Error in update, the join is not allowed in update")
 
@@ -1315,17 +1313,29 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # colect name of the fields
   fields = model.field_names
 
+  # check if the fields need to be updated automatically
+  for field in fields
+    if !haskey(objct.insert, field)
+      # check if field allow null or if exist a default value
+      if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
+        objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
+      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
+        objct.insert[field] = model.fields[field].formater(today())      
+      end
+    end
+  end
+
   # check if the fields are in objct.insert
-  for field in keys(objct.insert)
-    # check if field is a primary key and not allow to update
-    model.fields[field].primary_key && throw("Error in update, the field \e[4m\e[31m$(field)\e[0m is a primary key and not allow to update")
+  for field in keys(objct.insert)    
     # check if the create has a field that not exist in the model
     in(field, fields) || throw("""Error in update, the field "$(field)" not found in $(model.name)""")
+    # check if field is a primary key and not allow to update
+    model.fields[field].primary_key && throw("Error in update, the field \e[4m\e[31m$(field)\e[0m is a primary key and not allow to update")
     # check if the field has max_length and validate
-    hasfield(typeof(model.fields[field]), :max_length) && length(q.object.create[field]) > model.fields[field].max_length && error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(q.object.create[field]))\e[0m""")
+    hasfield(typeof(model.fields[field]), :max_length) && length(objct.insert[field]) > model.fields[field].max_length && error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(q.object.create[field]))\e[0m""")
     # check if the field has max_digits and validate
     if hasfield(typeof(model.fields[field]), :max_digits)
-      value_str = string(q.object.create[field])
+      value_str = string(objct.insert[field])
       integer_part, fractional_part = split(value_str, ".")
       total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
       if total_digits > model.fields[field].max_digits
@@ -1333,25 +1343,29 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       end
     end
   end
+   
 
-  # create
-  fields_columns = join([field for field in keys(q.object.create)], ", ")
-
-  # values
-  values_insert = join([q.object.create[field] |> model.fields[field].formater for field in keys(q.object.create)], ", ")
+  set_clause = join([ "$(field) = $(objct.insert[field] |> model.fields[field].formater)" for field in keys(objct.insert) ], ", ")
 
   # construct the SQL statement
   sql = """
-  UPDATE $(string(model.name)) SET
-    $(join([field * " = " * q.object.create[field] |> model.fields[field].formater for field in keys(q.object.create)], ", "))
-  WHERE
-    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
+    UPDATE $(string(model.name)) as $(instruction.alias)
+    SET $(set_clause)
+    WHERE $(join(instruction._where, " AND \n   "))
   """
 
   @info sql
 
+  # execute the SQL statement
+  if connection isa LibPQ.Connection
+    LibPQ.execute(connection, sql)
+  elseif connection isa SQLite.DB
+    SQLite.execute(connection, sql)
+  else
+    throw("Unsupported connection type")
+  end
 
-  
+  return nothing
 end
   
 
@@ -1370,7 +1384,7 @@ function list(objct::SQLObjectHandler)
 end
 
 # ---
-# Execute insertion functions
+# Execute bulk insert and update
 #
 
 

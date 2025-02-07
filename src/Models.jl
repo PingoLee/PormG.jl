@@ -36,7 +36,10 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
     # Check if the attribute is an instance of Model_Type
     attr = getfield(modules, name)
     if isa(attr, PormGModel)
-        push!(model_names, symbol ? name : attr)
+      if attr.name == ""
+        attr.name = name |> format_model_name
+      end
+      push!(model_names, symbol ? name : attr)
     end
   end
   return model_names
@@ -115,24 +118,38 @@ function set_models(_module::Module, path::String)::Nothing
 end
 
 function format_fild_name(name::String)::String
-  name[1] == '_' && (name = name[2:end])    
+  name[1] == '_' && (name = name[2:end])   
+  name = lowercase(name)
+  if occursin(r"__|@|^_", name)
+    throw(ArgumentError("The field name $name contains __ or @ or starts with _; this is not allowed"))
+  end 
   return name
 end
 
+function format_model_name(name::String)::String  
+  return format_fild_name(name)  
+end
+function format_model_name(name::Symbol)::String
+  return name |> String |> format_model_name  
+end
+
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
-function Model(name::AbstractString; fields...) 
+function Model(name::AbstractString, fields::NTuple{N, Pair{Symbol, T}}) where N where T <: Any
   fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
-    field_name = field_name |> String |> format_fild_name
-    if !(field isa PormGField)
+    field_name = field[1] |> String |> format_fild_name
+    if !(field[2] isa PormGField)
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
-    fields_dict[field_name] = field
+    fields_dict[field_name] = field[2]
     push!(field_names, field_name)
   end
   # println(fields_dict)
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
+end
+function Model(name::AbstractString; fields...)   
+  return Model(name, fields)
 end
 function Model(name::AbstractString, dict::Dict{String, PormGField})
   field_names::Vector{String} = []
@@ -158,9 +175,8 @@ function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
   throw(ArgumentError("You need to add fields to the model, example: $example_usage"))
 end
-function Model()
-  example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
-  throw(ArgumentError("You need to add a name and fields to the model, example: $example_usage"))
+function Model(; fields...)
+  return Model("", fields |> Tuple)
 end
 
 """
@@ -267,6 +283,30 @@ function format_bool_sql(value::Bool)
     return value ? "true" : "false"
 end
 
+function format_date_sql(value::Date)
+    return string("'", value, "'")    
+end
+function format_date_sql(value::Union{Missing, Nothing})
+    return "null"
+end
+function format_date_sql(value::DateTime)
+  return string("'", value |> Dates.Date, "'")
+end
+function format_date_sql(value::ZonedDateTime)
+  return string("'", value |> Dates.Date, "'")
+end
+function format_date_sql(value::AbstractString)
+  if occursin(r"^\d{4}-\d{2}-\d{2}$", value)
+    return string("'", value, "'")
+  else
+    throw(ArgumentError("The date $value is invalid"))
+  end  
+end
+function format_date_sql()
+  throw(ArgumentError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD"))
+end
+
+
 function format_timezone_sql(value::String; format::String=DATETIME_FORMAT)
   return validate_timezone(value, format) ? string("'", value, "'") : throw(ArgumentError("The timezone $value is invalid"))  
 end
@@ -292,7 +332,7 @@ end
 Compares the fields of two `PormGModel` instances to determine if they are equal.
 """
 function are_model_fields_equal(new_model::PormGModel, old_model::PormGModel)::Bool
-  new_fields = nesw_model.fields |> _compare_model_fields_prepare_fields
+  new_fields = new_model.fields |> _compare_model_fields_prepare_fields
   old_fields = old_model.fields |> _compare_model_fields_prepare_fields
 
   for (field_name, field) in new_fields
@@ -729,14 +769,14 @@ end
   auto_now::Bool = false
   auto_now_add::Bool = false
   type::String = "DATE"
-  formater::Function = format_text_sql
+  formater::Function = format_date_sql
 end
 
 function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false)
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
-  default = validate_default(default, Union{Date, Nothing}, "DateField", x -> Date(x))
+  default = validate_default(default, Union{Date, Nothing}, "DateField", format_date_sql)
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -1089,6 +1129,7 @@ end
 Format the input `x` as a string if it is of type `String`, otherwise return `x` as is.
 """
 function format_string(x)
+  @infiltrate
   if x isa String
     return "\"$x\""
   else
@@ -1134,7 +1175,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
   end
 end
 
-function validate_timezone(value::String, format::String)
+function validate_timezone(value::String, format::String) # TODO: maeby is unnecesary, i think that is better to use validate_default aproach
   try
     return DateTime(value, format) |> string
   catch e

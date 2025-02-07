@@ -35,8 +35,8 @@ import PormG.models as M
 # dt = query.create("texto" => "teste")
 
 query = M.Dim_teste_timezone |> object
-query.filter("id" => 1)
-query.update("texto" => "teste 2")
+query.filter("id" => 2)
+query.update("texto" => "teste 3")
 
 
 

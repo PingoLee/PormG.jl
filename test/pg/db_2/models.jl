@@ -2,74 +2,84 @@ module models
 
 import PormG.Models
 
-Dim_uf = Models.Model("Dim_uf",
-  id = Models.IDField(),
-  nome = Models.CharField(max_length=50),
-  sigla = Models.CharField(max_length=2))
+Status = Models.Model(
+  statusId = Models.IDField(),
+  status = Models.CharField()
+)
 
-Dim_ibge = Models.Model("Dim_ibge",
-  id = Models.IDField(),
-  cidade = Models.CharField(),
-  cod_es = Models.IntegerField(default=0),
-  estado = Models.CharField(max_length=50),
-  iso = Models.IntegerField(default=0),
-  lat = Models.DecimalField(max_digits=30, decimal_places=6),
-  lng = Models.DecimalField(max_digits=30, decimal_places=6),
-  regiao = Models.CharField(max_length=30),
-  regional = Models.CharField(max_length=30, blank=true, null=true),
-  uf = Models.CharField(max_length=2))
+Circuit = Models.Model(
+  circuitId = Models.IDField(),
+  circuitRef = Models.CharField(),
+  name = Models.CharField(),
+  location = Models.CharField(),
+  country = Models.CharField(),
+  lat = Models.FloatField(),
+  lng = Models.FloatField(),
+  alt = Models.IntegerField(),
+  url = Models.CharField()
+)
 
-Dim_estabelecimento = Models.Model("Dim_estabelecimento",
-  id = Models.IDField(),
-  cnes = Models.CharField(),
-  hamigo = Models.BooleanField(default=false),
-  nome = Models.CharField(),
-  publico = Models.BooleanField(default=false))
+Race = Models.Model(
+  raceId = Models.IDField(),
+  year = Models.IntegerField(),
+  round = Models.IntegerField(),
+  circuitId = Models.ForeignKey(Circuit, pk_field="circuitId", on_delete="models.RESTRICT"),
+  name = Models.CharField(),
+  date = Models.DateField(),
+  time = Models.TimeField(),
+  url = Models.CharField(),
+  fp1_date = Models.DateField(),
+  fp1_time = Models.TimeField(),
+  fp2_date = Models.DateField(),
+  fp2_time = Models.TimeField(),
+  fp3_date = Models.DateField(),
+  fp3_time = Models.TimeField(),
+  quali_date = Models.DateField(),
+  quali_time = Models.TimeField(),
+  sprint_date = Models.DateField(),
+  sprint_time = Models.TimeField()
+)
 
-Dim_servidor = Models.Model("Dim_servidor",
-  id = Models.IDField(),
-  host = Models.CharField(),
-  nome = Models.CharField(),
-  password = Models.CharField(),
-  port = Models.CharField(),
-  user = Models.CharField())
+Driver = Models.Model(
+  driverId = Models.IDField(),
+  driverRef = Models.CharField(),
+  number = Models.IntegerField(),
+  code = Models.CharField(),
+  forename = Models.CharField(),
+  surname = Models.CharField(),
+  dob = Models.DateField(),
+  nationality = Models.CharField(),
+  url = Models.CharField()
+)
 
-Dim_tipologia = Models.Model("Dim_tipologia",
-  id = Models.IDField(),
-  abrev = Models.CharField(max_length=50),
-  nome = Models.CharField(max_length=50))
+Constructor = Models.Model(
+  constructorId = Models.IDField(),
+  constructorRef = Models.CharField(),
+  name = Models.CharField(),
+  nationality = Models.CharField(),
+  url = Models.CharField()
+)
 
-Dim_INE_cat = Models.Model("Dim_INE_cat",
-  id = Models.IDField(),
-  nome = Models.CharField(),
-  tipo = Models.CharField(max_length=50))
-
-Dim_municipio = Models.Model("Dim_municipio",
-  id = Models.IDField(),
-  at_ativo = Models.BooleanField(default=true),
-  ativo = Models.BooleanField(default=true),
-  atualizacao = Models.DateField(blank=true, null=true),
-  base = Models.CharField(blank=true, null=true),
-  cibge = Models.BigIntegerField(null=true),
-  dbname = Models.CharField(blank=true, null=true),
-  estado = Models.CharField(blank=true, null=true),
-  ibge2 = Models.IntegerField(blank=true, null=true, default=0),
-  nome = Models.CharField(blank=true, null=true),
-  origem = Models.CharField(blank=true, null=true),
-  servidor = Models.ForeignKey("Dim_servidor", null=true, pk_field="id", on_delete="models.RESTRICT"))
-
-Dim_municipio_populacao_hist = Models.Model("Dim_municipio_populacao_hist",
-  id = Models.IDField(),
-  ano = Models.IntegerField(default=0),
-  dcnt = Models.IntegerField(null=true),
-  ibge = Models.ForeignKey("Dim_municipio", pk_field="id", on_delete="models.CASCADE"),
-  pop_15 = Models.IntegerField(null=true),
-  populacao = Models.IntegerField(default=0))
-
-Dim_teste_timezone = Models.Model("Dim_teste_timezone",
-  id = Models.IDField(),
-  texto = Models.CharField(),
-  data2 = Models.DateTimeField(auto_now=true))
+Result = Models.Model(
+  resultId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="models.RESTRICT"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="models.RESTRICT"),
+  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="models.RESTRICT"),
+  number = Models.IntegerField(),
+  grid = Models.IntegerField(),
+  position = Models.IntegerField(),
+  positionText = Models.CharField(),
+  positionOrder = Models.IntegerField(),
+  points = Models.FloatField(),
+  laps = Models.IntegerField(),
+  time = Models.CharField(),
+  milliseconds = Models.IntegerField(),
+  fastestLap = Models.IntegerField(),
+  rank = Models.IntegerField(),
+  fastestLapTime = Models.CharField(),
+  fastestLapSpeed = Models.FloatField(),
+  statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="models.RESTRICT")
+)
 
 Models.set_models(@__MODULE__, @__DIR__)
 

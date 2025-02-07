@@ -161,7 +161,7 @@ end
 # Makemigrations -- Do instructions to create a migration plan
 #
 # functions helpings to makemigrations
-  function _hash_field_name(model_name::Symbol, field_name::String; apend_number::Int64=5)::String
+  function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
     _hash = randstring(8) 
     name = "$(model_name)_$field_name"
     if length(name) + 8 + apend_number > 63
@@ -190,6 +190,22 @@ end
     end
     return nothing
   end
+  function _drop_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_field::PormGField, old_field::PormGField)
+    _drop_fk_constraint(conn, migration_plan, model_name, field_name |> string, new_field, old_field)
+  end
+
+  function _drop_index(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing)::Nothing
+    index_name === nothing && (index_name = get_constraints_index(conn, model_name, field_name))
+    if index_name === nothing
+      return nothing
+    end
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
+    Dialect.drop_index(conn, index_name))
+    return nothing    
+  end
+  function _drop_index(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing)
+    _drop_index(conn, migration_plan, model_name, field_name |> string, index_name=index_name)
+  end
 
   function _add_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
     if hasfield(new_field |> typeof, :to) && new_field.db_constraint && (!hasfield(old_field |> typeof, :to) || !old_field.db_constraint)
@@ -200,38 +216,80 @@ end
     return nothing
   end
 
+  function _add_constrains(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+    # If the new field is a foreign key
+    if hasfield(field |> typeof, :to) && field.db_constraint
+      constraint_name = name * "_fk" |> lowercase
+      _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
+      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> lowercase)\"", "\"$(field.pk_field)\""))
+    end
+
+    # If the new field is also indexed
+    if field.db_index 
+      index_name = name * "_idx" |> lowercase
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
+      Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
+    end
+    nothing
+  end
+
   function _add_new_table(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
     _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
     for (field_name, field) in model.fields       
-      name = _hash_field_name(model_name, field_name)        
-
-      # If the new field is a foreign key
-      if hasfield(field |> typeof, :to) && field.db_constraint
-        constraint_name = name * "_fk" |> lowercase
-        _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-        Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> lowercase)\"", "\"$(field.pk_field)\""))
-      end
-
-      # If the new field is also indexed
-      if field.db_index 
-        index_name = name * "_idx" |> lowercase
-        _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
-        Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
-      end    
+      name = _hash_field_name(model_name, field_name)      
+      _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)      
     end
     return nothing
   end
 
-  function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}})::Nothing
+  function _add_new_field(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
+    field = model.fields[field_name]
+    name = _hash_field_name(model_name, field_name)
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value))
+    _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
+    if temporary_default_value !== nothing
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name", Dialect.alter_field(conn, model_name, field_name, field, [:default]))
+    end
+    return nothing
+  end
+  function _add_new_field(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing)::Nothing
+    _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
+  end
+
+  function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn)::Nothing
     if Models.are_model_fields_equal(model, current_schema[model_name][:model])
-      println("Model $model_name are equal")
+      # println("Model $model_name are equal")
     else        
       # Compare fields
       @infiltrate false
+      # Convert keys(model.fields) to an array of stripped strings
+      stripped_model_fields = Set(map(key -> strip(key, '"'), collect(keys(model.fields))))
+
+      # Do the same for current_schema model fields
+      stripped_current_fields = Set(map(key -> strip(key, '"'), collect(keys(current_schema[model_name][:model].fields))))
+
+      # check the field are not in current_schema (deletion)
+      colect_deletion::Vector{Symbol} = []
+      for field_name in stripped_model_fields
+        if !(field_name in stripped_current_fields)
+          push!(colect_deletion, Symbol(field_name))
+        end
+      end
+
+      colect_addition::Vector{Symbol} = []
+      for field_name in stripped_current_fields
+        if !(field_name in stripped_model_fields)
+          push!(colect_addition, Symbol(field_name))
+        end
+      end    
+      
+      @infiltrate false
+      _resolve_table_fields(conn, model_name, model, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings)
+        
       for (field_name, field) in  current_schema[model_name][:model].fields
         if haskey(model.fields, field_name)
           # println("Fields $field_name")
-          @infiltrate false       
+          @infiltrate false         
                       
             # check if the field is diferent
             colect_not_equal::Vector{Symbol} = []
@@ -257,7 +315,7 @@ end
             
             isempty(colect_not_equal) && continue
             
-            @infiltrate
+            @infiltrate false
 
             # Check if is needed remove the foreign key
             name::String = _hash_field_name(model_name, field_name) 
@@ -288,8 +346,9 @@ end
             if model.fields[field_name].db_index && !field.db_index
               @infiltrate
               index_name = model.cache["index"][field_name]
-              _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
-              Dialect.drop_index(conn, "\"$index_name\""))
+              _drop_index(conn, migration_plan, model_name, field_name, index_name=index_name)
+              # _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
+              # Dialect.drop_index(conn, "\"$index_name\""))
             end
 
           
@@ -301,9 +360,80 @@ end
     end     
   end
 
+  function _resolve_table_fields(
+                                  conn::LibPQ.Connection, 
+                                  model_name::Symbol, 
+                                  model::PormGModel, 
+                                  current_model::PormGModel, 
+                                  colect_deletion::Vector{Symbol}, 
+                                  colect_addition::Vector{Symbol}, 
+                                  migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                                  settings::SQLConn
+                                )::Nothing
+    # Check by rename field  
+    while !isempty(colect_addition)
+      field_name = colect_addition[1]       
+      colect_numbered, list_to_question = _colect_numbered_fields(colect_deletion)
+      if colect_deletion |> isempty 
+        _add_new_field(conn, migration_plan, model_name, current_model, field_name, temporary_default_value = _get_temporary_default_value(current_model.fields[field_name |> string], settings))
+      else       
+        print("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':")
+        response = readline()
+        response = strip(lowercase(response))
+        if response in ["no", "n"]
+          _add_new_field(conn, migration_plan, model_name, current_model, field_name, temporary_default_value = _get_temporary_default_value(current_model.fields[field_name |> string], settings))
+        else
+          old_field::Union{Symbol,Nothing} = nothing
+          try
+            response = parse(Int, response)
+            old_field = colect_numbered[response]          
+          catch e
+            throw("Invalid number, please try makemigrations again")
+            return
+          end
+          _drop_fk_constraint(conn, migration_plan, model_name, old_field, current_model.fields[field_name |> string], model.fields[old_field |> string])
+          _drop_index(conn, migration_plan, model_name, old_field)
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name", 
+          Dialect.rename_field(conn, model_name, old_field, field_name))
+          _add_constrains(conn, migration_plan, model_name, current_model, field_name, current_model.fields[field_name |> string], _hash_field_name(model_name, field_name))
+          model.fields[field_name |> string] = model.fields[old_field |> string]
+          delete!(model.fields, old_field |> string)
+          # remove the old field from colect_deletion
+          filter!(x -> x != old_field, colect_deletion)
+        end
+      end      
+      filter!(x -> x != field_name, colect_addition)
+    end
+    if !isempty(colect_deletion)
+      for field_name in colect_deletion
+        _drop_fk_constraint(conn, migration_plan, model_name, field_name, current_model.fields[field_name |> string], model.fields[field_name |> string])
+        _drop_index(conn, migration_plan, model_name, field_name)
+        _configure_order_dict_migration_plan(migration_plan, model_name, "Remove field: $field_name", 
+        Dialect.drop_field(conn, model_name, field_name))
+      end
+    end
+  end
+
+  function _colect_numbered_fields(colect::Vector{Symbol})
+    colect_numbered = Dict{Int64, Symbol}()
+    for (index, field_name) in enumerate(colect)
+      colect_numbered[index] = field_name
+    end
+    return colect_numbered, join([string(index, " - ", colect[index]) for index in keys(colect_numbered)], ", ")
+  end
+  function _get_temporary_default_value(field::PormGField, settings::SQLConn)
+    if field |> typeof == Models.sDateTimeField
+      return field.formater(now(), settings.time_zone) |> field.formater
+    elseif field |> typeof == Models.sDateField
+      return field.formater(today())    
+    else
+      return nothing
+    end
+  end
+
 
 # Compare model definitions to the current database schema
-function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)
+function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::SQLConn)
   # models is olds models
 
   migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
@@ -317,7 +447,6 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
     return migration_plan  
   end
 
-  println("-------------------------------------")
   @infiltrate false
 
   for model in models # models is olds models
@@ -325,7 +454,7 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
     @infiltrate false 
     if haskey(current_schema, model_name)
       current_schema[model_name][:exist] = true
-      _alter_table_fields(conn, migration_plan, model_name, model, current_schema)
+      _alter_table_fields(conn, migration_plan, model_name, model, current_schema, settings)
     else
       if !haskey(futher_processing, :drop_table)
         futher_processing[:drop_table] = Dict{Symbol, Any}(model_name => Dict{String, Any}("model" => model, "exist" => false))
@@ -360,7 +489,7 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
             response = parse(Int, strip(response))
             if haskey(dict_rename, response)
               # first i need to alter the fields from old table named in postgres
-              _alter_table_fields(conn, migration_plan, dict_rename[response], futher_processing[:drop_table][dict_rename[response]]["model"], current_schema)
+              _alter_table_fields(conn, migration_plan, dict_rename[response], futher_processing[:drop_table][dict_rename[response]]["model"], current_schema, settings)
               _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, model_name, dict_rename[response] |> string))
               futher_processing[:drop_table][dict_rename[response]]["exist"] = true
             else
@@ -392,41 +521,40 @@ end
 
 # Main function to simulate makemigrations
 function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
-  # models_array::Vector{Any} = []
-  models_array = convert_schema_to_models(connection)
-  # println(models_array |> typeof)
+  models_array::Vector{PormGModel} = []
+  try
+    models_array = convert_schema_to_models(connection)
+  catch e
+    error_message = sprint(showerror, e)
+    if occursin("Table definition not found", error_message)
+      @info("The database is empty, that is migrate all tables") # TODO, impruve this message
+    else
+      println("Error: ", e)
+      @error("Error: ", e)
+      return
+    end
+  end
 
-  # try
-  #   models_array = convert_schema_to_models(connection)
-  # catch e
-  #   error_message = sprint(showerror, e)
-  #   if occursin("Table definition not found", error_message)
-  #     @info("The database is empty, that is migrate all tables") # TODO, impruve this message
-  #   else
-  #     println("Error: ", e)
-  #     @error("Error: ", e)
-  #     return
-  #   end
-  # end
   # get module from the path
-  # println(models_array)
-  current_models = get_all_models(include(path))
-  # println(current_models |> length)
+  temp_module = Module(:TemporaryModels)
+  Base.include(temp_module, path)
+  current_models = get_all_models(temp_module.models)
   
-  # println("compare")
-  migration_plan = get_migration_plan(models_array, current_models, connection)
+  migration_plan = get_migration_plan(models_array, current_models, connection, settings)
 
   # store migration_plan as pending_migrations.jl file
-  path = joinpath(settings.db_def_folder, "migrations")
-  if !ispath(path)
-    mkdir(path)
+  if migration_plan |> isempty
+    @info("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m")    
+  else     
+    path = joinpath(settings.db_def_folder, "migrations")
+    if !ispath(path)
+      mkdir(path)
+    end
+    generate_migration_plan("pending_migrations.jl", migration_plan, path)
+    @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
+    @info("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m")
   end
-  generate_migration_plan("pending_migrations.jl", migration_plan, path)
-
-
-  # migration_plan = generate_migration_plan(differences)
-  # # Here you would write the migration_plan to a file or directly apply it
-  # println("Migration plan: ", migration_plan)
+  
 end
 
 function makemigrations(db::String; config::Dict{String,SQLConn} = config)
@@ -502,7 +630,16 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
     end
     # Commit the transaction
     LibPQ.execute(connection, "COMMIT;")
-    println("Migrations applied successfully.")
+    @info("Migrations applied successfully.")
+    # check if folder applied_migrations exists
+    path = joinpath(settings.db_def_folder, "migrations", "applied_migrations")
+    if !ispath(path)
+      mkdir(path)
+    end
+    # move the file pending_migrations.jl to applied_migrations folder and rename it to the current date and time
+    date = Dates.now()
+    date = Dates.format(date, "yyyy-mm-dd_HH-MM-SS")
+    mv(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl"), joinpath(path, "migration_$date.jl"))
   catch e
     # Rollback the transaction in case of an error
     LibPQ.execute(connection, "ROLLBACK;")
@@ -681,7 +818,7 @@ function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing
       error("No matching table definitions found.")
   end
 
-  println(df)
+  # println(df)
 
   return df
 end
@@ -709,6 +846,19 @@ function get_constraints_fk(conn::LibPQ.Connection, table_name::Symbol, field_na
       return nothing
   end
   return result[1, :constraint_name]
+end
+
+function get_constraints_index(conn::LibPQ.Connection, table_name::Symbol, field_name::String)
+  query = """
+  SELECT indexname
+  FROM pg_indexes
+  WHERE tablename = '$table_name' AND indexdef LIKE '%$field_name%';
+  """
+  result = LibPQ.execute(conn, query) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :indexname]
 end
 
 function get_constraints_pk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )

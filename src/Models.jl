@@ -78,38 +78,42 @@ function set_models(_module::Module, path::String)::Nothing
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey
-        field_to = getfield(_module, field.to |> Symbol)
-        if field_to isa PormGModel
-          # println("field_to_", field_to.name)
-          if haskey(dict_tables_c, field_to.name)
-            dict_tables_c[field_to.name] += 1
-            push!(dict_tables_fiels[field_to.name], field_name)
-          else
-            dict_tables_c[field_to.name] = 1
-            dict_tables_fiels[field_to.name] = [field_name]
+        field_to::Union{PormGModel, Nothing} = nothing
+        try
+          field_to = field.to isa PormGModel ? field.to : getfield(_module, field.to |> Symbol)
+        catch
+          throw(ArgumentError("The model $(field.to) in the field $field_name in the model $(model.name) is not defined"))
+        end
+        # println("field_to_", field_to.name)
+        if haskey(dict_tables_c, field_to.name)
+          dict_tables_c[field_to.name] += 1
+          push!(dict_tables_fiels[field_to.name], field_name)
+        else
+          dict_tables_c[field_to.name] = 1
+          dict_tables_fiels[field_to.name] = [field_name]
+        end
+        if dict_tables_c[field_to.name] > 1
+          if field.related_name === nothing 
+            field.related_name = string(model.name, "_", field_name) |> lowercase
+            @warn("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
           end
-          if dict_tables_c[field_to.name] > 1
-            if field.related_name === nothing 
-              field.related_name = string(model.name, "_", field_name) |> lowercase
-              @warn("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
-            end
+          if haskey(field_to.reverse_fields, field.related_name)
+            throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
+          else
+            field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+          end
+        elseif dict_tables_c[field_to.name] == 1
+          if field.related_name === nothing
+            field_to.reverse_fields[model.name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+          else
             if haskey(field_to.reverse_fields, field.related_name)
-              throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
+              throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
             else
               field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
             end
-          elseif dict_tables_c[field_to.name] == 1
-            if field.related_name === nothing
-              field_to.reverse_fields[model.name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
-            else
-              if haskey(field_to.reverse_fields, field.related_name)
-                throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
-              else
-                field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
-              end
-            end
-          end        
-        end 
+          end
+        end        
+         
       end
     end
   end
@@ -131,6 +135,9 @@ function format_model_name(name::String)::String
 end
 function format_model_name(name::Symbol)::String
   return name |> String |> format_model_name  
+end
+function format_model_name(name::PormGModel)::String
+  return name.name |> format_model_name
 end
 
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
@@ -467,6 +474,7 @@ function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary
   !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
   # resolve db_index
   db_index = db_index || !db_constraint
+  pk_field = pk_field |> format_fild_name
   # Return the field instance
   return sForeignKey(
     verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,

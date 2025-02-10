@@ -109,6 +109,7 @@ const postgres_type_map_reverse = Dict{String, String}(
   "INTEGER" => "integer",
   "SMALLINT" => "smallint",
   "DECIMAL" => "decimal",
+  "FLOAT" => "float",
   "NUMERIC" => "decimal",
   "REAL" => "real",
   "DOUBLE PRECISION" => "double precision",

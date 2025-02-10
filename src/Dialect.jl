@@ -8,6 +8,9 @@ import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_m
 import PormG: get_constraints_pk, get_constraints_unique
 import PormG.Models: Migration
 
+import PormG.Infiltrator: @infiltrate
+
+
 # PostgreSQL
 function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
   format_str = format["format"]
@@ -229,7 +232,7 @@ function create_index(conn::Union{SQLite.DB, LibPQ.Connection}, index_name::Stri
   return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
-function add_foreign_key(conn::LibPQ.Connection, table_name::Symbol, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
+function add_foreign_key(conn::LibPQ.Connection, table_name::Union{Symbol, String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
   return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name) DEFERRABLE INITIALLY DEFERRED;"""
 end
 # function add_foreign_key(conn::LibPQ.Connection, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)

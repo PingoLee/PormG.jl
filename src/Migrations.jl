@@ -14,6 +14,7 @@ import Random: randstring
 import PormG.Infiltrator: @infiltrate
 
 import PormG: Models, Migration, Dialect
+import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique
 import PormG: PormGModel, PormGField, SQLConn
 import PormG: sqlite_type_map, postgres_type_map, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table
@@ -179,7 +180,7 @@ end
     end
   end  
 
-  function _drop_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
+  function _drop_fk_constraint_in_alteration(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
     if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (!hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
       constraint_name = get_constraints_fk(conn, model_name, field_name)
       if constraint_name === nothing
@@ -190,8 +191,8 @@ end
     end
     return nothing
   end
-  function _drop_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_field::PormGField, old_field::PormGField)
-    _drop_fk_constraint(conn, migration_plan, model_name, field_name |> string, new_field, old_field)
+  function _drop_fk_constraint_in_alteration(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_field::PormGField, old_field::PormGField)
+    _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name |> string, new_field, old_field)
   end
 
   function _drop_index(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing)::Nothing
@@ -207,25 +208,27 @@ end
     _drop_index(conn, migration_plan, model_name, field_name |> string, index_name=index_name)
   end
 
-  function _add_fk_constraint(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
+  function _add_fk_constraint_in_alteration(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
+    # to alterations
     if hasfield(new_field |> typeof, :to) && new_field.db_constraint && (!hasfield(old_field |> typeof, :to) || !old_field.db_constraint)
       constraint_name = "$(name)_fk" |> lowercase
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-      Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> lowercase)\"", "\"$(new_field.pk_field)\""))
+      Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> format_model_name)\"", "\"$(new_field.pk_field)\""))
     end
     return nothing
   end
 
   function _add_constrains(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+    # to new fields
     # If the new field is a foreign key
     if hasfield(field |> typeof, :to) && field.db_constraint
       constraint_name = name * "_fk" |> lowercase
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> lowercase)\"", "\"$(field.pk_field)\""))
+      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> format_model_name)\"", "\"$(field.pk_field)\""))
     end
 
     # If the new field is also indexed
-    if field.db_index 
+    if !field.primary_key && field.db_index 
       index_name = name * "_idx" |> lowercase
       _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
       Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
@@ -320,22 +323,16 @@ end
             # Check if is needed remove the foreign key
             name::String = _hash_field_name(model_name, field_name) 
 
-            _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
+            _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
             
             _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name",
             Dialect.alter_field(conn, model_name |> string, field_name, field, colect_not_equal))
 
             # Check if the field is a foreign key
-            _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
-
-            # Check if the foreign key changed to another table
-            if hasfield(field |> typeof, :to) && hasfield(model.fields[field_name] |> typeof, :to) && field.to != model.fields[field_name].to
-              _drop_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
-              _add_fk_constraint(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
-            end
-
+            _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
+            
             # Check if the field is also indexed
-            if field.db_index && !model.fields[field_name].db_index
+            if !field.primary_key && field.db_index && !model.fields[field_name].db_index
               @infiltrate false
               index_name = "$(name)_idx"
               _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
@@ -343,7 +340,7 @@ end
             end
 
             # Check if is need to remove the index
-            if model.fields[field_name].db_index && !field.db_index
+            if !field.primary_key && model.fields[field_name].db_index && !field.db_index
               @infiltrate
               index_name = model.cache["index"][field_name]
               _drop_index(conn, migration_plan, model_name, field_name, index_name=index_name)
@@ -391,8 +388,8 @@ end
             throw("Invalid number, please try makemigrations again")
             return
           end
-          _drop_fk_constraint(conn, migration_plan, model_name, old_field, current_model.fields[field_name |> string], model.fields[old_field |> string])
-          _drop_index(conn, migration_plan, model_name, old_field)
+          _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, old_field, current_model.fields[field_name |> string], model.fields[old_field |> string])
+          !current_model.fields[field_name |> string].primary_key && _drop_index(conn, migration_plan, model_name, old_field)
           _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name", 
           Dialect.rename_field(conn, model_name, old_field, field_name))
           _add_constrains(conn, migration_plan, model_name, current_model, field_name, current_model.fields[field_name |> string], _hash_field_name(model_name, field_name))
@@ -406,7 +403,7 @@ end
     end
     if !isempty(colect_deletion)
       for field_name in colect_deletion
-        _drop_fk_constraint(conn, migration_plan, model_name, field_name, current_model.fields[field_name |> string], model.fields[field_name |> string])
+        _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, current_model.fields[field_name |> string], model.fields[field_name |> string])
         _drop_index(conn, migration_plan, model_name, field_name)
         _configure_order_dict_migration_plan(migration_plan, model_name, "Remove field: $field_name", 
         Dialect.drop_field(conn, model_name, field_name))
@@ -601,6 +598,8 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
 
   # build the transaction to apply the migration plan
   fisrt_execution::Vector{String} = []
+  second_execution::Vector{String} = []
+  third_execution::Vector{String} = []
   last_execution::Vector{String} = []
 
   for dict_instructs in migration_plan
@@ -608,26 +607,29 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
     for (key, value) in dict_instructs
       if key == "New model"
         push!(fisrt_execution, value)
+      elseif key == "Drop table"
+        push!(second_execution, value)
+      elseif contains(key, "Rename field")
+        push!(third_execution, value)
       else
         push!(last_execution, value)
       end
-    end
-  
+    end  
   end
+
+  contatenate_execution = [fisrt_execution, second_execution, third_execution, last_execution]
 
   # Begin a transaction
   LibPQ.execute(connection, "BEGIN;")
 
   try
     # Iterate over the migration plan and execute each SQL statement
-    for action in fisrt_execution
-      println("Executing: $action")
-      LibPQ.execute(connection, action)
-    end
-    for action in last_execution
-      println("Executing: $action")
-      LibPQ.execute(connection, action)
-    end
+    for execution in contatenate_execution
+      for action in execution
+        println("Executing: $action")
+        LibPQ.execute(connection, action)
+      end
+    end   
     # Commit the transaction
     LibPQ.execute(connection, "COMMIT;")
     @info("Migrations applied successfully.")

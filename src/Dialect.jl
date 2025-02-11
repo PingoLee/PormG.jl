@@ -415,5 +415,17 @@ function drop_table(conn::SQLite.DB, table_name::Union{String, Symbol})
   return """DROP TABLE IF EXISTS "$table_name";"""
 end
 
+function alter_sequence_name(conn::LibPQ.Connection, old_sequence_name::String, new_sequence_name::String)
+  return """ALTER SEQUENCE IF EXISTS "$old_sequence_name" RENAME TO "$new_sequence_name";"""
+end
+
+# function create_sequence(conn::LibPQ.Connection, sequence_name::String, start_value::Int = 1, increment_by::Int = 1, min_value::Int = 1, max_value::Int = 9223372036854775807, cache::Int = 1)
+#   return """CREATE SEQUENCE IF NOT EXISTS "$sequence_name" START WITH $start_value INCREMENT BY $increment_by MINVALUE $min_value MAXVALUE $max_value CACHE $cache;"""
+# end
+
+# function drop_sequence(conn::LibPQ.Connection, sequence_name::String)
+#   return """DROP SEQUENCE IF EXISTS "$sequence_name";"""
+# end
+
 
 end

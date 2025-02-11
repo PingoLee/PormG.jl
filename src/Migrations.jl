@@ -10,6 +10,8 @@ using SQLite
 using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
+using Logging
+
 
 import PormG.Infiltrator: @infiltrate
 
@@ -232,7 +234,7 @@ end
       index_name = name * "_idx" |> lowercase
       _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
       Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
-    end
+    end  
     nothing
   end
 
@@ -301,8 +303,8 @@ end
               for attr in fieldnames(typeof(field))
                 new_var = getfield(field, attr)
                 old_var = getfield(model.fields[field_name], attr)
-                if new_var != old_var
-                  (attr == :to && new_var |> lowercase == old_var |> lowercase) && continue
+                if new_var != old_var                  
+                  attr == :to && Models._compare_field_foreign_key(field, model.fields[field_name]) && continue
                   attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
                   push!(colect_not_equal, attr)
                 end
@@ -316,9 +318,11 @@ end
               end
             end
             
-            isempty(colect_not_equal) && continue
-            
-            @infiltrate false
+            # if field_name == "time"
+            #   @infiltrate
+            # end
+           
+            isempty(colect_not_equal) && continue                       
 
             # Check if is needed remove the foreign key
             name::String = _hash_field_name(model_name, field_name) 
@@ -593,6 +597,15 @@ function get_all_dicts(mod::Module)
 end
 
 function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+  @info("\e[33mBefore applying the migrations, make sure to back up your database. Migrations are irreversible. And the PormG is in development, so it is not guaranteed that the migrations will be applied correctly.\e[0m")
+  print("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m")
+  response = readline()
+  response = strip(lowercase(response))
+  if !(response in ["yes", "y"])
+    @info("Migrations were not applied.")
+    return
+  end
+
   # Load the migration plan
   migration_plan = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")) |> get_all_dicts
 
@@ -632,7 +645,15 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
     end   
     # Commit the transaction
     LibPQ.execute(connection, "COMMIT;")
-    @info("Migrations applied successfully.")
+    @info("Migrations applied successfully.")    
+  catch e
+    # Rollback the transaction in case of an error
+    LibPQ.execute(connection, "ROLLBACK;")
+    println("Error applying migrations: ", e)
+    @error("Error applying migrations: ", e)
+  end
+
+  try
     # check if folder applied_migrations exists
     path = joinpath(settings.db_def_folder, "migrations", "applied_migrations")
     if !ispath(path)
@@ -641,12 +662,11 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
     # move the file pending_migrations.jl to applied_migrations folder and rename it to the current date and time
     date = Dates.now()
     date = Dates.format(date, "yyyy-mm-dd_HH-MM-SS")
-    mv(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl"), joinpath(path, "migration_$date.jl"))
+    mv(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl"), joinpath(path, "$(date)_migration.jl"))   
+    cp(joinpath(settings.db_def_folder, "models.jl"), joinpath(path, "$(date)_old_models.jl")) # TODO: I need deal with custom model name
   catch e
-    # Rollback the transaction in case of an error
-    LibPQ.execute(connection, "ROLLBACK;")
-    println("Error applying migrations: ", e)
-    @error("Error applying migrations: ", e)
+    @infiltrate
+    @error("Error moving files: ", e)
   end
 
   
@@ -899,6 +919,17 @@ function get_constraints_unique(conn::LibPQ.Connection, table_name::String, fiel
   return result[1, :constraint_name]
 end
 
+function get_sequence_name(conn::LibPQ.Connection, table_name::String, field_name::String)::String
+  query = """
+  SELECT pg_get_serial_sequence('$table_name', '$field_name');
+  """
+  result = LibPQ.execute(conn, query) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :pg_get_serial_sequence]
+end
+
 function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_map::Dict{String, Symbol} = postgres_type_map)
   table_name = row[:table_name]
   columns = split(row[:columns], ", ")
@@ -934,8 +965,9 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   end
    
   # Parse each column definition
-  for col in columns
-      col_parts = split(col, " ")
+  for col in columns    
+      col_parts = split(replace(col, "double precision" => "double_precision")
+      , " ")
       col_name = col_parts[1]
       col_type = lowercase(col_parts[2])
       generated::Bool = false
@@ -1027,7 +1059,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       end
       
       # Add field to fields dictionary
-      fields_dict[col_name |> string] = field
+      fields_dict[replace(col_name, "\"" => "")] = field
   end
 
   # Construct and return the model
@@ -1036,6 +1068,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   if !isempty(index_map)   
     model_resp.cache = Dict("index" => index_map)
   end
+  @infiltrate false
   return model_resp
 
 end

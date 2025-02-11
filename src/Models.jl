@@ -368,20 +368,33 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
   end
   for field_name in fieldnames(typeof(new_field))
     # Check if field exists in old_field
-    if !(field_name in fieldnames(typeof(old_field)))
-      return false
-    elseif field_name == :to && lowercase(getfield(new_field, field_name)) == lowercase(getfield(old_field, field_name))
-      continue
-    elseif field_name == :on_delete
-      continue  # Skip comparison for :on_delete attribute
-    elseif getfield(new_field, field_name) != getfield(old_field, field_name)
-      return false
+    try
+      if !(field_name in fieldnames(typeof(old_field)))
+        return false
+      elseif field_name == :to && _compare_field_foreign_key(new_field, old_field)
+        continue
+      elseif field_name == :on_delete
+        continue  # Skip comparison for :on_delete attribute
+      elseif getfield(new_field, field_name) != getfield(old_field, field_name)
+        return false
+      end
+    catch
+      @infiltrate
     end
   end
   return true
 end
 function _compare_model_field(new_field::Dict{String, PormGField}, old_field::Dict{String, PormGField})
   return _compare_model_field(new_field |> _compare_model_fields_prepare_fields, old_field |> _compare_model_fields_prepare_fields)
+end
+
+function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField)::Bool
+  new_to = new_field.to isa PormGModel ? new_field.to.name : new_field.to
+  old_to = old_field.to isa PormGModel ? old_field.to.name : old_field.to
+  if new_to == old_to && new_field.pk_field == old_field.pk_field
+    return true
+  end
+  return false
 end
 
 

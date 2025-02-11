@@ -342,7 +342,7 @@ function up_values!(q::SQLObject, values)
   @error "Invalid argument: $(values) (::$(typeof(values))); please use a string or a function (Mounth, Year, Day, Y_M ...)"
 end
   
-function up_create!(q::SQLObject, values::NTuple{N, Union{Pair{String, String}, Pair{String, Int64}}} where N)
+function up_create!(q::SQLObject, values)
   q.insert = Dict()
   for (k,v) in values   
     q.insert[k] = v 
@@ -1269,9 +1269,37 @@ end
 
 function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String})
   for field in pk_field
-    LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+    try
+      LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+    catch e
+      @infiltrate
+      if occursin("does not exist", e |> string)        
+        _fix_sequence_name(connection, model)
+        LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+      end
+    end
   end
 end
+
+function _fix_sequence_name(connection::LibPQ.Connection, model::PormGModel) # TODO maby i need use Migration get_sequence_name aproach
+  pk_field = [field for field in keys(model.fields) if model.fields[field].primary_key]
+  sequences = LibPQ.execute(connection, """SELECT *
+      FROM pg_sequences
+      WHERE sequencename LIKE '$(model.name |> lowercase)%';""") |> DataFrames.DataFrame  
+  for (index, row) in enumerate(eachrow(sequences))
+    if index == 1 && row.sequencename != "$(model.name |> lowercase)_$(pk_field[1])_seq"
+      if length(pk_field) == 0
+        throw("Error in _fix_sequence_name, the model $(model.name) does not have a primary key")
+      elseif length(pk_field) > 1
+        throw("Error in _fix_sequence_name, the model $(model.name) has more than one primary key")
+      end
+      LibPQ.execute(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;")
+    else
+      LibPQ.execute(connection, "DROP SEQUENCE $(row.sequencename);")
+    end
+  end
+end
+
 # function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String})
 #   sequences = LibPQ.execute(connection, """SELECT *
 #       FROM pg_sequences
@@ -1367,8 +1395,6 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   return nothing
 end
-  
-
 
 function fetch(connection::LibPQ.Connection, sql::String)
   return LibPQ.execute(connection, sql)
@@ -1387,7 +1413,139 @@ end
 # Execute bulk insert and update
 #
 
+export bulk_insert
 
+function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], chunk_size::Int64 = 1000) 
+  model = objct.object.model
+  settings = config[model.connect_key]
+  connection = settings.connections
+
+  # check if is allowed to insert
+  !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+
+  # If no rows then nothing to do
+  if size(df, 1) == 0
+    @warn("Warning in bulk_insert, the DataFrame is empty")
+    return nothing
+  end
+
+  # colect name of the fields
+  fields = model.field_names
+  fields_df::Vector{String} = []
+  if !isempty(columns)   
+    if length(columns) > 0
+      for column in columns
+        if column isa Pair
+          rename!(df, column.first => column.second)
+          push!(fields_df, column.second)
+        else
+          push!(fields_df, column)
+        end
+      end
+    end
+  else
+    for field in names(df)
+      fld_ = field |> lowercase
+      if fld_ in fields
+        push!(fields_df, fld_)
+      end
+      if fld_ != field
+        DataFrames.rename!(df, field => fld_)
+      end
+    end    
+  end
+
+  # check if missing fields in fields_df are not null or dont have a default value
+  pk_exist::Bool = false
+  pk_field::Vector{String} = []
+  for field in fields
+    if !in(field, fields_df)
+      if  model.fields[field].primary_key
+        pk_exist = true
+        push!(pk_field, field)
+      end
+
+      if model.fields[field].default !== nothing
+        df[!, field] = model.fields[field].default
+        push!(fields_df, field)
+      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = model.fields[field].formater(now(), settings.time_zone)
+        push!(fields_df, field)
+      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = model.fields[field].formater(today())
+        push!(fields_df, field)
+      elseif model.fields[field].null || model.fields[field].primary_key
+        continue      
+      else
+        @infiltrate
+        throw("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null")
+      end
+    end
+  end
+
+  # check if the fields_df are not in fields
+  for field in fields_df
+    in(field, fields) || throw("""Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
+  end
+
+  # Build a list of row value strings by applying each model field formatter.
+  rows = String[]
+  count::Int64 = 0
+  total::Int64 = size(df, 1)
+  for (index, row) in enumerate(eachrow(df))
+    values = String[]
+    try
+      values = [model.fields[field].formater(row[field]) for field in fields]
+    catch e
+      _depuration_values_bulk_insert(fields, model, row, index)
+      throw("Error in bulk_insert, the row $(index) has a problem: $(e)")
+    end
+    push!(rows, "($(join(values, ", ")))")
+    count += 1
+    if count == chunk_size || index == total
+      bulk_insert(model, connection, fields, rows, pk_exist, pk_field)
+      count = 0
+      rows = String[]
+    end
+  end  
+
+  return nothing
+  
+end
+
+function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Int64)
+  for field in fields
+    try
+      model.fields[field].formater(row[field])
+    catch e
+      throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[field])\e[0m"))
+    end
+  end  
+end
+
+function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String})
+  # Construct the bulk insert SQL.
+  sql = """
+  INSERT INTO $(string(model.name)) ($(join(fields, ", ")))
+  VALUES $(join(rows, ", "))
+  """
+
+  # @info sql
+
+  # Execute the query for the given connection type.
+  if connection isa LibPQ.Connection
+    LibPQ.execute(connection, sql)
+  elseif connection isa SQLite.DB
+    SQLite.execute(connection, sql)
+  else
+    throw("Unsupported connection type")
+  end
+
+  @infiltrate
+
+  pk_exist && _update_sequence(model, connection, pk_field)
+
+end
 
 
 end

@@ -26,7 +26,7 @@ Race = Models.Model(
   circuitId = Models.ForeignKey(Circuit, pk_field="circuitId", on_delete="models.RESTRICT"),
   name = Models.CharField(),
   date = Models.DateField(),
-  time = Models.TimeField(null=true),
+  time = Models.TimeField(),
   url = Models.CharField(),
   fp1_date = Models.DateField(null=true),
   fp1_time = Models.TimeField(null=true),

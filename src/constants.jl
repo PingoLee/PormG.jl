@@ -86,7 +86,8 @@ const postgres_type_map = Dict{String, Symbol}(
   "text" => :TextField,
   "float" => :FloatField,
   "time" => :TimeField,
-  "blob" => :BinaryField
+  "blob" => :BinaryField,
+  "double_precision" => :FloatField,
 )
 
 const sqlite_type_map_reverse = Dict{String, String}(
@@ -112,7 +113,7 @@ const postgres_type_map_reverse = Dict{String, String}(
   "FLOAT" => "float",
   "NUMERIC" => "decimal",
   "REAL" => "real",
-  "DOUBLE PRECISION" => "double precision",
+  "DOUBLE_PRECISION" => "float",
   "MONEY" => "money",
   "CHAR" => "char",
   "VARCHAR" => "varchar",

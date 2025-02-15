@@ -60,10 +60,10 @@ using .Models
 include("Dialect.jl")
 import .Dialect
 
-export object, show_query, list, bulk_insert
+export object, show_query, list, bulk_insert, bulk_update
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, query, list, page, bulk_insert
+import .QueryBuilder: object, query, list, page, bulk_insert, bulk_update
 show_query = query
 
 include("Migrations.jl")

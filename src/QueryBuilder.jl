@@ -639,18 +639,6 @@ end
 
 """
 This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
-
-# Arguments
-- `field::String`: The name of the field to be checked.
-- `model::PormGModel`: The model containing the field definitions.
-- `instruct::SQLInstruction`: An instruction object that may influence the field name modification.
-
-# Returns
-- `String`: The validated and modified field name.
-
-# Throws
-- `Error`: If the field is not found in the model's field names.
-
 """
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
@@ -665,6 +653,9 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   # println(field)
   return field
 end
+_solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct) 
+_solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction) = _solve_field(field, _module, Symbol(model_name), instruct)
+_solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
 
 "build a row to join"
 function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
@@ -690,7 +681,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # println("table", instruct.object.model.name)
   if vector[1] in instruct.object.model.field_names # vector moust be a field from the model
     last_column = vector[1]
-    row_join["a"] = string(instruct.django, instruct.object.model.name |> lowercase)
+    row_join["a"] = instruct.django !== nothing ? string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
     row_join["alias_a"] = instruct.alias
     how = instruct.object.model.fields[last_column].how
     if how === nothing
@@ -702,9 +693,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(last_column) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
+      row_join["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
     else
-      row_join["b"] = string(instruct.django,  foreign_table_name |> lowercase)
+      row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
     end
     # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -713,9 +704,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   elseif haskey(instruct.object.model.reverse_fields, vector[1])
     reverse_model = getfield(foreing_table_module, instruct.object.model.reverse_fields[vector[1]][3])
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
-    # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.table_name)")
+    # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     last_column = vector[2]
-    row_join["a"] = string(instruct.django, instruct.object.model.name |> lowercase)
+    row_join["a"] = instruct.django !== nothing ?  string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
     row_join["alias_a"] = instruct.alias
     how = reverse_model.fields[instruct.object.model.reverse_fields[vector[1]][1] |> String].how
     if how === nothing
@@ -727,9 +718,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
+      row_join["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
     else
-      row_join["b"] = string(instruct.django,  foreign_table_name |> lowercase)
+      row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -769,9 +760,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
+        row_join2["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
       else
-        row_join2["b"] = string(instruct.django,  foreign_table_name |> lowercase)
+        row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       end
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
       row_join2["key_b"] = new_object.fields[vector[1]].pk_field::String
@@ -781,7 +772,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     elseif haskey(new_object.reverse_fields, vector[1])
       reverse_model = getfield(foreing_table_module, new_object.reverse_fields[vector[1]][3])
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
-      !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.table_name)")
+      !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
       last_column = vector[2]
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
@@ -795,9 +786,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = string(instruct.django, foreign_table_name.table_name |> lowercase)
+        row_join2["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
       else
-        row_join2["b"] = string(instruct.django,  foreign_table_name |> lowercase)
+        row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       end
 
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -818,7 +809,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
   # functions must be processed here
-  return string(tb_alias, ".", _solve_field(vector[end], getfield(foreing_table_module, foreign_table_name |> Symbol), instruct))
+  return string(tb_alias, ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end
 
@@ -1113,7 +1104,8 @@ end
 
 function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
   # println(object.model.connect_key)
-  connection === nothing && (connection = config[object.model.connect_key].connections) # TODO -- i need create a mode to handle with pools
+  settings = config[object.model.connect_key]
+  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
   # println(connection)
   instruct = InstrucObject(text = "", 
@@ -1121,7 +1113,7 @@ function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
     alias = get_alias(table_alias),
     connection = connection,
-    django = "dash_" # TODO -- i need create a mode to generete the django prefix when needed
+    django = settings.django_prefix
   )   
 
   # println(instruct)
@@ -1168,7 +1160,7 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   respota = """
     SELECT
       $(_query_select(instruction.select ))
-    FROM $(string(instruction.django, q.object.model.name |> lowercase)) as $(instruction.alias)
+    FROM $(instruction.django !== nothing ? string(instruction.django, q.object.model.name |> lowercase) : q.object.model.name |> lowercase) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
@@ -1176,7 +1168,7 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
     $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
     $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
     """
-  @info respota
+  # @info respota
   return respota
 end
 
@@ -1247,7 +1239,7 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   )
   """
 
-  @info sql
+  # @info sql
 
   # execute the SQL statement
   if connection isa LibPQ.Connection
@@ -1382,7 +1374,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     WHERE $(join(instruction._where, " AND \n   "))
   """
 
-  @info sql
+  # @info sql
 
   # execute the SQL statement
   if connection isa LibPQ.Connection
@@ -1460,11 +1452,6 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; columns:
   pk_field::Vector{String} = []
   for field in fields
     if !in(field, fields_df)
-      if  model.fields[field].primary_key
-        pk_exist = true
-        push!(pk_field, field)
-      end
-
       if model.fields[field].default !== nothing
         df[!, field] = model.fields[field].default
         push!(fields_df, field)
@@ -1479,6 +1466,11 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; columns:
       else
         @infiltrate
         throw("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null")
+      end
+    else      
+      if  model.fields[field].primary_key
+        pk_exist = true
+        push!(pk_field, field)
       end
     end
   end
@@ -1541,11 +1533,148 @@ function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Ve
     throw("Unsupported connection type")
   end
 
-  @infiltrate
-
   pk_exist && _update_sequence(model, connection, pk_field)
 
 end
+
+export bulk_update
+
+function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
+  columns::Vector{Union{String, Pair{String, String}}}=Union{String, Pair{String, String}}[],
+  filters::Vector{Union{String, Pair{String, Any}}}=Union{String, Pair{String, Any}}[],
+  chunk_size::Int64=1000)
+  model = objct.object.model
+  settings = config[model.connect_key]
+  connection = settings.connections
+
+  # check if is allowed to insert
+  !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
+
+  # If no rows then nothing to do
+  if size(df, 1) == 0
+    @warn("Warning in bulk_update, the DataFrame is empty")
+    return nothing
+  end
+
+  # colect the filters
+  pks = [field for field in keys(model.fields) if model.fields[field].primary_key]
+  dinanic_filters::Vector{String} = []
+  static_filters::Vector{Pair{String, Any}} = []
+  if !isempty(filters)
+    for filter in filters
+      if filter isa Pair
+        push!(static_filters, filter)
+      else
+        push!(dinanic_filters, filter)
+      end
+    end
+  else
+    dinanic_filters = pks
+  end
+
+  # colect name of the fields
+  fields = model.field_names
+  fields_df::Vector{String} = []
+  if !isempty(columns)   
+    if length(columns) > 0
+      for column in columns
+        if column isa Pair
+          rename!(df, column.first => column.second)
+          push!(fields_df, column.second)
+        else
+          push!(fields_df, column)
+        end
+      end
+    end
+  else
+    for field in names(df)
+      fld_ = field |> lowercase
+      if fld_ in fields
+        push!(fields_df, fld_)
+      end
+      if fld_ != field
+        DataFrames.rename!(df, field => fld_)
+      end
+    end    
+  end  
+
+  # check if missing fields in fields_df are updated automatically
+  pk_exist::Bool = false
+  pk_field::Vector{String} = []
+  for field in fields
+    if !in(field, fields_df)      
+      if model.fields[field].type == "TIMESTAMPTZ" &&  model.fields[field].auto_now
+        df[!, field] = model.fields[field].formater(now(), settings.time_zone)
+        push!(fields_df, field)
+      elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
+        df[!, field] = model.fields[field].formater(today())
+        push!(fields_df, field)     
+      end    
+    else
+      if model.fields[field].primary_key
+        pk_exist = true
+        push!(pk_field, field)
+      end
+    end
+  end  
+
+  # check if the fields_df are not in fields
+  for field in fields_df
+    in(field, fields) || @error("""Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
+  end
+
+  # Build a list of row value strings by applying each model field formatter.
+  rows = String[]
+  set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in pk_field) ], ", ")
+  count::Int64 = 0
+  total::Int64 = size(df, 1)
+  for (index, row) in enumerate(eachrow(df))
+  values = String[]
+  try
+    values = [model.fields[field].formater(row[field]) for field in fields_df]
+  catch e
+    _depuration_values_bulk_insert(fields_df, model, row, index)
+    throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+  end
+  push!(rows, "($(join(values, ", ")))")
+  count += 1
+  if count == chunk_size || index == total
+    bulk_update(model, connection, fields_df, rows, pk_exist, pk_field, set_columns)
+    count = 0
+    rows = String[]
+  end
+  end
+
+  return nothing
+  
+end
+
+function bulk_update(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String}, set_columns::String)
+  # Construct the bulk update SQL.
+  pk_field_str = pk_field[1] # TODO: support multiple primary keys
+  sql = """
+  UPDATE $(string(model.name)) AS target
+  SET $(set_columns)
+  FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(fields, ",")))
+  WHERE target.$(pk_field_str) = source.$(pk_field_str);
+  """
+
+  # @info sql
+
+  # Execute the query for the given connection type.
+  if connection isa LibPQ.Connection
+    LibPQ.execute(connection, sql)
+  elseif connection isa SQLite.DB
+    SQLite.execute(connection, sql)
+  else    
+    throw("Unsupported connection type")
+  end
+end
+
+
+
+
+
 
 
 end

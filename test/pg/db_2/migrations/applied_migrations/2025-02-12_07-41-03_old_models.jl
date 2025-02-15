@@ -65,7 +65,7 @@ Result = Models.Model(
   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="models.RESTRICT"),
   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="models.RESTRICT"),
   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="models.RESTRICT"),
-  number = Models.IntegerField(null=true),
+  number = Models.IntegerField(),
   grid = Models.IntegerField(),
   position = Models.IntegerField(null=true),
   positionText = Models.CharField(),
@@ -76,7 +76,7 @@ Result = Models.Model(
   milliseconds = Models.IntegerField(null=true),
   fastestLap = Models.IntegerField(null=true),
   rank = Models.IntegerField(null=true),
-  fastestLapTime = Models.TimeField(null=true),
+  fastestLapTime = Models.CharField(null=true),
   fastestLapSpeed = Models.FloatField(null=true),
   statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="models.RESTRICT")
 )

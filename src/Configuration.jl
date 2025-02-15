@@ -221,6 +221,7 @@ mutable struct Settings <: SQLConn
   change_data::Bool # Enable the change of the database (upgrade, delete) in the app
   connections::Union{Nothing, SQLite.DB, LibPQ.Connection} # Store multiple database connections
   time_zone::String
+  django_prefix::Union{Nothing, String}
 
   Settings(;
       app_env             = ENV["PORMG_ENV"],           
@@ -233,7 +234,8 @@ mutable struct Settings <: SQLConn
       change_db           = false,
       change_data         = false,
       connections         = nothing,
-      time_zone            = DATETIME_FORMAT
+      time_zone           = DATETIME_FORMAT,
+      django_prefix       = nothing
   ) =
   new(
       app_env,
@@ -246,7 +248,8 @@ mutable struct Settings <: SQLConn
       change_db,
       change_data,
       connections,
-      time_zone
+      time_zone,
+      django_prefix
   )
 end
 

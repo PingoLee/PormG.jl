@@ -90,6 +90,20 @@ const postgres_type_map = Dict{String, Symbol}(
   "double_precision" => :FloatField,
 )
 
+# const postgres_map_type_to_cast = Dict{String, String}(
+#   "TIME" => "time",
+#   "DATE" => "date",
+#   "TIMESTAMP" => "timestamp",
+#   "INTEGER" => "integer",
+#   "BIGINT" => "bigint",
+#   "FLOAT" => "float",
+#   "BIGINT" => "bigint",
+#   "DECIMAL" => "decimal",
+#   "TEXT" => "text",
+#   "VARCHAR" => "varchar"
+# )
+
+
 const sqlite_type_map_reverse = Dict{String, String}(
   "VARCHAR" => "TEXT",
   "CHAR" => "TEXT",

@@ -181,3 +181,12 @@ const sqlite_date_format_map = Dict{String, String}(
 const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoindex"]
 
 const postgres_ignore_table::Vector{String} = ["auth_", "django_", "social_", "account_", "allauth_", "admin_", "celery_", "django_celery_", "djcelery_", "kombu_"]
+
+# deletion functions handlers
+function CASCADE end
+function RESTRICT end
+function PROTECT end
+function SET_NULL end
+function SET_DEFAULT end
+function SET end
+function DO_NOTHING end

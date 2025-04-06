@@ -253,7 +253,7 @@ end
     _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value))
     _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
     if temporary_default_value !== nothing
-      _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name", Dialect.alter_field(conn, model_name, field_name, field, [:default]))
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name", Dialect.alter_field(conn, model_name, field_name, field, nothing, [:default]))
     end
     return nothing
   end
@@ -296,68 +296,65 @@ end
           # println("Fields $field_name")
           @infiltrate false         
                       
-            # check if the field is diferent
-            colect_not_equal::Vector{Symbol} = []
-            if model.fields[field_name] |> typeof == field |> typeof                          
-              # Check if all attributes are equal                
-              for attr in fieldnames(typeof(field))
-                new_var = getfield(field, attr)
-                old_var = getfield(model.fields[field_name], attr)
-                if new_var != old_var                  
-                  attr == :to && Models._compare_field_foreign_key(field, model.fields[field_name]) && continue
-                  attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
-                  push!(colect_not_equal, attr)
-                end
+          old_field::PormGField = model.fields[field_name]
+
+          # check if the field is diferent
+          colect_not_equal::Vector{Symbol} = []
+          if old_field |> typeof == field |> typeof                          
+            # Check if all attributes are equal                
+            for attr in fieldnames(typeof(field))
+              new_var = getfield(field, attr)
+              old_var = getfield(old_field, attr)
+              if new_var != old_var                  
+                attr == :to && Models._compare_field_foreign_key(field, old_field) && continue
+                attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
+                push!(colect_not_equal, attr)
               end
+            end
+          else
+            # check is db_constraint is false in field
+            if field |> typeof == Models.sForeignKey && !field.db_constraint &&  old_field |> typeof == Models.sBigIntegerField
+              continue
             else
-              # check is db_constraint is false in field
-              if field |> typeof == Models.sForeignKey && !field.db_constraint &&  model.fields[field_name] |> typeof == Models.sBigIntegerField
-                continue
-              else
-                push!(colect_not_equal, :type)
-              end
+              push!(colect_not_equal, :type)
             end
-            
-            # if field_name == "time"
-            #   @infiltrate
-            # end
-           
-            isempty(colect_not_equal) && continue                       
-
-            # Check if is needed remove the foreign key
-            name::String = _hash_field_name(model_name, field_name) 
-
-            _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, field, model.fields[field_name])
-            
-            _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name",
-            Dialect.alter_field(conn, model_name |> string, field_name, field, colect_not_equal))
-
-            # Check if the field is a foreign key
-            _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, field, model.fields[field_name], name)
-            
-            # Check if the field is also indexed
-            if !field.primary_key && field.db_index && !model.fields[field_name].db_index
-              @infiltrate false
-              index_name = "$(name)_idx"
-              _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
-              Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
-            end
-
-            # Check if is need to remove the index
-            if !field.primary_key && model.fields[field_name].db_index && !field.db_index
-              @infiltrate
-              index_name = model.cache["index"][field_name]
-              _drop_index(conn, migration_plan, model_name, field_name, index_name=index_name)
-              # _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
-              # Dialect.drop_index(conn, "\"$index_name\""))
-            end
-
+          end
           
-        else
-        end
-      end
+          # if field_name == "time"
+          #   @infiltrate
+          # end
+          
+          isempty(colect_not_equal) && continue                       
 
-    
+          # Check if is needed remove the foreign key
+          name::String = _hash_field_name(model_name, field_name)
+          
+          _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, field, old_field)
+          
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name",
+          Dialect.alter_field(conn, model_name |> string, field_name, field, old_field, colect_not_equal))
+
+          # Check if the field is a foreign key
+          _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, field, old_field, name)
+          
+          # Check if the field is also indexed
+          if !field.primary_key && field.db_index && !model.fields[field_name].db_index
+            @infiltrate false
+            index_name = "$(name)_idx"
+            _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
+            Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
+          end
+
+          # Check if is need to remove the index
+          if !field.primary_key && old_field.db_index && !field.db_index
+            @infiltrate
+            index_name = model.cache["index"][field_name]
+            _drop_index(conn, migration_plan, model_name, field_name, index_name=index_name)
+            # _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
+            # Dialect.drop_index(conn, "\"$index_name\""))
+          end
+        end
+      end    
     end     
   end
 
@@ -651,6 +648,7 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
     LibPQ.execute(connection, "ROLLBACK;")
     println("Error applying migrations: ", e)
     @error("Error applying migrations: ", e)
+    return nothing
   end
 
   try

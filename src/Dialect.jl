@@ -239,20 +239,29 @@ end
 #   return add_foreign_key(model.name, model.name, constraint_name, field_name, ref_model.name, ref_field_name)
 # end
 
-function alter_field(conn::LibPQ.Connection, table_name::Union{Symbol, String}, field_name::Union{Symbol, String}, new_field::PormGField, colect_not_equal::Vector{Symbol})::String
+function alter_field(conn::LibPQ.Connection, table_name::Union{Symbol, String}, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
   sql_statements = []
 
   # Alter column type
   if any(attr -> attr in colect_not_equal, [:type, :max_length, :max_digits, :decimal_places])
     if new_field isa sCharField
-        max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE VARCHAR($max_length);""")
+      max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE VARCHAR($max_length);""")
     elseif new_field isa sDecimalField
-        max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
-        decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE DECIMAL($max_digits, $decimal_places);""")
+      max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
+      decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE DECIMAL($max_digits, $decimal_places);""")
+      if old_field !== nothing
+        old_max_digits = hasproperty(old_field, :max_digits) ? old_field.max_digits : nothing
+        old_decimal_places = hasproperty(old_field, :decimal_places) ? old_field.decimal_places : nothing
+        if old_max_digits !== nothing && decimal_places < old_decimal_places
+          @warn "The new decimal_places is less than the old decimal_places in table $(table_name) and field $(field_name)"
+        end
+      end
+    elseif new_field isa sTimeField
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE TIME USING "$field_name"::time without time zone;""")
     else
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE $(_get_column_type(new_field, conn));""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE $(_get_column_type(new_field, conn));""")
     end
   end
 

@@ -243,7 +243,6 @@ function  When(x::Union{Pair{String, Int64}, Pair{String, Int64}}; then::Union{S
   return FObject(function_name = "WHEN", column = x |> _get_pair_to_oper, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
 function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
-  println(x |> typeof, x)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
 function Case(conditions::Vector{N} where N <: SQLTypeF; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
@@ -319,8 +318,6 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
     elseif isa(v, SQLTypeF)
       push!(q.values, SQLField(_check_function(v), v._as))
     elseif isa(v, Pair) && isa(v.second, SQLTypeF)
-      println(v.second)
-      println(v.second |> typeof)
       push!(q.values, SQLField(_check_function(v.second), v.first))
     elseif isa(v, String)
       check = String.(split(v, "__@"))
@@ -374,9 +371,6 @@ function up_filter!(q::SQLObject, filter)
 end
 
 function _query_select(array::Vector{SQLTypeField})
-  # println(typeof(array))
-  # println(array)
-  # println(size(array, 1))
   if !isassigned(array, 1, 1)
     return "*"
   else
@@ -413,6 +407,7 @@ end
 function order_by!(q::SQLObject, values)
   throw("Invalid argument: $(values) (::$(typeof(values))); please use a string or a SQLTypeOrder)")
 end
+
   
 mutable struct ObjectHandler <: SQLObjectHandler
   object::SQLObject
@@ -531,8 +526,6 @@ end
   
 
 function _check_filter(x::Pair)
-  # println(x)
-  # println(typeof(x))
   if isa(x.first, String)
     check = String.(split(x.first, "__@"))
     return _get_pair_to_oper(check => x.second)  
@@ -540,36 +533,24 @@ function _check_filter(x::Pair)
 end
 
 
-function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[])
-  # println(array)
-  # println(array_store)
+function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[]) 
   array = copy(array)
-  for i in 1: size(array, 1)
-    # print(string(i, " - "))
-    # print(array[i])
-    # print(" ")
+  for i in 1: size(array, 1) 
     for (k, value) in PormGsuffix
       if endswith(array[i], k)
         array[i] = array[i][1:end-length(k)]          
       end
     end
     for (k, value) in PormGtrasnform
-      # print(endswith(array[i], k))
       if endswith(array[i], k)          
-        array[i] = array[i][1:end-length(k)]  
-        # print(" ")
-        # print(array[i])
-        # print(" ")        
+        array[i] = array[i][1:end-length(k)]               
       end
     end
-    # println(array[i])
   end
   
   # how join to Vector
-  # println(array)
   append!(array_store, array)
   unique!(array_store)
-  # println(array_store)
   return array_store  
 end
 
@@ -619,7 +600,6 @@ function _get_alias_name(row_join::Vector{Dict{String, Any}}, alias::String)
 end
 
 function _insert_join(row_join::Vector{Dict{String, Any}}, row::Dict{String,String})
-  # println(row_join)
   if size(row_join, 1) == 0
     push!(row_join, row)
     return row["alias_b"]
@@ -642,15 +622,10 @@ This function checks if the given `field` is a valid field in the provided `mode
 """
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
-  # println(field)
-  # println(model)
   if !(field in model.field_names)
     throw("Error in _build_row_join, the field $(field) not found in $(model.name): $(join(model.field_names, ", "))")
   end
-  # println(model.fields[field] |> typeof)
-  # println("---", hasfield(model.fields[field] |> typeof, :to))
   (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
-  # println(field)
   return field
 end
 _solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct) 
@@ -665,20 +640,13 @@ function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruct
 end
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
   vector = copy(field) 
-  println("_build_row_join")
-  println(vector)
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
   row_join = Dict{String,String}()
-  # println(vector)
 
   # fields_model = instruct.object.model.field_names
-  # println(fields_model)
   last_column::String = ""
 
-  # println(instruct.object.model.reverse_fields)
-  # println("fiels", instruct.object.model.fields)  
-  # println("table", instruct.object.model.name)
   if vector[1] in instruct.object.model.field_names # vector moust be a field from the model
     last_column = vector[1]
     row_join["a"] = instruct.django !== nothing ? string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
@@ -701,20 +669,20 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["key_b"] = instruct.object.model.fields[last_column].pk_field::String
     row_join["key_a"] = instruct.django !== nothing ? string(last_column, "_id") : last_column
-  elseif haskey(instruct.object.model.reverse_fields, vector[1])
-    reverse_model = getfield(foreing_table_module, instruct.object.model.reverse_fields[vector[1]][3])
+  elseif haskey(instruct.object.model.related_objects, vector[1])
+    reverse_model = getfield(foreing_table_module, instruct.object.model.related_objects[vector[1]][3])
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     last_column = vector[2]
     row_join["a"] = instruct.django !== nothing ?  string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
     row_join["alias_a"] = instruct.alias
-    how = reverse_model.fields[instruct.object.model.reverse_fields[vector[1]][1] |> String].how
+    how = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String].how
     if how === nothing
-      row_join["how"] = instruct.object.model.fields[instruct.object.model.reverse_fields[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
+      row_join["how"] = instruct.object.model.fields[instruct.object.model.related_objects[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
     else
       row_join["how"] = how
     end
-    foreign_table_name = instruct.object.model.reverse_fields[vector[1]][3] |> String
+    foreign_table_name = instruct.object.model.related_objects[vector[1]][3] |> String
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
@@ -724,29 +692,22 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model.reverse_fields[vector[1]][1] |> String
-    row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model.reverse_fields[vector[1]][4] |> String, "_id") : instruct.object.model.reverse_fields[vector[1]][4] |> String
+    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model.related_objects[vector[1]][4] |> String, "_id") : instruct.object.model.related_objects[vector[1]][4] |> String
   else
     throw("Error in _build_row_join, the column $(vector[1]) not found in $(instruct.object.model.name)")
   end
   
-  # println(row_join)
-  # println(instruct.row_join)
   vector = vector[2:end]  
 
   tb_alias = _insert_join(instruct.row_join, row_join)
   while size(vector, 1) > 1
-    # println(foreign_table_name)
-    # println(vector)
     row_join2 = Dict{String,String}()
     # get new object
     new_object = getfield(foreing_table_module, foreign_table_name |> Symbol)
-    # println(new_object.reverse_fields)
-    # println(new_object.field_names)
 
     if vector[1] in new_object.field_names
       !("to" in new_object.field_names) && throw("Error in _build_row_join, the column $(vector[1]) is a field from $(new_object.name), but this field has not a foreign key")
-      # println(new_object.fields[vector[1]])
       last_column = vector[2]
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
@@ -769,20 +730,20 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join2["key_a"] = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
       tb_alias = _insert_join(instruct.row_join, row_join2)
     
-    elseif haskey(new_object.reverse_fields, vector[1])
-      reverse_model = getfield(foreing_table_module, new_object.reverse_fields[vector[1]][3])
+    elseif haskey(new_object.related_objects, vector[1])
+      reverse_model = getfield(foreing_table_module, new_object.related_objects[vector[1]][3])
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
       !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
       last_column = vector[2]
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
-      how = reverse_model.fields[new_object.reverse_fields[vector[1]][1] |> String].how
+      how = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String].how
       if how === nothing
-        row_join2["how"] = new_object.fields[new_object.reverse_fields[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
+        row_join2["how"] = new_object.fields[new_object.related_objects[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
       else
         row_join2["how"] = how
       end
-      foreign_table_name = new_object.reverse_fields[vector[1]][3] |> String
+      foreign_table_name = new_object.related_objects[vector[1]][3] |> String
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
@@ -792,13 +753,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join2["key_b"] = new_object.reverse_fields[vector[1]][1] |> String
-      row_join2["key_a"] = instruct.django !== nothing ? string(new_object.reverse_fields[vector[1]][4] |> String, "_id") : new_object.reverse_fields[vector[1]][4] |> String
+      row_join2["key_b"] = new_object.related_objects[vector[1]][1] |> String
+      row_join2["key_a"] = instruct.django !== nothing ? string(new_object.related_objects[vector[1]][4] |> String, "_id") : new_object.related_objects[vector[1]][4] |> String
       tb_alias = _insert_join(instruct.row_join, row_join2)
       vector = vector[2:end]
 
     else
-      # println(field)
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
     vector = vector[2:end]
@@ -843,12 +803,10 @@ end
 
 # select
 function _get_select_query(v::SQLText, instruc::SQLInstruction)  
-  # println("foi SQLText")
   return Dialect.VALUE(v.field, instruc.connection)
 end
 
 function _get_select_query(v::Vector{SQLObject}, instruc::SQLInstruction)
-  # println("foi vector")
   resp = []
   for v in v
     push!(resp, _get_select_query(v, instruc))
@@ -857,9 +815,6 @@ function _get_select_query(v::Vector{SQLObject}, instruc::SQLInstruction)
 end
 # I think that is not the local to build the select query
 function _get_select_query(v::String, instruc::SQLInstruction)
-  # println("foi string")
-  # println(v)
-  # println(instruc.select)
   parts = split(v, "__")  
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
@@ -872,7 +827,6 @@ function _get_select_query(v::SQLField, instruc::SQLInstruction)
   return _get_select_query(v.field, instruc)
 end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
-  # println("foi SQLTypeOper")
   if isa(v.column, SQLTypeF) && haskey(v.column.function_name, PormGTypeField)
     value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
   else
@@ -895,13 +849,7 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
 end
 function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)  
-  # println("foi SQLTypeF")
-  # println(v) 
-  # println(v.kwargs)
-  # println(v.function_name)
-  # println(v.column |> typeof)
   value = getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
-  # println(value)
   return value # getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
 end
 
@@ -944,7 +892,6 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
   for v in object.order 
     found_in_select = false
     v_field_copy = copy(v.field)
-    println(v_field_copy)
     if haskey(instruc.cache, v_field_copy._as)
       v_field_copy.field = instruc.cache[v_field_copy._as].field # TODO how can i recover the order of the field in select, maybe is better thar use the function in order by
     else
@@ -998,15 +945,12 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   
 end
 # function _get_filter_query(v::SQLTypeF, instruc::SQLInstruction)
-#   println("foi SQLTypeF")
 #   return _get_select_query(v, instruc) 
 # end
 # function _get_filter_query(v::SQLTypeText, instruc::SQLInstruction)
-#   println("foi SQLTypeText")
 #   return _get_select_query(v, instruc)
 # end
 function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
-  # println("foi field3 SQLTypeField")
   # check if SQLTypeField exists in cache
   if haskey(instruc.cache, v._as)
     return instruc.cache[v._as].field
@@ -1018,8 +962,6 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   end
 end
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
-  println("foi SQLTypeOper")
-  println(v)
   if isa(v.column, SQLTypeF) && haskey(v.column.function_name, PormGTypeField)
     value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
   elseif isa(v.values, SQLObjectHandler)
@@ -1037,7 +979,6 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
 
   column = _get_filter_query(v.column, instruc)
-  println(column)
   
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
     return string(column, " ", v.operator, " ", value)
@@ -1050,7 +991,6 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
-  # println("foi SQLTypeQ")
   resp = []
   for v in q.filters
     push!(resp, _get_filter_query(v, instruc))
@@ -1079,11 +1019,9 @@ end
   - `instruc::SQLInstruction`: The SQLInstruction object to which the WHERE query will be added.
 """
 function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing 
-  # println("get_filter_query")
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
   for v in object.filter
     if isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper})
-      # println("Loc: ", _get_filter_query(v, instruc))
       push!(instruc._where, _get_filter_query(v, instruc))
     else
       throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper")
@@ -1096,18 +1034,15 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # for row in eachrow(instruc.df_join)
   #   push!(instruc.join, """ $(row.how) JOIN $(row.b) $(row.alias_b) ON $(row.alias_a).$(row.key_a) = $(row.alias_b).$(row.key_b) """)
   # end
-  # println(instruc.row_join)
   for value in instruc.row_join
     push!(instruc.join, """ $(value["how"]) JOIN $(value["b"]) $(value["alias_b"]) ON $(value["alias_a"]).$(value["key_a"]) = $(value["alias_b"]).$(value["key_b"]) """)
   end
 end
 
 function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
-  # println(object.model.connect_key)
   settings = config[object.model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
-  # println(connection)
   instruct = InstrucObject(text = "", 
     object = object,
     table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
@@ -1115,8 +1050,6 @@ function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     connection = connection,
     django = settings.django_prefix
   )   
-
-  # println(instruct)
   
   get_select_query(object.values, instruct)
   get_filter_query(object, instruct)
@@ -1155,8 +1088,6 @@ export query
 
 function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing) # TODO -- i need create a mode to change
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
-  # println(q.object)
-  # println("$(instruction._where |> length > 0 ? "WHERE" : "")")
   respota = """
     SELECT
       $(_query_select(instruction.select ))
@@ -1170,6 +1101,32 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
     """
   # @info respota
   return respota
+end
+
+# ---
+# Count or check if exists
+#
+
+export do_count, do_exists
+
+function do_count(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Int64
+  connection = config[q.object.model.connect_key].connections
+  instruction = build(q.object, table_alias=table_alias, connection=connection) 
+  resposta = """
+    SELECT
+      COUNT(*)
+    FROM $(instruction.django !== nothing ? string(instruction.django, q.object.model.name |> lowercase) : q.object.model.name |> lowercase) as $(instruction.alias)
+    $(join(instruction.join, "\n"))
+    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
+    $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
+    """
+  query_result = LibPQ.execute(connection, resposta)
+  return query_result[1, 1]
+end
+
+function do_exists(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)
+  count = do_count(q, table_alias=table_alias)
+  return count > 0
 end
 
 function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
@@ -1671,7 +1628,319 @@ function bulk_update(model::PormGModel, connection::LibPQ.Connection, fields::Ve
   end
 end
 
+# ---
+# Execute delete query with cascade, restrict, set null, set default and set value
+#
 
+# python code
+# def sort(self):
+#   sorted_models = []
+#   concrete_models = set()
+#   models = list(self.data)
+#   while len(sorted_models) < len(models):
+#       found = False
+#       for model in models:
+#           if model in sorted_models:
+#               continue
+#           dependencies = self.dependencies.get(model._meta.concrete_model)
+#           if not (dependencies and dependencies.difference(concrete_models)):
+#               sorted_models.append(model)
+#               concrete_models.add(model._meta.concrete_model)
+#               found = True
+#       if not found:
+#           return
+#   self.data = {model: self.data[model] for model in sorted_models}
+# def delete(self):
+#   # sort instance collections
+#   for model, instances in self.data.items():
+#       self.data[model] = sorted(instances, key=attrgetter("pk"))
+
+#   # if possible, bring the models in an order suitable for databases that
+#   # don't support transactions or cannot defer constraint checks until the
+#   # end of a transaction.
+#   self.sort()
+#   # number of objects deleted for each model label
+#   deleted_counter = Counter()
+
+#   # Optimize for the case with a single obj and no dependencies
+#   if len(self.data) == 1 and len(instances) == 1:
+#       instance = list(instances)[0]
+#       if self.can_fast_delete(instance):
+#           with transaction.mark_for_rollback_on_error(self.using):
+#               count = sql.DeleteQuery(model).delete_batch(
+#                   [instance.pk], self.using
+#               )
+#           setattr(instance, model._meta.pk.attname, None)
+#           return count, {model._meta.label: count}
+
+#   with transaction.atomic(using=self.using, savepoint=False):
+#       # send pre_delete signals
+#       for model, obj in self.instances_with_model():
+#           if not model._meta.auto_created:
+#               signals.pre_delete.send(
+#                   sender=model,
+#                   instance=obj,
+#                   using=self.using,
+#                   origin=self.origin,
+#               )
+
+#       # fast deletes
+#       for qs in self.fast_deletes:
+#           count = qs._raw_delete(using=self.using)
+#           if count:
+#               deleted_counter[qs.model._meta.label] += count
+
+#       # update fields
+#       for (field, value), instances_list in self.field_updates.items():
+#           updates = []
+#           objs = []
+#           for instances in instances_list:
+#               if (
+#                   isinstance(instances, models.QuerySet)
+#                   and instances._result_cache is None
+#               ):
+#                   updates.append(instances)
+#               else:
+#                   objs.extend(instances)
+#           if updates:
+#               combined_updates = reduce(or_, updates)
+#               combined_updates.update(**{field.name: value})
+#           if objs:
+#               model = objs[0].__class__
+#               query = sql.UpdateQuery(model)
+#               query.update_batch(
+#                   list({obj.pk for obj in objs}), {field.name: value}, self.using
+#               )
+
+#       # reverse instance collections
+#       for instances in self.data.values():
+#           instances.reverse()
+
+#       # delete instances
+#       for model, instances in self.data.items():
+#           query = sql.DeleteQuery(model)
+#           pk_list = [obj.pk for obj in instances]
+#           count = query.delete_batch(pk_list, self.using)
+#           if count:
+#               deleted_counter[model._meta.label] += count
+
+#           if not model._meta.auto_created:
+#               for obj in instances:
+#                   signals.post_delete.send(
+#                       sender=model,
+#                       instance=obj,
+#                       using=self.using,
+#                       origin=self.origin,
+#                   )
+
+#   for model, instances in self.data.items():
+#       for instance in instances:
+#           setattr(instance, model._meta.pk.attname, None)
+#   return sum(deleted_counter.values()), dict(deleted_counter)
+
+# You need to build a deletion mechanism that mimics Django’s behavior by following these steps:
+
+# Define deletion policies:
+# Implement functions for various delete rules (CASCADE, PROTECT, RESTRICT, SET, SET_NULL, SET_DEFAULT, DO_NOTHING). You already have stubs in your code, so complete each one to update related fields or collect dependent objects.
+
+# Collect related objects:
+# Write logic to inspect model relationships (e.g. ForeignKey fields) and build a dependency graph. This lets you determine the proper deletion order so that dependent objects are handled before the parent is deleted.
+
+# Sort models by dependencies:
+# Mimic Django’s ordering approach by sorting the models (or instances) so that deleting one does not violate foreign key constraints. This may involve a topological sort of your models based on their relations.
+
+# Implement a deletion collector:
+# Create a collector structure that gathers related objects for deletion (or field updates) and applies the appropriate on_delete action for each relationship.
+
+# Extend your delete function:
+# In your delete function in QueryBuilder.jl you’ll need to call your collector logic to process related objects and then construct and execute the DELETE SQL statements in a transactional way.
+
+# Handle transactions and signals:
+# Use transactions to ensure that either all related deletions are applied or the operation is rolled back. You might also implement pre_delete and post_delete hooks similar to Django’s signals.
+
+import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, NO_ACTION, PROTECT
+
+export delete
+
+function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+  model = objct.object.model
+  settings = config[model.connect_key]
+  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+
+  instruction = build(objct.object, table_alias=table_alias, connection=connection)
+
+  # check if is allowed to insert
+  !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to delete"))
+
+  # don't allow to delete a field without filter
+  instruction._where |> isempty && throw("Error in delete, the delete must have a filter")
+
+  # set collector
+  collector = Dict{Symbol, Any}()
+
+  # colect all related objects dependencies sorted
+  array_models::Vector{PormGModel} = _delection_collector(model, connection)
+
+  
+
+  # number of objects deleted for each model label
+  deleted_counter = Dict{String, Int64}()
+  
+  
+
+  # # Optimize for the case with a single obj and no dependencies
+  # if length(array_models) |> isempty # i think this is a same then can_fast_delete
+  #   count = objct |> count
+  #       count = sql.DeleteQuery(model).delete_batch([instance.pk], connection)
+  #     setattr(instance, model.pk.attname, nothing)
+  #     return count, Dict(model.label => count)
+  #   end
+  # end
+
+  
+
+  
+  return nothing
+end
+
+
+function _delection_collector(model::PormGModel, connection::Union{LibPQ.Connection, SQLite.DB})
+  related_objects = _collector(model)
+  @infiltrate
+  # collector.data = Dict{PormGModel, Vector{Any}}()
+  # collector.fast_deletes = []
+  # collector.field_updates = Dict{Tuple{PormGField, Any}, Vector{Any}}()
+  # collector.using = connection
+  # collector.origin = nothing
+  if related_objects |> isempty
+    return nothing
+  else
+    return _sort(related_objects)
+  end
+end
+
+function _collector(model::PormGModel)
+  related_objects::Vector{PormGModel} = []
+  for symbol_name in keys(model.related_objects)
+    push!(related_objects, getfield(model._module, symbol_name |> titlecase |> Symbol))
+  end
+  return related_objects
+end
+
+function _sort(related_objects::Vector{PormGModel})
+  sorted_models = []
+  concrete_models = Set{PormGModel}()
+  models = related_objects
+  while length(sorted_models) < length(models)
+    found = false
+    for model in models
+      if model in sorted_models
+        continue
+      end
+      dependencies = model.related_objects |> keys |> Set
+      if !(dependencies && setdiff(dependencies, concrete_models) |> isempty)
+        sorted_models = vcat(sorted_models, model)
+        concrete_models.add(model)
+        found = true
+      end
+    end
+    if !found
+      return nothing
+    end
+  end
+  return sorted_models
+end
+
+#https://github.com/django/django/blob/stable/5.1.x/django/db/models/deletion.py#L94
+
+# export CASCADE, PROTECT, RESTRICT, SET, SET_NULL, SET_DEFAULT, DO_NOTHING
+
+# """
+#     CASCADE(collector, field, sub_objs, using)
+
+# Collects the related objects for cascading deletion and, if needed, updates the field to null.
+# """
+# function CASCADE(collector, field, sub_objs, _using)
+#     collector.collect(
+#         sub_objs;
+#         source = field.remote_field.model,
+#         source_attr = field.name,
+#         nullable = field.null,
+#         fail_on_restricted = false
+#     )
+#     # If the field allows nulls but the connection does NOT support deferred constraint checks,
+#     # update the field value to `nothing` (Julia's equivalent of Python's None)
+#     if field.null && !_using.features.can_defer_constraint_checks
+#         collector.add_field_update(field, nothing, sub_objs)
+#     end
+# end
+
+# """
+#     PROTECT(collector, field, sub_objs, using)
+
+# Raises an error to prevent deletion if related objects exist.
+# """
+# function PROTECT(collector, field, sub_objs, using)
+#     error("Cannot delete some instances of model '$(field.remote_field.model)' because they are referenced through a protected foreign key: '$(typeof(sub_objs[1])).$(field.name)'")
+# end
+
+# """
+#     RESTRICT(collector, field, sub_objs, using)
+
+# Adds restricted objects and dependencies to the collector.
+# """
+# function RESTRICT(collector, field, sub_objs, using)
+#     collector.add_restricted_objects(field, sub_objs)
+#     collector.add_dependency(field.remote_field.model, field.model)
+# end
+
+# """
+#     SET(value)
+
+# Returns a deletion handler function that will update the field with a given value.
+# If `value` is a function, it is evaluated at the time of deletion.
+# """
+# function SET(value)
+#     if isa(value, Function)
+#         return (collector, field, sub_objs, using) -> begin
+#             collector.add_field_update(field, value(), sub_objs)
+#         end
+#     else
+#         set_on_delete = (collector, field, sub_objs, using) -> begin
+#             collector.add_field_update(field, value, sub_objs)
+#         end
+#         # In Django the function may have an attribute lazy_sub_objs = true.
+#         # You might record such behavior in documentation or by wrapping the function in a type.
+#         return set_on_delete
+#     end
+# end
+
+# """
+#     SET_NULL(collector, field, sub_objs, using)
+
+# Updates the field to `nothing`.
+# """
+# function SET_NULL(collector, field, sub_objs, using)
+#     collector.add_field_update(field, nothing, sub_objs)
+# end
+
+# """
+#     SET_DEFAULT(collector, field, sub_objs, using)
+
+# Updates the field to its default value.
+# """
+# function SET_DEFAULT(collector, field, sub_objs, using)
+#     collector.add_field_update(field, field.get_default(), sub_objs)
+# end
+
+# """
+#     DO_NOTHING(collector, field, sub_objs, using)
+
+# Does nothing on deletion.
+# """
+# function DO_NOTHING(collector, field, sub_objs, using)
+#     return nothing
+# end
 
 
 

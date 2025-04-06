@@ -3,6 +3,7 @@ module Models
 using Dates, TimeZones
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
+import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 
 import PormG.Infiltrator: @infiltrate
 
@@ -13,7 +14,7 @@ export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField
   verbose_name::Union{String, Nothing} = nothing
   fields::Dict{String, PormGField}
   field_names::Vector{String} = [] # needed to create sql queries with joins
-  reverse_fields::Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}} = Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}}() # needed to create sql queries with joins
+  related_objects::Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}} = Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}}() # needed to create sql queries with joins
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
   connect_key::Union{String, Nothing} = nothing # needed to get the connection
   cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
@@ -97,23 +98,31 @@ function set_models(_module::Module, path::String)::Nothing
             field.related_name = string(model.name, "_", field_name) |> lowercase
             @warn("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
           end
-          if haskey(field_to.reverse_fields, field.related_name)
+          if haskey(field_to.related_objects, field.related_name)
             throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
           else
-            field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+            field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
           end
         elseif dict_tables_c[field_to.name] == 1
           if field.related_name === nothing
-            field_to.reverse_fields[model.name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+            field_to.related_objects[model.name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
           else
-            if haskey(field_to.reverse_fields, field.related_name)
+            if haskey(field_to.related_objects, field.related_name)
               throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
             else
-              field_to.reverse_fields[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+              field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
             end
           end
         end        
-         
+        
+        # check on_delete
+        if field.on_delete == SET_NULL && field.null == false
+          @error("The field $field_name in the model $(model.name) has on_delete SET_NULL and null false, this is not allowed")
+        end
+        if field.on_delete == SET_DEFAULT && field.default === nothing
+          @error("The field $field_name in the model $(model.name) has on_delete SET_DEFAULT and default nothing, this is not allowed")
+        end
+                 
       end
     end
   end
@@ -402,7 +411,7 @@ end
 # Fields
 #
 
-mutable struct sIDField <: PormGField
+struct sIDField <: PormGField
   verbose_name::Union{String, Nothing}
   primary_key::Bool
   auto_increment::Bool
@@ -439,35 +448,53 @@ function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, 
   )
 end
 
-@kwdef mutable struct sForeignKey <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = true
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  to::Union{String, PormGModel, Nothing} = nothing
-  pk_field::Union{String, Symbol, Nothing} = nothing
-  on_delete::Union{String, Nothing} = nothing
-  on_update::Union{String, Nothing} = nothing
-  deferrable::Bool = true
-  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
-  related_name::Union{String, Nothing} = nothing
-  type::String = "BIGINT"
-  formater::Function = format_number_sql
-  db_constraint::Bool = true
-  initially_deferred::Bool = true
+struct sForeignKey <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  to::Union{String, PormGModel, Nothing}
+  pk_field::Union{String, Symbol, Nothing}
+  on_delete::Union{Function, Nothing}
+  on_update::Union{String, Nothing}
+  deferrable::Bool
+  how::Union{String, Nothing}  # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
+  related_name::Union{String, Nothing}
+  type::String
+  formater::Function
+  db_constraint::Bool
+  initially_deferred::Bool
 end
 
-function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=false, blank=false, null=false, db_index=true, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, initially_deferred=false, how=nothing, related_name=nothing, db_constraint=true)
-  # println(on_delete |> typeof)
+function ForeignKey(to::Union{String, PormGModel};
+    verbose_name=nothing,
+    primary_key=false,
+    unique=false,
+    blank=false,
+    null=false,
+    db_index=true,
+    default=nothing,
+    editable=false,
+    pk_field=nothing,
+    on_delete=nothing,
+    on_update=nothing,
+    deferrable=false,
+    initially_deferred=false,
+    how=nothing,
+    related_name=nothing,
+    db_constraint=true)
+
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
+
+  # Validate boolean parameters
   !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -476,57 +503,126 @@ function ForeignKey(to::Union{String, PormGModel}; verbose_name=nothing, primary
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
   !(initially_deferred isa Bool) && throw(ArgumentError("The 'initially_deferred' must be a Boolean"))
+
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
+
   # Validate optional string parameters
-  !(pk_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
+  !(pk_field isa Union{Nothing, AbstractString, Symbol}) &&
+    throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+  on_delete = _get_on_delete_mode(on_delete)
   !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
   !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
-  # resolve db_index
+
+  # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint
-  pk_field = pk_field |> format_fild_name
-  # Return the field instance
+  pk_field = format_fild_name(pk_field)  
+
   return sForeignKey(
-    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
-    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint, initially_deferred=initially_deferred
-  )  
+    verbose_name,
+    primary_key,
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    to,
+    pk_field,
+    on_delete,
+    on_update,
+    deferrable,
+    how,
+    related_name,
+    "BIGINT",
+    format_number_sql,
+    db_constraint,
+    initially_deferred
+  )
+end
+
+function _get_on_delete_mode(on_delete::Nothing)
+  return nothing
+end
+function _get_on_delete_mode(on_delete::AbstractString)
+  on_delete = uppercase(on_delete)
+  if contains(on_delete, "CASCADE")
+    return CASCADE
+  elseif contains(on_delete, "RESTRICT")
+    return RESTRICT
+  elseif contains(on_delete, "SET_NULL")
+    return SET_NULL
+  elseif contains(on_delete, "SET_DEFAULT")
+    return SET_DEFAULT
+  elseif contains(on_delete, "SET")
+    return SET
+  elseif contains(on_delete, "PROTECT")
+    return PROTECT
+  elseif contains(on_delete, "DO_NOTHING")
+    return DO_NOTHING
+  else
+    throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
+  end
+end
+function _get_on_delete_mode(on_delete::Function)
+  # check if the function is one of the valid functions
+  check_function = on_delete |> uppercase
+  if !(check_function in ["CASCADE", "RESTRICT", "SET_NULL", "SET_DEFAULT", "SET", "DO_NOTHING", "PROTECT"])
+    throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
+  end
+  return on_delete
 end
 
 
-@kwdef mutable struct sOneToOneField <: PormGField
-  # Same fields as sForeignKey but with unique=true by default
-  unique::Bool = true
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  to::Union{String, PormGModel, Nothing} = nothing
-  pk_field::Union{String, Symbol, Nothing} = nothing
-  on_delete::Union{String, Nothing} = nothing
-  on_update::Union{String, Nothing} = nothing
-  deferrable::Bool = true
-  how::Union{String, Nothing} = nothing # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
-  related_name::Union{String, Nothing} = nothing
-  type::String = "BIGINT"
-  formater::Function = format_number_sql
-  db_constraint::Bool = true
-  initially_deferred::Bool = true
+struct sOneToOneField <: PormGField
+  unique::Bool
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  to::Union{String, PormGModel, Nothing}
+  pk_field::Union{String, Symbol, Nothing}
+  on_delete::Union{Function, Nothing}
+  on_update::Union{String, Nothing}
+  deferrable::Bool
+  how::Union{String, Nothing}  # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
+  related_name::Union{String, Nothing}
+  type::String
+  formater::Function
+  db_constraint::Bool
+  initially_deferred::Bool
 end
 
-function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, primary_key=false, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false, pk_field=nothing, on_delete=nothing, on_update=nothing, deferrable=false, initially_deferred=false, how=nothing, related_name=nothing, db_constraint=true)
-  # Similar validation as in ForeignKey
+function OneToOneField(to::Union{String, PormGModel};
+    verbose_name=nothing,
+    primary_key=false,
+    unique=true,
+    blank=false,
+    null=false,
+    db_index=true,
+    default=nothing,
+    editable=false,
+    pk_field=nothing,
+    on_delete=nothing,
+    on_update=nothing,
+    deferrable=false,
+    initially_deferred=false,
+    how=nothing,
+    related_name=nothing,
+    db_constraint=true)
+
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
+
+  # Validate boolean parameters
   !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -535,8 +631,10 @@ function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, prim
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
   !(initially_deferred isa Bool) && throw(ArgumentError("The 'initially_deferred' must be a Boolean"))
+
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
+
   # Validate optional string parameters
   !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
   !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
@@ -544,13 +642,33 @@ function OneToOneField(to::Union{String, PormGModel}; verbose_name=nothing, prim
   !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
   !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
-  # resolve db_index
+
+  # Resolve on_delete using similar logic as ForeignKey
+  on_delete = _get_on_delete_mode(on_delete)
+
+  # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint
-  # Return the field instance
+
   return sOneToOneField(
-    verbose_name=verbose_name, primary_key=primary_key, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, to=to, pk_field=pk_field,
-    on_delete=on_delete, on_update=on_update, deferrable=deferrable, how=how, related_name=related_name, db_constraint=db_constraint, initially_deferred=initially_deferred
+    unique,
+    verbose_name,
+    primary_key,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    to,
+    pk_field,
+    on_delete,
+    on_update,
+    deferrable,
+    how,
+    related_name,
+    "BIGINT",
+    format_number_sql,
+    db_constraint,
+    initially_deferred
   )
 end
 
@@ -1204,25 +1322,5 @@ function validate_timezone(value::String, format::String) # TODO: maeby is unnec
   end
 end
 
-
-# ---
-# Define function to manage on_delete
-#
-
-function on_delete(action::Symbol, model::PormGModel)
-    if action == :CASCADE
-        cascade(model)
-    elseif action == :SET_NULL
-        # Implement logic to set foreign key fields to null
-    elseif action == :RESTRICT
-        # Implement logic to prevent deleting if there are related objects
-    else
-        # DO_NOTHING or other custom behaviors
-    end
-end
-
-function cascade(model::PormGModel)
-    # Here, implement the actual cascade logic for related objects
-end
 
 end

@@ -62,9 +62,9 @@ Constructor = Models.Model(
 
 Result = Models.Model(
   resultId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="RESTRICT"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="models.RESTRICT"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="models.RESTRICT"),
+  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="models.RESTRICT"),
   number = Models.IntegerField(null=true),
   grid = Models.IntegerField(),
   position = Models.IntegerField(null=true),
@@ -78,13 +78,7 @@ Result = Models.Model(
   rank = Models.IntegerField(null=true),
   fastestLapTime = Models.TimeField(null=true),
   fastestLapSpeed = Models.FloatField(null=true),
-  statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
-)
-
-Just_a_test_deletion = Models.Model(
-  id = Models.IDField(),
-  name = Models.CharField(),
-  test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE")
+  statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="models.RESTRICT")
 )
 
 Models.set_models(@__MODULE__, @__DIR__)

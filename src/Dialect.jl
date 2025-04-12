@@ -6,7 +6,7 @@ using LibPQ
 import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique
-import PormG.Models: Migration
+import PormG.Models: Migration, get_model_pk_field
 
 import PormG.Infiltrator: @infiltrate
 
@@ -435,6 +435,24 @@ end
 # function drop_sequence(conn::LibPQ.Connection, sequence_name::String)
 #   return """DROP SEQUENCE IF EXISTS "$sequence_name";"""
 # end
+
+# ---
+# Function to deal with deletion objects
+#
+
+function get_objects_to_delete(connection::LibPQ.Connection, model::PormGModel, instruction::SQLInstruction)::Vector{NamedTuple}
+  # Get the SQL that identifies objects to be deleted
+  sql_to_delete = """
+    SELECT "$(get_model_pk_field(model))"
+    FROM $(instruction.django !== nothing ? string(instruction.django, model.name |> lowercase) : model.name |> lowercase) as $(instruction.alias)
+    $(join(instruction.join, "\n"))
+    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
+  """
+
+  # Execute the query to get IDs of objects to delete
+  result = LibPQ.execute(connection, sql_to_delete)
+  return Tables.rowtable(result)
+end
 
 
 end

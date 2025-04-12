@@ -4,7 +4,7 @@ import DataFrames, Tables
 using Dates, TimeZones, Intervals
 using SQLite, LibPQ
 
-import PormG.Models: CharField, IntegerField
+import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
 import PormG: Dialect
 import PormG: config
 import PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
@@ -647,6 +647,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # fields_model = instruct.object.model.field_names
   last_column::String = ""
 
+  @infiltrate false
+
   if vector[1] in instruct.object.model.field_names # vector moust be a field from the model
     last_column = vector[1]
     row_join["a"] = instruct.django !== nothing ? string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
@@ -704,10 +706,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   while size(vector, 1) > 1
     row_join2 = Dict{String,String}()
     # get new object
-    new_object = getfield(foreing_table_module, foreign_table_name |> Symbol)
+    @infiltrate false
+    new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
 
     if vector[1] in new_object.field_names
-      !("to" in new_object.field_names) && throw("Error in _build_row_join, the column $(vector[1]) is a field from $(new_object.name), but this field has not a foreign key")
+      field = new_object.fields[vector[1]]
+      !hasfield(typeof(field), :to) && throw("Error in _build_row_join, the column $(vector[1]) is a field from $(new_object.name), but this field has not a foreign key")
       last_column = vector[2]
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
@@ -1153,7 +1157,6 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else
-        @infiltrate
         throw(ArgumentError("Error in insert, the field \e[4m\e[31m$(field)\e[0m not allow null"))
       end
     end
@@ -1632,135 +1635,29 @@ end
 # Execute delete query with cascade, restrict, set null, set default and set value
 #
 
-# python code
-# def sort(self):
-#   sorted_models = []
-#   concrete_models = set()
-#   models = list(self.data)
-#   while len(sorted_models) < len(models):
-#       found = False
-#       for model in models:
-#           if model in sorted_models:
-#               continue
-#           dependencies = self.dependencies.get(model._meta.concrete_model)
-#           if not (dependencies and dependencies.difference(concrete_models)):
-#               sorted_models.append(model)
-#               concrete_models.add(model._meta.concrete_model)
-#               found = True
-#       if not found:
-#           return
-#   self.data = {model: self.data[model] for model in sorted_models}
-# def delete(self):
-#   # sort instance collections
-#   for model, instances in self.data.items():
-#       self.data[model] = sorted(instances, key=attrgetter("pk"))
-
-#   # if possible, bring the models in an order suitable for databases that
-#   # don't support transactions or cannot defer constraint checks until the
-#   # end of a transaction.
-#   self.sort()
-#   # number of objects deleted for each model label
-#   deleted_counter = Counter()
-
-#   # Optimize for the case with a single obj and no dependencies
-#   if len(self.data) == 1 and len(instances) == 1:
-#       instance = list(instances)[0]
-#       if self.can_fast_delete(instance):
-#           with transaction.mark_for_rollback_on_error(self.using):
-#               count = sql.DeleteQuery(model).delete_batch(
-#                   [instance.pk], self.using
-#               )
-#           setattr(instance, model._meta.pk.attname, None)
-#           return count, {model._meta.label: count}
-
-#   with transaction.atomic(using=self.using, savepoint=False):
-#       # send pre_delete signals
-#       for model, obj in self.instances_with_model():
-#           if not model._meta.auto_created:
-#               signals.pre_delete.send(
-#                   sender=model,
-#                   instance=obj,
-#                   using=self.using,
-#                   origin=self.origin,
-#               )
-
-#       # fast deletes
-#       for qs in self.fast_deletes:
-#           count = qs._raw_delete(using=self.using)
-#           if count:
-#               deleted_counter[qs.model._meta.label] += count
-
-#       # update fields
-#       for (field, value), instances_list in self.field_updates.items():
-#           updates = []
-#           objs = []
-#           for instances in instances_list:
-#               if (
-#                   isinstance(instances, models.QuerySet)
-#                   and instances._result_cache is None
-#               ):
-#                   updates.append(instances)
-#               else:
-#                   objs.extend(instances)
-#           if updates:
-#               combined_updates = reduce(or_, updates)
-#               combined_updates.update(**{field.name: value})
-#           if objs:
-#               model = objs[0].__class__
-#               query = sql.UpdateQuery(model)
-#               query.update_batch(
-#                   list({obj.pk for obj in objs}), {field.name: value}, self.using
-#               )
-
-#       # reverse instance collections
-#       for instances in self.data.values():
-#           instances.reverse()
-
-#       # delete instances
-#       for model, instances in self.data.items():
-#           query = sql.DeleteQuery(model)
-#           pk_list = [obj.pk for obj in instances]
-#           count = query.delete_batch(pk_list, self.using)
-#           if count:
-#               deleted_counter[model._meta.label] += count
-
-#           if not model._meta.auto_created:
-#               for obj in instances:
-#                   signals.post_delete.send(
-#                       sender=model,
-#                       instance=obj,
-#                       using=self.using,
-#                       origin=self.origin,
-#                   )
-
-#   for model, instances in self.data.items():
-#       for instance in instances:
-#           setattr(instance, model._meta.pk.attname, None)
-#   return sum(deleted_counter.values()), dict(deleted_counter)
-
-# You need to build a deletion mechanism that mimics Django’s behavior by following these steps:
-
-# Define deletion policies:
-# Implement functions for various delete rules (CASCADE, PROTECT, RESTRICT, SET, SET_NULL, SET_DEFAULT, DO_NOTHING). You already have stubs in your code, so complete each one to update related fields or collect dependent objects.
-
-# Collect related objects:
-# Write logic to inspect model relationships (e.g. ForeignKey fields) and build a dependency graph. This lets you determine the proper deletion order so that dependent objects are handled before the parent is deleted.
-
-# Sort models by dependencies:
-# Mimic Django’s ordering approach by sorting the models (or instances) so that deleting one does not violate foreign key constraints. This may involve a topological sort of your models based on their relations.
-
-# Implement a deletion collector:
-# Create a collector structure that gathers related objects for deletion (or field updates) and applies the appropriate on_delete action for each relationship.
-
-# Extend your delete function:
-# In your delete function in QueryBuilder.jl you’ll need to call your collector logic to process related objects and then construct and execute the DELETE SQL statements in a transactional way.
-
-# Handle transactions and signals:
-# Use transactions to ensure that either all related deletions are applied or the operation is rolled back. You might also implement pre_delete and post_delete hooks similar to Django’s signals.
-
-import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, NO_ACTION, PROTECT
+import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, PROTECT
 
 export delete
+
+mutable struct DeletionCollector
+  model::PormGModel  # The main model being deleted from
+  connection::Union{LibPQ.Connection, SQLite.DB}  # Database connection
+  objects::Dict{PormGModel, Vector{Int64}}  # Models and their objects to delete
+  dependencies::Dict{PormGModel, Set{PormGModel}}  # Model dependencies
+  field_updates::Dict{Tuple{String, Any}, Dict{PormGModel, Vector{Int64}}}  # Field updates for SET_NULL etc.
+  fast_deletes::Dict{PormGModel, Vector{Int64}}  # Objects that can be deleted directly
+  sorted_models::Vector{PormGModel}  # Models in deletion order
+  
+  DeletionCollector(model, connection) = new(
+    model,
+    connection,
+    Dict{PormGModel, Vector{Int64}}(),
+    Dict{PormGModel, Set{PormGModel}}(),
+    Dict{Tuple{String, Any}, Dict{PormGModel, Vector{Int64}}}(),
+    Dict{PormGModel, Vector{Int64}}(),
+    Vector{PormGModel}()
+  )
+end
 
 function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
   model = objct.object.model
@@ -1769,182 +1666,303 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
 
   instruction = build(objct.object, table_alias=table_alias, connection=connection)
 
-  # check if is allowed to insert
+  # check if is allowed to delete
   !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to delete"))
 
-  # don't allow to delete a field without filter
+  # don't allow to delete without filter
   instruction._where |> isempty && throw("Error in delete, the delete must have a filter")
 
-  # set collector
-  collector = Dict{Symbol, Any}()
-
-  # colect all related objects dependencies sorted
-  array_models::Vector{PormGModel} = _delection_collector(model, connection)
-
+  # Collect all objects to delete
+  objects_to_delete = Dialect.get_objects_to_delete(connection, model, instruction)
   
+  # If no objects to delete, return early
+  if isempty(objects_to_delete)
+    return Dict{String, Int64}()
+  end
 
-  # number of objects deleted for each model label
+  # We'll track deletion counts
   deleted_counter = Dict{String, Int64}()
   
+  # Collect related models that need special handling
+  collector = DeletionCollector(model, connection)
   
-
-  # # Optimize for the case with a single obj and no dependencies
-  # if length(array_models) |> isempty # i think this is a same then can_fast_delete
-  #   count = objct |> count
-  #       count = sql.DeleteQuery(model).delete_batch([instance.pk], connection)
-  #     setattr(instance, model.pk.attname, nothing)
-  #     return count, Dict(model.label => count)
-  #   end
-  # end
-
+  # Add the primary objects to delete
+  add_objects_to_collector!(collector, objects_to_delete, model)
   
+  # Build and sort the deletion graph
+  process_collector!(collector)
 
-  
-  return nothing
-end
-
-
-function _delection_collector(model::PormGModel, connection::Union{LibPQ.Connection, SQLite.DB})
-  related_objects = _collector(model)
   @infiltrate
-  # collector.data = Dict{PormGModel, Vector{Any}}()
-  # collector.fast_deletes = []
-  # collector.field_updates = Dict{Tuple{PormGField, Any}, Vector{Any}}()
-  # collector.using = connection
-  # collector.origin = nothing
-  if related_objects |> isempty
-    return nothing
+ 
+  # Execute the deletion in a transaction
+  if connection isa LibPQ.Connection
+    # Start transaction
+    LibPQ.execute(connection, "BEGIN;")
+    
+    try
+      # Process fast deletes first (objects that can be deleted directly)
+      for (model, ids) in collector.fast_deletes
+        delete_objects(connection, model, ids)
+        deleted_counter[model.name] = length(ids)
+      end
+      
+      # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
+      for ((field, value), affected_models) in collector.field_updates
+        for (affected_model, ids) in affected_models
+          update_field(connection, affected_model, field, value, ids) 
+        end
+      end
+      
+      # Execute deletions in the sorted order
+      for model_to_delete in collector.sorted_models
+        ids = get(collector.objects, model_to_delete, [])
+        if !isempty(ids)
+          count = delete_objects(connection, model_to_delete, ids)
+          deleted_counter[model_to_delete.name] = count
+        end
+      end
+      
+      # Commit transaction
+      LibPQ.execute(connection, "COMMIT;")
+    catch e
+      # Rollback on error
+      LibPQ.execute(connection, "ROLLBACK;")
+      rethrow(e)
+    end
   else
-    return _sort(related_objects)
+    # Similar implementation for SQLite
+    # ...
+  end
+
+  total_deleted = sum(values(deleted_counter))
+  if total_deleted == 0
+    @warn("Warning in delete, no objects were deleted")  
+  end
+  
+  return total_deleted, deleted_counter
+end
+
+function add_objects_to_collector!(collector::DeletionCollector, objects::Vector{NamedTuple}, model::PormGModel)
+  # Extract IDs from objects - handle NamedTuples or Dict structures
+  pk_field = get_model_pk_field(model)
+  add_objects_to_collector!(collector, [getproperty(obj, pk_field) for obj in objects if !ismissing(getproperty(obj, pk_field))], model)
+end
+
+
+function add_objects_to_collector!(collector::DeletionCollector, ids::Vector{Int64}, model::PormGModel)
+  # Add to collector
+  collector.objects[model] = ids
+  
+  # Add model to the list of models to process
+  if !haskey(collector.dependencies, model)
+    collector.dependencies[model] = Set{PormGModel}()
   end
 end
 
-function _collector(model::PormGModel)
-  related_objects::Vector{PormGModel} = []
-  for symbol_name in keys(model.related_objects)
-    push!(related_objects, getfield(model._module, symbol_name |> titlecase |> Symbol))
+
+function process_collector!(collector::DeletionCollector)
+  # Process each model and its objects
+  for (model, ids) in collector.objects
+    # Find related objects through foreign keys
+    find_related_objects!(collector, model, ids)
   end
-  return related_objects
+
+  # Identify objects that can be fast-deleted
+  collect_fast_deletes!(collector)
+  
+  # Topologically sort models for deletion
+  collector.sorted_models = topological_sort(collector.dependencies)
 end
 
-function _sort(related_objects::Vector{PormGModel})
-  sorted_models = []
-  concrete_models = Set{PormGModel}()
-  models = related_objects
-  while length(sorted_models) < length(models)
-    found = false
-    for model in models
-      if model in sorted_models
-        continue
+function find_related_objects!(collector::DeletionCollector, model::PormGModel, ids::Vector{Int64})
+  # For each foreign key in the model (model has FK -> related_model)
+  for (field_name, field) in model.fields
+    if isa(field, sForeignKey) && field.on_delete !== nothing
+      related_model = field.to isa PormGModel ? field.to : getfield(model._module, Symbol(field.to))
+      
+      # Model with FK depends on the target model (CORRECT)
+      if !haskey(collector.dependencies, model)
+        collector.dependencies[model] = Set{PormGModel}()
       end
-      dependencies = model.related_objects |> keys |> Set
-      if !(dependencies && setdiff(dependencies, concrete_models) |> isempty)
-        sorted_models = vcat(sorted_models, model)
-        concrete_models.add(model)
-        found = true
-      end
-    end
-    if !found
-      return nothing
+      push!(collector.dependencies[model], related_model)
+      
+      handle_on_delete!(collector, field_name, field, model, ids, related_model)
     end
   end
-  return sorted_models
+  
+  # For models with foreign keys pointing to this model (related_model has FK -> model)
+  for (related_name, (field_name, pk_field, related_model_name, pk_model)) in model.related_objects
+    related_model = getfield(model._module, related_model_name |> capitalize_symbol)
+    
+    # REVERSED: Model depended on by models with FKs pointing to it
+    # Delete the referring models first, so the model can be deleted second
+    if !haskey(collector.dependencies, related_model)
+      collector.dependencies[related_model] = Set{PormGModel}()
+    end
+    # THIS is the fix - related_model depends on model (not the other way around)
+    push!(collector.dependencies[related_model], model)
+    
+    # Find objects that refer to the ids we're deleting
+    pk_field = get_model_pk_field(related_model)
+    sql = """
+      SELECT $(pk_field) FROM $(related_model.name |> lowercase)
+      WHERE $(field_name) IN ($(join(ids, ",")))
+    """    
+    result = LibPQ.execute(collector.connection, sql)
+    related_ids = [row[pk_field] for row in Tables.rowtable(result)]
+    
+    if !isempty(related_ids)
+      # Get the field and handle its on_delete behavior
+      field = related_model.fields[String(field_name)]
+      handle_on_delete!(collector, field_name, field, related_model, related_ids, model)
+    end
+  end
 end
 
-#https://github.com/django/django/blob/stable/5.1.x/django/db/models/deletion.py#L94
+function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, ids::Vector{Int64}, related_model::PormGModel)
+  @infiltrate false
+  pk_field = get_model_pk_field(model)
 
-# export CASCADE, PROTECT, RESTRICT, SET, SET_NULL, SET_DEFAULT, DO_NOTHING
+  if field.on_delete == CASCADE
+    # Find all related objects that reference the IDs being deleted
+    sql = """
+      SELECT $(pk_field) FROM $(model.name |> lowercase)
+      WHERE $(field_name) IN ($(join(ids, ",")))
+    """
+    result = LibPQ.execute(collector.connection, sql)
+    cascade_ids = [row[pk_field] for row in Tables.rowtable(result)]
+    
+    # Add them to the collector for deletion
+    if !isempty(cascade_ids)
+      add_objects_to_collector!(collector, cascade_ids, model)
+    end
 
-# """
-#     CASCADE(collector, field, sub_objs, using)
+  elseif field.on_delete == PROTECT
+    # Check if any related objects exist
+    sql = """
+      SELECT COUNT(*) FROM $(model.name |> lowercase)
+      WHERE $(field_name) IN ($(join(ids, ",")))
+    """
+    result = LibPQ.execute(collector.connection, sql)
+    count = result[1, 1]
+    
+    # If any related objects exist, throw an error
+    if count > 0
+      throw(ArgumentError("Cannot delete $(related_model.name) because it is referenced by $(model.name)"))
+    end
+  elseif field.on_delete == SET_NULL
+    # Add field update to set field to NULL
+    if !haskey(collector.field_updates, (field_name, nothing))
+      collector.field_updates[(field_name, nothing)] = Dict{PormGModel, Vector{Int64}}()
+    end
+    
+    # Find affected objects
+    sql = """
+      SELECT $(pk_field) FROM $(model.name |> lowercase)
+      WHERE $(field_name) IN ($(join(ids, ",")))
+    """
+    result = LibPQ.execute(collector.connection, sql)
+    affected_ids = [row[pk_field] for row in Tables.rowtable(result)]
+    
+    # Add to field updates
+    if !isempty(affected_ids)
+      collector.field_updates[(field_name, nothing)][model] = affected_ids
+    end
 
-# Collects the related objects for cascading deletion and, if needed, updates the field to null.
-# """
-# function CASCADE(collector, field, sub_objs, _using)
-#     collector.collect(
-#         sub_objs;
-#         source = field.remote_field.model,
-#         source_attr = field.name,
-#         nullable = field.null,
-#         fail_on_restricted = false
-#     )
-#     # If the field allows nulls but the connection does NOT support deferred constraint checks,
-#     # update the field value to `nothing` (Julia's equivalent of Python's None)
-#     if field.null && !_using.features.can_defer_constraint_checks
-#         collector.add_field_update(field, nothing, sub_objs)
-#     end
-# end
+  elseif field.on_delete == SET_DEFAULT
+    # Add field update to set field to default value
+    default_value = field.default
+    if !haskey(collector.field_updates, (field_name, default_value))
+      collector.field_updates[(field_name, default_value)] = Dict{PormGModel, Vector{Int64}}()
+    end
+    
+    # Find affected objects
+    sql = """
+      SELECT $(pk_field) FROM $(model.name |> lowercase)
+      WHERE $(field_name) IN ($(join(ids, ",")))
+    """
+    result = LibPQ.execute(collector.connection, sql)
+    affected_ids = [row.id for row in Tables.rowtable(result)]
+    
+    # Add to field updates
+    if !isempty(affected_ids)
+      collector.field_updates[(field_name, default_value)][model] = affected_ids
+    end
+  end
+  # Other on_delete behaviors can be added here
+end
 
-# """
-#     PROTECT(collector, field, sub_objs, using)
+function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
+  # Implementation of topological sort algorithm
+  @infiltrate 
+  result = Vector{PormGModel}()
+  temp_mark = Set{PormGModel}()
+  perm_mark = Set{PormGModel}()
+  
+  function visit(node)
+    if node in temp_mark
+      throw(ArgumentError("Circular dependency detected in model relationships"))
+    end
+    
+    if !(node in perm_mark)
+      push!(temp_mark, node)
+      
+      for dep in get(dependencies, node, Set{PormGModel}())
+        visit(dep)
+      end
+      
+      delete!(temp_mark, node)
+      push!(perm_mark, node)
+      push!(result, node)
+    end
+  end
+  
+  # Visit each node
+  for node in keys(dependencies)
+    if !(node in perm_mark)
+      visit(node)
+    end
+  end
+  
+  return result
+end
 
-# Raises an error to prevent deletion if related objects exist.
-# """
-# function PROTECT(collector, field, sub_objs, using)
-#     error("Cannot delete some instances of model '$(field.remote_field.model)' because they are referenced through a protected foreign key: '$(typeof(sub_objs[1])).$(field.name)'")
-# end
+function collect_fast_deletes!(collector::DeletionCollector)
+  # Find models that have no dependencies (nothing depends on them)
+  # These can be deleted directly without cascading effects
+  
+  # First, build a set of all models that have something depending on them
+  models_with_dependents = Set{PormGModel}()
+  for (_, dependent_models) in collector.dependencies
+      union!(models_with_dependents, dependent_models)
+  end
+  
+  # Models that can be fast-deleted are those that:
+  # 1. Have objects to delete
+  # 2. Nothing depends on them
+  for (model, ids) in collector.objects
+      if !(model in models_with_dependents)
+          collector.fast_deletes[model] = ids
+      end
+  end
+end
 
-# """
-#     RESTRICT(collector, field, sub_objs, using)
+function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, ids::Vector{Int64})
+  # Execute the actual deletion SQL
+  pk_field = get_model_pk_field(model)
+  sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(join(ids, ",")))"
+  result = LibPQ.execute(connection, sql)
+  return length(ids)  # Return count of deleted objects
+end
 
-# Adds restricted objects and dependencies to the collector.
-# """
-# function RESTRICT(collector, field, sub_objs, using)
-#     collector.add_restricted_objects(field, sub_objs)
-#     collector.add_dependency(field.remote_field.model, field.model)
-# end
-
-# """
-#     SET(value)
-
-# Returns a deletion handler function that will update the field with a given value.
-# If `value` is a function, it is evaluated at the time of deletion.
-# """
-# function SET(value)
-#     if isa(value, Function)
-#         return (collector, field, sub_objs, using) -> begin
-#             collector.add_field_update(field, value(), sub_objs)
-#         end
-#     else
-#         set_on_delete = (collector, field, sub_objs, using) -> begin
-#             collector.add_field_update(field, value, sub_objs)
-#         end
-#         # In Django the function may have an attribute lazy_sub_objs = true.
-#         # You might record such behavior in documentation or by wrapping the function in a type.
-#         return set_on_delete
-#     end
-# end
-
-# """
-#     SET_NULL(collector, field, sub_objs, using)
-
-# Updates the field to `nothing`.
-# """
-# function SET_NULL(collector, field, sub_objs, using)
-#     collector.add_field_update(field, nothing, sub_objs)
-# end
-
-# """
-#     SET_DEFAULT(collector, field, sub_objs, using)
-
-# Updates the field to its default value.
-# """
-# function SET_DEFAULT(collector, field, sub_objs, using)
-#     collector.add_field_update(field, field.get_default(), sub_objs)
-# end
-
-# """
-#     DO_NOTHING(collector, field, sub_objs, using)
-
-# Does nothing on deletion.
-# """
-# function DO_NOTHING(collector, field, sub_objs, using)
-#     return nothing
-# end
-
-
+function update_field(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, field::String, value::Any, ids::Vector{Int64})
+  # Update field values
+  pk_field = get_model_pk_field(model)
+  value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
+  sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE id IN ($(join(ids, ",")))"
+  LibPQ.execute(connection, sql)
+end
 
 
 
 end
-

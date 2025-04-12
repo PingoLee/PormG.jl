@@ -46,6 +46,14 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
   return model_names
 end
 
+function capitalize_symbol(s::Symbol)
+  str = string(s)
+  if isempty(str)
+    return s
+  end
+  return Symbol(uppercase(str[1]) * str[2:end])
+end
+
 function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
   fields::Vector{Symbol} = []
   for (field_name, field) in pairs(model.fields)

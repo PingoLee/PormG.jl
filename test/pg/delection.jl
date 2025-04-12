@@ -24,12 +24,18 @@ Base.include(PormG, "db_2/models.jl")
 import PormG.models as M
 
 
-query = M.Status |> object
-query.filter("status" => "Engine")
+query = M.Status |> object;
+query.filter("status" => "Engine");
 
 query |> do_count
 
 query |> do_exists
 
-query |> delete
+total, dict = query |> delete
 
+# test fast delete
+query = M.Just_a_test_deletion |> object
+query.filter("id" => 1)
+query |> do_count
+query |> do_exists
+total, dict = query |> delete

@@ -102,9 +102,9 @@ bulk_insert(query, df)
 # test querys
 
 query = M.Result |> object
-query.filter("driverid__surname" => "Hamilton", "fastestlaptime__@isnull" => false)
-query.values("driverid__surname", "driverid__forename", "position", "time", "fastestlaptime", "fastestlapspeed")
-query.order_by("-fastestlapspeed")
+query.filter("driverid__surname" => "Hamilton", "fastestlaptime__@isnull" => false);
+query.values("driverid__surname", "driverid__forename", "position", "time", "fastestlaptime", "fastestlapspeed");
+query.order_by("-fastestlapspeed");
 page(query, 10)
 
 df = query |> list |> DataFrame
@@ -123,3 +123,17 @@ df.country = map(x -> ismissing(x) ? missing : uppercase(x), df.country)
 # bulk_update
 
 bulk_update(query, df)
+
+
+# insert fake data in the table Just_a_test_deletion
+query = M.Just_a_test_deletion |> object
+query.create("name" => "test", "test_result" => 1)
+query.create("name" => "test", "test_result" => 2)
+query.create("name" => "test", "test_result" => 3)
+
+# check insertion
+query = M.Just_a_test_deletion |> object
+query.filter("name" => "test")
+query.values("id", "name", "test_result__constructorid__name")
+
+df2 = query |> list |> DataFrame

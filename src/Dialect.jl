@@ -448,7 +448,6 @@ function get_objects_to_delete(connection::LibPQ.Connection, model::PormGModel, 
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
   """
-
   # Execute the query to get IDs of objects to delete
   result = LibPQ.execute(connection, sql_to_delete)
   return Tables.rowtable(result)

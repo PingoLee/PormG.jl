@@ -23,7 +23,7 @@ Race = Models.Model(
   raceId = Models.IDField(),
   year = Models.IntegerField(),
   round = Models.IntegerField(),
-  circuitId = Models.ForeignKey(Circuit, pk_field="circuitId", on_delete="models.RESTRICT"),
+  circuitId = Models.ForeignKey(Circuit, pk_field="circuitId", on_delete="CASCADE"),
   name = Models.CharField(),
   date = Models.DateField(),
   time = Models.TimeField(null=true),

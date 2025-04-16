@@ -1659,7 +1659,7 @@ mutable struct DeletionCollector
   )
 end
 
-function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, allow_delete_all::Bool = false)
   model = objct.object.model
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
@@ -1670,14 +1670,14 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to delete"))
 
   # don't allow to delete without filter
-  instruction._where |> isempty && throw("Error in delete, the delete must have a filter")
+  !allow_delete_all && instruction._where |> isempty && throw("Error in delete, the delete must have a filter")
 
-  # Collect all objects to delete
+  # Collect all objects to delete (primary keys)
   objects_to_delete = Dialect.get_objects_to_delete(connection, model, instruction)
   
   # If no objects to delete, return early
   if isempty(objects_to_delete)
-    return Dict{String, Int64}()
+    return 0, Dict{String, Int64}()
   end
 
   # We'll track deletion counts
@@ -1692,7 +1692,7 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   # Build and sort the deletion graph
   process_collector!(collector)
 
-  @infiltrate
+  @infiltrate false
  
   # Execute the deletion in a transaction
   if connection isa LibPQ.Connection
@@ -1821,52 +1821,42 @@ end
 
 function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, ids::Vector{Int64}, related_model::PormGModel)
   @infiltrate false
-  pk_field = get_model_pk_field(model)
-
-  if field.on_delete == CASCADE
-    # Find all related objects that reference the IDs being deleted
-    sql = """
-      SELECT $(pk_field) FROM $(model.name |> lowercase)
-      WHERE $(field_name) IN ($(join(ids, ",")))
-    """
-    result = LibPQ.execute(collector.connection, sql)
-    cascade_ids = [row[pk_field] for row in Tables.rowtable(result)]
-    
+  if field.on_delete == CASCADE        
     # Add them to the collector for deletion
-    if !isempty(cascade_ids)
-      add_objects_to_collector!(collector, cascade_ids, model)
+    if !isempty(ids)
+      add_objects_to_collector!(collector, ids, model)
     end
 
-  elseif field.on_delete == PROTECT
-    # Check if any related objects exist
-    sql = """
-      SELECT COUNT(*) FROM $(model.name |> lowercase)
-      WHERE $(field_name) IN ($(join(ids, ",")))
-    """
-    result = LibPQ.execute(collector.connection, sql)
-    count = result[1, 1]
-    
-    # If any related objects exist, throw an error
-    if count > 0
-      throw(ArgumentError("Cannot delete $(related_model.name) because it is referenced by $(model.name)"))
+  elseif field.on_delete in [PROTECT, RESTRICT]
+    # Check if any related objects exist       
+    if !isempty(ids)
+      pk_field = get_model_pk_field(related_model)
+      sql = """
+        SELECT $(pk_field) FROM $(related_model.name |> lowercase)
+        WHERE $(pk_field) IN ($(join(ids, ",")))
+        LIMIT 5
+      """
+      sample_ids = LibPQ.execute(collector.connection, sql) |> Tables.rowtable
+      sample_ids_str = join([row[pk_field] for row in sample_ids], ", ")
+      
+      # More descriptive error with field name, constraint type, and sample IDs
+      constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
+      throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m (ids: \e[4m\e[32m$(sample_ids_str)\e[0m...) because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
     end
   elseif field.on_delete == SET_NULL
+    # check if the field allow null
+    if !field.null
+      throw(ArgumentError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
+    end
+
     # Add field update to set field to NULL
     if !haskey(collector.field_updates, (field_name, nothing))
       collector.field_updates[(field_name, nothing)] = Dict{PormGModel, Vector{Int64}}()
     end
-    
-    # Find affected objects
-    sql = """
-      SELECT $(pk_field) FROM $(model.name |> lowercase)
-      WHERE $(field_name) IN ($(join(ids, ",")))
-    """
-    result = LibPQ.execute(collector.connection, sql)
-    affected_ids = [row[pk_field] for row in Tables.rowtable(result)]
-    
+            
     # Add to field updates
     if !isempty(affected_ids)
-      collector.field_updates[(field_name, nothing)][model] = affected_ids
+      collector.field_updates[(field_name, nothing)][model] = ids
     end
 
   elseif field.on_delete == SET_DEFAULT
@@ -1874,19 +1864,11 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     default_value = field.default
     if !haskey(collector.field_updates, (field_name, default_value))
       collector.field_updates[(field_name, default_value)] = Dict{PormGModel, Vector{Int64}}()
-    end
-    
-    # Find affected objects
-    sql = """
-      SELECT $(pk_field) FROM $(model.name |> lowercase)
-      WHERE $(field_name) IN ($(join(ids, ",")))
-    """
-    result = LibPQ.execute(collector.connection, sql)
-    affected_ids = [row.id for row in Tables.rowtable(result)]
+    end    
     
     # Add to field updates
     if !isempty(affected_ids)
-      collector.field_updates[(field_name, default_value)][model] = affected_ids
+      collector.field_updates[(field_name, default_value)][model] = ids
     end
   end
   # Other on_delete behaviors can be added here
@@ -1894,7 +1876,7 @@ end
 
 function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
   # Implementation of topological sort algorithm
-  @infiltrate 
+  @infiltrate false
   result = Vector{PormGModel}()
   temp_mark = Set{PormGModel}()
   perm_mark = Set{PormGModel}()
@@ -1924,26 +1906,33 @@ function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
     end
   end
   
-  return result
+  return reverse(result)
 end
 
 function collect_fast_deletes!(collector::DeletionCollector)
   # Find models that have no dependencies (nothing depends on them)
-  # These can be deleted directly without cascading effects
   
-  # First, build a set of all models that have something depending on them
-  models_with_dependents = Set{PormGModel}()
-  for (_, dependent_models) in collector.dependencies
-      union!(models_with_dependents, dependent_models)
+  # First, identify all models that have something depending on them
+  models_with_dependents = Set{PormGModel}()  
+  # A model is a dependent if it appears as a key in the dependencies dict
+  # AND has a non-empty set of dependencies
+  for (model, dependencies) in collector.dependencies
+    if !isempty(dependencies)
+      # This model depends on something, so it's not a leaf node
+      push!(models_with_dependents, model)
+      
+      # Also add the models it depends on (they have dependents)
+      union!(models_with_dependents, dependencies)
+    end
   end
   
   # Models that can be fast-deleted are those that:
   # 1. Have objects to delete
-  # 2. Nothing depends on them
+  # 2. Don't appear in models_with_dependents
   for (model, ids) in collector.objects
-      if !(model in models_with_dependents)
-          collector.fast_deletes[model] = ids
-      end
+    if !(model in models_with_dependents)
+      collector.fast_deletes[model] = ids
+    end
   end
 end
 

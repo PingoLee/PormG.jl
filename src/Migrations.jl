@@ -519,6 +519,10 @@ end
 
 # Main function to simulate makemigrations
 function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+  if !settings.change_db
+    @warn("The database is not set to change_db, so the migration plan will not be applied.")
+    return
+  end
   models_array::Vector{PormGModel} = []
   try
     models_array = convert_schema_to_models(connection)
@@ -594,6 +598,11 @@ function get_all_dicts(mod::Module)
 end
 
 function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+  if !settings.change_db
+    @warn("The database is not set to change_db, so the migration plan will not be applied.")
+    return
+  end
+  
   @info("\e[33mBefore applying the migrations, make sure to back up your database. Migrations are irreversible. And the PormG is in development, so it is not guaranteed that the migrations will be applied correctly.\e[0m")
   print("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m")
   response = readline()

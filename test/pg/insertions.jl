@@ -41,7 +41,7 @@ import PormG.models as M
 path_load = "/home/pingo02/BackUp/pormg/f1/status.csv"
 df = CSV.File(path_load) |> DataFrame
 
-query = M.Status |> object
+query = M.Status |> object;
 
 for row in eachrow(df)
     dt = query.create("statusid" => row.statusId, "status" => row.status)

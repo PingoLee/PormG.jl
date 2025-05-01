@@ -453,5 +453,27 @@ function get_objects_to_delete(connection::LibPQ.Connection, model::PormGModel, 
   return Tables.rowtable(result)
 end
 
+# ---
+# Function to deal with operators
+#
+
+function contains(conn::LibPQ.Connection, column::String, value::String)::String
+  return """$(column) LIKE '%$(value)%'"""
+end
+function contains(conn::LibPQ.Connection, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+function icontains(conn::LibPQ.Connection, column::String, value::String)::String
+  return """$(column) ILIKE '%$(value)%'"""
+end
+function icontains(conn::LibPQ.Connection, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+  
+
+
+
 
 end

@@ -38,7 +38,7 @@ const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "lt" => "<",
   "isnull" => "ISNULL",
   "contains" => "contains",
-
+  "icontains" => "icontains",
 )
 
 const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
@@ -48,6 +48,7 @@ const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "day" => "DAY",  
   "yyyy_mm" => "Y_M",
   "quarter" => "QUARTER",
+  "quadrimester" => "QUADRIMESTER",
 )
 
 # dictionary from function to type of the field

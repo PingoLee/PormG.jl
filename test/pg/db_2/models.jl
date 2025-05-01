@@ -1,14 +1,14 @@
 module models
 
-import PormG.Models
+import PormG.Models # if you use PormG in your package, you need import ..your_package.PormG.Models
 
 Status = Models.Model(
   statusId = Models.IDField(),
   status = Models.CharField()
 )
 
-Circuit = Models.Model(
-  circuitId = Models.IDField(),
+Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the names of models.
+  circuitId = Models.IDField(), # the PormG automatically do a lowercase for the name of the field, so you can use a capital letter in the name of the field, Hoewver you need to use a lowercase in the query operations.
   circuitRef = Models.CharField(),
   name = Models.CharField(),
   location = Models.CharField(),
@@ -87,6 +87,6 @@ Just_a_test_deletion = Models.Model(
   test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE")
 )
 
-Models.set_models(@__MODULE__, @__DIR__)
+Models.set_models(@__MODULE__, @__DIR__) # That is important to set the models in the module, otherwise it will not work, that need stay at the end of the file
 
 end

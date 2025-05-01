@@ -73,7 +73,12 @@ end
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 function set_models(_module::Module, path::String)::Nothing
   models = get_all_models(_module)  
-  connect_key = split(path, "/")[end]
+  # Detect OS and extract connect_key accordingly
+  if Sys.iswindows()
+    connect_key = split(path, "\\")[end]
+  else
+    connect_key = split(path, "/")[end]
+  end
 
   # set the original module in models
   for model in models
@@ -146,6 +151,9 @@ function format_fild_name(name::String)::String
   end 
   return name
 end
+function format_fild_name(name::Nothing)::Nothing
+  return nothing
+end
 
 function format_model_name(name::String)::String  
   return format_fild_name(name)  
@@ -172,8 +180,9 @@ function Model(name::AbstractString, fields::NTuple{N, Pair{Symbol, T}}) where N
   # println(fields_dict)
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
-function Model(name::AbstractString; fields...)   
-  return Model(name, fields)
+function Model(name::AbstractString; fields...)
+  
+  return Model(name,  Tuple(pairs(fields)))
 end
 function Model(name::AbstractString, dict::Dict{String, PormGField})
   field_names::Vector{String} = []
@@ -230,7 +239,11 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
     field_name in contants_julia && (field_name = "_$field_name")
     struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol    
     sets::Vector{String} = []
-    fields = struct_name == :ForeignKey ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
+    try
+      fields = struct_name == :ForeignKey ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
+    catch e
+      @infiltrate
+    end
   end
   @info("""$(model.name) = Models.Model("$(model.name)"$fields)""")
 
@@ -253,10 +266,10 @@ end
 function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   to::String = "" 
   for sfield in fieldnames(typeof(field))
-    sfield == :to && (to = getfield(field, sfield); continue)
+    sfield == :to && (to = getfield(field, sfield); continue)    
     if getfield(field, sfield) != getfield(ForeignKey(""), sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
-    end
+    end    
   end
   fields *= ",\n  $field_name = Models.$struct_name(\"$to\", $(join(sets, ", ")))"
   return fields
@@ -456,7 +469,7 @@ function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, 
   )
 end
 
-struct sForeignKey <: PormGField
+mutable struct sForeignKey <: PormGField
   verbose_name::Union{String, Nothing}
   primary_key::Bool
   unique::Bool
@@ -525,7 +538,7 @@ function ForeignKey(to::Union{String, PormGModel};
   !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
 
   # Resolve db_index based on db_constraint
-  db_index = db_index || !db_constraint
+  db_index = db_index || !db_constraint 
   pk_field = format_fild_name(pk_field)  
 
   return sForeignKey(
@@ -576,7 +589,7 @@ function _get_on_delete_mode(on_delete::AbstractString)
 end
 function _get_on_delete_mode(on_delete::Function)
   # check if the function is one of the valid functions
-  check_function = on_delete |> uppercase
+  check_function = on_delete |> string |> uppercase
   if !(check_function in ["CASCADE", "RESTRICT", "SET_NULL", "SET_DEFAULT", "SET", "DO_NOTHING", "PROTECT"])
     throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
   end
@@ -1275,8 +1288,7 @@ end
 
 Format the input `x` as a string if it is of type `String`, otherwise return `x` as is.
 """
-function format_string(x)
-  @infiltrate
+function format_string(x)  
   if x isa String
     return "\"$x\""
   else

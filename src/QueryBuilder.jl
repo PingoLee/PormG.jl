@@ -5,7 +5,7 @@ using Dates, TimeZones, Intervals
 using SQLite, LibPQ
 
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
-import PormG: Dialect
+import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform
@@ -193,7 +193,7 @@ end
 export Sum, Avg, Count, Max, Min, When
 @kwdef mutable struct FObject <: SQLTypeF
   function_name::String
-  column::Union{String, SQLTypeField, N, Vector{N}, Vector{String}, SQLTypeOper, SQLTypeQ, SQLTypeQor, Vector{M}} where {N <: SQLTypeF, M <: SQLObject} # TODO Vector{M} is needed?
+  column::Union{String, SQLTypeField, N, Vector{N}, Vector{String}, SQLTypeOper, SQLTypeQ, SQLTypeQor, Vector{M}} where {N <: SQLTypeF, M <: SQLType} # TODO Vector{M} is needed?
   agregate::Bool = false
   _as::Union{String, Nothing} = nothing
   kwargs::Dict{String, Any} = Dict{String, Any}()
@@ -224,7 +224,7 @@ end
 function Cast(x::Union{String, SQLTypeText, SQLTypeF}, type::PormGField)
   return Cast(x, type.type)
 end
-function Concat(x::Union{Vector{String}, Vector{N}} where N <: SQLObject; output_field::Union{N, String, Nothing} where N <: PormGField = nothing, _as::String="")
+function Concat(x::Union{Vector{String}, Vector{N}} where N <: SQLType; output_field::Union{N, String, Nothing} where N <: PormGField = nothing, _as::String="")
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
@@ -245,6 +245,9 @@ end
 function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
+function When(x::Union{SQLTypeOper, SQLTypeF}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+  return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
+end
 function Case(conditions::Vector{N} where N <: SQLTypeF; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)
     output_field = output_field.type
@@ -258,7 +261,7 @@ function Case(conditions::SQLTypeF; default::Any = "NULL", output_field::Union{N
   return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
 end
 function To_char(x::Union{String, SQLTypeF, Vector{String}}, format::String)
-  return FObject(function_name = "TO_CHAR", column = x, kwargs = Dict{String, Any}("format" => format))
+  return FObject(function_name = "EXTRACT_DATE", column = x, kwargs = Dict{String, Any}("format" => format))
 end
 
 MONTH(x) = Extract(x, "MONTH")
@@ -273,7 +276,9 @@ DATE(x) = To_char(x, "YYYY-MM-DD")
 # # 					When(**{ f'{data}__month__lte': 12 }, then=Value('3')),
 # # 					output_field=CharField()
 # # 				)))
-QUARTER(x) = Concat([
+
+function QUADRIMESTER(x)
+  return Concat([
                 Cast(YEAR(x), CharField()), 
                 Value("-Q"), 
                 Case([When(OP(MONTH(x), "<=", 4), then = 1), 
@@ -284,6 +289,21 @@ QUARTER(x) = Concat([
                 ], 
                 output_field = CharField(), 
                 _as = "$(x[1])__quarter")
+end
+function QUARTER(x)
+  return Concat([
+                Cast(YEAR(x), CharField()), 
+                Value("-Q"), 
+                Case([When(OP(MONTH(x), "<=", 3), then = 1), 
+                      When(OP(MONTH(x), "<=", 6), then = 2), 
+                      When(OP(MONTH(x), "<=", 9), then = 3), 
+                      When(OP(MONTH(x), "<=", 12), then = 4)
+                      ], 
+                      output_field = CharField())
+                ],
+                output_field = CharField(),
+                _as = "$(x[1])__trimester")
+end
 
 
 
@@ -386,6 +406,7 @@ function _query_select(array::Vector{SQLTypeField})
 end
 
 function order_by!(q::SQLObject, values::NTuple{N, Union{String, SQLTypeOrder}} where N)
+  q.order = [] # every call of order_by, reset the order
   for v in values 
     if isa(v, String)
       # check if v constains - in the first position
@@ -463,6 +484,12 @@ function _check_function(f::FObject)
   f.column = _check_function(f.column)
   return f
 end
+function _check_function(f::Vector{FObject})
+  for i in 1:size(f, 1)
+    f[i] = _check_function(f[i])  
+  end  
+  return f
+end
 function _check_function(f::SQLTypeOper)
   f.column = _check_function(f.column)
   return f
@@ -470,12 +497,19 @@ end
 function _check_function(f::Union{SQLText, SQLField})
   return f
 end
+function _check_function(f::Vector{SQLType})
+  for i in 1:size(f, 1)    
+    f[i] = _check_function(f[i])   
+  end  
+  return f
+end
+
 function _check_function(x::Vector{String})  
   if length(x) == 1
     return x[1]
   else    
     if haskey(PormGtrasnform, x[end])
-      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])   
+      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])  
       return _check_function(resp)
     else
       joined_keys_with_prefix = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), "\n")
@@ -697,7 +731,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
     row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model.related_objects[vector[1]][4] |> String, "_id") : instruct.object.model.related_objects[vector[1]][4] |> String
   else
-    throw("Error in _build_row_join, the column $(vector[1]) not found in $(instruct.object.model.name)")
+    throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
   
   vector = vector[2:end]  
@@ -801,6 +835,7 @@ function ISNULL(v::String , value::Bool)
   end
 end
 
+
 # ---
 # Build the SQLInstruction object
 #
@@ -811,6 +846,20 @@ function _get_select_query(v::SQLText, instruc::SQLInstruction)
 end
 
 function _get_select_query(v::Vector{SQLObject}, instruc::SQLInstruction)
+  resp = []
+  for v in v
+    push!(resp, _get_select_query(v, instruc))
+  end
+  return resp
+end
+function _get_select_query(v::Vector{SQLType}, instruc::SQLInstruction)
+  resp = []
+  for v in v
+    push!(resp, _get_select_query(v, instruc))
+  end
+  return resp
+end
+function _get_select_query(v::Vector{FObject}, instruc::SQLInstruction)
   resp = []
   for v in v
     push!(resp, _get_select_query(v, instruc))
@@ -831,7 +880,7 @@ function _get_select_query(v::SQLField, instruc::SQLInstruction)
   return _get_select_query(v.field, instruc)
 end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
-  if isa(v.column, SQLTypeF) && haskey(v.column.function_name, PormGTypeField)
+  if isa(v.column, SQLTypeF) && haskey(PormGTypeField, v.column.function_name)
     value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
   else
     if isa(v.values, String)
@@ -848,6 +897,8 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " (", join(value, ", "), ")")
   elseif v.operator in ["ISNULL"]
     return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
+  elseif v.operator in ["contains", "icontains"]
+    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, value)
   else
     throw("Error in operator, $(v.operator) is not a valid operator")
   end
@@ -887,6 +938,9 @@ function get_select_query(values::Vector{Union{SQLTypeText, SQLTypeField}}, inst
     else
       v_copy.field = _get_select_query(v_copy.field, instruc)
       instruc.select[i] = v_copy
+      if v_copy._as === nothing
+        throw(ArgumentError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
+      end
       instruc.cache[v_copy._as] = instruc.select[i]
     end    
   end
@@ -975,7 +1029,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     value = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($value)")
   else
-    if isa(v.values, String)
+    if v.operator in ["contains", "icontains"]
+      value = v.values
+    elseif isa(v.values, String)
       value = "'" * v.values * "'"
     else
       value = string(v.values)
@@ -988,8 +1044,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", value)
   elseif v.operator in ["in", "not in"]
     return string(column, " ", v.operator, " (", join(value, ", "), ")")
-  elseif v.operator in ["ISNULL"]
+  elseif v.operator in ["ISNULL"]    
     return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
+  elseif v.operator in ["contains", "icontains"]
+    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, value)
   else
     throw("Error in operator, $(v.operator) is not a valid operator")
   end
@@ -1027,7 +1085,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   for v in object.filter
     if isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper})
       push!(instruc._where, _get_filter_query(v, instruc))
-    else
+    else      
       throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper")
     end
   end  
@@ -1052,7 +1110,7 @@ function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
     alias = get_alias(table_alias),
     connection = connection,
-    django = settings.django_prefix
+    django = settings.django_prefix === nothing ? nothing : settings.django_prefix * "_",
   )   
   
   get_select_query(object.values, instruct)
@@ -1224,7 +1282,6 @@ function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_fi
     try
       LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
     catch e
-      @infiltrate
       if occursin("does not exist", e |> string)        
         _fix_sequence_name(connection, model)
         LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
@@ -1367,7 +1424,10 @@ end
 
 export bulk_insert
 
-function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], chunk_size::Int64 = 1000) 
+function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
+    columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], 
+    chunk_size::Int64 = 1000
+  ) 
   model = objct.object.model
   settings = config[model.connect_key]
   connection = settings.connections
@@ -1424,8 +1484,7 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; columns:
       elseif model.fields[field].null || model.fields[field].primary_key
         continue      
       else
-        @infiltrate
-        throw("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null")
+        throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in the DataFrame and not allow null"))
       end
     else      
       if  model.fields[field].primary_key
@@ -1499,10 +1558,82 @@ end
 
 export bulk_update
 
+"""
+Performs a bulk update operation on a database table using the provided `DataFrame` and a query object.
+
+# Arguments
+- `objct::SQLObjectHandler`: The database handler object.
+- `df::DataFrames.DataFrame`: The DataFrame containing the data to be used for the update.
+- `columns`: (Optional) Specifies which columns to update. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, no columns are specified.
+- `filters`: (Optional) Specifies the filters to apply for the update. Can be a `String`, a `Pair{String, T}` where `T` is `String`, `Int64`, `Bool`, `Date`, or `DateTime`, or a `Vector` of these. If `nothing`, no filters are applied.
+- `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
+- `chunk_size::Int64`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
+
+# Example
+```julia
+# Update the columns of the DataFrame df if df contains the primary key of the table
+bulk_update(objct, df)
+# Update the name and dof columns for the security_id in the DataFrame df
+bulk_update(objct, df, columns=["security_id", "name", "dof"], filters=["security_id"])
+```
+"""
 function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
-  columns::Vector{Union{String, Pair{String, String}}}=Union{String, Pair{String, String}}[],
-  filters::Vector{Union{String, Pair{String, Any}}}=Union{String, Pair{String, Any}}[],
+    columns=nothing, 
+    filters=nothing,
+    show_query::Bool=false, 
+    chunk_size::Int64=1000)
+
+  _columns::Vector{Union{String, Pair{String, String}}} = []
+  _filters::Vector{Union{String, Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}}} = []
+  if columns === nothing
+  elseif columns isa AbstractString
+    push!(_columns, columns)
+  elseif columns isa Pair{String, String}
+    push!(_columns, columns)
+  elseif columns isa Vector
+    for column in columns
+      if column isa AbstractString
+        push!(_columns, column)
+      elseif column isa Pair{String, String}
+        push!(_columns, column)
+      else
+        throw("Error in bulk_update, the columns must be a String or a Pair{String, String}")
+      end
+    end
+  else
+    throw("Error in bulk_update, the columns must be a String or a Pair{String, String}")
+  end
+
+  if filters === nothing
+  elseif filters isa AbstractString
+    push!(_filters, filters)
+  elseif filter isa Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}
+    push!(_filters, filters)
+  elseif filters isa Vector
+    for filter in filters
+      if filter isa AbstractString
+        push!(_filters, filter)
+      elseif filter isa Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}
+        push!(_filters, filter)
+      else
+        throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, NumInt64ber, Bool, Date, DateTime}")
+      end
+    end
+  else
+    throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, Int64, Bool, Date, DateTime}")
+  end
+
+
+  _bulk_update(objct, df, _columns, _filters, show_query, chunk_size)
+  
+end
+
+function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
+  columns::Vector{Union{String, Pair{String, String}}},
+  filters::Vector{Union{String, Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}}},
+  show_query::Bool,
   chunk_size::Int64=1000)
+
   model = objct.object.model
   settings = config[model.connect_key]
   connection = settings.connections
@@ -1516,22 +1647,6 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     return nothing
   end
 
-  # colect the filters
-  pks = [field for field in keys(model.fields) if model.fields[field].primary_key]
-  dinanic_filters::Vector{String} = []
-  static_filters::Vector{Pair{String, Any}} = []
-  if !isempty(filters)
-    for filter in filters
-      if filter isa Pair
-        push!(static_filters, filter)
-      else
-        push!(dinanic_filters, filter)
-      end
-    end
-  else
-    dinanic_filters = pks
-  end
-
   # colect name of the fields
   fields = model.field_names
   fields_df::Vector{String} = []
@@ -1539,7 +1654,13 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     if length(columns) > 0
       for column in columns
         if column isa Pair
-          rename!(df, column.first => column.second)
+          if !(column.first in df |> names)
+            @error("""Error in bulk_update, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
+          end
+          if column.second in df |> names
+            DataFrames.select!(df, DataFrames.Not(column.second |> Symbol))
+          end
+          DataFrames.rename!(df, column.first => column.second)
           push!(fields_df, column.second)
         else
           push!(fields_df, column)
@@ -1578,6 +1699,35 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     end
   end  
 
+  # colect the filters
+  pks = [field for field in keys(model.fields) if model.fields[field].primary_key]
+  dinanic_filters::Vector{String} = []
+  static_filters::Vector{Pair{String, Any}} = []
+  if !isempty(filters)
+    for filter in filters
+      if filter isa Pair
+        push!(static_filters, filter)
+      else
+        push!(dinanic_filters, filter)
+        filter in fields_df || push!(fields_df, filter)
+      end
+    end
+  else
+    dinanic_filters = pks
+  end
+
+  instruction::Union{SQLInstruction, Nothing} = nothing
+
+  objct.object.filter = [] # clear the filters
+  if size(static_filters, 1) > 0
+    for filter in static_filters
+      objct.filter(filter)
+    end
+    instruction = build(objct.object, connection=connection) 
+  end
+
+  @infiltrate false
+
   # check if the fields_df are not in fields
   for field in fields_df
     in(field, fields) || @error("""Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
@@ -1589,46 +1739,62 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   count::Int64 = 0
   total::Int64 = size(df, 1)
   for (index, row) in enumerate(eachrow(df))
-  values = String[]
-  try
-    values = [model.fields[field].formater(row[field]) for field in fields_df]
-  catch e
-    _depuration_values_bulk_insert(fields_df, model, row, index)
-    throw("Error in bulk_update, the row $(index) has a problem: $(e)")
-  end
-  push!(rows, "($(join(values, ", ")))")
-  count += 1
-  if count == chunk_size || index == total
-    bulk_update(model, connection, fields_df, rows, pk_exist, pk_field, set_columns)
-    count = 0
-    rows = String[]
-  end
+    values = String[]
+    try
+      values = [model.fields[field].formater(row[field]) for field in fields_df]
+    catch e
+      _depuration_values_bulk_insert(fields_df, model, row, index)
+      throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+    end
+    push!(rows, "($(join(values, ", ")))")
+    count += 1
+    if count == chunk_size || index == total
+      @infiltrate false
+      _bulk_update(model, connection, fields_df, rows, set_columns, dinanic_filters, show_query, instruction)
+      count = 0
+      rows = String[]
+    end
   end
 
   return nothing
   
 end
 
-function bulk_update(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String}, set_columns::String)
+function _bulk_update(model::PormGModel, 
+  connection::LibPQ.Connection, 
+  fields::Vector{String}, 
+  rows::Vector{String}, 
+  set_columns::String, 
+  dinanic_filters::Vector{String}, 
+  show_query::Bool,
+  instruction::Union{SQLInstruction, Nothing})
+
+  if instruction.join |> length > 0
+    throw("Error in bulk_update, the join is not allowed in bulk_update")
+  end
   # Construct the bulk update SQL.
-  pk_field_str = pk_field[1] # TODO: support multiple primary keys
+  _where::Vector{String} = []
+  for filter in dinanic_filters
+    push!(_where, "Tb.$(filter) = source.$(filter)::$(model.fields[filter].type |> lowercase)")
+  end
+  for filter in instruction._where
+    push!(_where, filter)
+  end
   sql = """
-  UPDATE $(string(model.name)) AS target
+  UPDATE $(instruction.django !== nothing ? string(instruction.django, model.name |> lowercase) : model.name |> lowercase) AS Tb
   SET $(set_columns)
   FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(fields, ",")))
-  WHERE target.$(pk_field_str) = source.$(pk_field_str);
+  WHERE $(join(_where, " AND \n   "))
   """
 
-  # @info sql
+  @infiltrate false
 
-  # Execute the query for the given connection type.
-  if connection isa LibPQ.Connection
-    LibPQ.execute(connection, sql)
-  elseif connection isa SQLite.DB
-    SQLite.execute(connection, sql)
-  else    
-    throw("Unsupported connection type")
-  end
+  if show_query 
+     @info sql
+  else 
+    # Execute the query for the given connection type.
+    LibPQ.execute(connection, sql)   
+  end  
 end
 
 # ---

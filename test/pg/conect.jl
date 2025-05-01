@@ -4,7 +4,6 @@ Pkg.activate(".")
 using Revise
 using PormG
 using DataFrames
-using Test
 
 cd("test")
 cd("pg")

@@ -66,3 +66,20 @@ total, dict = delete(query; allow_delete_all = true)
 query = M.Constructor |> object;
 query |> do_count
 total, dict = delete(query; allow_delete_all = true)
+
+
+
+# test delete
+
+# insert fake data in the table Just_a_test_deletion
+query = M.Just_a_test_deletion |> object
+query.create("name" => "test", "test_result" => 1)
+query.create("name" => "test", "test_result" => 2)
+query.create("name" => "test", "test_result" => 3)
+
+# check insertion
+query = M.Just_a_test_deletion |> object
+query.filter("name" => "test")
+query.values("id", "name", "test_result__constructorid__name")
+
+df2 = query |> list |> DataFrame

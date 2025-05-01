@@ -1,25 +1,65 @@
 module Generator
 
-import PormG: MODEL_PATH, SQLConn
+import PormG: MODEL_PATH, SQLConn, DB_PATH
 using SQLite, LibPQ
 import OrderedCollections: OrderedDict
 
-# I want generate files with db models, can you help me?
-# example:
-# users = Models.PormGModel("users", 
-#   name = Models.CharField(), 
-#   email = Models.CharField(), 
-#   age = Models.IntegerField()
-# )
+"""
+  create_db_folder_and_yml(path::String)::Nothing
 
-# cars = Models.PormGModel("cars", 
-#   user = Models.ForeignKey(users, "CASCADE"),
-#   name = Models.CharField(), 
-#   brand = Models.CharField(), 
-#   year = Models.IntegerField()
-# )
-# I Need open a sqlight db and get all tables and columns to generate the models.jl file
+Creates a folder named "db" at the given path (if it doesn't exist) and an empty ".yml" file inside it.
+"""
+function create_db_folder_and_yml(;path::String = DB_PATH)::Nothing
+    db_folder = joinpath(path)
+    if !isdir(db_folder)
+        mkpath(db_folder)
+    end
+    yml_file = joinpath(db_folder, "connection.yml")
+    if !isfile(yml_file)
+      open(yml_file, "w") do f
+        write(f, """
+    env: dev
 
+    dev:
+      adapter: PostgreSQL
+      database: 
+      host: 
+      username: 
+      password: 
+      port: 
+      config:
+        change_db: true
+        change_data: true
+        time_zone: 'America/Sao_Paulo'
+
+    prod:
+      adapter: PostgreSQL
+      database: 
+      host: 
+      username: 
+      password: 
+      port: 
+      config:
+        change_db: true
+        change_data: true
+        time_zone: 'America/Sao_Paulo'
+
+    test:
+      adapter: PostgreSQL
+      database: 
+      host: 
+      username: 
+      password: 
+      port: 
+      config:
+        change_db: true
+        change_data: true
+        time_zone: 'America/Sao_Paulo'
+    """)
+      end
+    end
+    nothing
+end
 
 """
   generate_models_from_db(db::SQLite.DB, file::String, Instructions::Vector{Any}) :: Nothing

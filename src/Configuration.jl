@@ -3,7 +3,7 @@ module Configuration
 import YAML, Logging
 import PormG: SQLConn, config
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT
-
+import PormG: Generator
 import PormG.Infiltrator: @infiltrate
 
 import SQLite
@@ -97,8 +97,25 @@ end
 function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, config::Dict{String,SQLConn} = config)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
+
+  # check if the path exists
+  if !isdir(path)
+    Generator.create_db_folder_and_yml(path=path)
+    @error("The database $(path) does not exist. A new folder and configuration file have been created. Please edit the file and run again.")
+    return nothing
+  end
+
+  # check if the yml file exists
+  db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME)
+  if !isfile(db_settings_file)
+    Generator.create_db_folder_and_yml(path=path)
+    @error("The database $(db_settings_file) does not exist. A new configuration file have been created. Please edit the configuration.yml file and run again.")
+    return nothing
+  end
+
   if !haskey(config, path)
-    config[path] = Settings(app_env = ENV["PORMG_ENV"], db_def_folder=path)
+    env = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : DEV
+    config[path] = Settings(app_env = env, db_def_folder=path)
   end
   settings::SQLConn = config[path]
 

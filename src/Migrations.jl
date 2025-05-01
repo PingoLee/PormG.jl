@@ -518,11 +518,12 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
 end
 
 # Main function to simulate makemigrations
-function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models.jl")
   if !settings.change_db
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
     return
   end
+  @infiltrate
   models_array::Vector{PormGModel} = []
   try
     models_array = convert_schema_to_models(connection)
@@ -844,7 +845,7 @@ function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing
 
   df = DataFrame(LibPQ.execute(db, query))
   if nrow(df) == 0
-      error("No matching table definitions found.")
+      @warn("No tables found in the database.")
   end
 
   # println(df)
@@ -1107,6 +1108,7 @@ function django_to_string(path::String)
   # Read the file  
   return replace(read(path, String), "'" => "\"")
 end
+  
 
 """
   import_models_from_django(model_py_string::String; db::Union{SQLite.DB, LibPQ.Connection} = connection(), force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
@@ -1250,37 +1252,38 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
   # Iterate over the fields in the class content
   pass = false
   for field_line in class_content
-      field_match = match(field_regex, field_line)
-      if field_match !== nothing
-          field_name = field_match.captures[1]
-          field_type = field_match.captures[2]
-          field_args_str = field_match.captures[3]
+    field_match = match(field_regex, field_line)
+    if field_match !== nothing
+      field_name = field_match.captures[1]
+      field_type = field_match.captures[2]
+      field_args_str = field_match.captures[3]
 
-          # Parse field arguments
-          options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore)
-          
-          # Check for primary key
-          if haskey(options, :primary_key) && options[:primary_key] == true
-              has_primary_key = true
-          end         
+      # Parse field arguments
+      options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore)
+      
+      # Check for primary key
+      if haskey(options, :primary_key) && options[:primary_key] == true
+          has_primary_key = true
+      end         
 
-          # Instantiate the field
-          try
-            # println(field_type)
-            if field_type in autofields_ignore
-              pass = true
-              continue
-            elseif field_type in ["ForeignKey", "OneToOneField" ]              
-              # println(related_model, " ", related_model |> typeof)
-              fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(related_model; options...)
-            else
-              fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
-            end
-          catch e
-              error_msg = "Error processing field '$field_name' in class '$class_name': $(e)"
-              throw(ErrorException(error_msg))
-          end
+      # Instantiate the field
+      try
+        # println(field_type)
+        if field_type in autofields_ignore
+          pass = true
+          continue
+        elseif field_type in ["ForeignKey", "OneToOneField" ]              
+          # println(related_model, " ", related_model |> typeof)
+          fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(related_model; options...)
+        else
+          fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
+        end
+      catch e
+        @infiltrate
+        error_msg = "Error processing field '$field_name' in class '$class_name': $(e)"
+        throw(ErrorException(error_msg))
       end
+    end
   end
 
   return pass

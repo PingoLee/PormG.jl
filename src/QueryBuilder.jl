@@ -1271,20 +1271,49 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     throw("Unsupported connection type")
   end
 
-  pk_exist && _update_sequence(model, connection, pk_field)
+  pk_exist && _update_sequence(model, connection, pk_field, settings)
 
   return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
 
 end
 
-function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String})
+function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String}, settings::SQLConn)
+  @infiltrate
   for field in pk_field
-    try
-      LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
-    catch e
-      if occursin("does not exist", e |> string)        
-        _fix_sequence_name(connection, model)
+    if settings.change_db
+      try
         LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+      catch e
+        if occursin("does not exist", e |> string)        
+          _fix_sequence_name(connection, model)
+          LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+        end
+      end
+    elseif settings.django_prefix !== nothing
+      @infiltrate
+      try
+        # For Django prefixed tables, try with django prefix pattern
+        sequence_name = "$(settings.django_prefix)_$(model.name |> lowercase)_$(field)_seq"
+        LibPQ.execute(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(settings.django_prefix)_$(model.name |> lowercase)), true);")
+      catch e
+        if occursin("does not exist", e |> string)
+          # # Try to find the actual sequence name
+          # sequences = LibPQ.execute(connection, """
+          #   SELECT sequence_name 
+          #   FROM information_schema.sequences 
+          #   WHERE sequence_name LIKE '%$(settings.django_prefix)_$(model.name |> lowercase)%'
+          #   AND sequence_schema = 'public';
+          # """) |> DataFrames.DataFrame
+          
+          # if size(sequences, 1) > 0
+          #   sequence_name = sequences[1, :sequence_name]
+          #   LibPQ.execute(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(settings.django_prefix)_$(model.name |> lowercase)), true);")
+          # else
+          #   @warn "Could not find sequence for $(settings.django_prefix)_$(model.name |> lowercase).$(field)"
+          # end
+        else
+          rethrow(e)
+        end
       end
     end
   end
@@ -1431,6 +1460,9 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   model = objct.object.model
   settings = config[model.connect_key]
   connection = settings.connections
+  django_prefix = settings.django_prefix === nothing ? false : true
+
+  
 
   # check if is allowed to insert
   !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
@@ -1442,7 +1474,18 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   end
 
   # colect name of the fields
-  fields = model.field_names
+  fields = copy(model.field_names)
+
+  if django_prefix
+    for (i, field) in enumerate(fields)
+      if hasfield(typeof(model.fields[field]), :to) && model.fields[field].to !== nothing
+        # Field is a foreign key
+        new_field = field * "_id"
+        fields[i] = new_field        
+      end
+    end
+  end
+  
   fields_df::Vector{String} = []
   if !isempty(columns)   
     if length(columns) > 0
@@ -1465,7 +1508,7 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
         DataFrames.rename!(df, field => fld_)
       end
     end    
-  end
+  end  
 
   # check if missing fields in fields_df are not null or dont have a default value
   pk_exist::Bool = false
@@ -1481,13 +1524,16 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
         df[!, field] = model.fields[field].formater(today())
         push!(fields_df, field)
-      elseif model.fields[field].null || model.fields[field].primary_key
+      elseif model.fields[field].null
         continue      
+      elseif model.fields[field].primary_key
+        push!(pk_field, field)
       else
         throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in the DataFrame and not allow null"))
       end
-    else      
-      if  model.fields[field].primary_key
+    else
+      _field::String = django_prefix ? replace(field, "_id" => "") : field
+      if model.fields[_field].primary_key
         pk_exist = true
         push!(pk_field, field)
       end
@@ -1506,15 +1552,15 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   for (index, row) in enumerate(eachrow(df))
     values = String[]
     try
-      values = [model.fields[field].formater(row[field]) for field in fields]
+      values = [model.fields[django_prefix ? replace(field, "_id" => "") : field].formater(row[field]) for field in fields_df]
     catch e
-      _depuration_values_bulk_insert(fields, model, row, index)
+      _depuration_values_bulk_insert(fields, model, row, index, django_prefix)
       throw("Error in bulk_insert, the row $(index) has a problem: $(e)")
     end
     push!(rows, "($(join(values, ", ")))")
     count += 1
     if count == chunk_size || index == total
-      bulk_insert(model, connection, fields, rows, pk_exist, pk_field)
+      bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix)
       count = 0
       rows = String[]
     end
@@ -1524,20 +1570,26 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   
 end
 
-function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Int64)
+function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Int64, django_prefix::Bool)
   for field in fields
+    # Check if field exists in the row before trying to format it
+    if !(field in names(row))
+      return nothing
+    end
+    _field::String = django_prefix ? replace(field, "_id" => "") : field
     try
-      model.fields[field].formater(row[field])
+      model.fields[_field].formater(row[field])
     catch e
       throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[field])\e[0m"))
     end
   end  
 end
 
-function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String})
+function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, django_prefix::Bool)
   # Construct the bulk insert SQL.
+  _table = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
   sql = """
-  INSERT INTO $(string(model.name)) ($(join(fields, ", ")))
+  INSERT INTO $(_table) ($(join(fields, ", ")))
   VALUES $(join(rows, ", "))
   """
 
@@ -1545,14 +1597,25 @@ function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Ve
 
   # Execute the query for the given connection type.
   if connection isa LibPQ.Connection
-    LibPQ.execute(connection, sql)
+    try
+      LibPQ.execute(connection, sql)
+    catch e
+      if occursin("duplicate key value violates unique constraint", e |> string)
+        _update_sequence(model, connection, pk_field, settings)
+        throw("Error in bulk_insert, the row has a duplicate key value")
+      elseif occursin("violates foreign key constraint", e |> string)
+        throw("Error in bulk_insert, the row has a foreign key constraint")
+      else
+        throw(e)
+      end
+    end
   elseif connection isa SQLite.DB
     SQLite.execute(connection, sql)
   else
     throw("Unsupported connection type")
   end
 
-  pk_exist && _update_sequence(model, connection, pk_field)
+  pk_exist && _update_sequence(model, connection, pk_field, settings)
 
 end
 

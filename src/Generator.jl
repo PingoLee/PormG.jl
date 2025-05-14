@@ -61,21 +61,13 @@ function create_db_folder_and_yml(;path::String = DB_PATH)::Nothing
     nothing
 end
 
-"""
-  generate_models_from_db(db::SQLite.DB, file::String, Instructions::Vector{Any}) :: Nothing
-
-Generate models from a database and write them to a file.
-
-# Arguments
-- `db::SQLite.DB`: The SQLite database object.
-- `file::String`: The name of the file to write the generated models to.
-- `Instructions::Vector{Any}`: A vector of instructions for generating the models.
-"""
-function generate_models_from_db(db::Union{SQLite.DB, LibPQ.LibPQ.Connection }, file::String, Instructions::Vector{Any}) :: Nothing 
+function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::SQLConn) :: Nothing 
 
   open(joinpath(MODEL_PATH, file), "w") do f
     write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
     import PormG.Models
+    import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
+
     """)
     for table in Instructions
       write(f, "$(table)\n\n")      

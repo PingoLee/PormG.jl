@@ -3,6 +3,7 @@ module Models
 using Dates, TimeZones
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
+import PormG: SQLConn, config
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 
 import PormG.Infiltrator: @infiltrate
@@ -232,8 +233,9 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words)::String
+function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; contants_julia::Vector{String}=reserved_words)::String
   fields::String = ""
+  django_prefix::Bool = settings.django_prefix === nothing ? false : true
   for (field_name, field) in pairs(model.fields) |> sort
     occursin(r"__|@|^_", field_name) && throw(ArgumentError("The field name $field_name in the model $model contains __ or @ or starts with _"))
     field_name in contants_julia && (field_name = "_$field_name")
@@ -245,9 +247,10 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
       @infiltrate
     end
   end
-  @info("""$(model.name) = Models.Model("$(model.name)"$fields)""")
+  model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
+  @info("""$(model.name) = Models.Model("$(model_name_abs)"$fields)""")
 
-  return """$(model.name) = Models.Model("$(model.name)"$fields)"""
+  return """$(model.name) = Models.Model("$(model_name_abs)"$fields)"""
 end
 function _model_to_str_general(field_name, field, struct_name, sets, fields)
   stadard_field = getfield(@__MODULE__, struct_name)()

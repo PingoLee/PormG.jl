@@ -1278,23 +1278,23 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 end
 
 function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String}, settings::SQLConn)
-  @infiltrate
+  @infiltrate false
   for field in pk_field
     if settings.change_db
       try
-        LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+        LibPQ.execute(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
       catch e
         if occursin("does not exist", e |> string)        
           _fix_sequence_name(connection, model)
-          LibPQ.execute(connection, "SELECT setval('$(string(model.name |> lowercase))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name |> lowercase))), true);")
+          LibPQ.execute(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
         end
       end
     elseif settings.django_prefix !== nothing
       @infiltrate
       try
         # For Django prefixed tables, try with django prefix pattern
-        sequence_name = "$(settings.django_prefix)_$(model.name |> lowercase)_$(field)_seq"
-        LibPQ.execute(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(settings.django_prefix)_$(model.name |> lowercase)), true);")
+        sequence_name = "$(model.name)_$(field)_seq"
+        LibPQ.execute(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(model.name)), true);")
       catch e
         if occursin("does not exist", e |> string)
           # # Try to find the actual sequence name
@@ -1474,18 +1474,7 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   end
 
   # colect name of the fields
-  fields = copy(model.field_names)
-
-  if django_prefix
-    for (i, field) in enumerate(fields)
-      if hasfield(typeof(model.fields[field]), :to) && model.fields[field].to !== nothing
-        # Field is a foreign key
-        new_field = field * "_id"
-        fields[i] = new_field        
-      end
-    end
-  end
-  
+  fields = model.field_names
   fields_df::Vector{String} = []
   if !isempty(columns)   
     if length(columns) > 0
@@ -1532,8 +1521,7 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
         throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in the DataFrame and not allow null"))
       end
     else
-      _field::String = django_prefix ? replace(field, "_id" => "") : field
-      if model.fields[_field].primary_key
+      if model.fields[field].primary_key
         pk_exist = true
         push!(pk_field, field)
       end
@@ -1552,7 +1540,7 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   for (index, row) in enumerate(eachrow(df))
     values = String[]
     try
-      values = [model.fields[django_prefix ? replace(field, "_id" => "") : field].formater(row[field]) for field in fields_df]
+      values = [model.fields[field].formater(row[field]) for field in fields_df]
     catch e
       _depuration_values_bulk_insert(fields, model, row, index, django_prefix)
       throw("Error in bulk_insert, the row $(index) has a problem: $(e)")
@@ -1576,9 +1564,8 @@ function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGMode
     if !(field in names(row))
       return nothing
     end
-    _field::String = django_prefix ? replace(field, "_id" => "") : field
     try
-      model.fields[_field].formater(row[field])
+      model.fields[field].formater(row[field])
     catch e
       throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[field])\e[0m"))
     end
@@ -1587,9 +1574,8 @@ end
 
 function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, django_prefix::Bool)
   # Construct the bulk insert SQL.
-  _table = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
   sql = """
-  INSERT INTO $(_table) ($(join(fields, ", ")))
+  INSERT INTO $(string(model.name)) ($(join(fields, ", ")))
   VALUES $(join(rows, ", "))
   """
 

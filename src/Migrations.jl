@@ -19,7 +19,8 @@ import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique
 import PormG: PormGModel, PormGField, SQLConn
-import PormG: sqlite_type_map, postgres_type_map, MODEL_PATH, sqlite_ignore_schema, postgres_ignore_table
+import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table
+import PormG: MODEL_PATH, SQLConn, DB_PATH
 
 import PormG.Generator: generate_models_from_db, generate_migration_plan
 
@@ -1132,13 +1133,22 @@ import_models_from_django(django_to_string("/home/user/models.py"))
 """
 function import_models_from_django(
     model_py_string::String;
-    db::Union{SQLite.DB, LibPQ.Connection} = connection(),
+    db::String = DB_PATH,
     force_replace::Bool = false,
     ignore_table::Vector{String} = postgres_ignore_table,
     file::String = "automatic_models.jl",
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
   )
+
+  settings::Union{Nothing, SQLConn} = nothing
+  try
+    settings = config[db]
+  catch e
+    @error("The database $(db) does not exists in the config")
+    return
+  end
+
   # Check if db/models/automatic_models.jl exists
   if isfile(joinpath(MODEL_PATH, file)) && !force_replace
       @warn(
@@ -1187,12 +1197,12 @@ function import_models_from_django(
 
     # Collect all create instructions
     if !isempty(fields_dict)
-        push!(Instructions, Models.Model(class_name, fields_dict) |> Models.Model_to_str)
+        push!(Instructions, Models.Model_to_str(Models.Model(class_name, fields_dict), settings))
     end
     
   end
 
-  generate_models_from_db(db, file, Instructions)
+  generate_models_from_db(file, Instructions, settings)
 end
 
 function parse_class(model_py_string::String)
@@ -1272,9 +1282,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
         if field_type in autofields_ignore
           pass = true
           continue
-        elseif field_type in ["ForeignKey", "OneToOneField" ]              
+        elseif field_type in ["ForeignKey", "OneToOneField" ]
+          # Add "_id" suffix for foreign keys
+          field_key = Symbol("$(field_name)_id")              
           # println(related_model, " ", related_model |> typeof)
-          fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(related_model; options...)
+          fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
         else
           fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
         end

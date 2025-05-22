@@ -226,6 +226,79 @@ end
 
 App configuration - sets up the app's defaults. Individual options are overwritten in the corresponding environment file.
 """
+
+export fetch
+
+function reconnect_to_db(settings::SQLConn)
+  # Check if the connection is closed
+  if settings.connections === nothing || !LibPQ.isopen(settings.connections)
+    # Reconnect to the database
+    db_settings_file = joinpath(settings.db_def_folder, PORMG_DB_CONFIG_FILE_NAME) 
+    db_conn_data::Dict =  YAML.load(open(db_settings_file))
+    db_conn_data = read_db_connection_data(settings.db_def_folder, settings)
+
+    if db_conn_data["adapter"] == "SQLite"
+      dbname =  if haskey(db_conn_data, "host") && db_conn_data["host"] !== nothing
+        db_conn_data["host"]
+          elseif haskey(db_conn_data, "database") && db_conn_data["database"] !== nothing
+            db_conn_data["database"]
+          else
+            nothing
+          end
+
+      db = if dbname !== nothing
+        isempty(dirname(dbname)) || mkpath(dirname(dbname))
+        SQLite.DB(dbname)
+      else # in-memory
+        SQLite.DB()
+      end
+
+      settings.connections = db
+
+    elseif db_conn_data["adapter"] == "PostgreSQL"
+      dns = String[]
+
+      for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding"]
+        get!(db_conn_data, key, nothing)
+        println(key, " => ", db_conn_data[key])
+        db_conn_data[key] !== nothing && push!(dns, string("$key=", db_conn_data[key]))
+      end
+
+      get!(db_conn_data, "database", nothing)
+      db_conn_data["database"] !== nothing && push!(dns, string("dbname=", db_conn_data["database"]))
+
+      get!(db_conn_data, "username", nothing)
+      db_conn_data["username"] !== nothing && push!(dns, string("user=", db_conn_data["username"]))
+
+      settings.connections = LibPQ.Connection(join(dns, " "))
+    end
+  end
+end
+  
+  
+
+function fetch(settings::SQLConn, sql::String)
+  try
+    return fetch(settings.connections, sql)
+  catch e
+    if occursin("server closed the connection" , String(e)) || occursin("connection not open", String(e))
+      @warn "Lost connection to database. Attempting to reconnect..."
+      reconnect_to_db(settings)
+      try
+        return fetch(settings.connections, sql)
+      catch e
+        @error "Failed to reconnect to the database: $(e)"
+        throw(e)
+      end
+    else
+      rethrow(e)
+    end
+  end
+end
+function fetch(connection::LibPQ.Connection, sql::String)
+  return LibPQ.execute(connection, sql) 
+end
+
 mutable struct Settings <: SQLConn
   app_env::String
   db_def_folder::String # same then key

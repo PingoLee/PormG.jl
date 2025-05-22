@@ -9,6 +9,7 @@ import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform
+import PormG.Configuration: fetch
 import PormG.Infiltrator: @infiltrate
 
 #
@@ -659,7 +660,7 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   if !(field in model.field_names)
     throw("Error in _build_row_join, the field $(field) not found in $(model.name): $(join(model.field_names, ", "))")
   end
-  (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
+  # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
   return field
 end
 _solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct) 
@@ -677,15 +678,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
   row_join = Dict{String,String}()
-
-  # fields_model = instruct.object.model.field_names
-  last_column::String = ""
-
+ 
   @infiltrate false
 
-  if vector[1] in instruct.object.model.field_names # vector moust be a field from the model
-    last_column = vector[1]
-    row_join["a"] = instruct.django !== nothing ? string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
+  last_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+
+  if last_column in instruct.object.model.field_names # vector moust be a field from the model    
+    row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
     how = instruct.object.model.fields[last_column].how
     if how === nothing
@@ -697,20 +696,19 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(last_column) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
+      row_join["b"] = foreign_table_name.name
     else
       row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
     end
     # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["key_b"] = instruct.object.model.fields[last_column].pk_field::String
-    row_join["key_a"] = instruct.django !== nothing ? string(last_column, "_id") : last_column
+    row_join["key_a"] = last_column
   elseif haskey(instruct.object.model.related_objects, vector[1])
     reverse_model = getfield(foreing_table_module, instruct.object.model.related_objects[vector[1]][3])
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
-    last_column = vector[2]
-    row_join["a"] = instruct.django !== nothing ?  string(instruct.django, instruct.object.model.name |> lowercase) : instruct.object.model.name |> lowercase
+    row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
     how = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String].how
     if how === nothing
@@ -722,14 +720,14 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
+      row_join["b"] = foreign_table_name.name
     else
       row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
-    row_join["key_a"] = instruct.django !== nothing ? string(instruct.object.model.related_objects[vector[1]][4] |> String, "_id") : instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][4] |> String
   else
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
@@ -742,37 +740,36 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # get new object
     @infiltrate false
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
+    last_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
 
-    if vector[1] in new_object.field_names
-      field = new_object.fields[vector[1]]
-      !hasfield(typeof(field), :to) && throw("Error in _build_row_join, the column $(vector[1]) is a field from $(new_object.name), but this field has not a foreign key")
-      last_column = vector[2]
+    if last_column in new_object.field_names
+      field = new_object.fields[last_column]
+      !hasfield(typeof(field), :to) && throw("Error in _build_row_join, the column $(last_column) is a field from $(new_object.name), but this field has not a foreign key")
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
-      how = new_object.fields[vector[1]].how
+      how = new_object.fields[last_column].how
       if how === nothing
-        row_join2["how"] = new_object.fields[vector[1]].null == "YES" ? "LEFT" : "INNER"
+        row_join2["how"] = new_object.fields[last_column].null == "YES" ? "LEFT" : "INNER"
       else
         row_join2["how"] = how
       end
-      foreign_table_name = new_object.fields[vector[1]].to
+      foreign_table_name = new_object.fields[last_column].to
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
+        row_join2["b"] = foreign_table_name.name
       else
         row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       end
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
-      row_join2["key_b"] = new_object.fields[vector[1]].pk_field::String
-      row_join2["key_a"] = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+      row_join2["key_b"] = new_object.fields[last_column].pk_field::String
+      row_join2["key_a"] = last_column
       tb_alias = _insert_join(instruct.row_join, row_join2)
     
     elseif haskey(new_object.related_objects, vector[1])
       reverse_model = getfield(foreing_table_module, new_object.related_objects[vector[1]][3])
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
       !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
-      last_column = vector[2]
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
       how = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String].how
@@ -785,14 +782,14 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = instruct.django !== nothing ? string(instruct.django, foreign_table_name.name |> lowercase) : foreign_table_name.name |> lowercase
+        row_join2["b"] =  foreign_table_name.name
       else
         row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       end
 
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
       row_join2["key_b"] = new_object.related_objects[vector[1]][1] |> String
-      row_join2["key_a"] = instruct.django !== nothing ? string(new_object.related_objects[vector[1]][4] |> String, "_id") : new_object.related_objects[vector[1]][4] |> String
+      row_join2["key_a"] = new_object.related_objects[vector[1]][4] |> String
       tb_alias = _insert_join(instruct.row_join, row_join2)
       vector = vector[2:end]
 
@@ -893,7 +890,7 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
  
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
     return string(column, " ", v.operator, " ", value)
-  elseif v.operator in ["in", "not in"]
+  elseif v.operator in ["IN", "NOT IN"]
     return string(column, " ", v.operator, " (", join(value, ", "), ")")
   elseif v.operator in ["ISNULL"]
     return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
@@ -1110,7 +1107,7 @@ function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
     alias = get_alias(table_alias),
     connection = connection,
-    django = settings.django_prefix === nothing ? nothing : settings.django_prefix * "_",
+    django = settings.django_prefix === nothing ? nothing : settings.django_prefix * "_", # TODO, remover
   )   
   
   get_select_query(object.values, instruct)
@@ -1153,7 +1150,7 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   respota = """
     SELECT
       $(_query_select(instruction.select ))
-    FROM $(instruction.django !== nothing ? string(instruction.django, q.object.model.name |> lowercase) : q.object.model.name |> lowercase) as $(instruction.alias)
+    FROM $(q.object.model.name) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
@@ -1177,7 +1174,7 @@ function do_count(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
   resposta = """
     SELECT
       COUNT(*)
-    FROM $(instruction.django !== nothing ? string(instruction.django, q.object.model.name |> lowercase) : q.object.model.name |> lowercase) as $(instruction.alias)
+    FROM $(q.object.model.name) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
@@ -1434,17 +1431,16 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   return nothing
 end
 
-function fetch(connection::LibPQ.Connection, sql::String)
-  return LibPQ.execute(connection, sql)
-end
+
 
 export list
 # create a function like a list from Django query
 function list(objct::SQLObjectHandler)
-  connection = config[objct.object.model.connect_key].connections
+  settings = config[objct.object.model.connect_key]
+  connection = settings.connections
 
   sql = query(objct, connection=connection)
-  return fetch(connection, sql)
+  return fetch(settings, sql)
 end
 
 # ---
@@ -1584,7 +1580,7 @@ function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Ve
   # Execute the query for the given connection type.
   if connection isa LibPQ.Connection
     try
-      LibPQ.execute(connection, sql)
+      fetch(settings, sql)
     catch e
       if occursin("duplicate key value violates unique constraint", e |> string)
         _update_sequence(model, connection, pk_field, settings)
@@ -1627,8 +1623,8 @@ bulk_update(objct, df, columns=["security_id", "name", "dof"], filters=["securit
 ```
 """
 function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
-    columns=nothing, 
-    filters=nothing,
+    columns=nothing, # what columns to update
+    filters=nothing, # what columns to do the filter
     show_query::Bool=false, 
     chunk_size::Int64=1000)
 
@@ -1671,7 +1667,6 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   else
     throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, Int64, Bool, Date, DateTime}")
   end
-
 
   _bulk_update(objct, df, _columns, _filters, show_query, chunk_size)
   
@@ -1762,7 +1757,7 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
       end
     end
   else
-    dinanic_filters = pks
+    dinanic_filters = pks    
   end
 
   instruction::Union{SQLInstruction, Nothing} = nothing
@@ -1789,17 +1784,17 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   total::Int64 = size(df, 1)
   for (index, row) in enumerate(eachrow(df))
     values = String[]
+    joined_columns = vcat(fields_df, dinanic_filters)
     try
-      values = [model.fields[field].formater(row[field]) for field in fields_df]
+      values = [model.fields[field].formater(row[field]) for field in joined_columns]
     catch e
       _depuration_values_bulk_insert(fields_df, model, row, index)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
     push!(rows, "($(join(values, ", ")))")
     count += 1
-    if count == chunk_size || index == total
-      @infiltrate false
-      _bulk_update(model, connection, fields_df, rows, set_columns, dinanic_filters, show_query, instruction)
+    if count == chunk_size || index == total      
+      _bulk_update(model, settings, connection, joined_columns, rows, set_columns, dinanic_filters, show_query, instruction)
       count = 0
       rows = String[]
     end
@@ -1809,7 +1804,8 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   
 end
 
-function _bulk_update(model::PormGModel, 
+function _bulk_update(model::PormGModel,
+  settings::SQLConn,
   connection::LibPQ.Connection, 
   fields::Vector{String}, 
   rows::Vector{String}, 
@@ -1818,7 +1814,8 @@ function _bulk_update(model::PormGModel,
   show_query::Bool,
   instruction::Union{SQLInstruction, Nothing})
 
-  if instruction.join |> length > 0
+  @infiltrate false
+  if instruction !== nothing && instruction.join |> length > 0
     throw("Error in bulk_update, the join is not allowed in bulk_update")
   end
   # Construct the bulk update SQL.
@@ -1826,11 +1823,13 @@ function _bulk_update(model::PormGModel,
   for filter in dinanic_filters
     push!(_where, "Tb.$(filter) = source.$(filter)::$(model.fields[filter].type |> lowercase)")
   end
-  for filter in instruction._where
-    push!(_where, filter)
+  if instruction !== nothing    
+    for filter in instruction._where
+      push!(_where, filter)
+    end
   end
   sql = """
-  UPDATE $(instruction.django !== nothing ? string(instruction.django, model.name |> lowercase) : model.name |> lowercase) AS Tb
+  UPDATE $(model.name) AS Tb
   SET $(set_columns)
   FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(fields, ",")))
   WHERE $(join(_where, " AND \n   "))
@@ -1839,10 +1838,10 @@ function _bulk_update(model::PormGModel,
   @infiltrate false
 
   if show_query 
-     @info sql
+    @info sql
   else 
     # Execute the query for the given connection type.
-    LibPQ.execute(connection, sql)   
+    fetch(connection, sql)   
   end  
 end
 
@@ -1912,7 +1911,9 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   # Execute the deletion in a transaction
   if connection isa LibPQ.Connection
     # Start transaction
-    LibPQ.execute(connection, "BEGIN;")
+    # TODO: Check if the connection is in a transaction already
+    # TODO: deal with connection pools
+    fetch(settings, "BEGIN;")
     
     try
       # Process fast deletes first (objects that can be deleted directly)
@@ -1938,10 +1939,10 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
       end
       
       # Commit transaction
-      LibPQ.execute(connection, "COMMIT;")
+      fetch(settings, "COMMIT;")
     catch e
       # Rollback on error
-      LibPQ.execute(connection, "ROLLBACK;")
+      fetch(settings, "ROLLBACK;")
       rethrow(e)
     end
   else

@@ -229,6 +229,7 @@ App configuration - sets up the app's defaults. Individual options are overwritt
 
 export fetch
 
+
 function reconnect_to_db(settings::SQLConn)
   # Check if the connection is closed
   if settings.connections === nothing || !LibPQ.isopen(settings.connections)

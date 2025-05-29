@@ -310,6 +310,14 @@ end
 function format_number_sql(value::AbstractString)
     return parse(Float64, value) |> string   
 end
+function format_number_sql(value::AbstractArray)
+  arrayref::Vector{String} = []
+  for v in value
+    push!(arrayref, v |> format_number_sql)
+  end
+  @infiltrate false
+  return string("(", join(arrayref, ","), ")")
+end
 
 function format_bool_sql(value::Integer)
     if value in [0, 1] == false

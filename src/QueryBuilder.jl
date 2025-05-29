@@ -38,10 +38,11 @@ end
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{Dict{String, Any}} = [] # array of dictionary to be used in join query
-  array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
+  # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
+  tab_field_cache::Dict{String, PormGField} = sizehint!(Dict{String, PormGField}(), 12) # cache to be used in join query
   connection::Union{SQLite.DB, LibPQ.LibPQ.Connection, Nothing} = nothing
   array_defs::SQLTypeArrays = SQLArrays()
-  cache::Dict{String, SQLTypeField} = Dict{String, SQLTypeField}()
+  cache::Dict{String, SQLTypeField} = sizehint!(Dict{String, SQLTypeField}(), 12)
   django::Union{Nothing, String} = nothing
 end
 
@@ -125,7 +126,7 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String, Int64, Bool, SQLObjectHandler}
+  values::Union{String, Int64, Bool, SQLObjectHandler, Vector{T}} where T <: Union{String, DateTime, Int64, Bool, Date}
   column::Union{SQLTypeField, SQLTypeF, String, Vector{String}} # Vector{String} is need 
 end
 OP(column::String, value) = OperObject(operator = "=", values = value, column = SQLField(column))
@@ -546,28 +547,43 @@ function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, 
     return OperObject(operator = "=", values = x.second, column = SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end  
 end
-function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Int64, Bool}
+function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Int64, Bool, Date}
+  return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
+end
+function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{String, Int64, Bool}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandler
-  if x.first[end] == "in"
-    return OperObject(operator = "in", values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  if x.first[end] in ["in", "not in"]
+    return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     throw("Invalid operator $(x.first[end]), only 'in' is allowed with a object")
   end
-
 end
+function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{String, Int64, Bool}
+  if x.first[end] in ["in", "not in"]
+    @infiltrate false
+    return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    throw("Invalid operator $(x.first[end]), only 'in' is allowed with a object")
+  end
+end
+function _get_pair_to_oper(x::Pair{Vector{String}, Date})
+  _get_pair_to_oper(x.first => x.second |> string)
+end
+
   
 
 function _check_filter(x::Pair)
   if isa(x.first, String)
     check = String.(split(x.first, "__@"))
+    @infiltrate false
     return _get_pair_to_oper(check => x.second)  
   end
 end
 
-
+# does this obsolet?
 function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[]) 
   array = copy(array)
   for i in 1: size(array, 1) 
@@ -658,6 +674,7 @@ This function checks if the given `field` is a valid field in the provided `mode
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
   if !(field in model.field_names)
+    @infiltrate
     throw("Error in _build_row_join, the field $(field) not found in $(model.name): $(join(model.field_names, ", "))")
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
@@ -681,38 +698,45 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
  
   @infiltrate false
 
-  last_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+  first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+  last_field::Union{Nothing, PormGField} = nothing
 
-  if last_column in instruct.object.model.field_names # vector moust be a field from the model    
+  if first_column in instruct.object.model.field_names # vector moust be a field from the model    
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
-    how = instruct.object.model.fields[last_column].how
+    first_field = instruct.object.model.fields[first_column]
+    @infiltrate false
+    how = first_field.how
     if how === nothing
-      row_join["how"] = instruct.object.model.fields[last_column].null == "YES" ? "LEFT" : "INNER"
+      row_join["how"] = first_field.null == "YES" ? "LEFT" : "INNER"
     else
       row_join["how"] = how
     end
-    foreign_table_name = instruct.object.model.fields[last_column].to
+    foreign_table_name = first_field.to
     if foreign_table_name === nothing
-      throw("Error in _build_row_join, the column $(last_column) does not have a foreign key")
+      throw("Error in _build_row_join, the column $(first_column) does not have a foreign key")
     elseif isa(foreign_table_name, PormGModel)
       row_join["b"] = foreign_table_name.name
+      size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
     else
       row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
+      size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
     end
     # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model.fields[last_column].pk_field::String
-    row_join["key_a"] = last_column
+    row_join["key_b"] = first_field.pk_field::String
+    row_join["key_a"] = first_column
   elseif haskey(instruct.object.model.related_objects, vector[1])
-    reverse_model = getfield(foreing_table_module, instruct.object.model.related_objects[vector[1]][3])
+    s_model = Symbol(uppercasefirst(string(instruct.object.model.related_objects[vector[1]][3])))
+    reverse_model = getfield(foreing_table_module, s_model)
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
-    how = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String].how
+    last_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]
+    how = last_field.how    
     if how === nothing
-      row_join["how"] = instruct.object.model.fields[instruct.object.model.related_objects[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
+      row_join["how"] = last_field.null == "YES" ? "LEFT" : "INNER"
     else
       row_join["how"] = how
     end
@@ -726,8 +750,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    foreign_table_name = s_model |> string    
   else
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
@@ -740,39 +765,43 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # get new object
     @infiltrate false
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
-    last_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+    first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
 
-    if last_column in new_object.field_names
-      field = new_object.fields[last_column]
-      !hasfield(typeof(field), :to) && throw("Error in _build_row_join, the column $(last_column) is a field from $(new_object.name), but this field has not a foreign key")
+    if first_column in new_object.field_names
+      first_field = new_object.fields[first_column]
+      !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
-      how = new_object.fields[last_column].how
+      how = new_object.fields[first_column].how
       if how === nothing
-        row_join2["how"] = new_object.fields[last_column].null == "YES" ? "LEFT" : "INNER"
+        row_join2["how"] = new_object.fields[first_column].null == "YES" ? "LEFT" : "INNER"
       else
         row_join2["how"] = how
       end
-      foreign_table_name = new_object.fields[last_column].to
+      foreign_table_name = new_object.fields[first_column].to
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
         row_join2["b"] = foreign_table_name.name
+        size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
       else
         row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
+        size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
       end
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
-      row_join2["key_b"] = new_object.fields[last_column].pk_field::String
-      row_join2["key_a"] = last_column
+      row_join2["key_b"] = new_object.fields[first_column].pk_field::String
+      row_join2["key_a"] = first_column
       tb_alias = _insert_join(instruct.row_join, row_join2)
     
     elseif haskey(new_object.related_objects, vector[1])
-      reverse_model = getfield(foreing_table_module, new_object.related_objects[vector[1]][3])
+      s_model = Symbol(uppercasefirst(string(new_object.related_objects[vector[1]][3])))
+      reverse_model = getfield(foreing_table_module, s_model)
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
       !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
       row_join2["a"] = row_join["b"]
       row_join2["alias_a"] = tb_alias
-      how = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String].how
+      last_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
+      how = last_field.how
       if how === nothing
         row_join2["how"] = new_object.fields[new_object.related_objects[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
       else
@@ -788,8 +817,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join2["key_b"] = new_object.related_objects[vector[1]][1] |> String
-      row_join2["key_a"] = new_object.related_objects[vector[1]][4] |> String
+      row_join2["key_b"] = new_object.related_objects[vector[1]][4] |> String
+      row_join2["key_a"] = new_object.related_objects[vector[1]][1] |> String
       tb_alias = _insert_join(instruct.row_join, row_join2)
       vector = vector[2:end]
 
@@ -803,7 +832,11 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # last_column is the last column in the join ex. last_login
   # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
+  @infiltrate false
+
+  # println("$(join(field, "__"))")
   # functions must be processed here
+  instruct.tab_field_cache["$(join(field, "__"))"] = last_field
   return string(tb_alias, ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end
@@ -875,6 +908,7 @@ function _get_select_query(v::String, instruc::SQLInstruction)
 end
 function _get_select_query(v::SQLField, instruc::SQLInstruction)
   return _get_select_query(v.field, instruc)
+  # return v.field
 end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
   if isa(v.column, SQLTypeF) && haskey(PormGTypeField, v.column.function_name)
@@ -887,6 +921,8 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
   end
   column = _get_select_query(v.column, instruc)
+
+  @infiltrate
  
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
     return string(column, " ", v.operator, " ", value)
@@ -1025,22 +1061,27 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
     value = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($value)")
-  else
-    if v.operator in ["contains", "icontains"]
-      value = v.values
-    elseif isa(v.values, String)
-      value = "'" * v.values * "'"
+  else   
+    @infiltrate false
+    if isa(v.column, SQLTypeField)
+      _get_select_query(v.column, instruc) # TODO, how do this i where before do operates
+    else 
+      @infiltrate false
+    end
+    if haskey(instruc.object.model.fields, v.column.field)
+      value = instruc.object.model.fields[v.column.field].formater(v.values)
+    elseif haskey(instruc.tab_field_cache, v.column._as)
+      value = instruc.tab_field_cache[v.column.field].formater(v.values)
     else
-      value = string(v.values)
+      @infiltrate false
+      throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
     end
   end
 
   column = _get_filter_query(v.column, instruc)
   
-  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
-    return string(column, " ", v.operator, " ", value)
-  elseif v.operator in ["in", "not in"]
-    return string(column, " ", v.operator, " (", join(value, ", "), ")")
+  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!=", "in", "not in"]   
+    return string(column, " ", v.operator, " ", value) 
   elseif v.operator in ["ISNULL"]    
     return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
   elseif v.operator in ["contains", "icontains"]
@@ -1440,6 +1481,7 @@ function list(objct::SQLObjectHandler)
   connection = settings.connections
 
   sql = query(objct, connection=connection)
+  @infiltrate false
   return fetch(settings, sql)
 end
 

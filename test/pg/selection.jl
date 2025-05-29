@@ -91,7 +91,27 @@ df = query |> list |> DataFrame # get the result in a df
 query.values("date__@quarter", "rows" => Count("raceid"));
 df = query |> list |> DataFrame # get the result in a df
 
+# Dealing with operations
+query = M.Result |> object;
+query.filter("positionorder__@lt" => 3);
+query.values("raceid__circuitid__name", "driverid__forename", "constructorid__name");
+df = query |> list |> DataFrame # get the result in a df
 
+query = M.Result |> object;
+query.filter("positionorder__@in" => [1, 2]);
+query.values("raceid__circuitid__name", "driverid__forename", "constructorid__name");
+df = query |> list |> DataFrame # get the result in a df
+query |> show_query # show the query
+
+
+# Dealing with reverse joins
+query = M.Constructor |> object;
+query.values("result__resultid");
+query.filter("result__resultid" => 1);
+
+df = query |> list |> DataFrame # get the result in a df
+
+@info query |> show_query 
 
 
 @time begin

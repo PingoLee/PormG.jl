@@ -103,10 +103,11 @@ mutable struct SQLObjectQuery <: SQLObject
   having::Vector{String}
   list_joins::Vector{String} # is ther a better way to do this?
   row_join::Vector{Dict{String, Any}}  
+  distinct::Bool # Add distinct field
 
   SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = [], list_joins = [], row_join = []) =
-    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join)
+        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false) = # Add distinct to constructor
+    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct) # Add distinct to new
 end
 
 #
@@ -126,7 +127,7 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String, Int64, Bool, SQLObjectHandler, Vector{T}} where T <: Union{String, DateTime, Int64, Bool, Date}
+  values::Union{String, Int64, Bool, SQLObjectHandler, Vector{T}} where T <: Union{Missing, String, DateTime, Int64, Bool, Date}
   column::Union{SQLTypeField, SQLTypeF, String, Vector{String}} # Vector{String} is need 
 end
 OP(column::String, value) = OperObject(operator = "=", values = value, column = SQLField(column))
@@ -392,6 +393,20 @@ function up_filter!(q::SQLObject, filter)
   return q
 end
 
+function distinct!(q::SQLObject, value::Bool) #::Union{Bool, Nothing}) 
+  q.distinct = value
+  return q
+end
+distinct!(q::SQLObject, value::Tuple{}) = distinct!(q, true) # if no value is passed, distinct is true
+distinct!(q::SQLObject, value::Tuple{Bool}) = distinct!(q, value[1]) # if a value is passed, distinct is the value
+function distinct!(q::SQLObject, value)
+  throw("Invalid argument: $(value) (::$(typeof(value))); please use a boolean value (true or false)")
+end
+
+# function distinct!(q::SQLObject, value)
+#   throw("Invalid argument: $(value) (::$(typeof(value))); please use a boolean value (true or false)")
+# end
+
 function _query_select(array::Vector{SQLTypeField})
   if !isassigned(array, 1, 1)
     return "*"
@@ -439,6 +454,7 @@ mutable struct ObjectHandler <: SQLObjectHandler
   create::Function
   update::Function
   order_by::Function
+  distinct::Function # Add distinct function
 
   # Constructor with keyword arguments
   function ObjectHandler(; object::SQLObject, 
@@ -446,8 +462,9 @@ mutable struct ObjectHandler <: SQLObjectHandler
                           filter::Function = (x...) -> up_filter!(object, x), 
                           create::Function = (x...) -> up_create!(object, x), 
                           update::Function = (x...) -> up_update!(object, x), 
-                          order_by::Function = (x...) -> order_by!(object, x))
-      return new(object, values, filter, create, update, order_by)
+                          order_by::Function = (x...) -> order_by!(object, x),
+                          distinct::Function = (x...) -> distinct!(object, x))
+      return new(object, values, filter, create, update, order_by, distinct) # Add distinct to new
   end
 end
 
@@ -550,9 +567,9 @@ end
 function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Int64, Bool, Date}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{String, Int64, Bool}
+function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{Missing, String, Int64, Bool}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
-end
+end  
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandler
   if x.first[end] in ["in", "not in"]
@@ -561,7 +578,7 @@ function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandl
     throw("Invalid operator $(x.first[end]), only 'in' is allowed with a object")
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{String, Int64, Bool}
+function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Int64, Bool}
   if x.first[end] in ["in", "not in"]
     @infiltrate false
     return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
@@ -674,8 +691,8 @@ This function checks if the given `field` is a valid field in the provided `mode
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
   if !(field in model.field_names)
-    @infiltrate
-    throw("Error in _build_row_join, the field $(field) not found in $(model.name): $(join(model.field_names, ", "))")
+    @infiltrate false
+    throw(ArgumentError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
   return field
@@ -685,6 +702,19 @@ _solve_field(field::String, _module::Module, model_name::String, instruct::SQLIn
 _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
 
 "build a row to join"
+function _determine_join_type(field::PormGField)
+  valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
+  
+  if field.how !== nothing && !isempty(field.how)
+    join_type = uppercase(strip(field.how))
+    if join_type ∉ valid_joins
+      throw(ArgumentError("Invalid join type '$(field.how)'. Valid types: $(join(valid_joins, ", "))"))
+    end
+    return join_type
+  end
+  
+  return field.null ? "LEFT" : "INNER"
+end
 function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
   # convert the field to a vector of string
   vector = String.(field)
@@ -694,7 +724,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   vector = copy(field) 
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
-  row_join = Dict{String,String}()
+  row_join = sizehint!(Dict{String,String}(), 8)
  
   @infiltrate false
 
@@ -706,12 +736,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["alias_a"] = instruct.alias
     first_field = instruct.object.model.fields[first_column]
     @infiltrate false
-    how = first_field.how
-    if how === nothing
-      row_join["how"] = first_field.null == "YES" ? "LEFT" : "INNER"
-    else
-      row_join["how"] = how
-    end
+    row_join["how"] = _determine_join_type(first_field)
     foreign_table_name = first_field.to
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(first_column) does not have a foreign key")
@@ -733,13 +758,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
-    last_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]
-    how = last_field.how    
-    if how === nothing
-      row_join["how"] = last_field.null == "YES" ? "LEFT" : "INNER"
-    else
-      row_join["how"] = how
-    end
+    last_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]   
+    row_join["how"] = _determine_join_type(last_field)
     foreign_table_name = instruct.object.model.related_objects[vector[1]][3] |> String
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
@@ -759,9 +779,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   
   vector = vector[2:end]  
 
+  @infiltrate false
   tb_alias = _insert_join(instruct.row_join, row_join)
   while size(vector, 1) > 1
-    row_join2 = Dict{String,String}()
     # get new object
     @infiltrate false
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
@@ -770,61 +790,52 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if first_column in new_object.field_names
       first_field = new_object.fields[first_column]
       !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
-      row_join2["a"] = row_join["b"]
-      row_join2["alias_a"] = tb_alias
-      how = new_object.fields[first_column].how
-      if how === nothing
-        row_join2["how"] = new_object.fields[first_column].null == "YES" ? "LEFT" : "INNER"
-      else
-        row_join2["how"] = how
-      end
+      row_join["a"] = row_join["b"]
+      row_join["alias_a"] = tb_alias      
+      row_join["how"] = _determine_join_type(new_object.fields[first_column])
       foreign_table_name = new_object.fields[first_column].to
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] = foreign_table_name.name
+        row_join["b"] = foreign_table_name.name
         size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
       else
-        row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
+        row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
         size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
       end
-      row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
-      row_join2["key_b"] = new_object.fields[first_column].pk_field::String
-      row_join2["key_a"] = first_column
-      tb_alias = _insert_join(instruct.row_join, row_join2)
-    
+      row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
+      row_join["key_b"] = new_object.fields[first_column].pk_field::String
+      row_join["key_a"] = first_column    
     elseif haskey(new_object.related_objects, vector[1])
       s_model = Symbol(uppercasefirst(string(new_object.related_objects[vector[1]][3])))
       reverse_model = getfield(foreing_table_module, s_model)
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
       !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
-      row_join2["a"] = row_join["b"]
-      row_join2["alias_a"] = tb_alias
+      row_join["a"] = row_join["b"]
+      row_join["alias_a"] = tb_alias
       last_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
-      how = last_field.how
-      if how === nothing
-        row_join2["how"] = new_object.fields[new_object.related_objects[vector[1]][4] |> String].null == "YES" ? "LEFT" : "INNER"
-      else
-        row_join2["how"] = how
-      end
+      row_join["how"] = _determine_join_type(last_field)
       foreign_table_name = new_object.related_objects[vector[1]][3] |> String
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
       elseif isa(foreign_table_name, PormGModel)
-        row_join2["b"] =  foreign_table_name.name
+        row_join["b"] =  foreign_table_name.name
       else
-        row_join2["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
+        row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       end
 
-      row_join2["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join2["key_b"] = new_object.related_objects[vector[1]][4] |> String
-      row_join2["key_a"] = new_object.related_objects[vector[1]][1] |> String
-      tb_alias = _insert_join(instruct.row_join, row_join2)
+      row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
+      row_join["key_b"] = new_object.related_objects[vector[1]][4] |> String
+      row_join["key_a"] = new_object.related_objects[vector[1]][1] |> String
       vector = vector[2:end]
 
     else
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
+
+    @infiltrate false
+    tb_alias = _insert_join(instruct.row_join, row_join)
+
     vector = vector[2:end]
   end
 
@@ -1068,7 +1079,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     else 
       @infiltrate false
     end
-    if haskey(instruc.object.model.fields, v.column.field)
+    if v.operator in ["ISNULL"]
+      return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
+    elseif haskey(instruc.object.model.fields, v.column.field)
+      @infiltrate false
       value = instruc.object.model.fields[v.column.field].formater(v.values)
     elseif haskey(instruc.tab_field_cache, v.column._as)
       value = instruc.tab_field_cache[v.column.field].formater(v.values)
@@ -1081,9 +1095,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   column = _get_filter_query(v.column, instruc)
   
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!=", "in", "not in"]   
-    return string(column, " ", v.operator, " ", value) 
-  elseif v.operator in ["ISNULL"]    
-    return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
+    return string(column, " ", v.operator, " ", value)     
   elseif v.operator in ["contains", "icontains"]
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, value)
   else
@@ -1134,6 +1146,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # for row in eachrow(instruc.df_join)
   #   push!(instruc.join, """ $(row.how) JOIN $(row.b) $(row.alias_b) ON $(row.alias_a).$(row.key_a) = $(row.alias_b).$(row.key_b) """)
   # end
+  @infiltrate false
   for value in instruc.row_join
     push!(instruc.join, """ $(value["how"]) JOIN $(value["b"]) $(value["alias_b"]) ON $(value["alias_a"]).$(value["key_a"]) = $(value["alias_b"]).$(value["key_b"]) """)
   end
@@ -1165,6 +1178,18 @@ end
 
 export page
 
+"""
+Set pagination parameters for a SQL query object.
+
+# Arguments
+- `object::SQLObjectHandler`: The SQL object handler to modify
+- `limit::Int64`: Maximum number of records to return (default: 10)  
+- `offset::Int64`: Number of records to skip from the beginning (default: 0)
+
+# Examples
+page(query, limit=20, offset=10) |> list |> DataFrame or page(query, 20, 10)
+page(query, limit=20) |> list |> DataFrame or page(query, 20)
+"""
 function page(object::SQLObjectHandler; limit::Int64 = 10, offset::Int64 = 0)
   object.object.limit = limit
   object.object.offset = offset
@@ -1190,11 +1215,11 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
   respota = """
     SELECT
-      $(_query_select(instruction.select ))
+      $(q.object.distinct ? "DISTINCT" : "") $(_query_select(instruction.select ))
     FROM $(q.object.model.name) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
-    $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
+    $(instruction.agregate && size(instruction.group, 1) > 0 ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
     $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
     $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
@@ -1210,17 +1235,18 @@ end
 export do_count, do_exists
 
 function do_count(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Int64
-  connection = config[q.object.model.connect_key].connections
+  settings = config[q.object.model.connect_key]
+  connection = settings.connections
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
   resposta = """
     SELECT
-      COUNT(*)
+      COUNT($(q.object.distinct ? "DISTINCT *" : "*"))
     FROM $(q.object.model.name) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     """
-  query_result = LibPQ.execute(connection, resposta)
+  query_result = fetch(settings, resposta)
   return query_result[1, 1]
 end
 
@@ -1424,7 +1450,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
         objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(today())      
+        objct.insert[field] = model.fields[field].formater(today())
       end
     end
   end
@@ -1436,7 +1462,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # check if field is a primary key and not allow to update
     model.fields[field].primary_key && throw("Error in update, the field \e[4m\e[31m$(field)\e[0m is a primary key and not allow to update")
     # check if the field has max_length and validate
-    hasfield(typeof(model.fields[field]), :max_length) && length(objct.insert[field]) > model.fields[field].max_length && error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(q.object.create[field]))\e[0m""")
+    hasfield(typeof(model.fields[field]), :max_length) && length(objct.insert[field]) > model.fields[field].max_length && error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(objct.create[field]))\e[0m""")
     # check if the field has max_digits and validate
     if hasfield(typeof(model.fields[field]), :max_digits)
       value_str = string(objct.insert[field])
@@ -1477,6 +1503,9 @@ end
 export list
 # create a function like a list from Django query
 function list(objct::SQLObjectHandler)
+  if objct.object.model.connect_key === nothing
+    throw(ArgumentError("Error in list, the model \e[4m\e[31m$(objct.object.model.name)\e[0m not have a build correctly, please reload the app"))
+  end
   settings = config[objct.object.model.connect_key]
   connection = settings.connections
 
@@ -1493,7 +1522,8 @@ export bulk_insert
 
 function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
     columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], 
-    chunk_size::Int64 = 1000
+    chunk_size::Int64 = 1000,
+    show_query::Bool = false
   ) 
   model = objct.object.model
   settings = config[model.connect_key]
@@ -1518,7 +1548,13 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     if length(columns) > 0
       for column in columns
         if column isa Pair
-          rename!(df, column.first => column.second)
+          if !(column.first in df |> names)
+            @error("""Error in bulk_insert, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
+          end
+          if column.second in df |> names
+            DataFrames.select!(df, DataFrames.Not(column.second |> Symbol))
+          end
+          DataFrames.rename!(df, column.first => column.second)
           push!(fields_df, column.second)
         else
           push!(fields_df, column)
@@ -1540,32 +1576,43 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   # check if missing fields in fields_df are not null or dont have a default value
   pk_exist::Bool = false
   pk_field::Vector{String} = []
+  @infiltrate false
   for field in fields
-    if !in(field, fields_df)
+    if in(field, fields_df)
       if model.fields[field].default !== nothing
-        df[!, field] = model.fields[field].default
-        push!(fields_df, field)
+        @infiltrate 
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = model.fields[field].formater(now(), settings.time_zone)
-        push!(fields_df, field)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = model.fields[field].formater(today())
-        push!(fields_df, field)
-      elseif model.fields[field].null
-        continue      
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+      elseif !model.fields[field].null
+        if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
+          throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
+        end
       elseif model.fields[field].primary_key
-        push!(pk_field, field)
-      else
-        throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in the DataFrame and not allow null"))
+        pk_exist = true
       end
     else
-      if model.fields[field].primary_key
-        pk_exist = true
-        push!(pk_field, field)
+      if model.fields[field].default !== nothing
+        df[!, field] = map(x -> model.fields[field].default, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].primary_key
+        continue
+      elseif !model.fields[field].null
+        throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
       end
-    end
-  end
+    end   
+  end 
 
+  @infiltrate false
+  
   # check if the fields_df are not in fields
   for field in fields_df
     in(field, fields) || throw("""Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
@@ -1580,13 +1627,13 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     try
       values = [model.fields[field].formater(row[field]) for field in fields_df]
     catch e
-      _depuration_values_bulk_insert(fields, model, row, index, django_prefix)
-      throw("Error in bulk_insert, the row $(index) has a problem: $(e)")
+      _depuration_values_bulk_insert(fields_df, model, row, index, django_prefix)
+      throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
     push!(rows, "($(join(values, ", ")))")
     count += 1
     if count == chunk_size || index == total
-      bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix)
+      bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query)
       count = 0
       rows = String[]
     end
@@ -1610,37 +1657,42 @@ function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGMode
   end  
 end
 
-function bulk_insert(model::PormGModel, connection::LibPQ.Connection, fields::Vector{String}, rows::Vector{String}, pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, django_prefix::Bool)
+function bulk_insert(model::PormGModel, connection::LibPQ.Connection, 
+  fields::Vector{String}, rows::Vector{String}, 
+  pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
+  django_prefix::Bool, show_query::Bool = false)
   # Construct the bulk insert SQL.
   sql = """
   INSERT INTO $(string(model.name)) ($(join(fields, ", ")))
   VALUES $(join(rows, ", "))
   """
 
-  # @info sql
-
-  # Execute the query for the given connection type.
-  if connection isa LibPQ.Connection
-    try
-      fetch(settings, sql)
-    catch e
-      if occursin("duplicate key value violates unique constraint", e |> string)
-        _update_sequence(model, connection, pk_field, settings)
-        throw("Error in bulk_insert, the row has a duplicate key value")
-      elseif occursin("violates foreign key constraint", e |> string)
-        throw("Error in bulk_insert, the row has a foreign key constraint")
-      else
-        throw(e)
-      end
-    end
-  elseif connection isa SQLite.DB
-    SQLite.execute(connection, sql)
+  # Execute the query or just show it
+  if show_query
+    @info sql
   else
-    throw("Unsupported connection type")
+    # Execute the query for the given connection type.
+    if connection isa LibPQ.Connection
+      try
+        fetch(settings, sql)
+      catch e
+        if occursin("duplicate key value violates unique constraint", e |> string)
+          _update_sequence(model, connection, pk_field, settings)
+          throw("Error in bulk_insert, the row has a duplicate key value")
+        elseif occursin("violates foreign key constraint", e |> string)
+          throw("Error in bulk_insert, the row has a foreign key constraint")
+        else
+          throw(e)
+        end
+      end
+    elseif connection isa SQLite.DB
+      SQLite.execute(connection, sql)
+    else
+      throw("Unsupported connection type")
+    end
+
+    pk_exist && _update_sequence(model, connection, pk_field, settings)
   end
-
-  pk_exist && _update_sequence(model, connection, pk_field, settings)
-
 end
 
 export bulk_update
@@ -1769,20 +1821,32 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   pk_exist::Bool = false
   pk_field::Vector{String} = []
   for field in fields
-    if !in(field, fields_df)      
-      if model.fields[field].type == "TIMESTAMPTZ" &&  model.fields[field].auto_now
-        df[!, field] = model.fields[field].formater(now(), settings.time_zone)
-        push!(fields_df, field)
+    if in(field, fields_df)      
+      if model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
       elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
-        df[!, field] = model.fields[field].formater(today())
-        push!(fields_df, field)     
-      end    
-    else
-      if model.fields[field].primary_key
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+      elseif !model.fields[field].null
+        if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
+          throw(ArgumentError("Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
+        end
+      elseif model.fields[field].primary_key
         pk_exist = true
         push!(pk_field, field)
       end
-    end
+    else
+      if model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].primary_key
+        continue
+      elseif !model.fields[field].null
+        throw(ArgumentError("Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
+      end
+    end   
   end  
 
   # colect the filters
@@ -1801,7 +1865,7 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   else
     dinanic_filters = pks    
   end
-
+  
   instruction::Union{SQLInstruction, Nothing} = nothing
 
   objct.object.filter = [] # clear the filters
@@ -1821,16 +1885,19 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]
-  set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in pk_field) ], ", ")
+  # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
+  deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
+  set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
   count::Int64 = 0
   total::Int64 = size(df, 1)
+  @infiltrate false
   for (index, row) in enumerate(eachrow(df))
     values = String[]
-    joined_columns = vcat(fields_df, dinanic_filters)
+    joined_columns = unique(vcat(fields_df, dinanic_filters))
     try
       values = [model.fields[field].formater(row[field]) for field in joined_columns]
     catch e
-      _depuration_values_bulk_insert(fields_df, model, row, index)
+      _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
     push!(rows, "($(join(values, ", ")))")
@@ -1888,7 +1955,7 @@ function _bulk_update(model::PormGModel,
 end
 
 # ---
-# Execute delete query with cascade, restrict, set null, set default and set value
+# Django_like delete query with cascade, restrict, set null, set default and set value
 #
 
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, PROTECT
@@ -1897,6 +1964,7 @@ export delete
 
 mutable struct DeletionCollector
   model::PormGModel  # The main model being deleted from
+  settings::SQLConn  # Connection settings
   connection::Union{LibPQ.Connection, SQLite.DB}  # Database connection
   objects::Dict{PormGModel, Vector{Int64}}  # Models and their objects to delete
   dependencies::Dict{PormGModel, Set{PormGModel}}  # Model dependencies
@@ -1904,9 +1972,10 @@ mutable struct DeletionCollector
   fast_deletes::Dict{PormGModel, Vector{Int64}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
   
-  DeletionCollector(model, connection) = new(
+  DeletionCollector(model, settings) = new(
     model,
-    connection,
+    settings,
+    settings.connections,
     Dict{PormGModel, Vector{Int64}}(),
     Dict{PormGModel, Set{PormGModel}}(),
     Dict{Tuple{String, Any}, Dict{PormGModel, Vector{Int64}}}(),
@@ -1940,7 +2009,7 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   deleted_counter = Dict{String, Int64}()
   
   # Collect related models that need special handling
-  collector = DeletionCollector(model, connection)
+  collector = DeletionCollector(model, settings)
   
   # Add the primary objects to delete
   add_objects_to_collector!(collector, objects_to_delete, model)
@@ -1966,6 +2035,7 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
       
       # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
       for ((field, value), affected_models) in collector.field_updates
+         @infiltrate
         for (affected_model, ids) in affected_models
           update_field(connection, affected_model, field, value, ids) 
         end
@@ -1973,8 +2043,9 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
       
       # Execute deletions in the sorted order
       for model_to_delete in collector.sorted_models
-        ids = get(collector.objects, model_to_delete, [])
+        ids = get(collector.objects, model_to_delete, [])        
         if !isempty(ids)
+          @infiltrate false
           count = delete_objects(connection, model_to_delete, ids)
           deleted_counter[model_to_delete.name] = count
         end
@@ -2034,6 +2105,7 @@ end
 
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, ids::Vector{Int64})
   # For each foreign key in the model (model has FK -> related_model)
+  _django = collector.settings.django_prefix === nothing ? false : true
   for (field_name, field) in model.fields
     if isa(field, sForeignKey) && field.on_delete !== nothing
       related_model = field.to isa PormGModel ? field.to : getfield(model._module, Symbol(field.to))
@@ -2050,6 +2122,8 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
   
   # For models with foreign keys pointing to this model (related_model has FK -> model)
   for (related_name, (field_name, pk_field, related_model_name, pk_model)) in model.related_objects
+    @infiltrate false
+    _django && (related_model_name = replace(string(related_model_name), collector.settings.django_prefix * "_" => "") |> Symbol)
     related_model = getfield(model._module, related_model_name |> capitalize_symbol)
     
     # REVERSED: Model depended on by models with FKs pointing to it
@@ -2078,7 +2152,7 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
 end
 
 function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, ids::Vector{Int64}, related_model::PormGModel)
-  @infiltrate false
+  @infiltrate
   if field.on_delete == CASCADE        
     # Add them to the collector for deletion
     if !isempty(ids)
@@ -2108,25 +2182,27 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     end
 
     # Add field update to set field to NULL
-    if !haskey(collector.field_updates, (field_name, nothing))
-      collector.field_updates[(field_name, nothing)] = Dict{PormGModel, Vector{Int64}}()
+    if !haskey(collector.field_updates, (field_name |> string, nothing))
+      @infiltrate false
+      collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Vector{Int64}}()
     end
-            
+    
+    @infiltrate false
     # Add to field updates
-    if !isempty(affected_ids)
-      collector.field_updates[(field_name, nothing)][model] = ids
+    if !isempty(ids)
+      collector.field_updates[(field_name |> string, nothing)][model] = ids
     end
 
   elseif field.on_delete == SET_DEFAULT
     # Add field update to set field to default value
     default_value = field.default
-    if !haskey(collector.field_updates, (field_name, default_value))
-      collector.field_updates[(field_name, default_value)] = Dict{PormGModel, Vector{Int64}}()
+    if !haskey(collector.field_updates, (field_name |> string, default_value))
+      collector.field_updates[(field_name |> string, default_value)] = Dict{PormGModel, Vector{Int64}}()
     end    
     
     # Add to field updates
-    if !isempty(affected_ids)
-      collector.field_updates[(field_name, default_value)][model] = ids
+    if !isempty(ids)
+      collector.field_updates[(field_name |> string, default_value)][model] = ids
     end
   end
   # Other on_delete behaviors can be added here

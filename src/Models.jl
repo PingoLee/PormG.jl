@@ -73,6 +73,7 @@ end
 
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 function set_models(_module::Module, path::String)::Nothing
+  @infiltrate false
   models = get_all_models(_module)  
   # Detect OS and extract connect_key accordingly
   if Sys.iswindows()
@@ -90,6 +91,7 @@ function set_models(_module::Module, path::String)::Nothing
     dict_tables_c = Dict{String, Int}()
     dict_tables_fiels = Dict{String, Vector{String}}()
     model.connect_key = connect_key
+    @infiltrate model.name == "dash_tab_cvat" 
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey
@@ -296,6 +298,14 @@ function format_text_sql(value::Bool)
 end
 function format_text_sql(value::AbstractString)
     return string("'", replace(value, "'" => "`"), "'")    
+end
+function format_text_sql(value::AbstractArray)
+  arrayref::Vector{String} = []
+  for v in value
+    push!(arrayref, v |> format_text_sql)
+  end
+  @infiltrate false
+  return string("(", join(arrayref, ","), ")")
 end
 
 function format_number_sql(value::Integer)

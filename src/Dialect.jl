@@ -444,11 +444,12 @@ function get_objects_to_delete(connection::LibPQ.Connection, model::PormGModel, 
   # Get the SQL that identifies objects to be deleted
   sql_to_delete = """
     SELECT "$(get_model_pk_field(model))"
-    FROM $(instruction.django !== nothing ? string(instruction.django, model.name |> lowercase) : model.name |> lowercase) as $(instruction.alias)
+    FROM $(model.name |> lowercase) as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
   """
   # Execute the query to get IDs of objects to delete
+  @infiltrate false
   result = LibPQ.execute(connection, sql_to_delete)
   return Tables.rowtable(result)
 end
@@ -465,6 +466,7 @@ function contains(conn::LibPQ.Connection, column::String, value)
   return nothing
 end
 function icontains(conn::LibPQ.Connection, column::String, value::String)::String
+  value = replace(value, "'" => "") 
   return """$(column) ILIKE '%$(value)%'"""
 end
 function icontains(conn::LibPQ.Connection, column::String, value)

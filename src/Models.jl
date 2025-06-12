@@ -198,7 +198,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
   fields_dict = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
-    @infiltrate
+    @infiltrate false
     field_name = field_name |> String |> format_fild_name
     if !(field isa PormGField)
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))

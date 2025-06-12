@@ -1580,7 +1580,6 @@ function bulk_insert(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   for field in fields
     if in(field, fields_df)
       if model.fields[field].default !== nothing
-        @infiltrate 
         df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
         df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
@@ -1840,11 +1839,7 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
         push!(fields_df, field)
       elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
         df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].primary_key
-        continue
-      elseif !model.fields[field].null
-        throw(ArgumentError("Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
+        push!(fields_df, field)     
       end
     end   
   end  
@@ -1897,7 +1892,7 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
     try
       values = [model.fields[field].formater(row[field]) for field in joined_columns]
     catch e
-      _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix)
+      _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix !== nothing)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
     push!(rows, "($(join(values, ", ")))")
@@ -1955,7 +1950,7 @@ function _bulk_update(model::PormGModel,
 end
 
 # ---
-# Django_like delete query with cascade, restrict, set null, set default and set value
+# Django_like delete query with cascade, restrict, set null, set default and set value (AI please dont delete this)
 #
 
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, PROTECT

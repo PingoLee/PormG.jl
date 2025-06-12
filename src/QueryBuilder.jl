@@ -1475,7 +1475,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
    
 
-  set_clause = join([ "$(field) = $(objct.insert[field] |> model.fields[field].formater)" for field in keys(objct.insert) ], ", ")
+  set_clause = join([ """"$(field)" = $(objct.insert[field] |> model.fields[field].formater)""" for field in keys(objct.insert) ], ", ")
 
   # construct the SQL statement
   sql = """

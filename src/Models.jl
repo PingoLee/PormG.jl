@@ -91,7 +91,7 @@ function set_models(_module::Module, path::String)::Nothing
     dict_tables_c = Dict{String, Int}()
     dict_tables_fiels = Dict{String, Vector{String}}()
     model.connect_key = connect_key
-    @infiltrate model.name == "dash_tab_cvat" 
+    # @infiltrate model.name == "dash_tab_cvat" 
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey

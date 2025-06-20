@@ -1086,6 +1086,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       value = instruc.object.model.fields[v.column.field].formater(v.values)
     elseif haskey(instruc.tab_field_cache, v.column._as)
       value = instruc.tab_field_cache[v.column.field].formater(v.values)
+    elseif isa(v.column, SQLTypeField)
+      value = string("'", v.values, "'") # TODO, maybe I need to check if the column is valid and process the function before store
     else
       @infiltrate false
       throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
@@ -1820,11 +1822,13 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   pk_exist::Bool = false
   pk_field::Vector{String} = []
   for field in fields
-    if in(field, fields_df)      
-      if model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+    if in(field, fields_df)
+      if model.fields[field].default !== nothing
+        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, field])
+      elseif model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
+        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, field])
       elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, field])
       elseif !model.fields[field].null
         if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
           throw(ArgumentError("Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
@@ -1835,10 +1839,10 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
       end
     else
       if model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, fields_df[1]])
         push!(fields_df, field)
       elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, fields_df[1]])
         push!(fields_df, field)     
       end
     end   
@@ -1950,8 +1954,9 @@ function _bulk_update(model::PormGModel,
 end
 
 # ---
-# Django_like delete query with cascade, restrict, set null, set default and set value (AI please dont delete this)
+# Django like function to build a delete query with cascade, restrict, set null, set default and set value (AI please don't delete this code)
 #
+
 
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, PROTECT
 
@@ -1979,7 +1984,45 @@ mutable struct DeletionCollector
   )
 end
 
-function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, allow_delete_all::Bool = false)
+"""
+Delete objects from the database with proper handling of foreign key relationships and cascading operations.
+
+# Arguments
+- `objct::SQLObjectHandler`: The SQL object handler containing the query and model information
+- `show_query::Bool=false`: If `true`, displays the generated SQL queries instead of executing them
+- `allow_delete_all::Bool=false`: If `true`, allows deletion without WHERE clause filters (dangerous operation)
+
+# Returns
+- `Tuple{Int64, Dict{String, Int64}}`: A tuple containing:
+  - Total number of deleted objects
+  - Dictionary mapping model names to their respective deletion counts
+
+# Behavior
+- Validates that the connection allows data modification operations
+- Requires WHERE clause filters unless `allow_delete_all` is explicitly set to `true`
+- Handles foreign key relationships by building a deletion dependency graph
+- Processes SET_NULL, SET_DEFAULT, and cascading delete operations appropriately
+- Executes all operations within a database transaction for data integrity
+
+# Examples
+```julia
+# Delete objects from a model with a specific filter
+query = MyModels.model_test |> object;
+query.filter("id", 1)
+total_deleted, deleted_counter = delete(query) OR query |> delete
+# Show the SQL query without executing it
+query = MyModels.model_test |> object;
+query.filter("id", 1)
+total_deleted, deleted_counter = delete(query, show_query=true)
+# Delete all objects from a model (use with caution)
+query = MyModels.model_test |> object;
+total_deleted, deleted_counter = delete(query, allow_delete_all=true)
+"""
+function delete(objct::SQLObjectHandler; 
+    table_alias::Union{Nothing, SQLTableAlias} = nothing, 
+    connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
+    show_query::Bool = false,
+    allow_delete_all::Bool = false)
   model = objct.object.model
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
@@ -2019,18 +2062,21 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     # Start transaction
     # TODO: Check if the connection is in a transaction already
     # TODO: deal with connection pools
-    fetch(settings, "BEGIN;")
+    show_query || fetch(settings, "BEGIN;")
     
     try
       # Process fast deletes first (objects that can be deleted directly)
       for (model, ids) in collector.fast_deletes
-        delete_objects(connection, model, ids)
+        delete_objects(connection, model, ids, show_query)
         deleted_counter[model.name] = length(ids)
+        # Remove from objects to prevent double deletion
+        delete!(collector.objects, model)
       end
+
       
       # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
       for ((field, value), affected_models) in collector.field_updates
-         @infiltrate
+        @infiltrate
         for (affected_model, ids) in affected_models
           update_field(connection, affected_model, field, value, ids) 
         end
@@ -2038,6 +2084,7 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
       
       # Execute deletions in the sorted order
       for model_to_delete in collector.sorted_models
+
         ids = get(collector.objects, model_to_delete, [])        
         if !isempty(ids)
           @infiltrate false
@@ -2045,12 +2092,12 @@ function delete(objct::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
           deleted_counter[model_to_delete.name] = count
         end
       end
-      
+        
       # Commit transaction
-      fetch(settings, "COMMIT;")
+      show_query || fetch(settings, "COMMIT;")
     catch e
       # Rollback on error
-      fetch(settings, "ROLLBACK;")
+      show_query || fetch(settings, "ROLLBACK;")
       rethrow(e)
     end
   else
@@ -2068,6 +2115,7 @@ end
 
 function add_objects_to_collector!(collector::DeletionCollector, objects::Vector{NamedTuple}, model::PormGModel)
   # Extract IDs from objects - handle NamedTuples or Dict structures
+  @infiltrate false
   pk_field = get_model_pk_field(model)
   add_objects_to_collector!(collector, [getproperty(obj, pk_field) for obj in objects if !ismissing(getproperty(obj, pk_field))], model)
 end
@@ -2075,6 +2123,7 @@ end
 
 function add_objects_to_collector!(collector::DeletionCollector, ids::Vector{Int64}, model::PormGModel)
   # Add to collector
+  @infiltrate false
   collector.objects[model] = ids
   
   # Add model to the list of models to process
@@ -2100,20 +2149,22 @@ end
 
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, ids::Vector{Int64})
   # For each foreign key in the model (model has FK -> related_model)
+  @infiltrate false
   _django = collector.settings.django_prefix === nothing ? false : true
-  for (field_name, field) in model.fields
-    if isa(field, sForeignKey) && field.on_delete !== nothing
-      related_model = field.to isa PormGModel ? field.to : getfield(model._module, Symbol(field.to))
+  # if coll
+  # for (field_name, field) in model.fields
+  #   if isa(field, sForeignKey) && field.on_delete !== nothing
+  #     related_model = field.to isa PormGModel ? field.to : getfield(model._module, Symbol(field.to))
       
-      # Model with FK depends on the target model (CORRECT)
-      if !haskey(collector.dependencies, model)
-        collector.dependencies[model] = Set{PormGModel}()
-      end
-      push!(collector.dependencies[model], related_model)
+  #     # Model with FK depends on the target model (CORRECT)
+  #     if !haskey(collector.dependencies, model)
+  #       collector.dependencies[model] = Set{PormGModel}()
+  #     end
+  #     push!(collector.dependencies[model], related_model)
       
-      handle_on_delete!(collector, field_name, field, model, ids, related_model)
-    end
-  end
+  #     handle_on_delete!(collector, field_name, field, model, ids, related_model)
+  #   end
+  # end
   
   # For models with foreign keys pointing to this model (related_model has FK -> model)
   for (related_name, (field_name, pk_field, related_model_name, pk_model)) in model.related_objects
@@ -2265,10 +2316,14 @@ function collect_fast_deletes!(collector::DeletionCollector)
   end
 end
 
-function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, ids::Vector{Int64})
+function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, ids::Vector{Int64}, show_query::Bool)
   # Execute the actual deletion SQL
   pk_field = get_model_pk_field(model)
   sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(join(ids, ",")))"
+  if show_query
+    @info sql
+    return length(ids)  # Return count of deleted objects
+  end
   result = LibPQ.execute(connection, sql)
   return length(ids)  # Return count of deleted objects
 end

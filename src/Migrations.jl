@@ -524,7 +524,7 @@ function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::S
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
     return
   end
-  @infiltrate
+  @infiltrate false
   models_array::Vector{PormGModel} = []
   try
     models_array = convert_schema_to_models(connection)

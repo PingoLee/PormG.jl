@@ -1,6 +1,6 @@
 module models
 
-import PormG.Models # if you use PormG in your package, you need import ..your_package.PormG.Models
+import PormG.Models
 
 Status = Models.Model(
   statusId = Models.IDField(),
@@ -62,7 +62,7 @@ Constructor = Models.Model(
 
 Result = Models.Model(
   resultId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="RESTRICT"),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
   number = Models.IntegerField(null=true),
@@ -84,8 +84,10 @@ Result = Models.Model(
 Just_a_test_deletion = Models.Model(
   id = Models.IDField(),
   name = Models.CharField(),
-  test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE")
+  test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
+  test_result2 = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
 )
+
 
 Models.set_models(@__MODULE__, @__DIR__) # That is important to set the models in the module, otherwise it will not work, that need stay at the end of the file
 

@@ -123,3 +123,6 @@ df = query |> list |> DataFrame # get the result in a df
 end
 
 #
+
+query = M.Just_a_test_deletion |> object;
+query |> do_count

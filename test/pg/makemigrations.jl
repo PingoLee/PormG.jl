@@ -45,3 +45,4 @@ PormG.Migrations.migrate("db_2")
 # Now, a new folder "applied_migrations" is created with the migrations that were applied to the database.
 
 # At this stage, PormG is quite different from Django. PormG operates by converting a PostgreSQL database into its own model, comparing this against the models.jl file, and subsequently generating a migration plan for PostgreSQL.
+

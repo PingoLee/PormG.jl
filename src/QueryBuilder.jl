@@ -149,6 +149,33 @@ end
   or::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor}}
 end
 
+function Base.push!(q::SQLTypeQ, x...)
+  for v in x
+    if isa(v, Pair)
+      push!(q.filters, _check_filter(v))
+    elseif isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper})
+      push!(q.filters, v)
+    else
+      throw("Invalid argument: $(v); please use a pair (key => value) or Q/Qor/OP object")
+    end
+  end
+  return q
+end
+
+function Base.push!(q::SQLTypeQor, x...)
+  for v in x
+    if isa(v, Pair)
+      push!(q.or, _check_filter(v))
+    elseif isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper})
+      push!(q.or, v)
+    else
+      throw("Invalid argument: $(v); please use a pair (key => value) or Q/Qor/OP object")
+    end
+  end
+  return q
+end
+
+
 """
   Q(x...)
 
@@ -473,6 +500,35 @@ export object
 function object(model::PormGModel)
   return ObjectHandler(object = SQLObjectQuery(model = model))
 end
+function Base.deepcopy(obj::SQLObjectHandler)
+  return ObjectHandler(object = deepcopy(obj.object))
+end
+function Base.deepcopy(obj::SQLObjectQuery)
+  return SQLObjectQuery(
+    model = obj.model,  # PormGModel doesn't need deep copy (immutable reference)
+    values = deepcopy(obj.values),
+    filter = deepcopy(obj.filter),
+    insert = deepcopy(obj.insert),
+    limit = obj.limit,
+    offset = obj.offset,
+    order = deepcopy(obj.order),
+    group = deepcopy(obj.group),
+    having = deepcopy(obj.having),
+    list_joins = deepcopy(obj.list_joins),
+    row_join = deepcopy(obj.row_join),
+    distinct = obj.distinct
+  )
+end
+function Base.deepcopy(filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper}})
+  return [deepcopy(f) for f in filter]
+end
+function Base.deepcopy(oper::SQLTypeOper)
+  return OperObject(
+    operator = oper.operator,
+    values = oper.values |> typeof <: SQLObjectHandler ? oper.values : deepcopy(oper.values),
+    column = deepcopy(oper.column)
+  )
+end
 # function object(model::String)
 #   return object(getfield(Models, Symbol(model)))
 # end
@@ -575,7 +631,7 @@ function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandl
   if x.first[end] in ["in", "not in"]
     return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw("Invalid operator $(x.first[end]), only 'in' is allowed with a object")
+    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in'\e[0m is allowed with a object"))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Int64, Bool}
@@ -592,11 +648,12 @@ end
 
   
 
-function _check_filter(x::Pair)
+function _check_filter(x::Pair)  
   if isa(x.first, String)
     check = String.(split(x.first, "__@"))
-    @infiltrate false
-    return _get_pair_to_oper(check => x.second)  
+    return _get_pair_to_oper(check => x.second)
+  else
+    throw("Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.first))")
   end
 end
 
@@ -668,12 +725,14 @@ function _get_alias_name(row_join::Vector{Dict{String, Any}}, alias::String)
 end
 
 function _insert_join(row_join::Vector{Dict{String, Any}}, row::Dict{String,String})
+  @infiltrate false
   if size(row_join, 1) == 0
     push!(row_join, row)
     return row["alias_b"]
   else
-    check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"], row_join)
+    check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"] && r["alias_a"] == row["alias_a"], row_join)
     if size(check, 1) == 0
+      @infiltrate false
       push!(row_join, row)
       return row["alias_b"]
     else
@@ -702,8 +761,13 @@ _solve_field(field::String, _module::Module, model_name::String, instruct::SQLIn
 _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
 
 "build a row to join"
-function _determine_join_type(field::PormGField)
+function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing)
   valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
+
+  if previus_how !== nothing && previus_how == "LEFT"
+    # if the previous join was a LEFT JOIN, the current join must be a LEFT JOIN
+    return "LEFT"
+  end
   
   if field.how !== nothing && !isempty(field.how)
     join_type = uppercase(strip(field.how))
@@ -792,7 +856,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
       row_join["a"] = row_join["b"]
       row_join["alias_a"] = tb_alias      
-      row_join["how"] = _determine_join_type(new_object.fields[first_column])
+      row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=row_join["how"])
       foreign_table_name = new_object.fields[first_column].to
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
@@ -814,7 +878,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["a"] = row_join["b"]
       row_join["alias_a"] = tb_alias
       last_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
-      row_join["how"] = _determine_join_type(last_field)
+      row_join["how"] = _determine_join_type(last_field, previus_how=row_join["how"])
       foreign_table_name = new_object.related_objects[vector[1]][3] |> String
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
@@ -1033,8 +1097,6 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
     functions = functions[1:end-1]
   end
 end
-
-# PAREI AQUI
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
   contains(v, "@") && return _get_filter_query(split(v, "__@"), instruc)
@@ -1962,24 +2024,24 @@ import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, PROTECT
 
 export delete
 
-mutable struct DeletionCollector
+mutable struct DeletionCollector{T}
   model::PormGModel  # The main model being deleted from
   settings::SQLConn  # Connection settings
   connection::Union{LibPQ.Connection, SQLite.DB}  # Database connection
-  objects::Dict{PormGModel, Vector{Int64}}  # Models and their objects to delete
+  objects::Dict{PormGModel, Vector{Dict{Symbol, T}}}  # Models and their objects to delete
   dependencies::Dict{PormGModel, Set{PormGModel}}  # Model dependencies
-  field_updates::Dict{Tuple{String, Any}, Dict{PormGModel, Vector{Int64}}}  # Field updates for SET_NULL etc.
-  fast_deletes::Dict{PormGModel, Vector{Int64}}  # Objects that can be deleted directly
+  field_updates::Dict{Tuple{String, Any}, Dict{PormGModel, Dict{Symbol, T}}}  # Field updates for SET_NULL etc.
+  fast_deletes::Dict{PormGModel, Vector{Dict{Symbol, T}}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
   
-  DeletionCollector(model, settings) = new(
+  DeletionCollector(model, settings) = new{Union{String, SQLObjectHandler}}(
     model,
     settings,
     settings.connections,
-    Dict{PormGModel, Vector{Int64}}(),
+    Dict{PormGModel, Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}}(),
     Dict{PormGModel, Set{PormGModel}}(),
-    Dict{Tuple{String, Any}, Dict{PormGModel, Vector{Int64}}}(),
-    Dict{PormGModel, Vector{Int64}}(),
+    Dict{Tuple{String, Any}, Dict{PormGModel, Dict{Symbol, String}}}(),
+    Dict{PormGModel, Dict{Symbol, String}}(),
     Vector{PormGModel}()
   )
 end
@@ -2026,20 +2088,15 @@ function delete(objct::SQLObjectHandler;
   model = objct.object.model
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
-
-  instruction = build(objct.object, table_alias=table_alias, connection=connection)
-
+    
   # check if is allowed to delete
   !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to delete"))
 
   # don't allow to delete without filter
-  !allow_delete_all && instruction._where |> isempty && throw("Error in delete, the delete must have a filter")
-
-  # Collect all objects to delete (primary keys)
-  objects_to_delete = Dialect.get_objects_to_delete(connection, model, instruction)
+  !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")
   
   # If no objects to delete, return early
-  if isempty(objects_to_delete)
+  if objct |> !do_exists
     return 0, Dict{String, Int64}()
   end
 
@@ -2050,7 +2107,7 @@ function delete(objct::SQLObjectHandler;
   collector = DeletionCollector(model, settings)
   
   # Add the primary objects to delete
-  add_objects_to_collector!(collector, objects_to_delete, model)
+  add_objects_to_collector!(collector, objct |> deepcopy, model)
   
   # Build and sort the deletion graph
   process_collector!(collector)
@@ -2059,6 +2116,7 @@ function delete(objct::SQLObjectHandler;
  
   # Execute the deletion in a transaction
   if connection isa LibPQ.Connection
+    @infiltrate false
     # Start transaction
     # TODO: Check if the connection is in a transaction already
     # TODO: deal with connection pools
@@ -2066,9 +2124,8 @@ function delete(objct::SQLObjectHandler;
     
     try
       # Process fast deletes first (objects that can be deleted directly)
-      for (model, ids) in collector.fast_deletes
-        delete_objects(connection, model, ids, show_query)
-        deleted_counter[model.name] = length(ids)
+      for (model, keys) in collector.fast_deletes
+        delete_objects(connection, model, keys, show_query, deleted_counter)
         # Remove from objects to prevent double deletion
         delete!(collector.objects, model)
       end
@@ -2084,12 +2141,11 @@ function delete(objct::SQLObjectHandler;
       
       # Execute deletions in the sorted order
       for model_to_delete in collector.sorted_models
-
-        ids = get(collector.objects, model_to_delete, [])        
-        if !isempty(ids)
+        @infiltrate false
+        _array = get(collector.objects, model_to_delete, [])        
+        if !isempty(_array)
           @infiltrate false
-          count = delete_objects(connection, model_to_delete, ids)
-          deleted_counter[model_to_delete.name] = count
+          delete_objects(connection, model_to_delete, _array, show_query, deleted_counter)
         end
       end
         
@@ -2113,18 +2169,24 @@ function delete(objct::SQLObjectHandler;
   return total_deleted, deleted_counter
 end
 
-function add_objects_to_collector!(collector::DeletionCollector, objects::Vector{NamedTuple}, model::PormGModel)
+function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjectHandler, model::PormGModel)
   # Extract IDs from objects - handle NamedTuples or Dict structures
   @infiltrate false
-  pk_field = get_model_pk_field(model)
-  add_objects_to_collector!(collector, [getproperty(obj, pk_field) for obj in objects if !ismissing(getproperty(obj, pk_field))], model)
+  pk_field = get_model_pk_field(model) |> string |> lowercase
+  objct.values(pk_field);
+  add_objects_to_collector!(collector, model, pk_field, objct)
 end
 
 
-function add_objects_to_collector!(collector::DeletionCollector, ids::Vector{Int64}, model::PormGModel)
+function add_objects_to_collector!(collector::DeletionCollector, model::PormGModel, key::String, objct::SQLObjectHandler)
   # Add to collector
+  # @info objct |> query
   @infiltrate false
-  collector.objects[model] = ids
+  if !haskey(collector.objects, model)
+    collector.objects[model] = []
+  end
+ 
+  push!(collector.objects[model], Dict(:key => key, :objct => objct))
   
   # Add model to the list of models to process
   if !haskey(collector.dependencies, model)
@@ -2135,9 +2197,9 @@ end
 
 function process_collector!(collector::DeletionCollector)
   # Process each model and its objects
-  for (model, ids) in collector.objects
-    # Find related objects through foreign keys
-    find_related_objects!(collector, model, ids)
+  for (model, keys) in collector.objects
+    # Find related objects through foreign keys    
+    find_related_objects!(collector, model, keys)
   end
 
   # Identify objects that can be fast-deleted
@@ -2147,81 +2209,74 @@ function process_collector!(collector::DeletionCollector)
   collector.sorted_models = topological_sort(collector.dependencies)
 end
 
-function find_related_objects!(collector::DeletionCollector, model::PormGModel, ids::Vector{Int64})
+function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
   # For each foreign key in the model (model has FK -> related_model)
   @infiltrate false
   _django = collector.settings.django_prefix === nothing ? false : true
-  # if coll
-  # for (field_name, field) in model.fields
-  #   if isa(field, sForeignKey) && field.on_delete !== nothing
-  #     related_model = field.to isa PormGModel ? field.to : getfield(model._module, Symbol(field.to))
-      
-  #     # Model with FK depends on the target model (CORRECT)
-  #     if !haskey(collector.dependencies, model)
-  #       collector.dependencies[model] = Set{PormGModel}()
-  #     end
-  #     push!(collector.dependencies[model], related_model)
-      
-  #     handle_on_delete!(collector, field_name, field, model, ids, related_model)
-  #   end
-  # end
-  
+    
   # For models with foreign keys pointing to this model (related_model has FK -> model)
   for (related_name, (field_name, pk_field, related_model_name, pk_model)) in model.related_objects
-    @infiltrate false
     _django && (related_model_name = replace(string(related_model_name), collector.settings.django_prefix * "_" => "") |> Symbol)
-    related_model = getfield(model._module, related_model_name |> capitalize_symbol)
+    related_model = getfield(model._module, related_model_name |> capitalize_symbol);
+
+    _query = related_model |> object;
+    if size(dict, 1) == 1
+      _query.filter("$(field_name)__@in" => dict[1][:objct]);
+    else
+      or_object = Qor("$(field_name)__@in" => dict[1][:objct])
+      push!(or_object, "$(field_name)__@in" => dict[1][:objct])
+      for (index, dict_) in enumerate(dict)
+        if index == 1
+          continue # already added
+        end
+        push!(or_object, "$(field_name)__@in" => dict_[:objct])
+      end
+      _query.filter(or_object)
+    end
     
-    # REVERSED: Model depended on by models with FKs pointing to it
-    # Delete the referring models first, so the model can be deleted second
+    @infiltrate false
+    _query |> do_exists || continue # No related objects, skip
+     
+    # @info _query |> query
+
+    # THE ORDER IS correctly set?
     if !haskey(collector.dependencies, related_model)
       collector.dependencies[related_model] = Set{PormGModel}()
-    end
-    # THIS is the fix - related_model depends on model (not the other way around)
+    end  
     push!(collector.dependencies[related_model], model)
-    
-    # Find objects that refer to the ids we're deleting
-    pk_field = get_model_pk_field(related_model)
-    sql = """
-      SELECT $(pk_field) FROM $(related_model.name |> lowercase)
-      WHERE $(field_name) IN ($(join(ids, ",")))
-    """    
-    result = LibPQ.execute(collector.connection, sql)
-    related_ids = [row[pk_field] for row in Tables.rowtable(result)]
-    
-    if !isempty(related_ids)
-      # Get the field and handle its on_delete behavior
-      field = related_model.fields[String(field_name)]
-      handle_on_delete!(collector, field_name, field, related_model, related_ids, model)
-    end
+
+    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
+    _keys[:key] = pk_model |> string |> lowercase
+    _keys[:objct] = _query    
+
+    field = related_model.fields[String(field_name)]
+    handle_on_delete!(collector, field_name, field, model, _keys, related_model)
+
   end
 end
 
-function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, ids::Vector{Int64}, related_model::PormGModel)
-  @infiltrate
-  if field.on_delete == CASCADE        
-    # Add them to the collector for deletion
-    if !isempty(ids)
-      add_objects_to_collector!(collector, ids, model)
-    end
-
-  elseif field.on_delete in [PROTECT, RESTRICT]
-    # Check if any related objects exist       
-    if !isempty(ids)
-      pk_field = get_model_pk_field(related_model)
-      sql = """
-        SELECT $(pk_field) FROM $(related_model.name |> lowercase)
-        WHERE $(pk_field) IN ($(join(ids, ",")))
-        LIMIT 5
-      """
-      sample_ids = LibPQ.execute(collector.connection, sql) |> Tables.rowtable
-      sample_ids_str = join([row[pk_field] for row in sample_ids], ", ")
-      
-      # More descriptive error with field name, constraint type, and sample IDs
-      constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
-      throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m (ids: \e[4m\e[32m$(sample_ids_str)\e[0m...) because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
-    end
+function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, 
+  keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel)
+  @infiltrate false
+  if field.on_delete == CASCADE
+    pk_field = get_model_pk_field(related_model) |> string |> lowercase
+    _query = deepcopy(keys[:objct])
+    _query.values(pk_field) 
+    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
+    _keys[:key] = pk_field
+    _keys[:objct] = _query
+    
+    # @info _query |> query
+    add_objects_to_collector!(collector, related_model, pk_field, _query) 
+    @infiltrate false
+    find_related_objects!(collector, related_model, [_keys]) # Recursively find related objects for the related model
+  elseif field.on_delete in [PROTECT, RESTRICT]    
+    # More descriptive error with field name, constraint type, and sample IDs
+    constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
+    throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
+    # TODO : I dont check if this works
+    @infiltrate
     # check if the field allow null
     if !field.null
       throw(ArgumentError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
@@ -2240,6 +2295,8 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     end
 
   elseif field.on_delete == SET_DEFAULT
+    # TODO : I dont check if this works
+    @infiltrate
     # Add field update to set field to default value
     default_value = field.default
     if !haskey(collector.field_updates, (field_name |> string, default_value))
@@ -2255,8 +2312,6 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
 end
 
 function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
-  # Implementation of topological sort algorithm
-  @infiltrate false
   result = Vector{PormGModel}()
   temp_mark = Set{PormGModel}()
   perm_mark = Set{PormGModel}()
@@ -2268,18 +2323,15 @@ function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
     
     if !(node in perm_mark)
       push!(temp_mark, node)
-      
       for dep in get(dependencies, node, Set{PormGModel}())
         visit(dep)
       end
-      
       delete!(temp_mark, node)
       push!(perm_mark, node)
       push!(result, node)
     end
   end
   
-  # Visit each node
   for node in keys(dependencies)
     if !(node in perm_mark)
       visit(node)
@@ -2309,23 +2361,54 @@ function collect_fast_deletes!(collector::DeletionCollector)
   # Models that can be fast-deleted are those that:
   # 1. Have objects to delete
   # 2. Don't appear in models_with_dependents
-  for (model, ids) in collector.objects
+  for (model, keys) in collector.objects
     if !(model in models_with_dependents)
-      collector.fast_deletes[model] = ids
+      @infiltrate false
+      collector.fast_deletes[model] = keys
     end
   end
 end
 
-function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, ids::Vector{Int64}, show_query::Bool)
+function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+   show_query::Bool, deleted_counter::Dict{String, Int64})
+  @infiltrate false
   # Execute the actual deletion SQL
-  pk_field = get_model_pk_field(model)
-  sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(join(ids, ",")))"
+  _where = String[]
+  # @info keys[1][:objct] |> query
+  for key in keys
+    pk_field = key[:key]
+    push!(_where, """"$(pk_field)" IN ($(key[:objct] |> query))""")   
+  end
+  sql::String = ""
+  if size(keys, 1) == 1
+    deleted_counter[model.name] = keys[1][:objct] |> do_count
+    sql = "DELETE FROM $(model.name |> lowercase) WHERE $(join(_where, " OR "))"
+  else
+    # TODO : this code has not been tested, I need to check if it works    
+    pk_field = get_model_pk_field(model) |> string |> lowercase
+    _query = model |> object;
+    or_object = Qor("$(pk_field)__@in" => keys[1][:objct])
+    for (index, key) in enumerate(keys)
+      if index == 1
+        continue # already added
+      end
+      push!(or_object, "$(pk_field)__@in" => key[:objct])
+    end
+    _query.filter(or_object)
+    deleted_counter[model.name] = _query |> do_count
+    _query.values(pk_field) # Ensure the query is built
+    @infiltrate false
+    sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(_query |> query))"
+  end
+
+  sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
+      
   if show_query
     @info sql
-    return length(ids)  # Return count of deleted objects
+    return deleted_counter  # Return count of deleted objects
   end
   result = LibPQ.execute(connection, sql)
-  return length(ids)  # Return count of deleted objects
+  return deleted_counter  # Return count of deleted objects
 end
 
 function update_field(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, field::String, value::Any, ids::Vector{Int64})

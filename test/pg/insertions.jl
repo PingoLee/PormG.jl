@@ -22,12 +22,14 @@ Base.include(PormG, "db_2/models.jl")
 import PormG.models as M
 
 
+# If you already have a database and want clear all data in the tables, open clear_all.jl and run it.
+
 # Now you can use the models to insert data in the database one by one
 path_load = joinpath("f1", "status.csv")
 df = CSV.File(path_load) |> DataFrame
 
 query = M.Status |> object;
-
+query |> do_count
 for row in eachrow(df)
     dt = query.create("statusid" => row.statusId, "status" => row.status)
     println(row.statusId)
@@ -35,6 +37,7 @@ end
 
 # Now you can use bulk_insert to insert data in the database in bulk
 query = M.Circuit |> object;
+query |> do_count
 path_load = joinpath("f1", "circuits.csv")
 df = CSV.File(path_load) |> DataFrame
 bulk_insert(query, df)
@@ -43,11 +46,12 @@ bulk_insert(query, df)
 query = M.Race |> object;
 path_load = joinpath("f1", "races.csv")
 df = CSV.File(path_load) |> DataFrame
-
+rename!(df, lowercase.(names(df)))
 bulk_insert(query, df) # a error is expected
 # ArgumentError: Error in bulk_insert, the field fp1_date in row 1 has a value that can't be formatted: \N
 
 # pre-processing
+rename!(df, lowercase.(names(df)))
 for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
     df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
 end
@@ -55,6 +59,7 @@ end
 bulk_insert(query, df) # now it should work
 
 query = M.Driver |> object;
+# query |> do_count
 df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
 for col in [:number]
     df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
@@ -62,11 +67,14 @@ end
 bulk_insert(query, df)
 
 query = M.Constructor |> object;
+# query |> do_count
 df = CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame
 bulk_insert(query, df)
 
 query = M.Result |> object;
 df = CSV.File(joinpath("f1", "results.csv")) |> DataFrame
+# lowercase the column names
+rename!(df, lowercase.(names(df)))
 for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
     df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
 end

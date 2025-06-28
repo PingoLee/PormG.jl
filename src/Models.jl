@@ -5,6 +5,7 @@ import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
 import PormG: SQLConn, config
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
+using Printf
 
 import PormG.Infiltrator: @infiltrate
 
@@ -315,17 +316,28 @@ function format_number_sql(value::Union{Missing, Nothing})
     return "null"
 end
 function format_number_sql(value::Union{Float16, Float32, Float64})
-    return string("'", value, "'")    
+  # Use @sprintf to avoid scientific notation and ensure full precision
+  return string("'", @sprintf("%.17g", value), "'")
 end
 function format_number_sql(value::AbstractString)
-    return parse(Float64, value) |> string   
+  # try integer first
+  if (i = tryparse(Int64, strip(value))) !== nothing
+    return value
+  # then float
+  elseif (f = tryparse(Float64, strip(value))) !== nothing
+    return value
+  else
+    if occursin(r"^\d+,\d+$", value)
+      throw(ArgumentError("Does you want to use ',' as decimal separator? Please use '.' instead."))
+    end
+    throw(ArgumentError("The value '$value' is not a valid number"))
+  end
 end
 function format_number_sql(value::AbstractArray)
   arrayref::Vector{String} = []
   for v in value
     push!(arrayref, v |> format_number_sql)
   end
-  @infiltrate false
   return string("(", join(arrayref, ","), ")")
 end
 

@@ -235,6 +235,23 @@ end
 function Avg(x; distinct::Bool = false)
   return FObject(function_name = "AVG", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
+"""
+  Count(x; distinct::Bool = false)
+
+Creates an aggregate COUNT function object for use in query building.
+
+# Arguments
+- `x`: The column or expression to count.
+- `distinct::Bool = false`: If `true`, counts only distinct values of `x`.
+
+# Examples
+```julia
+# Count just when other_model_id is distinct  
+query = MyModels.model_test |> object;
+query.filter("id__@gte" => 1)
+query.values("id", "count" => Count("other_model_id", distinct=true))
+df = query |> list |> DataFrame
+"""
 function Count(x; distinct::Bool = false)
   return FObject(function_name = "COUNT", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
@@ -266,10 +283,10 @@ end
 function Extract(x::Union{String, SQLTypeF, Vector{String}}, part::String, format::String)
   return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
-function When(x::NTuple{N, Union{Pair{String, Int64}, Pair{String, String}}} where N; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+function When(x::NTuple{N, Pair{String, Union{T, Vector{T}}}}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing) where {T, N}
   return When(Q(x), then = then, _else = _else)
 end
-function  When(x::Union{Pair{String, Int64}, Pair{String, Int64}}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
+function  When(x::Union{Pair{String, Vector{T}}}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing) where T <: Union{Missing, String, Int64, Bool, SQLTypeF}
   return FObject(function_name = "WHEN", column = x |> _get_pair_to_oper, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
 function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeF} = 0, _else::Union{String, Int64, Bool, SQLTypeF, Missing} = missing)
@@ -368,7 +385,11 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
     elseif isa(v, SQLTypeF)
       push!(q.values, SQLField(_check_function(v), v._as))
     elseif isa(v, Pair) && isa(v.second, SQLTypeF)
-      push!(q.values, SQLField(_check_function(v.second), v.first))
+      try
+        push!(q.values, SQLField(_check_function(v.second), v.first))
+      catch e
+        @infiltrate
+      end
     elseif isa(v, String)
       check = String.(split(v, "__@"))
       if size(check, 1) == 1
@@ -578,7 +599,18 @@ function _check_function(f::Vector{SQLType})
   end  
   return f
 end
-
+function _check_function(f::QorObject)
+  for i in 1:length(f.or)
+    f.or[i] = _check_function(f.or[i])
+  end
+  return f
+end
+function _check_function(f::QObject)
+  for i in 1:length(f.filters)
+    f.filters[i] = _check_function(f.filters[i])
+  end
+  return f
+end
 function _check_function(x::Vector{String})  
   if length(x) == 1
     return x[1]
@@ -949,7 +981,6 @@ end
 function _get_select_query(v::SQLText, instruc::SQLInstruction)  
   return Dialect.VALUE(v.field, instruc.connection)
 end
-
 function _get_select_query(v::Vector{SQLObject}, instruc::SQLInstruction)
   resp = []
   for v in v
@@ -971,49 +1002,46 @@ function _get_select_query(v::Vector{FObject}, instruc::SQLInstruction)
   end
   return resp
 end
-# I think that is not the local to build the select query
 function _get_select_query(v::String, instruc::SQLInstruction)
   parts = split(v, "__")  
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
     return string(instruc.alias, ".", _solve_field(v, instruc.object.model, instruc))
-  end 
-  
+  end   
 end
 function _get_select_query(v::SQLField, instruc::SQLInstruction)
   return _get_select_query(v.field, instruc)
   # return v.field
 end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction)
-  if isa(v.column, SQLTypeF) && haskey(PormGTypeField, v.column.function_name)
-    value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
-  else
-    if isa(v.values, String)
-      value = "'" * v.values * "'"
-    else
-      value = string(v.values)
-    end
-  end
-  column = _get_select_query(v.column, instruc)
-
-  @infiltrate
- 
-  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
-    return string(column, " ", v.operator, " ", value)
-  elseif v.operator in ["IN", "NOT IN"]
-    return string(column, " ", v.operator, " (", join(value, ", "), ")")
-  elseif v.operator in ["ISNULL"]
-    return getfield(QueryBuilder, Symbol(v.operator))(column, v.values)
-  elseif v.operator in ["contains", "icontains"]
-    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, value)
-  else
-    throw("Error in operator, $(v.operator) is not a valid operator")
-  end
+  # use logic to when funtion
+  return _get_filter_query(v, instruc)
 end
-function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)  
-  value = getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
-  return value # getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
+function _get_select_query(v::SQLTypeF, instruc::SQLInstruction)
+  @infiltrate false
+  try
+    return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc), v.kwargs, instruc.connection)
+  catch e
+    @infiltrate 
+    throw(ArgumentError("Error in function \e[4m\e[31m$(v.function_name)\e[0m, the function does not exist or is not implemented for the dialect \e[4m\e[32m$(instruc.dialect)\e[0m. Please check the function name and the dialect."))
+  end
+
+end
+function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction)
+  resp = []
+  for v in q.or
+    push!(resp, _get_select_query(v, instruc))
+  end
+  return "(" * join(resp, " OR ") * ")"
+end
+
+function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction)
+  resp = []
+  for v in q.filters
+    push!(resp, _get_select_query(v, instruc))
+  end
+  return "(" * join(resp, " AND ") * ")"
 end
 
 """
@@ -1085,7 +1113,8 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
 end
 
 function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction, )
-  # for loop from end to start exept the first
+  # what to do with the functions?
+  @infiltrate
   v = String.(v)
   text = _build_row_join(v[1], instruc, as=false)
   i = 2
@@ -1144,8 +1173,16 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     if v.operator in ["ISNULL"]
       return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
     elseif haskey(instruc.object.model.fields, v.column.field)
-      @infiltrate false
-      value = instruc.object.model.fields[v.column.field].formater(v.values)
+      value = nothing
+      try
+        value = instruc.object.model.fields[v.column.field].formater(v.values)
+      catch e        
+        @infiltrate false
+        if contains(string(e), "The date") && contains(string(e), "is invalid")          
+          throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
+        end
+        @infiltrate
+      end
     elseif haskey(instruc.tab_field_cache, v.column._as)
       value = instruc.tab_field_cache[v.column.field].formater(v.values)
     elseif isa(v.column, SQLTypeField)

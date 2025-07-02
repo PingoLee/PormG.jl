@@ -15,7 +15,7 @@ cd("pg")
 PormG.Configuration.load("db_2")
 
 # import PormG: Models, Dialect
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, page # Important: to import this to use the functions in the query
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page # Important: to import this to use the functions in the query
 
 # First load the models
 Base.include(PormG, "db_2/models.jl")
@@ -56,7 +56,7 @@ for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :q
     df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
 end
 
-bulk_insert(query, df) # now it should work
+bulk_insert(query, df, copy=true) # now it should work
 
 query = M.Driver |> object;
 # query |> do_count
@@ -81,29 +81,64 @@ end
 bulk_insert(query, df)
 
 
-# # test querys
+# Deal with updates
+query = M.Just_a_test_deletion |> object;
+query |> do_count && delete(query; allow_delete_all = true)
+query.create("name" => "test", "test_result" => 1)
+query.create("name" => "test", "test_result" => 2)
+query.create("name" => "test", "test_result" => 3)
 
-# query = M.Result |> object
-# query.filter("driverid__surname" => "Hamilton", "fastestlaptime__@isnull" => false);
-# query.values("driverid__surname", "driverid__forename", "position", "time", "fastestlaptime", "fastestlapspeed");
-# query.order_by("-fastestlapspeed");
-# page(query, 10)
+# update the single data
+query = M.Just_a_test_deletion |> object;
+query.filter("test_result" => 1);
+query.update("name" => "test_update")
 
-# df = query |> list |> DataFrame
+query = M.Just_a_test_deletion |> object;
+df = query |> list |> DataFrame
 
-# query = M.Circuit |> object;
-# query.values("circuitid", "name", "location", "country");
-# query.order_by("circuitid");
-# page(query, 10);
+# update the bulk data from df
+query = M.Just_a_test_deletion |> object;
+for (index, row) in eachrow(df) |> enumerate
+  row.name = "test_update_$(index)"
+end
+bulk_update(query, df, columns=["name"], filters=["id"])
+query = M.Just_a_test_deletion |> object;
+df = query |> list |> DataFrame
 
-# df = query |> list |> DataFrame
+# Teste F expressions
+query = M.Just_a_test_deletion |> object;
+query.filter("test_result" => 1);
+query.update("test_result2" => F("test_result")) # update a value with a F expression
+query2 = M.Just_a_test_deletion |> object;
+df = query2 |> list |> DataFrame
 
-# df.location = map(x -> ismissing(x) ? missing : uppercase(x), df.location)
-# df.country = map(x -> ismissing(x) ? missing : uppercase(x), df.country)
+query.update("test_result2" => F("test_result") + 1);
+df = query2 |> list |> DataFrame
+
+query.update("test_result2" => F("test_result2") * 2);
+df = query2 |> list |> DataFrame
+
+query.update("test_result2" => F("test_result2") / 2);
+df = query2 |> list |> DataFrame
+
+query.update("test_result2" => F("test_result") + F("test_result"));
+df = query2 |> list |> DataFrame
+
+query.update("test_result2" => F("test_result2") - 1);
+df = query2 |> list |> DataFrame
+
+query.update("test_result2" => missing);
+df = query2 |> list |> DataFrame
+
+# Teste F expressions with join
+# i know this examples does not make much sense, but it is just to test the F expressions with joins
+query = M.Just_a_test_deletion |> object;
+query.filter("test_result" => 1);
+query.update("test_result2" => F("test_result__statusid") );
+df = query2 |> list |> DataFrame
 
 
-# # bulk_update
-
-# bulk_update(query, df)
-
-
+query = M.Just_a_test_deletion |> object;
+query.filter("test_result" => 1);
+query.update("test_result2" => F("test_result__driverid__number") );
+df = query2 |> list |> DataFrame

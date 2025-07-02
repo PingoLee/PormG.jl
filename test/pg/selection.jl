@@ -14,7 +14,7 @@ cd("pg")
 PormG.Configuration.load("db_2")
 
 # teste compation of fields
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, page, do_count, do_exists, show_query, Max, Min
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, show_query, Max, Min
 
 # load models
 Base.include(PormG, "db_2/models.jl")
@@ -48,12 +48,12 @@ df = query |> list |> DataFrame # get the result in a df
 @info query |> show_query # show the query
 
 # if you want keep the filters and user postgresql functions, you can do it like this:
-query.values("raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
+query.values("statusid__status", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
 query.order_by("raceid__circuitid__name");
 df = query |> list |> DataFrame # get the result in a df
 @info query |> show_query # show the query
 
-# If i want add a filter to the query, i can do it like this:
+# If i want add a filter to the query:
 query.filter("driverid__forename" => "Ayrton");
 df = query |> list |> DataFrame # get the result in a df
 @info query |> show_query # show the query
@@ -114,6 +114,7 @@ df = query |> list |> DataFrame # get the result in a df
 @info query |> show_query 
 
 
+# Perform a test from time 
 @time begin
     query = M.Result |> object;
     query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
@@ -122,7 +123,14 @@ df = query |> list |> DataFrame # get the result in a df
     query |> show_query
 end
 
-#
+# Test a FExpression
+query = M.Result |> object;
+query.filter(F("driverid__dob__@day") == F("raceid__date__@day"), "min_grid__@gt" => 0);
+query.values("raceid__circuitid__name", "raceid__date", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
+df = query |> list |> DataFrame # get the result in a df
 
-query = M.Just_a_test_deletion |> object;
-query |> do_count
+@info query |> show_query # show the query
+
+filter!(r -> r.min_grid != 0, df) # remove rows with min_grid = 0
+
+sort(df, [:max_grid, :raceid__date], rev = [false, true])

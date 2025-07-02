@@ -282,7 +282,7 @@ function fetch(settings::SQLConn, sql::String)
   try
     return fetch(settings.connections, sql)
   catch e    
-    @infiltrate
+    @infiltrate false
     if e == LibPQ.Errors.UnknownError("") || occursin("server closed the connection" , string(e)) || occursin("connection not open", string(e))
       @warn "Lost connection to database. Attempting to reconnect..."
       reconnect_to_db(settings);

@@ -26,5 +26,28 @@ import PormG.models as M
 query = M.Circuit |> object;
 query |> do_count
 
-total, dict = delete(query, show_query = false, allow_delete_all = true)
+total, dict = delete(query, allow_delete_all = true)
 
+# delete all Status
+query = M.Status |> object;
+total, dict = delete(query; allow_delete_all = true)
+
+# delete all Circuit
+query = M.Circuit |> object;
+query |> do_count
+total, dict = delete(query; allow_delete_all = true)
+
+# delete all Driver
+query = M.Driver |> object;
+query |> do_count
+total, dict = delete(query; allow_delete_all = true)
+
+# delete all Constructor
+query = M.Constructor |> object;
+query |> do_count
+total, dict = delete(query; allow_delete_all = true)
+
+# delete all Result
+query = M.Result |> object;
+query |> do_count
+total, dict = delete(query; allow_delete_all = true)

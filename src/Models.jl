@@ -6,6 +6,7 @@ import PormG: DATETIME_FORMAT
 import PormG: SQLConn, config
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 using Printf
+import Base.deepcopy
 
 import PormG.Infiltrator: @infiltrate
 
@@ -20,6 +21,23 @@ export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
   connect_key::Union{String, Nothing} = nothing # needed to get the connection
   cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
+end
+function deepcopy(model::Model_Type)
+  try
+    return Model_Type(
+      model.name,
+      model.verbose_name,
+      deepcopy(model.fields),
+      deepcopy(model.field_names),
+      deepcopy(model.related_objects),
+      model._module,
+      model.connect_key,
+      deepcopy(model.cache)
+    )
+  catch e
+    @error("Failed to deepcopy Model_Type: $(e)")
+    rethrow(e)
+  end
 end
 
 """

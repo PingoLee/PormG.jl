@@ -22,6 +22,7 @@ abstract type SQLType <: PormGAbstractType end
 abstract type SQLTypeQ <: SQLType end
 abstract type SQLTypeQor <: SQLType end
 abstract type SQLTypeF <: SQLType end
+abstract type SQLTypeFunction <: SQLType end # Function to be used in the query
 abstract type SQLTypeOper <: SQLType end
 abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
 abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations 

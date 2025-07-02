@@ -120,6 +120,12 @@ function WHEN(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Conne
   return "WHEN $(column) THEN $(format["then"])" |> string
 end
 
+function F(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+  # For simple field references, just return the column name
+  # The actual processing is handled in QueryBuilder._get_select_query
+  return column
+end
+
 
 # postgresql query synopsis
 # CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] table_name ( [
@@ -459,6 +465,7 @@ end
 #
 
 function contains(conn::LibPQ.Connection, column::String, value::String)::String
+  value = replace(value, "'" => "")
   return """$(column) LIKE '%$(value)%'"""
 end
 function contains(conn::LibPQ.Connection, column::String, value)

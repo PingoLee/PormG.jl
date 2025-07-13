@@ -14,6 +14,8 @@ using LibPQ
 
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
+abstract type PormGPostgres <: SQLConn end
+abstract type PormGSQLite <: SQLConn end
 abstract type SQLObject <: PormGAbstractType end
 abstract type SQLObjectHandler <: SQLObject end
 abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias

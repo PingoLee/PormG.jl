@@ -1,23 +1,38 @@
 # Core ConnectionPool Structure
 
-mutable struct ConnectionPool
-    connections::Vector{Union{Nothing, LibPQ.Connection, SQLite.DB}}
+mutable struct PostgresConnectionPool <: PormGPostgres
+    connections::Vector{Union{Nothing, LibPQ.Connection}}
     available::Vector{Bool}
     connection_string::String
     pool_size::Int
     adapter::String
-    lock::ReentrantLock  # For thread safety
-    
-    ConnectionPool(connection_string::String, adapter::String; pool_size::Int = 10) = begin
-        connections = Vector{Union{Nothing, LibPQ.Connection, SQLite.DB}}(undef, pool_size)
-        available = fill(false, pool_size)  # Start with all unavailable
-        lock = ReentrantLock()
-        new(connections, available, connection_string, adapter, pool_size, lock)
+    lock::ReentrantLock
+    # ... constructor as before ...
+end
+
+mutable struct SQLiteConnectionPool <: PormGSQLite
+    connections::Vector{Union{Nothing, SQLite.DB}}
+    available::Vector{Bool}
+    connection_string::String
+    pool_size::Int
+    adapter::String
+    lock::ReentrantLock
+    # ... constructor as before ...
+end
+
+function create_pool(conn_str::String, adapter::String; pool_size::Int = 10)
+    if adapter == "PostgreSQL"
+        return PostgresConnectionPool(conn_str, adapter, pool_size = pool_size)
+    elseif adapter == "SQLite"
+        return SQLiteConnectionPool(conn_str, adapter, pool_size = pool_size)
+    else
+        throw(ArgumentError("Unsupported adapter: $adapter"))
     end
 end
 
+
 # Initialize the pool with actual connections
-function initialize_pool!(pool::ConnectionPool)
+function initialize_pool!(pool::Union{PostgresConnectionPool, SQLiteConnectionPool})
     Base.lock(pool.lock) do
         for i in 1:pool.pool_size
             try
@@ -48,7 +63,7 @@ end
 # Connection Management Functions
 // ...existing code...
 
-function acquire_connection(pool::ConnectionPool; timeout::Float64 = 30.0)
+function acquire_connection(pool::Union{PostgresConnectionPool, SQLiteConnectionPool}; timeout::Float64 = 30.0)
     start_time = time()
     
     while time() - start_time < timeout
@@ -82,7 +97,7 @@ function acquire_connection(pool::ConnectionPool; timeout::Float64 = 30.0)
     throw(ArgumentError("No available connections in the pool after $(timeout) seconds timeout"))
 end
 
-function release_connection(pool::ConnectionPool, conn::Union{LibPQ.Connection, SQLite.DB})
+function release_connection(pool::Union{PostgresConnectionPool, SQLiteConnectionPool}, conn::Union{LibPQ.Connection, SQLite.DB})
     Base.lock(pool.lock) do
         for i in 1:length(pool.connections)
             if pool.connections[i] === conn
@@ -134,7 +149,7 @@ mutable struct Settings <: SQLConn
     log_to_file::Bool
     change_db::Bool
     change_data::Bool
-    connections::Union{Nothing, SQLite.DB, LibPQ.Connection, ConnectionPool}  # Updated to include ConnectionPool
+    connections::Union{Nothing, SQLite.DB, LibPQ.Connection, PormGPostgres, PormGSQLite}
     time_zone::String
     django_prefix::Union{Nothing, String}
     use_connection_pool::Bool  # New field to enable/disable pooling
@@ -175,7 +190,7 @@ end
 // ...existing code...
 
 function fetch(settings::SQLConn, sql::String)
-    if settings.use_connection_pool && settings.connections isa ConnectionPool
+    if settings.use_connection_pool && settings.connections isa Union{PostgresConnectionPool, SQLiteConnectionPool}
         conn = acquire_connection(settings.connections)
         try
             result = fetch(conn, sql)
@@ -210,7 +225,7 @@ end
 # Pool Cleanup Function
 // ...existing code...
 
-function close_pool!(pool::ConnectionPool)
+function close_pool!(pool::Union{PostgresConnectionPool, SQLiteConnectionPool})
     Base.lock(pool.lock) do
         for i in 1:length(pool.connections)
             if pool.connections[i] !== nothing
@@ -233,7 +248,7 @@ end
 # Add this to your module cleanup if needed
 function __cleanup__()
     for (path, settings) in config
-        if settings.connections isa ConnectionPool
+        if settings.connections isa Union{PostgresConnectionPool, SQLiteConnectionPool}
             close_pool!(settings.connections)
         end
     end

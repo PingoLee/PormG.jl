@@ -3,7 +3,7 @@ using Dates
 using SQLite
 using DataFrames
 using LibPQ
-import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField
+import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique
 import PormG.Models: Migration, get_model_pk_field
@@ -12,7 +12,7 @@ import PormG.Infiltrator: @infiltrate
 
 
 # PostgreSQL
-function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
+function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   format_str = format["format"]
   locale = get(format, "locale", "")
   nlsparam = get(format, "nlsparam", "")
@@ -25,31 +25,31 @@ function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::SQLite.DB
   return "strftime('$(sqlite_date_format_map[format_str])', $(column)) $(locale)"
 end
 
-function SUM(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function SUM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   if get(format, "distinct", false)
     return "SUM(DISTINCT $(column))"
   else
     return "SUM($(column))"
   end
 end
-function AVG(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function AVG(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   if get(format, "distinct", false)
     return "AVG(DISTINCT $(column))"
   else
     return "AVG($(column))"
   end
 end
-function COUNT(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function COUNT(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   if get(format, "distinct", false)
     return "COUNT(DISTINCT $(column))"
   else
     return "COUNT($(column))"
   end
 end
-function MAX(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function MAX(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   return "MAX($(column))"
 end
-function MIN(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function MIN(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   return "MIN($(column))"
 end
 
@@ -60,32 +60,32 @@ end
 # # 					When(**{ f'{data}__month__lte': 12 }, then=Value('3')),
 # # 					output_field=CharField()
 # # 				)))
-function VALUE(value::String, conn::LibPQ.Connection)
+function VALUE(value::String, conn::PormGPostgres)
   return "('$(value)')::text"
 end
 function VALUE(value::String, conn::SQLite.DB)
   return "'$(value)'"
 end
-function CAST(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
+function CAST(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   return """($column)::$(format["type"])"""
 end
 function CAST(column::String, format::Dict{String, Any}, conn::SQLite.DB)
   return "CAST($column AS $(sqlite_type_map_reverse[format["type"]]))"
 end
-function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::LibPQ.Connection)
+function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::PormGPostgres)
   return "CONCAT($(join(column, ",\n")))"
 end
 function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::SQLite.DB)
   return "($(join(column, " ||\n")))"
 end
-function EXTRACT(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
+function EXTRACT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   if haskey(format, "format")
     return "EXTRACT($(format["part"]) FROM $(column))$(format["format"])"  
   else
     return "EXTRACT($(format["part"]) FROM $(column))"  
   end
 end
-function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::LibPQ.Connection)
+function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
   if format["output_field"] != ""
     return """(CASE
     $(join(column, "\n"))
@@ -100,7 +100,7 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::LibPQ.Connec
     """
   end
 end
-function CASE(column::String, format::Dict{String, Any}, conn::LibPQ.Connection)
+function CASE(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   return """CASE $(column) ELSE $(format["else"]) END"""
 end
 function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
@@ -116,11 +116,11 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
   end
 end
 
-function WHEN(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function WHEN(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   return "WHEN $(column) THEN $(format["then"])" |> string
 end
 
-function F(column::String, format::Dict{String, Any}, conn::Union{LibPQ.Connection,SQLite.DB})
+function F(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   # For simple field references, just return the column name
   # The actual processing is handled in QueryBuilder._get_select_query
   return column
@@ -146,7 +146,7 @@ end
 # ---
 import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sForeignKey
 
-function _get_column_type(field::PormGField, conn::LibPQ.Connection; type_map::Dict{String, String} = postgres_type_map_reverse)::String
+function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict{String, String} = postgres_type_map_reverse)::String
   if field isa sIDField
     return type_map[field.type]
   elseif field isa sCharField
@@ -179,7 +179,7 @@ function _get_column_type(field::PormGField, conn::LibPQ.Connection; type_map::D
   end
 end
 
-function field_to_column(col_name::String, field::PormGField, conn::Union{LibPQ.Connection, SQLite.DB}; temporary_default::Any = nothing)::String
+function field_to_column(col_name::String, field::PormGField, conn::Union{PormGPostgres, SQLite.DB}; temporary_default::Any = nothing)::String
   # Determine the base SQL type for PostgreSQL
   base_type = _get_column_type(field, conn)
 
@@ -222,11 +222,11 @@ end
 # Functions to create migration queries
 #
 
-function create_table(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::String, columns::Vector{String})
+function create_table(conn::Union{SQLite.DB, PormGPostgres}, table_name::String, columns::Vector{String})
   return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
     );""" #|> x -> replace(x, "\\\"" => "\"")
 end
-function create_table(conn::LibPQ.Connection, model::PormGModel)
+function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
   for (field_name, field) in model.fields    
     push!(columns, field_to_column(field_name, field, conn))
@@ -234,18 +234,18 @@ function create_table(conn::LibPQ.Connection, model::PormGModel)
   return create_table(conn, model.name |> lowercase, columns)
 end
 
-function create_index(conn::Union{SQLite.DB, LibPQ.Connection}, index_name::String, table_name::String, columns::Vector{String})
+function create_index(conn::Union{SQLite.DB, PormGPostgres}, index_name::String, table_name::String, columns::Vector{String})
   return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
-function add_foreign_key(conn::LibPQ.Connection, table_name::Union{Symbol, String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
+function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol, String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
   return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name) DEFERRABLE INITIALLY DEFERRED;"""
 end
-# function add_foreign_key(conn::LibPQ.Connection, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
+# function add_foreign_key(conn::PormGPostgres, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
 #   return add_foreign_key(model.name, model.name, constraint_name, field_name, ref_model.name, ref_field_name)
 # end
 
-function alter_field(conn::LibPQ.Connection, table_name::Union{Symbol, String}, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
+function alter_field(conn::PormGPostgres, table_name::Union{Symbol, String}, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
   sql_statements = []
 
   # Alter column type
@@ -367,15 +367,15 @@ function alter_field(conn::SQLite.DB, table_name::String, field_name::String, ne
 
 end
 
-function add_field(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::Union{String, Symbol}, field_name::String, field::PormGField; temporary_default::Any = nothing)
+function add_field(conn::Union{SQLite.DB, PormGPostgres}, table_name::Union{String, Symbol}, field_name::String, field::PormGField; temporary_default::Any = nothing)
   return """ALTER TABLE "$table_name" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
 
-function rename_field(conn::Union{SQLite.DB, LibPQ.Connection}, table_name::Union{String, Symbol}, old_field_name::Union{String, Symbol}, new_field_name::Union{String, Symbol})
+function rename_field(conn::Union{SQLite.DB, PormGPostgres}, table_name::Union{String, Symbol}, old_field_name::Union{String, Symbol}, new_field_name::Union{String, Symbol})
   return """ALTER TABLE "$table_name" RENAME COLUMN "$old_field_name" TO "$new_field_name";"""
 end
 
-function drop_foreign_key(conn::LibPQ.Connection, table_name::Symbol, constraint_name::String)
+function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
   return """ALTER TABLE "$table_name" DROP CONSTRAINT "$constraint_name";"""
 end
   
@@ -412,33 +412,33 @@ function drop_foreign_key(conn::SQLite.DB, table_name::String, constraint_name::
 
 end
 
-function drop_index(conn::LibPQ.Connection, index_name::String)
+function drop_index(conn::PormGPostgres, index_name::String)
   return """DROP INDEX IF EXISTS "$index_name";"""
 end
 function drop_index(conn::SQLite.DB, index_name::String)
   return """DROP INDEX IF EXISTS "$index_name";"""  
 end
 
-function rename_table(conn::Union{SQLite.DB, LibPQ.Connection}, old_table_name::String, new_table_name::String)
+function rename_table(conn::Union{SQLite.DB, PormGPostgres}, old_table_name::String, new_table_name::String)
   return """ALTER TABLE "$old_table_name" RENAME TO "$new_table_name";"""  
 end
 
-function drop_table(conn::LibPQ.Connection, table_name::Union{String, Symbol})
+function drop_table(conn::PormGPostgres, table_name::Union{String, Symbol})
   return """DROP TABLE IF EXISTS "$table_name" CASCADE;"""
 end
 function drop_table(conn::SQLite.DB, table_name::Union{String, Symbol})
   return """DROP TABLE IF EXISTS "$table_name";"""
 end
 
-function alter_sequence_name(conn::LibPQ.Connection, old_sequence_name::String, new_sequence_name::String)
+function alter_sequence_name(conn::PormGPostgres, old_sequence_name::String, new_sequence_name::String)
   return """ALTER SEQUENCE IF EXISTS "$old_sequence_name" RENAME TO "$new_sequence_name";"""
 end
 
-# function create_sequence(conn::LibPQ.Connection, sequence_name::String, start_value::Int = 1, increment_by::Int = 1, min_value::Int = 1, max_value::Int = 9223372036854775807, cache::Int = 1)
+# function create_sequence(conn::PormGPostgres, sequence_name::String, start_value::Int = 1, increment_by::Int = 1, min_value::Int = 1, max_value::Int = 9223372036854775807, cache::Int = 1)
 #   return """CREATE SEQUENCE IF NOT EXISTS "$sequence_name" START WITH $start_value INCREMENT BY $increment_by MINVALUE $min_value MAXVALUE $max_value CACHE $cache;"""
 # end
 
-# function drop_sequence(conn::LibPQ.Connection, sequence_name::String)
+# function drop_sequence(conn::PormGPostgres, sequence_name::String)
 #   return """DROP SEQUENCE IF EXISTS "$sequence_name";"""
 # end
 
@@ -446,7 +446,7 @@ end
 # Function to deal with deletion objects
 #
 
-function get_objects_to_delete(connection::LibPQ.Connection, model::PormGModel, instruction::SQLInstruction)::Vector{NamedTuple}
+function get_objects_to_delete(connection::PormGPostgres, model::PormGModel, instruction::SQLInstruction)::Vector{NamedTuple}
   # Get the SQL that identifies objects to be deleted
   sql_to_delete = """
     SELECT "$(get_model_pk_field(model))"
@@ -464,19 +464,19 @@ end
 # Function to deal with operators
 #
 
-function contains(conn::LibPQ.Connection, column::String, value::String)::String
+function contains(conn::PormGPostgres, column::String, value::String)::String
   value = replace(value, "'" => "")
   return """$(column) LIKE '%$(value)%'"""
 end
-function contains(conn::LibPQ.Connection, column::String, value)
+function contains(conn::PormGPostgres, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end
-function icontains(conn::LibPQ.Connection, column::String, value::String)::String
+function icontains(conn::PormGPostgres, column::String, value::String)::String
   value = replace(value, "'" => "") 
   return """$(column) ILIKE '%$(value)%'"""
 end
-function icontains(conn::LibPQ.Connection, column::String, value)
+function icontains(conn::PormGPostgres, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end

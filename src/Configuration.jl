@@ -1,7 +1,7 @@
 module Configuration
 
 import YAML, Logging
-import PormG: SQLConn, config
+import PormG: SQLConn, PormGPostgres, PormGSQLite, config
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT
 import PormG: Generator
 import PormG.Infiltrator: @infiltrate
@@ -159,63 +159,258 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     get!(settings.db_config_settings, "username", nothing)
     settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", settings.db_config_settings["username"]))
 
-    settings.connections = LibPQ.Connection(join(dns, " "))
+    # settings.connections = LibPQ.Connection(join(dns, " "))
+    @infiltrate false
+    settings.connections = PostgresConnectionPool(join(dns, " "))
 
   end
 end
 
 #
-# TODO: create a mode to handle multiple connections
+# mode to handle multiple connections (connection pool)
 #
 
-# mutable struct ConnectionPool
-#   connections::Vector{Union{Nothing, LibPQ.Connection}}
-#   available::Vector{Bool}
-# end
+mutable struct PostgresConnectionPool <: PormGPostgres
+  connections::Vector{Union{Nothing, LibPQ.Connection}}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock  # For thread safety  
+end
 
-# function create_pg_pool(connection_string::String; pool_size::Int = 10)
-#   connections = Vector{Union{Nothing, LibPQ.Connection}}(undef, pool_size)
-#   available = fill(true, pool_size)
-#   for i in 1:pool_size
-#       connections[i] = LibPQ.Connection(connection_string)
-#   end
-#   return ConnectionPool(connections, available)
-# end
+mutable struct SQLiteConnectionPool <: PormGSQLite
+  connections::Vector{Union{Nothing, SQLite.DB}}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock  # For thread safety
+end
 
-# function acquire_connection(pool::ConnectionPool)
-#   for i in 1:length(pool.connections)
-#       if pool.available[i]
-#           pool.available[i] = false
-#           return pool.connections[i]
-#       end
-#   end
-#   throw(ArgumentError("No available connections in the pool."))
-# end
+function PostgresConnectionPool(connection_string::String; pool_size::Int = 3)
+  connections = Vector{Union{Nothing, LibPQ.Connection}}(nothing, pool_size)
+  available = fill(true, pool_size) 
+  lock = ReentrantLock()
+  PostgresConnectionPool(connections, available, connection_string, pool_size, lock)
+end
 
-# function release_connection(pool::ConnectionPool, conn::LibPQ.Connection)
-#   for i in 1:length(pool.connections)
-#       if pool.connections[i] === conn
-#           pool.available[i] = true
-#           return
-#       end
-#   end
-#   throw(ArgumentError("Connection not found in the pool."))
-# end
+function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3)
+  connections = Vector{Union{Nothing, SQLite.DB}}(nothing, pool_size)
+  available = fill(true, pool_size)
+  lock = ReentrantLock()
+  SQLiteConnectionPool(connections, available, connection_string, pool_size, lock)
+end
 
-# OLD
+function close_pool!(pool::PormGPostgres)
+  Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] !== nothing
+        try
+          LibPQ.close(pool.connections[i])
+        catch e
+          @error "Failed to close connection $i: $e"
+        end
+        pool.connections[i] = nothing        
+      end
+      pool.available[i] = true
+    end
+  end
+end
 
-# # Function to get a connection from the pool
-# function get_connection(name::String)::Union{SQLite.DB, Nothing}
-#   return get(PormG.CONNECTIONS, name, nothing)
-# end
 
-# # Function to remove a connection from the pool
-# function remove_connection(settings::Settings, name::String)
-#   if haskey(settings.connections, name)
-#       close(settings.connections[name])
-#       delete!(settings.connections, name)
-#   end
-# end
+function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_retries::Int = 20)
+  start_time = time()
+  retry_count = 0
+  
+  while retry_count < max_retries && (time() - start_time) < timeout_seconds
+    connection = Base.lock(pool.lock) do
+      # First, try to find an available connection
+      for i in 1:length(pool.connections)
+        if pool.available[i]
+          if pool.connections[i] !== nothing
+            # Check if connection is still alive
+            if is_connection_alive(pool.connections[i])
+              pool.available[i] = false
+              # @info "Acquired existing connection $i from pool"
+              return pool.connections[i]
+            else
+              try
+                pool.connections[i] = LibPQ.Connection(pool.connection_string)
+                pool.available[i] = false
+                # @info "Reconnected and acquired connection $i"
+                return pool.connections[i]
+              catch e
+                @error "Failed to reconnect connection $i: $e" connection_string=pool.connection_string
+                pool.connections[i] = nothing
+                pool.available[i] = true
+              end
+            end
+          else            
+            # Create new connection in empty slot
+            try
+              pool.connections[i] = LibPQ.Connection(pool.connection_string)
+              pool.available[i] = false
+              # @info "Created new connection in slot $i"
+              return pool.connections[i]
+            catch e
+              @error "Failed to create new connection in slot $i: $e" connection_string=pool.connection_string
+              pool.connections[i] = nothing
+              pool.available[i] = true
+            end
+          end
+        end
+      end
+      
+      # If we reach here, no available connections found
+      # Try to expand the pool if we haven't reached the limit
+      if length(pool.connections) < max_retries
+        try
+          new_connection = LibPQ.Connection(pool.connection_string)
+          push!(pool.connections, new_connection)
+          push!(pool.available, false)
+          pool.pool_size += 1
+          @info "Expanded connection pool to $(pool.pool_size) connections"
+          return new_connection
+        catch e
+          @error "Failed to create new connection for pool expansion: $e" connection_string=pool.connection_string
+        end
+      end
+      
+      # Return nothing if no connection could be acquired
+      return nothing
+    end
+    
+    # If we got a connection, return it
+    if connection !== nothing
+      return connection
+    end
+    
+    # No connection available, wait and retry
+    retry_count += 1
+    @info "No available connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
+    sleep(0.1)  # Wait 100ms before retrying
+  end
+  
+  # If we've exhausted all retries
+  if retry_count >= max_retries
+    @error "Exceeded maximum retry attempts ($max_retries) to acquire connection" pool_size=pool.pool_size connection_string=pool.connection_string
+    throw("No available connections in the pool after $max_retries attempts")
+  else
+    @error "Timeout after $(timeout_seconds) seconds waiting for available connection" pool_size=pool.pool_size connection_string=pool.connection_string
+    throw("No available connections in the pool after $(timeout_seconds) seconds")
+  end
+end
+
+function release_connection(pool::PormGPostgres, conn::LibPQ.Connection)
+  released = Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] === conn
+        pool.available[i] = true
+        # @info "Released connection $i back to pool"
+        return true
+      end
+    end
+  end
+  released !== nothing && return released
+  @warn "Connection not found in the pool - connection may have been replaced due to failure"
+  return false
+end
+
+function is_connection_alive(conn::LibPQ.Connection)
+  @infiltrate false
+  try
+    return LibPQ.status(conn) == LibPQ.libpq_c.CONNECTION_OK
+  catch
+    return false
+  end
+end
+
+function reconnect_db(pool::PormGPostgres, conn::LibPQ.Connection)
+  reconnect = Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] === conn
+        try
+          LibPQ.reset!(conn)
+          if is_connection_alive(conn)
+            pool.available[i] = false
+            @info "Successfully reset connection $i"
+            return conn
+          end
+        catch e
+          @error "Failed to reset connection $i: $e"
+        end
+        # If reset fails, create a new connection
+        try
+          pool.connections[i] = LibPQ.Connection(pool.connection_string)
+          pool.available[i] = false
+          @info "Recreated connection $i"
+          return pool.connections[i]
+        catch e
+          @error "Failed to recreate connection $i: $e"
+        end
+      end
+    end
+  end
+  reconnect !== nothing && return reconnect
+  @error "Connection not found in the pool for reconnection"
+  return nothing
+end
+  
+  
+
+#
+# fetch Function with Pool Support
+#
+
+export fetch
+
+function is_connection_error(e, connection::PormGPostgres)
+    msg = lowercase(string(e))
+    return (e isa LibPQ.Errors.UnknownError && string(e) == "") ||
+           occursin("server closed the connection", msg) ||
+           occursin("connection not open", msg)
+           # occursin("connection refused", msg) ||
+           # occursin("connection timeout", msg)
+end
+
+function fetch(connection::PormGPostgres, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing)
+  @infiltrate false
+  conn === nothing && (conn = acquire_connection(connection))
+  try
+    return LibPQ.execute(conn, sql)
+  catch e
+    @infiltrate
+    if is_connection_error(e, connection)
+      @warn "Lost connection to database. Attempting to reconnect..."
+      conn = reconnect_db(connection, conn)
+      return LibPQ.execute(conn, sql)
+    end
+    @error "Failed to execute SQL query: $e"
+    throw(e)
+  finally
+    release_connection(connection, conn)
+  end
+end
+fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings.connections, sql; conn=conn)
+
+function with_transaction(pool::PormGPostgres, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, release_conn::Bool = false)
+  conn === nothing && (conn = acquire_connection(pool))
+  try
+    return LibPQ.execute(conn, sql), conn
+  catch e
+    @infiltrate   
+    @error "Failed to execute SQL transaction, rolling back: $e"
+    throw(e)
+  finally
+    if release_conn
+      release_connection(pool, conn)
+    end
+  end
+end
+with_transaction(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, release_conn::Bool = false) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn)
+
+
+
+
 
 function connection(; key::String = "db") 
   settings = config[key]
@@ -227,7 +422,6 @@ end
 App configuration - sets up the app's defaults. Individual options are overwritten in the corresponding environment file.
 """
 
-export fetch
 
 
 function reconnect_to_db(settings::SQLConn)
@@ -278,29 +472,34 @@ end
   
   
 
-function fetch(settings::SQLConn, sql::String)
-  try
-    return fetch(settings.connections, sql)
-  catch e    
-    @infiltrate false
-    if e == LibPQ.Errors.UnknownError("") || occursin("server closed the connection" , string(e)) || occursin("connection not open", string(e))
-      @warn "Lost connection to database. Attempting to reconnect..."
-      reconnect_to_db(settings);
-      @infiltrate false
-      try
-        return fetch(settings.connections, sql)
-      catch e
-        @error "Failed to reconnect to the database: $(e)"
-        throw(e)
-      end
-    else
-      rethrow(e)
-    end
-  end
-end
-function fetch(connection::LibPQ.Connection, sql::String)
-  return LibPQ.execute(connection, sql) 
-end
+# # old fetch function
+# function fetch(settings::SQLConn, sql::String)
+#   try
+#     return fetch(settings.connections, sql)
+#   catch e    
+#     @infiltrate false
+#     if e == LibPQ.Errors.UnknownError("") || occursin("server closed the connection" , string(e)) || occursin("connection not open", string(e))
+#       @warn "Lost connection to database. Attempting to reconnect..."
+#       reconnect_to_db(settings);
+#       @infiltrate false
+#       try
+#         return fetch(settings.connections, sql)
+#       catch e
+#         @error "Failed to reconnect to the database: $(e)"
+#         throw(e)
+#       end
+#     else
+#       rethrow(e)
+#     end
+#   end
+# end
+# function fetch(connection::LibPQ.Connection, sql::String)
+#   return LibPQ.execute(connection, sql) 
+# end
+
+#
+# Settings struct
+#
 
 mutable struct Settings <: SQLConn
   app_env::String
@@ -312,7 +511,7 @@ mutable struct Settings <: SQLConn
   log_to_file::Bool
   change_db::Bool # Enable makemigrations and migrations functionality in the app
   change_data::Bool # Enable the change of the database (upgrade, delete) in the app
-  connections::Union{Nothing, SQLite.DB, LibPQ.Connection} # Store multiple database connections
+  connections::Union{Nothing, PormGPostgres, PormGSQLite}
   time_zone::String
   django_prefix::Union{Nothing, String}
 
@@ -344,6 +543,15 @@ mutable struct Settings <: SQLConn
       time_zone,
       django_prefix
   )
+end
+
+# Add this to your module cleanup if needed
+function __cleanup__()
+  for (path, settings) in config
+    if settings.connections isa SQLConn
+      close_pool!(settings.connections)
+    end
+  end
 end
 
 end

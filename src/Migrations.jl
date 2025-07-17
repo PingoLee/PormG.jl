@@ -18,11 +18,12 @@ import PormG.Infiltrator: @infiltrate
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique
-import PormG: PormGModel, PormGField, SQLConn
+import PormG: PormGModel, PormGField, SQLConn, PormGPostgres
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table
 import PormG: MODEL_PATH, SQLConn, DB_PATH
 
 import PormG.Generator: generate_models_from_db, generate_migration_plan
+import PormG.Configuration: with_transaction, fetch
 
 
 # ---
@@ -183,7 +184,7 @@ end
     end
   end  
 
-  function _drop_fk_constraint_in_alteration(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
+  function _drop_fk_constraint_in_alteration(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField)::Nothing
     if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (!hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
       constraint_name = get_constraints_fk(conn, model_name, field_name)
       if constraint_name === nothing
@@ -194,11 +195,11 @@ end
     end
     return nothing
   end
-  function _drop_fk_constraint_in_alteration(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_field::PormGField, old_field::PormGField)
+  function _drop_fk_constraint_in_alteration(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol, new_field::PormGField, old_field::PormGField)
     _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name |> string, new_field, old_field)
   end
 
-  function _drop_index(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing)::Nothing
+  function _drop_index(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String; index_name::Union{String, Nothing} = nothing)::Nothing
     index_name === nothing && (index_name = get_constraints_index(conn, model_name, field_name))
     if index_name === nothing
       return nothing
@@ -207,11 +208,11 @@ end
     Dialect.drop_index(conn, index_name))
     return nothing    
   end
-  function _drop_index(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing)
+  function _drop_index(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing)
     _drop_index(conn, migration_plan, model_name, field_name |> string, index_name=index_name)
   end
 
-  function _add_fk_constraint_in_alteration(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
+  function _add_fk_constraint_in_alteration(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::PormGField, old_field::PormGField, name::String)::Nothing
     # to alterations
     if hasfield(new_field |> typeof, :to) && new_field.db_constraint && (!hasfield(old_field |> typeof, :to) || !old_field.db_constraint)
       constraint_name = "$(name)_fk" |> lowercase
@@ -221,7 +222,7 @@ end
     return nothing
   end
 
-  function _add_constrains(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+  function _add_constrains(conn::Union{PormGPostgres, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
     # to new fields
     # If the new field is a foreign key
     if hasfield(field |> typeof, :to) && field.db_constraint
@@ -239,7 +240,7 @@ end
     nothing
   end
 
-  function _add_new_table(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
+  function _add_new_table(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
     _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
     for (field_name, field) in model.fields       
       name = _hash_field_name(model_name, field_name)      
@@ -248,7 +249,7 @@ end
     return nothing
   end
 
-  function _add_new_field(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
+  function _add_new_field(conn::Union{PormGPostgres, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
     field = model.fields[field_name]
     name = _hash_field_name(model_name, field_name)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value))
@@ -258,11 +259,11 @@ end
     end
     return nothing
   end
-  function _add_new_field(conn::Union{LibPQ.Connection, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing)::Nothing
+  function _add_new_field(conn::Union{PormGPostgres, SQLite.DB}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Symbol; temporary_default_value::Any = nothing)::Nothing
     _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
   end
 
-  function _alter_table_fields(conn::LibPQ.Connection, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn)::Nothing
+  function _alter_table_fields(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn)::Nothing
     if Models.are_model_fields_equal(model, current_schema[model_name][:model])
       # println("Model $model_name are equal")
     else        
@@ -360,7 +361,7 @@ end
   end
 
   function _resolve_table_fields(
-                                  conn::LibPQ.Connection, 
+                                  conn::PormGPostgres, 
                                   model_name::Symbol, 
                                   model::PormGModel, 
                                   current_model::PormGModel, 
@@ -519,7 +520,7 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
 end
 
 # Main function to simulate makemigrations
-function makemigrations(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models.jl")
+function makemigrations(connection::PormGPostgres, settings::SQLConn; path::String = "db/models.jl")
   if !settings.change_db
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
     return
@@ -599,7 +600,7 @@ function get_all_dicts(mod::Module)
   return ordered_dicts
 end
 
-function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String = "db/models/models.jl")
+function migrate(connection::PormGPostgres, settings::SQLConn; path::String = "db/models/models.jl")
   if !settings.change_db
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
     return
@@ -641,22 +642,22 @@ function migrate(connection::LibPQ.Connection, settings::SQLConn; path::String =
   contatenate_execution = [fisrt_execution, second_execution, third_execution, last_execution]
 
   # Begin a transaction
-  LibPQ.execute(connection, "BEGIN;")
+  result, conn = with_transaction(connection, "BEGIN;")
 
   try
     # Iterate over the migration plan and execute each SQL statement
     for execution in contatenate_execution
       for action in execution
         println("Executing: $action")
-        LibPQ.execute(connection, action)
+        with_transaction(connection, action, conn=conn)
       end
     end   
     # Commit the transaction
-    LibPQ.execute(connection, "COMMIT;")
+    with_transaction(connection, "COMMIT;", conn=conn, release_conn = true)
     @info("Migrations applied successfully.")    
   catch e
     # Rollback the transaction in case of an error
-    LibPQ.execute(connection, "ROLLBACK;")
+    with_transaction(connection, "ROLLBACK;", conn=conn, release_conn = true)
     println("Error applying migrations: ", e)
     @error("Error applying migrations: ", e)
     return nothing
@@ -691,12 +692,12 @@ end
 #
 
 """
-  convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{String} = postgres_ignore_table)
+  convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table)
 
 Convert the database schema to models.
 
 # Arguments
-- `db::LibPQ.Connection`: The database connection.
+- `db::PormGPostgres`: The database connection.
 - `ignore_table::Vector{String}`: A vector of table names to ignore. Defaults to `postgres_ignore_table`.
 
 # Returns
@@ -705,7 +706,7 @@ Convert the database schema to models.
 # Description
 This function retrieves the database schema and converts it to models. It collects all create instructions and skips tables specified in the `ignore_table` vector. The function prints the type of each schema and returns the schema for debugging purposes. It stops processing after the fifth schema.
 """
-function convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{String} = postgres_ignore_table)
+function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table)
   # Get all schema
   schemas = get_database_schema(db)
   # Colect all create instructions
@@ -727,7 +728,7 @@ function convert_schema_to_models(db::LibPQ.Connection; ignore_table::Vector{Str
   return models_array
 end
   
-function import_models_from_postgres(;db::LibPQ.Connection = connection(), 
+function import_models_from_postgres(;db::PormGPostgres = connection(), 
                                   force_replace::Bool=false, 
                                   ignore_table::Vector{String} = postgres_ignore_table,
                                   file::String="automatic_models.jl")
@@ -754,7 +755,7 @@ function import_models_from_postgres(db::String;
   import_models_from_postgres(db=connection(key=db), force_replace=force_replace, ignore_table=ignore_table, file=file)
 end
 
-function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
+function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
   # Modified query that adds identity info and checks single-column UNIQUE constraints
   query = """
     WITH unique_constraints AS (
@@ -844,7 +845,7 @@ function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing
     ORDER BY table_schema, table_name;
     """
 
-  df = DataFrame(LibPQ.execute(db, query))
+  df = DataFrame(fetch(db, query))
   if nrow(df) == 0
       @warn("No tables found in the database.")
   end
@@ -854,11 +855,11 @@ function get_database_schema(db::LibPQ.Connection; schema::Union{String, Nothing
   return df
 end
 
-function get_database_schema(;pickup::Union{SQLite.DB, LibPQ.Connection} = connection())  
+function get_database_schema(;pickup::Union{SQLite.DB, PormGPostgres} = connection())  
   return get_database_schema(pickup)
 end
 
-function get_constraints_fk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )
+function get_constraints_fk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
   SELECT
       tc.constraint_name, kcu.column_name,
@@ -872,27 +873,27 @@ function get_constraints_fk(conn::LibPQ.Connection, table_name::Symbol, field_na
         ON ccu.constraint_name = tc.constraint_name
   WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'FOREIGN KEY' AND kcu.column_name = '$field_name';
   """
-  result = LibPQ.execute(conn, query) |> DataFrame
+  result = fetch(conn, query) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
   return result[1, :constraint_name]
 end
 
-function get_constraints_index(conn::LibPQ.Connection, table_name::Symbol, field_name::String)
+function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_name::String)
   query = """
   SELECT indexname
   FROM pg_indexes
   WHERE tablename = '$table_name' AND indexdef LIKE '%$field_name%';
   """
-  result = LibPQ.execute(conn, query) |> DataFrame
+  result = fetch(conn, query) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
   return result[1, :indexname]
 end
 
-function get_constraints_pk(conn::LibPQ.Connection, table_name::Symbol, field_name::String )
+function get_constraints_pk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
   SELECT
       tc.constraint_name, kcu.column_name,
@@ -906,14 +907,14 @@ function get_constraints_pk(conn::LibPQ.Connection, table_name::Symbol, field_na
         ON ccu.constraint_name = tc.constraint_name
   WHERE tc.constraint_type = 'PRIMARY KEY' AND kcu.column_name = '$field_name' AND ccu.table_name = '$table_name';
   """
-  result = LibPQ.execute(conn, query) |> DataFrame
+  result = fetch(conn, query) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
   return result[1, :constraint_name]
 end
 
-function get_constraints_unique(conn::LibPQ.Connection, table_name::String, field_name::String)::String
+function get_constraints_unique(conn::PormGPostgres, table_name::String, field_name::String)::String
   query = """
   SELECT constraint_name
   FROM information_schema.table_constraints tc
@@ -921,18 +922,18 @@ function get_constraints_unique(conn::LibPQ.Connection, table_name::String, fiel
   ON tc.constraint_name = ccu.constraint_name
   WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'UNIQUE' AND ccu.column_name = '$field_name';
   """
-  result = LibPQ.execute(conn, query) |> DataFrame
+  result = fetch(conn, query) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
   return result[1, :constraint_name]
 end
 
-function get_sequence_name(conn::LibPQ.Connection, table_name::String, field_name::String)::String
+function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::String)::String
   query = """
   SELECT pg_get_serial_sequence('$table_name', '$field_name');
   """
-  result = LibPQ.execute(conn, query) |> DataFrame
+  result = fetch(conn, query) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
@@ -1112,13 +1113,13 @@ end
   
 
 """
-  import_models_from_django(model_py_string::String; db::Union{SQLite.DB, LibPQ.Connection} = connection(), force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
+  import_models_from_django(model_py_string::String; db::Union{SQLite.DB, PormGPostgres} = connection(), force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
 
 Imports Django models from a given `model.py` file content string and generates corresponding Julia models.
 
 # Arguments
 - `model_py_string::String`: The content of the `model.py` file as a string; user django_to_string(path) to read the file; or insert the file path.
-- `db::Union{SQLite.DB, LibPQ.Connection}`: The database connection object. Defaults to `connection()`.
+- `db::Union{SQLite.DB, PormGPostgres}`: The database connection object. Defaults to `connection()`.
 - `force_replace::Bool`: If `true`, forces replacement of the existing models file. Defaults to `false`.
 - `ignore_table::Vector{String}`: Tables to ignore during the import process. Defaults to `postgres_ignore_table`.
 - `file::String`: The name of the file to save the generated models. Defaults to `"automatic_models.jl"`.

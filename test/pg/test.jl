@@ -6,6 +6,7 @@ using PormG
 using DataFrames
 using CSV
 using Test
+using Dates
 
 cd("test")
 cd("pg")
@@ -20,6 +21,12 @@ import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_coun
 # load models
 Base.include(PormG, "db_2/models.jl")
 import PormG.models as M
+
+# PormG.Configuration.__cleanup__()
+# PormG.config["db_2"].connections.connections
+# PormG.config["db_2"].connections.available
+
+# conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
 
 @testset "Database Setup and Bulk Insert" begin
     # Clear all tables
@@ -349,3 +356,5 @@ end
   sort!(df, [:count_grid])
   @test df[1, :count_grid] == 2
 end
+
+PormG.Configuration.__cleanup__()

@@ -72,6 +72,7 @@ show_query = query
 include("Migrations.jl")
 using .Migrations
 
+atexit(Configuration.__cleanup__)
 
 
 end # module PormG

@@ -7,9 +7,9 @@ using SQLite, LibPQ
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
 import PormG: Dialect, Models
 import PormG: config
-import PormG: SQLType, SQLConn, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: SQLType, SQLConn, PormGPostgres, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform
-import PormG.Configuration: fetch
+import PormG.Configuration: fetch, with_transaction
 import PormG.Infiltrator: @infiltrate
 
 #
@@ -40,7 +40,7 @@ end
   row_join::Vector{Dict{String, Any}} = [] # array of dictionary to be used in join query
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{String, PormGField} = sizehint!(Dict{String, PormGField}(), 12) # cache to be used in join query
-  connection::Union{SQLite.DB, LibPQ.LibPQ.Connection, Nothing} = nothing
+  connection::Union{SQLite.DB, PormGPostgres, Nothing} = nothing
   array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{String, SQLTypeField} = sizehint!(Dict{String, SQLTypeField}(), 12)
   django::Union{Nothing, String} = nothing
@@ -1145,8 +1145,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][4] |> String
-    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][1] |> String
     foreign_table_name = s_model |> string
     # @infiltrate  
   else
@@ -1202,8 +1202,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join["key_a"] = new_object.related_objects[vector[1]][4] |> String
-      row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
+      row_join["key_b"] = new_object.related_objects[vector[1]][4] |> String
+      row_join["key_a"] = new_object.related_objects[vector[1]][1] |> String
       vector = vector[2:end]
 
     else
@@ -1602,7 +1602,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   end
 end
 
-function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
   settings = config[object.model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
@@ -1663,7 +1663,7 @@ end
 
 export query
 
-function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing) # TODO -- i need create a mode to change
+function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing) # TODO -- i need create a mode to change
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
   respota = """
     SELECT
@@ -1736,16 +1736,18 @@ function do_exists(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
     $limit_clause
     $offset_clause
     """    
+    @infiltrate false
     result = fetch(settings, sql) |> Tables.rowtable
     @infiltrate false
     return length(result) > 0
   catch e
+    @infiltrate
     @error "Error in do_exists for model $(q.object.model.name): $e"
     return false
   end
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
   model = objct.model
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
@@ -1814,8 +1816,9 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # @info sql
 
   # execute the SQL statement
-  if connection isa LibPQ.Connection
-    result = LibPQ.execute(connection, sql * " RETURNING *;")
+  if connection isa PormGPostgres
+    result = fetch(settings, sql * " RETURNING *;")
+    # result = LibPQ.execute(connection, sql * " RETURNING *;")
   elseif connection isa SQLite.DB
     SQLite.execute(connection, sql)
     # Assuming the table has an auto-increment primary key named "id"
@@ -1831,16 +1834,16 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
 end
 
-function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String}, settings::SQLConn)
+function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::SQLConn)
   @infiltrate false
   for field in pk_field
     if settings.change_db
       try
-        LibPQ.execute(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
+        fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
       catch e
         if occursin("does not exist", e |> string)        
           _fix_sequence_name(connection, model)
-          LibPQ.execute(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
+          fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
         end
       end
     elseif settings.django_prefix !== nothing
@@ -1848,11 +1851,11 @@ function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_fi
       try
         # For Django prefixed tables, try with django prefix pattern
         sequence_name = "$(model.name)_$(field)_seq"
-        LibPQ.execute(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(model.name)), true);")
+        fetch(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(model.name)), true);")
       catch e
         if occursin("does not exist", e |> string)
           # # Try to find the actual sequence name
-          # sequences = LibPQ.execute(connection, """
+          # sequences = fetch(connection, """
           #   SELECT sequence_name 
           #   FROM information_schema.sequences 
           #   WHERE sequence_name LIKE '%$(settings.django_prefix)_$(model.name |> lowercase)%'
@@ -1861,7 +1864,7 @@ function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_fi
           
           # if size(sequences, 1) > 0
           #   sequence_name = sequences[1, :sequence_name]
-          #   LibPQ.execute(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(settings.django_prefix)_$(model.name |> lowercase)), true);")
+          #   fetch(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(settings.django_prefix)_$(model.name |> lowercase)), true);")
           # else
           #   @warn "Could not find sequence for $(settings.django_prefix)_$(model.name |> lowercase).$(field)"
           # end
@@ -1873,9 +1876,9 @@ function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_fi
   end
 end
 
-function _fix_sequence_name(connection::LibPQ.Connection, model::PormGModel) # TODO maby i need use Migration get_sequence_name aproach
+function _fix_sequence_name(connection::PormGPostgres, model::PormGModel) # TODO maby i need use Migration get_sequence_name aproach
   pk_field = [field for field in keys(model.fields) if model.fields[field].primary_key]
-  sequences = LibPQ.execute(connection, """SELECT *
+  sequences = fetch(connection, """SELECT *
       FROM pg_sequences
       WHERE sequencename LIKE '$(model.name |> lowercase)%';""") |> DataFrames.DataFrame  
   for (index, row) in enumerate(eachrow(sequences))
@@ -1885,20 +1888,20 @@ function _fix_sequence_name(connection::LibPQ.Connection, model::PormGModel) # T
       elseif length(pk_field) > 1
         throw("Error in _fix_sequence_name, the model $(model.name) has more than one primary key")
       end
-      LibPQ.execute(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;")
+      fetch(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;")
     else
-      LibPQ.execute(connection, "DROP SEQUENCE $(row.sequencename);")
+      fetch(connection, "DROP SEQUENCE $(row.sequencename);")
     end
   end
 end
 
-# function _update_sequence(model::PormGModel, connection::LibPQ.Connection, pk_field::Vector{String})
-#   sequences = LibPQ.execute(connection, """SELECT *
+# function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String})
+#   sequences = fetch(connection, """SELECT *
 #       FROM pg_sequences
 #       WHERE sequencename LIKE '$(model.name |> lowercase)%';""") |> DataFrames.DataFrame
 #   for row in eachrow(sequences)
 #     if row.sequenceowner == model.name
-#       LibPQ.execute(connection, "SELECT setval('$(row.sequencename)', (SELECT MAX($(pk_field[1])) FROM $(model.name)), true);")
+#       fetch(connection, "SELECT setval('$(row.sequencename)', (SELECT MAX($(pk_field[1])) FROM $(model.name)), true);")
 #     end
 #   end
 # end
@@ -1973,7 +1976,7 @@ function _build_join_conditions(row_join::Vector{Dict{String, Any}})
     end
     return join(conditions, " AND ")
 end
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing)
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
   model = objct.model
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
@@ -2052,7 +2055,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   has_joins = !isempty(instruction.row_join)
   sql = ""
   if has_joins
-    if connection isa LibPQ.Connection
+    if connection isa PormGPostgres
       from_tables = _build_from_tables(instruction.row_join)
       join_conditions = _build_join_conditions(instruction.row_join)
       all_conditions = isempty(instruction._where) ? join_conditions :
@@ -2081,8 +2084,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   @infiltrate false
 
   # execute the SQL statement
-  if connection isa LibPQ.Connection
-    LibPQ.execute(connection, sql)
+  if connection isa PormGPostgres
+    fetch(connection, sql)
   elseif connection isa SQLite.DB
     SQLite.execute(connection, sql)
   else
@@ -2287,7 +2290,7 @@ function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGMode
   end  
 end
 
-function _bulk_insert(model::PormGModel, connection::LibPQ.Connection, 
+function _bulk_insert(model::PormGModel, connection::PormGPostgres, 
   fields::Vector{String}, rows::Vector{String}, 
   pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
   django_prefix::Bool, show_query::Bool = false)
@@ -2302,7 +2305,7 @@ function _bulk_insert(model::PormGModel, connection::LibPQ.Connection,
     @info sql
   else
     # Execute the query for the given connection type.
-    if connection isa LibPQ.Connection
+    if connection isa PormGPostgres
       try
         fetch(settings, sql)
       catch e
@@ -2543,7 +2546,7 @@ end
 
 function _bulk_update(model::PormGModel,
   settings::SQLConn,
-  connection::LibPQ.Connection, 
+  connection::PormGPostgres, 
   fields::Vector{String}, 
   rows::Vector{String}, 
   set_columns::String, 
@@ -2594,7 +2597,7 @@ export delete
 mutable struct DeletionCollector{T}
   model::PormGModel  # The main model being deleted from
   settings::SQLConn  # Connection settings
-  connection::Union{LibPQ.Connection, SQLite.DB}  # Database connection
+  connection::Union{PormGPostgres, SQLite.DB}  # Database connection
   objects::Dict{PormGModel, Vector{Dict{Symbol, T}}}  # Models and their objects to delete
   dependencies::Dict{PormGModel, Set{PormGModel}}  # Model dependencies
   field_updates::Dict{Tuple{String, Any}, Dict{PormGModel, Dict{Symbol, T}}}  # Field updates for SET_NULL etc.
@@ -2660,7 +2663,7 @@ total, dict = delete(query; allow_delete_all = true)
 """
 function delete(objct::SQLObjectHandler; 
     table_alias::Union{Nothing, SQLTableAlias} = nothing, 
-    connection::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
+    connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, 
     show_query::Bool = false,
     allow_delete_all::Bool = false)
   model = objct.object.model
@@ -2693,17 +2696,21 @@ function delete(objct::SQLObjectHandler;
   @infiltrate false
  
   # Execute the deletion in a transaction
-  if connection isa LibPQ.Connection
+  if connection isa PormGPostgres
     @infiltrate false
     # Start transaction
     # TODO: Check if the connection is in a transaction already
     # TODO: deal with connection pools
-    show_query || fetch(settings, "BEGIN;")
+    if show_query 
+      conn = nothing
+    else
+      result, conn = with_transaction(settings, "BEGIN;")
+    end
     
     try
       # Process fast deletes first (objects that can be deleted directly)
       for (model, keys) in collector.fast_deletes
-        delete_objects(connection, model, keys, show_query, deleted_counter)
+        delete_objects(connection, model, keys, show_query, deleted_counter, conn)
         # Remove from objects to prevent double deletion
         delete!(collector.objects, model)
       end
@@ -2723,15 +2730,15 @@ function delete(objct::SQLObjectHandler;
         _array = get(collector.objects, model_to_delete, [])        
         if !isempty(_array)
           @infiltrate false
-          delete_objects(connection, model_to_delete, _array, show_query, deleted_counter)
+          delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
         end
       end
         
       # Commit transaction
-      show_query || fetch(settings, "COMMIT;")
+      show_query || with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
     catch e
       # Rollback on error
-      show_query || fetch(settings, "ROLLBACK;")
+      show_query || with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
       rethrow(e)
     end
   else
@@ -2955,8 +2962,8 @@ function collect_fast_deletes!(collector::DeletionCollector)
   end
 end
 
-function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Bool, deleted_counter::Dict{String, Integer})
+function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+   show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection})
   @infiltrate false
   # Execute the actual deletion SQL
   _where = String[]
@@ -2993,11 +3000,11 @@ function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::P
     @info sql
     return deleted_counter  # Return count of deleted objects
   end
-  result = LibPQ.execute(connection, sql)
+  result, conn = with_transaction(connection, sql, conn=conn)
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool)
+function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, conn::Union{Nothing, LibPQ.Connection} = nothing, show_query::Bool)
   # Update field values using query object like CASCADE
   @infiltrate
   pk_field = keys[:key]
@@ -3009,6 +3016,7 @@ function update_field(connection::Union{LibPQ.Connection, SQLite.DB}, model::Por
     return
   end
   LibPQ.execute(connection, sql)
+  with_transaction(connection, sql, conn=conn)
 end
 
 

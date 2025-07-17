@@ -2713,7 +2713,7 @@ function delete(objct::SQLObjectHandler;
       for ((field, value), affected_models) in collector.field_updates
         @infiltrate
         for (affected_model, keys) in affected_models
-          update_field(connection, affected_model, field, value, keys) 
+          update_field(connection, affected_model, field, value, keys, show_query)
         end
       end
       
@@ -2997,16 +2997,19 @@ function delete_objects(connection::Union{LibPQ.Connection, SQLite.DB}, model::P
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}})
+function update_field(connection::Union{LibPQ.Connection, SQLite.DB}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool)
   # Update field values using query object like CASCADE
   @infiltrate
   pk_field = keys[:key]
   _query = keys[:objct]
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
   sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(_query |> query))"
+  if show_query
+    @info sql
+    return
+  end
   LibPQ.execute(connection, sql)
 end
-
 
 
 end

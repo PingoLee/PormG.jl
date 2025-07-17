@@ -38,8 +38,8 @@ const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "lt" => "<",
   "neq" => "!=",
   "isnull" => "ISNULL",
-  "in" => "IN",
-  "nin" => "NOT IN",
+  "in" => "in",
+  "nin" => "not in",
   "contains" => "contains",
   "icontains" => "icontains",
 )

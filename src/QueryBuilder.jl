@@ -16,9 +16,9 @@ import PormG.Infiltrator: @infiltrate
 # SQLTypeArrays Objects
 #
 @kwdef mutable struct SQLArrays <: SQLTypeArrays # TODO -- check if I need to use this
-  count::Int64 = 1
+  count::Integer = 1
   array_string::Array{String, 2} = Array{String, 2}(undef, 20, 3)
-  array_int::Array{Int64, 2} = Array{Int64, 2}(undef, 20, 3)
+  array_int::Array{Integer, 2} = Array{Integer, 2}(undef, 20, 3)
 end
 
 #
@@ -48,7 +48,7 @@ end
 
 # Store information to decide the name from table alias in subquery
 mutable struct SQLTbAlias <: SQLTableAlias
-  count::Int64
+  count::Integer
 end
 SQLTbAlias() = SQLTbAlias(0)
 function get_alias(s::SQLTableAlias)
@@ -80,11 +80,11 @@ Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as)
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
   field::Union{SQLTypeField, String}
-  order::Union{Int64, Nothing}
+  order::Union{Integer, Nothing}
   orientation::String
   _as::Union{String, Nothing}
 end
-SQLOrder(field::Union{SQLTypeField, String}; order::Union{Int64, Nothing} = nothing, orientation::String = "ASC", _as::Union{String, Nothing} = nothing) = SQLOrder(field, order, orientation, _as)
+SQLOrder(field::Union{SQLTypeField, String}; order::Union{Integer, Nothing} = nothing, orientation::String = "ASC", _as::Union{String, Nothing} = nothing) = SQLOrder(field, order, orientation, _as)
 Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as)
 
 #
@@ -96,8 +96,8 @@ mutable struct SQLObjectQuery <: SQLObject
   values::Vector{Union{SQLTypeText, SQLTypeField}}
   filter::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}} # filters to be used in the query
   insert::Dict{String, Any} # values to be used to create or insert
-  limit::Int64
-  offset::Int64
+  limit::Integer
+  offset::Integer
   order::Vector{SQLTypeOrder}
   group::Vector{String}
   having::Vector{String}
@@ -121,13 +121,13 @@ That is a internal function, please do not use it.
 
 # Fields
 - `operator::String`: the operator used in the SQL query.
-- `values::Union{String, Int64, Bool}`: the value(s) to be used with the operator.
+- `values::Union{String, Integer, Bool}`: the value(s) to be used with the operator.
 - `column::Union{String, SQLTypeFunction}`: the column to be used with the operator.
 
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String, Int64, Bool, SQLObjectHandler, SQLTypeF, Vector{T}} where T <: Union{Missing, String, DateTime, Int64, Bool, Date, SQLTypeF}
+  values::Union{String, Integer, Bool, SQLObjectHandler, SQLTypeF, Vector{T}} where T <: Union{Missing, String, DateTime, Integer, Bool, Date, SQLTypeF}
   column::Union{SQLTypeField, SQLTypeFunction, String, SQLTypeF, Vector{Union{String, SQLTypeF}}} # Vector{String} is need 
 end
 OP(column::String, value) = OperObject(operator = "=", values = value, column = SQLField(column))
@@ -142,14 +142,14 @@ OP(column::SQLTypeFunction, operator::String, value) = OperObject(operator = ope
 export Q, Qor
 
 @kwdef mutable struct QObject <: SQLTypeQ
-  filters::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor}}
+  filters::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLTypeF}} # filters to be used in the query
 end
 function Base.deepcopy(q::QObject)
   return QObject(filters = deepcopy(q.filters))
 end
 
 @kwdef mutable struct QorObject <: SQLTypeQor
-  or::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor}}
+  or::Vector{Union{SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLTypeF}} # filters to be used in the query
 end
 function Base.deepcopy(q::QorObject)
   return QorObject(or = deepcopy(q.or))
@@ -197,7 +197,7 @@ end
 
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper, SQLTypeF}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QObject(filters = colect)
 end
 
@@ -218,7 +218,7 @@ end
 
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper, SQLTypeF}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QorObject(or = colect)
 end
 
@@ -256,7 +256,7 @@ query.values("price", "discounted_price" => F("price") * 0.9)
 @kwdef mutable struct FExpression <: SQLTypeF
   field_name::String
   operation::Union{String, Nothing} = nothing  # +, -, *, /, etc.
-  operand::Union{String, Int64, Float64, SQLTypeF, Nothing} = nothing
+  operand::Union{String, Integer, Float64, SQLTypeF, Nothing} = nothing
   function_name::String = "F"
   column::Union{String, SQLTypeField, Vector{String}} = ""
   agregate::Bool = false
@@ -291,7 +291,7 @@ function Base.deepcopy(f::FExpression)
 end
 
 # Arithmetic operations for F expressions
-function Base.:+(f::FExpression, operand::Union{Int64, Float64, String, FExpression})
+function Base.:+(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
     field_name = f.field_name,
     operation = "+",
@@ -301,7 +301,7 @@ function Base.:+(f::FExpression, operand::Union{Int64, Float64, String, FExpress
   )
 end
 
-function Base.:-(f::FExpression, operand::Union{Int64, Float64, String, FExpression})
+function Base.:-(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
     field_name = f.field_name,
     operation = "-",
@@ -311,7 +311,7 @@ function Base.:-(f::FExpression, operand::Union{Int64, Float64, String, FExpress
   )
 end
 
-function Base.:*(f::FExpression, operand::Union{Int64, Float64, String, FExpression})
+function Base.:*(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
     field_name = f.field_name,
     operation = "*",
@@ -321,7 +321,7 @@ function Base.:*(f::FExpression, operand::Union{Int64, Float64, String, FExpress
   )
 end
 
-function Base.:/(f::FExpression, operand::Union{Int64, Float64, String, FExpression})
+function Base.:/(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
     field_name = f.field_name,
     operation = "/",
@@ -332,52 +332,52 @@ function Base.:/(f::FExpression, operand::Union{Int64, Float64, String, FExpress
 end
 
 # Comparison operations for F expressions
-function Base.:(==)(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})  
+function Base.:(==)(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})  
   f.operation = "="
   f.operand = operand
   return f
 end
-function Base.:>(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
   f.operation = ">"
   f.operand = operand
   return f
 end
 
-function Base.:<(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:<(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
   f.operation = "<"
   f.operand = operand
   return f
 end
 
-function Base.:>=(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:>=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
   f.operation = ">="
   f.operand = operand
   return f
 end
 
-function Base.:<=(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:<=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
   f.operation = "<="
   f.operand = operand
   return f
 end
-# function Base.:>(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+# function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
 #   return OperObject(operator = ">", values = operand, column = f)
 # end
 
-# function Base.:<(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+# function Base.:<(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
 #   return OperObject(operator = "<", values = operand, column = f)
 # end
 
-# function Base.:>=(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+# function Base.:>=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
 #   return OperObject(operator = ">=", values = operand, column = f)
 # end
 
-# function Base.:<=(f::FExpression, operand::Union{Int64, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+# function Base.:<=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
 #   return OperObject(operator = "<=", values = operand, column = f)
 # end
 
 # Allow arithmetic operations with F expressions on the right side
-function Base.:+(operand::Union{Int64, Float64}, f::FExpression)
+function Base.:+(operand::Union{Integer, Float64}, f::FExpression)
   return FExpression(
     field_name = f.field_name,
     operation = "+",
@@ -387,7 +387,7 @@ function Base.:+(operand::Union{Int64, Float64}, f::FExpression)
   )
 end
 
-function Base.:*(operand::Union{Int64, Float64}, f::FExpression)
+function Base.:*(operand::Union{Integer, Float64}, f::FExpression)
   return FExpression(
     field_name = f.field_name,
     operation = "*",
@@ -402,6 +402,7 @@ end
   function_name::String
   column::Union{String, SQLTypeField, N, Vector{N}, Vector{String}, SQLTypeOper, SQLTypeQ, SQLTypeQor, Vector{M}} where {N <: SQLTypeFunction, M <: SQLType} # TODO Vector{M} is needed?
   agregate::Bool = false
+  formater::Union{Nothing, Function} = nothing # function to format the value
   _as::Union{String, Nothing} = nothing
   kwargs::Dict{String, Any} = Dict{String, Any}()
 end
@@ -410,6 +411,7 @@ function Base.deepcopy(f::FObject)
     function_name = f.function_name,
     column = deepcopy(f.column),
     agregate = f.agregate,
+    formater = f.formater,
     _as = f._as,
     kwargs = deepcopy(f.kwargs)
   )
@@ -463,22 +465,24 @@ function Concat(x::Union{Vector{String}, Vector{N}} where N <: SQLType; output_f
   end
   return FObject(function_name = "CONCAT", column = x, kwargs = Dict{String, Any}("output_field" => output_field, "as" => _as))
 end
-function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String)
-  return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("part" => part))
+function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String; formater::Union{Nothing, Function, PormGField} = nothing)
+  isa(formater, PormGField) && (formater = formater.formater)
+  return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part))
 end
-function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String, format::String)
-  return FObject(function_name = "EXTRACT", column = x, kwargs = Dict{String, Any}("part" => part, "format" => format))
+function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
+  isa(formater, PormGField) && (formater = formater.formater)
+  return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
-function When(x::NTuple{N, Pair{String, Union{T, Vector{T}}}}; then::Union{String, Int64, Bool, SQLTypeFunction} = 0, _else::Union{String, Int64, Bool, SQLTypeFunction, Missing} = missing) where {T, N}
+function When(x::NTuple{N, Pair{String, Union{T, Vector{T}}}}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing) where {T, N}
   return When(Q(x), then = then, _else = _else)
 end
-function  When(x::Union{Pair{String, Vector{T}}}; then::Union{String, Int64, Bool, SQLTypeFunction} = 0, _else::Union{String, Int64, Bool, SQLTypeFunction, Missing} = missing) where T <: Union{Missing, String, Int64, Bool, SQLTypeFunction}
+function  When(x::Union{Pair{String, Vector{T}}}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing) where T <: Union{Missing, String, Integer, Bool, SQLTypeFunction}
   return FObject(function_name = "WHEN", column = x |> _get_pair_to_oper, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
-function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Int64, Bool, SQLTypeFunction} = 0, _else::Union{String, Int64, Bool, SQLTypeFunction, Missing} = missing)
+function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
-function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Union{String, Int64, Bool, SQLTypeFunction} = 0, _else::Union{String, Int64, Bool, SQLTypeFunction, Missing} = missing)
+function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
 function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
@@ -493,15 +497,16 @@ function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::
   end  
   return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
 end
-function To_char(x::Union{String, SQLTypeFunction, Vector{String}}, format::String)
-  return FObject(function_name = "EXTRACT_DATE", column = x, kwargs = Dict{String, Any}("format" => format))
+function To_char(x::Union{String, SQLTypeFunction, Vector{String}}, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
+  isa(formater, PormGField) && (formater = formater.formater)
+  return FObject(function_name = "EXTRACT_DATE", column = x, formater = formater, kwargs = Dict{String, Any}("format" => format))
 end
 
-MONTH(x) = Extract(x, "MONTH")
-YEAR(x) = Extract(x, "YEAR")
-DAY(x) = Extract(x, "DAY")
-Y_M(x) = To_char(x, "YYYY-MM")
-DATE(x) = To_char(x, "YYYY-MM-DD")
+MONTH(x) = Extract(x, "MONTH", formater = Models.format_number_sql)
+YEAR(x) = Extract(x, "YEAR", formater = Models.format_number_sql)
+DAY(x) = Extract(x, "DAY", formater = Models.format_number_sql)
+Y_M(x) = To_char(x, "YYYY-MM", formater = Models.format_yyyy_mm)
+DATE(x) = To_char(x, "YYYY-MM-DD", formater = Models.format_date_sql)
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -605,7 +610,10 @@ function up_create!(q::SQLObject, values)
   return insert(q)
 end
 
-function up_update!(q::SQLObject, values::NTuple{N, Pair{String, T}} where N) where T <: Union{String, Int64, FExpression, SQLTypeF, Missing, Nothing}
+# function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: SQLTypeFunction)
+# function up_update!(q::SQLObject, values::NTuple{N, Pair{String, T}} where N where T <: Union{String, Integer, FExpression, SQLTypeF, Missing, Nothing, Bool})
+# function up_update!(q::SQLObject, values::NTuple{N, T} where N where T <: Union{Pair{String, String}, Pair{String, Integer}, Pair{String, FExpression}, Pair{String, SQLTypeF}, Pair{String, Missing}, Pair{String, Nothing}, Pair{String, Bool}})
+function up_update!(q::SQLObject, values)
   q.insert = Dict()
   for (k,v) in values   
     q.insert[k] = v 
@@ -704,6 +712,71 @@ end
 
 export object
 
+"""
+Wraps a PormGModel into an ObjectHandler on which you can call:
+```
+- .filter(...) to add WHERE clauses
+- .values(...) to choose/annotate columns
+- .order_by(...) to sort
+- .distinct() to add DISTINCT clause
+- .create(...) for single-row DML
+- .update(...) for single-row DML
+- plus bulk_insert, bulk_update, do_count, do_exists, list
+```
+
+# Arguments
+- `model::PormGModel`: The model to be wrapped and handled.
+
+# Example
+```julia
+using PormG, DataFrames
+
+# assume models loaded as `M`
+query = M.User |> object
+
+# 1) Filtering & selecting
+query.filter("is_active" => true)
+query.values("id", "username", "email")
+df = query |> list |> DataFrame
+
+# 2) Counting
+active_users = query |> do_count
+
+# 3) Inserting a single row
+query = M.Status |> object
+new = query.create("statusid" => 42, "status" => "Foo")  
+# returns a Dict of the inserted row
+
+# 4) Updating a single row
+query = M.Status |> object
+query.filter("statusid" => 42)
+query.update("status" => "Bar")
+
+# 5) Ordering & aggregation
+query = M.Result |> object
+query.filter("raceid__year" => 2020)
+query.values(
+  "driverid__forename", 
+  "constructorid__name", 
+  "laps" => Count("laps")
+)
+query.order_by("-laps")
+df2 = query |> list |> DataFrame
+
+# 6) Existence check
+query = M.User |> object
+query.filter("id" => 1)
+exists = query |> do_exists
+
+# 7) Bulk insert
+df_new = DataFrame(name=["A","B"], age=[30,25])
+bulk_insert(M.User |> object, df_new)
+
+# 8) Bulk update (by primary key)
+df_up = DataFrame(id=[1,2], name=["Alice","Bob"])
+bulk_update(M.User |> object, df_up, columns=["name"], filters=["id"])
+``
+"""
 function object(model::PormGModel)
   return ObjectHandler(object = SQLObjectQuery(model = model))
 end
@@ -827,7 +900,9 @@ function _check_function(x::Vector{String})
   end    
 end
 _check_function(x::String) = _check_function(String.(split(x, "__@")))
-
+function _check_function(x::FExpression)
+  return x
+end
 
 """
   _get_pair_to_oper(x::Pair)
@@ -841,33 +916,33 @@ _check_function(x::String) = _check_function(String.(split(x, "__@")))
   - `OperObject`: An OperObject with the corresponding operator and values.
 
 """
-function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Int64, Bool}
+function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Integer, Bool}
   if haskey(PormGsuffix, x.first[end])
     return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else    
     return OperObject(operator = "=", values = x.second, column = SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end  
 end
-function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Int64, Bool, Date}
+function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Integer, Bool, Date}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{Missing, String, Int64, Bool}
+function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{Missing, String, Integer, Bool}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end  
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandler
-  if x.first[end] in ["in", "not in"]
+  if x.first[end] in ["in", "nin"]
     return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in'\e[0m is allowed with a object"))
+    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Int64, Bool}
-  if x.first[end] in ["in", "not in"]
+function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Integer, Bool}
+  if x.first[end] in ["in", "nin"]
     @infiltrate false
-    return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw("Invalid operator $(x.first[end]), only 'in' is allowed with a object")
+    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String}, Date})
@@ -878,9 +953,16 @@ end
 
 function _check_filter(x::Pair)  
   if isa(x.first, String)
-    check = String.(split(x.first, "__@"))
-    return _get_pair_to_oper(check => x.second)
-  else
+    check = String.(split(x.first, "__@"))  
+    try
+      # @infiltrate
+      return _get_pair_to_oper(check => x.second)
+    catch e
+      @infiltrate
+      @error "Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.first))" exception=(e, catch_backtrace())
+      rethrow(e)
+    end
+  else    
     throw("Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.first))")
   end
 end
@@ -907,7 +989,7 @@ function _get_join_query(array::Vector{String}; array_store::Vector{String}=Stri
   return array_store  
 end
 
-function _get_join_query(x::Tuple{Pair{String, Int64}, Vararg{Pair{String, Int64}}}; array_store::Vector{String} = String[])
+function _get_join_query(x::Tuple{Pair{String, Integer}, Vararg{Pair{String, Integer}}}; array_store::Vector{String} = String[])
   array = String[]
   for (k,v) in x
     push!(array, k)
@@ -921,7 +1003,7 @@ function _get_join_query(x::Tuple{String, Vararg{String}}; array_store::Vector{S
   end
   _get_join_query(array, array_store=array_store)  
 end
-function _get_join_query(x::Dict{String,Union{Int64, String}}; array_store::Vector{String} = String[])
+function _get_join_query(x::Dict{String,Union{Integer, String}}; array_store::Vector{String} = String[])
   array = String[]
   for (k,v) in x
     push!(array, k)
@@ -1044,6 +1126,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["key_b"] = first_field.pk_field::String
     row_join["key_a"] = first_column
   elseif haskey(instruct.object.model.related_objects, vector[1])
+    # @infiltrate false
     s_model = Symbol(uppercasefirst(string(instruct.object.model.related_objects[vector[1]][3])))
     reverse_model = getfield(foreing_table_module, s_model)
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
@@ -1062,10 +1145,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][4] |> String
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][1] |> String
-    foreign_table_name = s_model |> string    
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    foreign_table_name = s_model |> string
+    # @infiltrate  
   else
+    @infiltrate
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
   
@@ -1117,8 +1202,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join["key_b"] = new_object.related_objects[vector[1]][4] |> String
-      row_join["key_a"] = new_object.related_objects[vector[1]][1] |> String
+      row_join["key_a"] = new_object.related_objects[vector[1]][4] |> String
+      row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
       vector = vector[2:end]
 
     else
@@ -1204,7 +1289,7 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
-    if _as !== nothing
+    if _as !== nothing && haskey(instruc.tab_field_cache, _as)
       instruc.tab_field_cache[_as] = instruc.object.model.fields[v]
     end
     return string(instruc.alias, ".", _solve_field(v, instruc.object.model, instruc))
@@ -1243,6 +1328,17 @@ function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Noth
     push!(resp, _get_select_query(v, instruc, _as=_as))
   end
   return "(" * join(resp, " AND ") * ")"
+end
+function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
+  # TODO check if the field is in the model
+  @infiltrate false
+  if q.operation !== nothing
+    return _set_update_query(q, instruc)
+  elseif q.field in instruc.object.model.field_names
+    return string(instruc.alias, ".", _solve_field(q.field, instruc.object.model, instruc))
+  else
+    throw(ArgumentError("The field \e[31m$(q.field)\e[0m not found in \e[34m$(instruc.object.model.name)\e[0m: \e[32m$(join(instruc.object.model.field_names, ", "))\e[0m"))
+  end
 end
 
 
@@ -1358,13 +1454,20 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   end
 end
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
+  @infiltrate false
   if isa(v.values, SQLTypeF)
     @infiltrate
     column = _get_filter_query(v.column, instruc)
     value = _get_filter_query(v.values, instruc)
     return string(column, " ", v.operator, " ", value)
-  elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
-    value = getfield(Models, PormGTypeField[v.column.function_name])(v.values)
+  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formater !== nothing
+    @infiltrate false
+    value = v.column.field.formater(v.values)
+    if isa(value, String) && !contains(value, "'")
+      value = string("'", value, "'")
+    end
+  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
+    value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
   elseif isa(v.values, SQLObjectHandler)
     if !(v.operator in ["in", "not in"])
       throw("Error in values, $(v.values) is not a SQLObjectHandler")
@@ -1391,13 +1494,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
           throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
         @infiltrate
-      end    
-    elseif isa(v.column, SQLTypeField)
-      @infiltrate false
-      value = string("'", v.values, "'") # TODO, maybe I need to check if the column is valid and process the function before store
-    elseif haskey(instruc.tab_field_cache, v.column._as)
+      end      
+    elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @infiltrate false
       value = instruc.tab_field_cache[v.column._as].formater(v.values)
+    elseif isa(v.column, SQLTypeField)
+      @infiltrate false
+      value = string("'", v.values, "'") # TODO, maybe I need to check if the column is valid and process the function before store    
     else
       @infiltrate false
       throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
@@ -1469,8 +1572,13 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
     if isa(v, SQLTypeOper)
       @infiltrate false
       if isa(v.column, SQLTypeField) && isa(v.column.field, String) && !contains(v.column.field, "__") && !(v.column.field in instruc.object.model.field_names)
+        # @infiltrate false
         field = instruc.cache[v.column._as].field
-        _validation = instruc.tab_field_cache[instruc.cache[v.column._as]._as]
+        if haskey(instruc.tab_field_cache, v.column._as)
+          _validation = instruc.tab_field_cache[instruc.cache[v.column._as]._as]
+        else
+          _validation = IntegerField()
+        end
         push!(instruc.having, "$(field) $(v.operator) $(_validation.formater(v.values))")
         return nothing
       end
@@ -1527,23 +1635,23 @@ Set pagination parameters for a SQL query object.
 
 # Arguments
 - `object::SQLObjectHandler`: The SQL object handler to modify
-- `limit::Int64`: Maximum number of records to return (default: 10)  
-- `offset::Int64`: Number of records to skip from the beginning (default: 0)
+- `limit::Integer`: Maximum number of records to return (default: 10)  
+- `offset::Integer`: Number of records to skip from the beginning (default: 0)
 
 # Examples
 page(query, limit=20, offset=10) |> list |> DataFrame or page(query, 20, 10)
 page(query, limit=20) |> list |> DataFrame or page(query, 20)
 """
-function page(object::SQLObjectHandler; limit::Int64 = 10, offset::Int64 = 0)
+function page(object::SQLObjectHandler; limit::Integer = 10, offset::Integer = 0)
   object.object.limit = limit
   object.object.offset = offset
   return object
 end
-function page(object::SQLObjectHandler, limit::Int64)
+function page(object::SQLObjectHandler, limit::Integer)
   object.object.limit = limit
   return object
 end
-function page(object::SQLObjectHandler, limit::Int64, offset::Int64)
+function page(object::SQLObjectHandler, limit::Integer, offset::Integer)
   object.object.limit = limit
   object.object.offset = offset
   return object
@@ -1596,7 +1704,7 @@ end
 
 export do_count, do_exists
 
-function do_count(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Int64
+function do_count(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Integer
   settings = config[q.object.model.connect_key]
   connection = settings.connections
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
@@ -2016,7 +2124,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   - `objct::SQLObjectHandler`: The SQL object handler to use for the operation.
   - `df::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
   - `columns::Vector{Union{String, Pair{String, String}}}`: Optional. Specifies the columns to insert and their mappings.
-  - `chunk_size::Int64`: Optional. The number of rows to insert in each batch (default: 1000).
+  - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
   - `show_query::Bool`: Optional. If true, prints the generated SQL query (default: false).
   - `copy::Bool`: Optional. If true, creates a copy of the DataFrame before processing (default: false).
 
@@ -2045,7 +2153,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
 """
 function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
     columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], 
-    chunk_size::Int64 = 1000,
+    chunk_size::Integer = 1000,
     show_query::Bool = false,
     copy::Bool = false
   ) 
@@ -2145,8 +2253,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]
-  count::Int64 = 0
-  total::Int64 = size(df, 1)
+  count::Integer = 0
+  total::Integer = size(df, 1)
   for (index, row) in enumerate(eachrow(df))
     values = String[]
     try
@@ -2168,7 +2276,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   
 end
 
-function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Int64, django_prefix::Bool)
+function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer, django_prefix::Bool)
   for field in fields
     # Check if field exists in the row before trying to format it
     if !(field in names(row))
@@ -2229,9 +2337,9 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `objct::SQLObjectHandler`: The database handler object.
 - `df::DataFrames.DataFrame`: The DataFrame containing the data to be used for the update.
 - `columns`: (Optional) Specifies which columns to update. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, no columns are specified.
-- `filters`: (Optional) Specifies the filters to apply for the update. Can be a `String`, a `Pair{String, T}` where `T` is `String`, `Int64`, `Bool`, `Date`, or `DateTime`, or a `Vector` of these. If `nothing`, no filters are applied.
+- `filters`: (Optional) Specifies the filters to apply for the update. Can be a `String`, a `Pair{String, T}` where `T` is `String`, `Integer`, `Bool`, `Date`, or `DateTime`, or a `Vector` of these. If `nothing`, no filters are applied.
 - `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
-- `chunk_size::Int64`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
+- `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
 
 # Example
 ```julia
@@ -2245,10 +2353,10 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     columns=nothing, # what columns to update
     filters=nothing, # what columns to do the filter
     show_query::Bool=false, 
-    chunk_size::Int64=1000)
+    chunk_size::Integer=1000)
 
   _columns::Vector{Union{String, Pair{String, String}}} = []
-  _filters::Vector{Union{String, Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}}} = []
+  _filters::Vector{Union{String, Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}}} = []
   if columns === nothing
   elseif columns isa AbstractString
     push!(_columns, columns)
@@ -2271,20 +2379,20 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   if filters === nothing
   elseif filters isa AbstractString
     push!(_filters, filters)
-  elseif filter isa Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}
+  elseif filter isa Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}
     push!(_filters, filters)
   elseif filters isa Vector
     for filter in filters
       if filter isa AbstractString
         push!(_filters, filter)
-      elseif filter isa Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}
+      elseif filter isa Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}
         push!(_filters, filter)
       else
-        throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, NumInt64ber, Bool, Date, DateTime}")
+        throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, NumIntegerber, Bool, Date, DateTime}")
       end
     end
   else
-    throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, Int64, Bool, Date, DateTime}")
+    throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, Integer, Bool, Date, DateTime}")
   end
 
   _bulk_update(objct, df, _columns, _filters, show_query, chunk_size)
@@ -2293,9 +2401,9 @@ end
 
 function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},
-  filters::Vector{Union{String, Pair{String, <:Union{String, Int64, Bool, Date, DateTime}}}},
+  filters::Vector{Union{String, Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}}},
   show_query::Bool,
-  chunk_size::Int64=1000)
+  chunk_size::Integer=1000)
 
   model = objct.object.model
   settings = config[model.connect_key]
@@ -2411,8 +2519,8 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
   deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
   set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
-  count::Int64 = 0
-  total::Int64 = size(df, 1)
+  count::Integer = 0
+  total::Integer = size(df, 1)
   @infiltrate false
   for (index, row) in enumerate(eachrow(df))
     values = String[]
@@ -2517,7 +2625,7 @@ Delete objects from the database with proper handling of foreign key relationshi
 - `allow_delete_all::Bool=false`: If `true`, allows deletion without WHERE clause filters (dangerous operation)
 
 ## Returns
-- `Tuple{Int64, Dict{String, Int64}}`: A tuple containing:
+- `Tuple{Integer, Dict{String, Integer}}`: A tuple containing:
   - Total number of deleted objects
   - Dictionary mapping model names to their respective deletion counts
 
@@ -2570,11 +2678,11 @@ function delete(objct::SQLObjectHandler;
   
   # If no objects to delete, return early
   if objct |> !do_exists
-    return 0, Dict{String, Int64}()
+    return 0, Dict{String, Integer}()
   end
 
   # We'll track deletion counts
-  deleted_counter = Dict{String, Int64}()
+  deleted_counter = Dict{String, Integer}()
   
   # Collect related models that need special handling
   collector = DeletionCollector(model, settings)
@@ -2611,8 +2719,8 @@ function delete(objct::SQLObjectHandler;
       # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
       for ((field, value), affected_models) in collector.field_updates
         @infiltrate
-        for (affected_model, ids) in affected_models
-          update_field(connection, affected_model, field, value, ids) 
+        for (affected_model, keys) in affected_models
+          update_field(connection, affected_model, field, value, keys) 
         end
       end
       
@@ -2763,30 +2871,37 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     # Add field update to set field to NULL
     if !haskey(collector.field_updates, (field_name |> string, nothing))
       @infiltrate false
-      collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Vector{Int64}}()
+      collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Dict{Symbol, Union{String, SQLObjectHandler}}}()
     end
     
     @infiltrate false
-    # Add to field updates
-    if !isempty(ids)
-      collector.field_updates[(field_name |> string, nothing)][model] = ids
-    end
+    # Add to field updates using _query object like CASCADE
+    pk_field = get_model_pk_field(related_model) |> string |> lowercase
+    _query = deepcopy(keys[:objct])
+    _query.values(pk_field)
+    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
+    _keys[:key] = pk_field
+    _keys[:objct] = _query
+    collector.field_updates[(field_name |> string, nothing)][related_model] = _keys
 
   elseif field.on_delete == SET_DEFAULT
     # TODO : I dont check if this works
-    @infiltrate
     # Add field update to set field to default value
     default_value = field.default
     if !haskey(collector.field_updates, (field_name |> string, default_value))
-      collector.field_updates[(field_name |> string, default_value)] = Dict{PormGModel, Vector{Int64}}()
+      collector.field_updates[(field_name |> string, default_value)] = Dict{PormGModel, Dict{Symbol, Union{String, SQLObjectHandler}}}()
     end    
     
-    # Add to field updates
-    if !isempty(ids)
-      collector.field_updates[(field_name |> string, default_value)][model] = ids
-    end
+    # Add to field updates using _query object like CASCADE
+    pk_field = get_model_pk_field(related_model) |> string |> lowercase
+    _query = deepcopy(keys[:objct])
+    _query.values(pk_field)
+    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
+    _keys[:key] = pk_field
+    _keys[:objct] = _query
+    @infiltrate
+    collector.field_updates[(field_name |> string, default_value)][related_model] = _keys
   end
-  # Other on_delete behaviors can be added here
 end
 
 function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
@@ -2848,7 +2963,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
 end
 
 function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Bool, deleted_counter::Dict{String, Int64}, conn::Union{Nothing, LibPQ.Connection})
+   show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection})
   @infiltrate false
   # Execute the actual deletion SQL
   _where = String[]
@@ -2889,11 +3004,13 @@ function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::Porm
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, ids::Vector{Int64}, conn::Union{Nothing, LibPQ.Connection} = nothing)
-  # Update field values
-  pk_field = get_model_pk_field(model)
+function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, conn::Union{Nothing, LibPQ.Connection} = nothing)
+  # Update field values using query object like CASCADE
+  @infiltrate
+  pk_field = keys[:key]
+  _query = keys[:objct]
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
-  sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE id IN ($(join(ids, ",")))"
+  sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(_query |> query))"
   with_transaction(connection, sql, conn=conn)
 end
 

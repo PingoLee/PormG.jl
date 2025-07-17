@@ -3,7 +3,7 @@ module Models
 using Dates, TimeZones
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
-import PormG: SQLConn, config
+import PormG: SQLConn, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 using Printf
 import Base.deepcopy
@@ -90,6 +90,21 @@ function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
   end
 end
 
+function get_model_name(model::PormGModel, settings::SQLConn, symbol::Bool=true)::Union{String, Symbol}
+  value::Union{String, Symbol, Nothing} = nothing
+  if settings.django_prefix !== nothing
+    django_prefix = """$(settings.django_prefix)_"""
+    value = replace(model.name, django_prefix => "") |> lowercase
+  else
+    value = model.name |> lowercase
+  end
+  if symbol
+    return value |> Symbol
+  else
+    return value
+  end
+end
+
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 function set_models(_module::Module, path::String)::Nothing
   @infiltrate false
@@ -100,6 +115,12 @@ function set_models(_module::Module, path::String)::Nothing
   else
     connect_key = split(path, "/")[end]
   end
+
+  @infiltrate false
+  if haskey(config, connect_key) == false
+    Configuration.load()
+  end
+  settings::SQLConn = config[connect_key]
 
   # set the original module in models
   for model in models
@@ -129,23 +150,26 @@ function set_models(_module::Module, path::String)::Nothing
           dict_tables_fiels[field_to.name] = [field_name]
         end
         if dict_tables_c[field_to.name] > 1
+          @infiltrate false
           if field.related_name === nothing 
-            field.related_name = string(model.name, "_", field_name) |> lowercase
+            field.related_name = string(get_model_name(model, settings), "_", field_name) |> lowercase
             @warn("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
           end
           if haskey(field_to.related_objects, field.related_name)
             throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
           else
-            field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+            field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, get_model_name(model, settings), get_model_pk_field(model) |> Symbol)
           end
         elseif dict_tables_c[field_to.name] == 1
-          if field.related_name === nothing
-            field_to.related_objects[model.name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+          @infiltrate false
+          model_name = get_model_name(model, settings)
+          if field.related_name === nothing            
+            field_to.related_objects[model_name |> string] = (field_name |> Symbol, field.pk_field |> Symbol, model_name |> Symbol, get_model_pk_field(model) |> Symbol)
           else
             if haskey(field_to.related_objects, field.related_name)
               throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
             else
-              field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model.name |> Symbol, get_model_pk_field(model) |> Symbol)
+              field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model_name, get_model_pk_field(model) |> Symbol)
             end
           end
         end        
@@ -410,7 +434,25 @@ function format_timezone_sql(value::DateTime, timezone::String)
   return ZonedDateTime(value, TimeZone(timezone))
 end
 
-    
+function format_yyyy_mm(value::String)
+  if occursin(r"^\d{4}-\d{2}$", value)
+    return string("'", value, "'")
+  else
+    throw(ArgumentError("The value $value is invalid, it must be in the format YYYY-MM"))
+  end  
+end
+function format_yyyy_mm(value::Integer)
+  value = string(value)
+  if length(value) == 6
+    # Format as YYYY-MM
+    return string("'", value[1:4], "-", value[5:6], "'")
+  else
+    throw(ArgumentError("The value $value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM"))
+  end
+end
+function format_yyyy_mm(value)
+  throw(ArgumentError("The value must be a String or Integer in the format YYYY-MM or YYYYMM"))
+end    
 
 # ---
 # Tools to comparisons

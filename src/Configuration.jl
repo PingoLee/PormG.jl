@@ -72,7 +72,7 @@ function read_db_connection_data(path::String, settings::SQLConn) :: Dict{String
   if  haskey(db_conn_data, settings.app_env)
       if haskey(db_conn_data[settings.app_env], "config") && isa(db_conn_data[settings.app_env]["config"], Dict)
         for (k, v) in db_conn_data[settings.app_env]["config"]
-          println(k, " => ", v)
+          # println(k, " => ", v)
           if k == "log_level"
             for dl in Dict("debug" => Logging.Debug, "error" => Logging.Error, "info" => Logging.Info, "warn" => Logging.Warn)
               occursin(dl[1], v) && setfield!(settings, Symbol(k), dl[2])
@@ -97,6 +97,8 @@ end
 function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, config::Dict{String,SQLConn} = config)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
+
+  @infiltrate false
 
   # check if the path exists
   if !isdir(path)
@@ -145,7 +147,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding"]
       # get!(settings.db_config_settings, key, get(ENV, "SEARCHLIGHT_$(uppercase(key))", nothing))
       get!(settings.db_config_settings, key, nothing)
-      println(key, " => ", settings.db_config_settings[key])
+      # println(key, " => ", settings.db_config_settings[key])
       settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", settings.db_config_settings[key]))
     end
 
@@ -164,6 +166,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     settings.connections = PostgresConnectionPool(join(dns, " "))
 
   end
+  return nothing
 end
 
 #
@@ -455,7 +458,7 @@ function reconnect_to_db(settings::SQLConn)
 
     for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding"]
       get!(db_conn_data, key, nothing)
-      println(key, " => ", db_conn_data[key])
+      # println(key, " => ", db_conn_data[key])
       db_conn_data[key] !== nothing && push!(dns, string("$key=", db_conn_data[key]))
     end
 

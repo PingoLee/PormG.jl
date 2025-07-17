@@ -1145,8 +1145,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][4] |> String
-    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][1] |> String
     foreign_table_name = s_model |> string
     # @infiltrate  
   else
@@ -1202,8 +1202,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join["key_a"] = new_object.related_objects[vector[1]][4] |> String
-      row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
+      row_join["key_b"] = new_object.related_objects[vector[1]][4] |> String
+      row_join["key_a"] = new_object.related_objects[vector[1]][1] |> String
       vector = vector[2:end]
 
     else

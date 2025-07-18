@@ -357,4 +357,44 @@ end
   @test df[1, :count_grid] == 2
 end
 
+@testset "Print Query" begin
+  query = M.Result |> object;
+  query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
+  query.values("resultid", "driverid__forename", "constructorid__name", "statusid__status");
+  @test typeof(query |> show_query) == String 
+
+  try
+    delete(M.Circuit |> object, allow_delete_all=true, show_query=true)
+    @test true
+  catch e
+      @error "Error during delete with show_query" error=e
+      @test false  # Fail the test if an error occurs
+  end
+
+  @test M.Circuit |> object |> do_exists
+
+  query = M.Constructor |> object
+  try
+    bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, show_query=true)
+    @test true
+  catch e
+    @error "Error during bulk_insert with show_query" error=e
+    @test false  # Fail the test if an error occurs
+  end
+
+  query = M.Just_a_test_deletion |> object
+  df = query |> list |> DataFrame
+  for (index, row) in enumerate(eachrow(df))
+    row.name = "test_update_$(index)"
+  end
+  try
+    bulk_update(query, df, columns=["name"], filters=["id"], show_query=true)
+    @test true
+  catch e
+    @error "Error during bulk_update with show_query" error=e
+    @test false  # Fail the test if an error occurs
+  end
+
+end
+
 PormG.Configuration.__cleanup__()

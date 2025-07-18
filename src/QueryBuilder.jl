@@ -2098,7 +2098,21 @@ end
 
 
 export list
-# create a function like a list from Django query
+"""
+Fetches a list of records from the database for the given `SQLObjectHandler`.
+
+# Returns
+- The result of the database query as returned by `fetch`.
+
+# Example
+```julia
+query = M.Result |> object
+query.filter("raceid__year" => 2020)
+query.values("driverid__forename", "constructorid__name", "laps" => Count("laps"))
+query.order_by("-laps")
+df = query |> list |> DataFrame
+```
+"""
 function list(objct::SQLObjectHandler)
   if objct.object.model.connect_key === nothing
     throw(ArgumentError("Error in list, the model \e[4m\e[31m$(objct.object.model.name)\e[0m not have a build correctly, please reload the app"))
@@ -2720,7 +2734,7 @@ function delete(objct::SQLObjectHandler;
       for ((field, value), affected_models) in collector.field_updates
         @infiltrate
         for (affected_model, keys) in affected_models
-          update_field(connection, affected_model, field, value, keys, show_query)
+          update_field(connection, affected_model, field, value, keys, show_query, conn)
         end
       end
       
@@ -3004,7 +3018,7 @@ function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::Porm
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, conn::Union{Nothing, LibPQ.Connection} = nothing, show_query::Bool)
+function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool, conn::Union{Nothing, LibPQ.Connection})
   # Update field values using query object like CASCADE
   @infiltrate
   pk_field = keys[:key]

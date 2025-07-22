@@ -1145,10 +1145,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][4] |> String
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][2] |> String
+    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
     foreign_table_name = s_model |> string
-    # @infiltrate  
+    @infiltrate false
   else
     @infiltrate
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
@@ -1202,8 +1202,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join["key_b"] = new_object.related_objects[vector[1]][4] |> String
-      row_join["key_a"] = new_object.related_objects[vector[1]][1] |> String
+      row_join["key_a"] = new_object.related_objects[vector[1]][2] |> String
+      row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
       vector = vector[2:end]
 
     else
@@ -2876,7 +2876,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
-    @infiltrate
+    @infiltrate false
     # check if the field allow null
     if !field.null
       throw(ArgumentError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))

@@ -2,4 +2,5 @@ db/*
 Manifest.toml
 test/pg/db/connection.yml
 test/pg/db_2/connection.yml
+test/pg/db_2/migrations/
 todo.txt

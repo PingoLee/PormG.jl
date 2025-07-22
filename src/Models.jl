@@ -169,7 +169,7 @@ function set_models(_module::Module, path::String)::Nothing
             field_to.related_objects[model_name |> string] = (field_name |> Symbol, field.pk_field |> Symbol, model_name |> Symbol, get_model_pk_field(model) |> Symbol)
           else
             if haskey(field_to.related_objects, field.related_name)
-              throw(ArgumentError("The related_name $field.related_name in the model $model is already defined"))
+              throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
             else
               field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model_name, get_model_pk_field(model) |> Symbol)
             end

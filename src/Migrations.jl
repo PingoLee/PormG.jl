@@ -1203,7 +1203,7 @@ function import_models_from_django(
     
   end
 
-  generate_models_from_db(file, Instructions, settings)
+  generate_models_from_db(file, Instructions, settings, path=db)
 end
 
 function parse_class(model_py_string::String)

@@ -15,6 +15,7 @@ using LibPQ
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
 abstract type PormGPostgres <: SQLConn end
+abstract type PormGPostgresParam <: PormGPostgres end
 abstract type PormGSQLite <: SQLConn end
 abstract type SQLObject <: PormGAbstractType end
 abstract type SQLObjectHandler <: SQLObject end

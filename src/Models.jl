@@ -7,6 +7,8 @@ import PormG: SQLConn, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 using Printf
 import Base.deepcopy
+using Decimals
+
 
 import PormG.Infiltrator: @infiltrate
 
@@ -331,16 +333,18 @@ end
 #
 
 function format_text_sql(value::Union{Int, Date, DateTime, ZonedDateTime})
-    return string("'", value, "'")        
+    return string(value)        
 end
 function format_text_sql(value::Union{Missing, Nothing})
-    return "null"
+    return missing
 end
 function format_text_sql(value::Bool)
-    return value ? "'true'" : "'false'"
+  return value
+    # return value ? "'true'" : "'false'"
 end
 function format_text_sql(value::AbstractString)
-    return string("'", replace(value, "'" => "`"), "'")    
+  return value
+    # return string("'", replace(value, "'" => "`"), "'")    
 end
 function format_text_sql(value::AbstractArray)
   arrayref::Vector{String} = []
@@ -348,18 +352,21 @@ function format_text_sql(value::AbstractArray)
     push!(arrayref, v |> format_text_sql)
   end
   @infiltrate false
-  return string("(", join(arrayref, ","), ")")
+  # return string("(", join(arrayref, ","), ")")
+  return arrayref
 end
 
 function format_number_sql(value::Integer)
-    return string(value)    
+  return value
+    # return string(value)    
 end
 function format_number_sql(value::Union{Missing, Nothing})
-    return "null"
+    return missing
 end
 function format_number_sql(value::Union{Float16, Float32, Float64})
   # Use @sprintf to avoid scientific notation and ensure full precision
-  return string("'", @sprintf("%.17g", value), "'")
+  # return string("'", @sprintf("%.17g", value), "'")
+  return @sprintf("%.17g", value)
 end
 function format_number_sql(value::AbstractString)
   # try integer first
@@ -376,58 +383,71 @@ function format_number_sql(value::AbstractString)
   end
 end
 function format_number_sql(value::AbstractArray)
-  arrayref::Vector{String} = []
+  arrayref::Vector{Union{String, Integer, Missing}} = []
   for v in value
     push!(arrayref, v |> format_number_sql)
   end
-  return string("(", join(arrayref, ","), ")")
+  # return string("(", join(arrayref, ","), ")")
+  return arrayref
+end
+function format_number_sql(value::Decimals.Decimal)
+  try
+    return string(value)
+  catch e
+    @error("Failed to format Decimals.Decimal value: $(e)", value=value)
+    throw(e)
+  end
 end
 
 function format_bool_sql(value::Integer)
     if value in [0, 1] == false
         throw(ArgumentError("The value must be 0, 1, true or false"))
     end
-    return value == 1 ? "true" : "false"
+    return value == 1 ? true : false
 end
 function format_bool_sql(value::Union{Missing, Nothing})
-    return "null"
+    return missing
 end
 function format_bool_sql(value::Bool)
-    return value ? "true" : "false"
+    return value
 end
 
 function format_date_sql(value::Date)
-    return string("'", value, "'")    
+    # return string("'", value, "'")    
+  return value |> string
 end
 function format_date_sql(value::Union{Missing, Nothing})
-    return "null"
+    return missing
 end
 function format_date_sql(value::DateTime)
-  return string("'", value |> Dates.Date, "'")
+  # return string("'", value |> Dates.Date, "'")
+  return value |> Dates.Date |> string
 end
 function format_date_sql(value::ZonedDateTime)
-  return string("'", value |> Dates.Date, "'")
+  # return string("'", value |> Dates.Date, "'")
+  return value |> Dates.Date |> string
 end
 function format_date_sql(value::AbstractString)
   if occursin(r"^\d{4}-\d{2}-\d{2}$", value)
-    return string("'", value, "'")
+    return value
   else
     throw(ArgumentError("The date $value is invalid"))
   end  
 end
-function format_date_sql()
+function format_date_sql(value)
   throw(ArgumentError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD"))
 end
 
 
 function format_timezone_sql(value::String; format::String=DATETIME_FORMAT)
-  return validate_timezone(value, format) ? string("'", value, "'") : throw(ArgumentError("The timezone $value is invalid"))  
+  return validate_timezone(value, format) ? string(value) : throw(ArgumentError("The timezone $value is invalid"))  
 end
 function format_timezone_sql(value::Union{Missing, Nothing})
-    return "null"
+    return missing
 end
 function format_timezone_sql(value::ZonedDateTime)
-    return string("'", value, "'")    
+    # return string("'", value, "'")    
+  return value |> string
 end
 function format_timezone_sql(value::DateTime, timezone::String)
   # function used just in create 
@@ -436,7 +456,7 @@ end
 
 function format_yyyy_mm(value::String)
   if occursin(r"^\d{4}-\d{2}$", value)
-    return string("'", value, "'")
+    return value
   else
     throw(ArgumentError("The value $value is invalid, it must be in the format YYYY-MM"))
   end  
@@ -445,7 +465,7 @@ function format_yyyy_mm(value::Integer)
   value = string(value)
   if length(value) == 6
     # Format as YYYY-MM
-    return string("'", value[1:4], "-", value[5:6], "'")
+    return string(value[1:4], "-", value[5:6])
   else
     throw(ArgumentError("The value $value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM"))
   end
@@ -1026,7 +1046,28 @@ end
   formater::Function = format_date_sql
 end
 
-function DateField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false)
+function DateField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :auto_now, :auto_now_add
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for DateField. It will be ignored." field="DateField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  auto_now = get(kwargs, :auto_now, false)
+  auto_now_add = get(kwargs, :auto_now_add, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default

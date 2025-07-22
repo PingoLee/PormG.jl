@@ -1,7 +1,7 @@
 module Configuration
 
 import YAML, Logging
-import PormG: SQLConn, PormGPostgres, PormGSQLite, config
+import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT
 import PormG: Generator
 import PormG.Infiltrator: @infiltrate
@@ -375,17 +375,27 @@ function is_connection_error(e, connection::PormGPostgres)
            # occursin("connection timeout", msg)
 end
 
-function fetch(connection::PormGPostgres, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing)
+function libpq_execute(conn::LibPQ.Connection, sql::String, params::Nothing)
+  return LibPQ.execute(conn, sql)  
+end
+function libpq_execute(conn::LibPQ.Connection, sql::String, params::Vector{Any})
+  return LibPQ.execute(conn, sql, params) 
+end
+libpq_execute(conn::LibPQ.Connection, sql::String, params::PormGPostgresParam) = libpq_execute(conn, sql, params.parameters)
+
+function fetch(connection::PormGPostgres, sql::String; 
+  conn::Union{Nothing, LibPQ.Connection} = nothing, 
+  params::Union{Nothing, PormGPostgresParam} = nothing)
   @infiltrate false
   conn === nothing && (conn = acquire_connection(connection))
   try
-    return LibPQ.execute(conn, sql)
+    return libpq_execute(conn, sql, params)
   catch e
     @infiltrate
     if is_connection_error(e, connection)
       @warn "Lost connection to database. Attempting to reconnect..."
       conn = reconnect_db(connection, conn)
-      return LibPQ.execute(conn, sql)
+      return libpq_execute(conn, sql, params)
     end
     @error "Failed to execute SQL query: $e"
     throw(e)
@@ -393,12 +403,18 @@ function fetch(connection::PormGPostgres, sql::String; conn::Union{Nothing, LibP
     release_connection(connection, conn)
   end
 end
-fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings.connections, sql; conn=conn)
+fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing) = fetch(settings.connections, sql; conn=conn, params=params)
+fetch(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings.connections, sql; conn=conn, params=params)
+fetch(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings, sql; conn=conn, params=params)
 
-function with_transaction(pool::PormGPostgres, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, release_conn::Bool = false)
+function with_transaction(pool::PormGPostgres, sql::String; 
+  conn::Union{Nothing, LibPQ.Connection} = nothing, 
+  release_conn::Bool = false, 
+  params::Union{Nothing, PormGPostgresParam} = nothing)
+  
   conn === nothing && (conn = acquire_connection(pool))
   try
-    return LibPQ.execute(conn, sql), conn
+    return libpq_execute(conn, sql, params), conn
   catch e
     @infiltrate   
     @error "Failed to execute SQL transaction, rolling back: $e"
@@ -409,7 +425,8 @@ function with_transaction(pool::PormGPostgres, sql::String; conn::Union{Nothing,
     end
   end
 end
-with_transaction(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, release_conn::Bool = false) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn)
+with_transaction(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, release_conn::Bool = false, params::Union{Nothing, PormGPostgresParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
+
 
 
 

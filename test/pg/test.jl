@@ -233,6 +233,9 @@ end
     query = M.Result |> object;
     query.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "monaco"]);
     @test query |> do_count == 1664
+    query = M.Result |> object;
+    query.filter("raceid__circuitid__name__@nin" => ["Circuit de Monaco", "monaco"]);
+    @test query |> do_count == 25095
 end
 
 @testset "Date Operations" begin

@@ -7,10 +7,103 @@ using SQLite, LibPQ
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
 import PormG: Dialect, Models
 import PormG: config
-import PormG: SQLType, SQLConn, PormGPostgres, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: SQLType, SQLConn, PormGPostgres, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform
 import PormG.Configuration: fetch, with_transaction
 import PormG.Infiltrator: @infiltrate
+
+#
+# SQL Sanitization
+#
+
+"""
+Sanitize SQL identifiers (table names, column names) to prevent injection.
+Only allows alphanumeric characters, underscores, and validates against model schema.
+"""
+function sanitize_identifier(identifier::String, valid_identifiers::Vector{String})::String
+    # Remove any non-alphanumeric/underscore characters
+    clean_id = replace(identifier, r"[^a-zA-Z0-9_]" => "")
+    
+    # Validate against whitelist
+    if !(clean_id in valid_identifiers)
+        throw(ArgumentError("Invalid identifier: $identifier"))
+    end
+    
+    return "\"$clean_id\""  # Quote the identifier
+end
+
+"""
+Escape LIKE patterns to prevent wildcard injection
+"""
+function escape_like_pattern(pattern::String)::String
+    # Escape special LIKE characters
+    escaped = replace(pattern, "\\" => "\\\\")
+    escaped = replace(escaped, "%" => "\\%")
+    escaped = replace(escaped, "_" => "\\_")
+    return escaped
+end
+
+"""
+Quote SQL identifiers based on database type
+"""
+function quote_identifier(identifier::String, conn)::String
+    clean_id = replace(identifier, r"[^a-zA-Z0-9_]" => "")
+    return "\"$clean_id\""
+end
+
+"""
+Validate and quote table name
+"""
+function safe_table_identifier(table_name::String, conn)::String
+    clean_name = replace(table_name, r"[^a-zA-Z0-9_]" => "")
+    
+    if clean_name != table_name
+        @warn "Table name contains invalid characters, sanitized: $table_name -> $clean_name"
+    end
+    
+    return quote_identifier(clean_name, conn)
+end
+
+"""
+Validate field name against model and return quoted identifier
+"""
+function safe_field_identifier(field_name::String, model::PormGModel, conn)::String
+    # Validate field exists in model
+    if !(field_name in model.field_names)
+        throw(ArgumentError("Invalid field name: $field_name for model $(model.name)"))
+    end
+    return quote_identifier(field_name, conn)
+end
+
+#
+# Parameters
+#
+
+mutable struct PgParameterizedQuery <: PormGPostgresParam
+  sql::String
+  parameters::Union{AbstractVector, Tuple}
+  parameter_count::Int
+
+  PgParameterizedQuery(sql::String, parameters::Union{AbstractVector, Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
+end
+get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
+
+function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false)
+  parameters::Vector{String} = String[]
+  for v in value
+    pq.parameter_count += 1
+    push!(pq.parameters, v)
+    push!(parameters, "\$$(pq.parameter_count)")
+  end
+  return parameters
+end
+function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false)::String
+  contains && (value = string("%", value |> escape_like_pattern, "%"))  # Escape LIKE patterns if needed
+  pq.parameter_count += 1
+  push!(pq.parameters, value)
+  return "\$$(pq.parameter_count)"  # PostgreSQL style
+end
+add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool = false) = add_parameter!(instruc.parameters, value; contains = contains)
 
 #
 # SQLTypeArrays Objects
@@ -44,6 +137,7 @@ end
   array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{String, SQLTypeField} = sizehint!(Dict{String, SQLTypeField}(), 12)
   django::Union{Nothing, String} = nothing
+  parameters::Union{Nothing, PormGPostgresParam} = nothing # parameters to be used in the query
 end
 
 # Store information to decide the name from table alias in subquery
@@ -104,10 +198,11 @@ mutable struct SQLObjectQuery <: SQLObject
   list_joins::Vector{String} # is ther a better way to do this?
   row_join::Vector{Dict{String, Any}}  
   distinct::Bool # Add distinct field
+  parameters::Union{Nothing, PormGPostgresParam}
 
   SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false) = # Add distinct to constructor
-    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct) # Add distinct to new
+        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, parameters = nothing) = # Add distinct to constructor
+    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, parameters) # Add distinct to new
 end
 
 #
@@ -1064,7 +1159,9 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
     throw(ArgumentError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
-  return field
+  
+  # Quote the field name to prevent SQL injection
+  return quote_identifier(field, instruct.connection)
 end
 _solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct) 
 _solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction) = _solve_field(field, _module, Symbol(model_name), instruct)
@@ -1225,7 +1322,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # println("$(join(field, "__"))")
   # functions must be processed here
   instruct.tab_field_cache["$(join(field, "__"))"] = last_field
-  return string(tb_alias, ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
+  return string(quote_identifier(tb_alias, instruct.connection), ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end
 
@@ -1292,8 +1389,9 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
     if _as !== nothing && haskey(instruc.tab_field_cache, _as)
       instruc.tab_field_cache[_as] = instruc.object.model.fields[v]
     end
-    return string(instruc.alias, ".", _solve_field(v, instruc.object.model, instruc))
-  end   
+    quoted_alias = quote_identifier(instruc.alias, instruc.connection)
+    return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
+  end
 end
 function _get_select_query(v::SQLField, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
   return _get_select_query(v.field, instruc, _as=_as)
@@ -1432,9 +1530,9 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
   else
-    return string(instruc.alias, ".", _solve_field(v, instruc.object.model, instruc))  
-  end
-  
+    quoted_alias = quote_identifier(instruc.alias, instruc.connection)
+    return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))  
+  end  
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc) # Does this have any coletaral efect?
@@ -1455,25 +1553,29 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
 end
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @infiltrate false
+  column = _get_filter_query(v.column, instruc)
   if isa(v.values, SQLTypeF)
-    @infiltrate
-    column = _get_filter_query(v.column, instruc)
-    value = _get_filter_query(v.values, instruc)
-    return string(column, " ", v.operator, " ", value)
+    @infiltrate false
+    # F expressions are safe since they reference model fields    
+    placeholders = _get_filter_query(v.values, instruc)
+    return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formater !== nothing
     @infiltrate false
-    value = v.column.field.formater(v.values)
-    if isa(value, String) && !contains(value, "'")
-      value = string("'", value, "'")
-    end
+    placeholders = add_parameter!(instruc, v.column.field.formater(v.values)) 
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
-    value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
+    placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.field.function_name])(v.values))
+    # value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
+  elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
+    # Function with formater
+    @infiltrate false
+    placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.function_name])(v.values))
   elseif isa(v.values, SQLObjectHandler)
+    # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["in", "not in"])
       throw("Error in values, $(v.values) is not a SQLObjectHandler")
     end
-    value = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection)
-    return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($value)")
+    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
+    return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
   else   
     @infiltrate false
     if isa(v.column, SQLTypeField)
@@ -1485,10 +1587,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     if v.operator in ["ISNULL"]
       return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
     elseif haskey(instruc.object.model.fields, v.column.field)
-      value = nothing
+      placeholders = nothing
       try
-        value = instruc.object.model.fields[v.column.field].formater(v.values)
-      catch e        
+        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values))
+      catch e
         @infiltrate false
         if contains(string(e), "The date") && contains(string(e), "is invalid")          
           throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
@@ -1497,23 +1599,29 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       end      
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @infiltrate false
-      value = instruc.tab_field_cache[v.column._as].formater(v.values)
+      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains = v.operator in ["contains", "icontains"])
     elseif isa(v.column, SQLTypeField)
       @infiltrate false
-      value = string("'", v.values, "'") # TODO, maybe I need to check if the column is valid and process the function before store    
+      placeholders = add_parameter!(instruc, v.values, contains = v.operator in ["contains", "icontains"])
     else
       @infiltrate false
       throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
     end
   end
-
-  @infiltrate false
-  column = _get_filter_query(v.column, instruc)
   
-  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!=", "in", "not in"]   
-    return string(column, " ", v.operator, " ", value)     
+  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
+    return string(column, " ", v.operator, " ", placeholders)     
+  elseif v.operator in ["in", "not in"]
+    if isa(placeholders, String)
+      return string(column, " ", v.operator, " (", placeholders, ")")
+    elseif isa(placeholders, AbstractArray)
+      return string(column, " ", v.operator, " (", join(placeholders, ", "), ")")
+    else
+      throw("Error in operator: $(v.operator), the value must be a String or a Vector of Strings")
+    end
   elseif v.operator in ["contains", "icontains"]
-    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, value)
+    # @infiltrate
+    return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else
     throw("Error in operator, $(v.operator) is not a valid operator")
   end
@@ -1593,25 +1701,32 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
 end
 
 function build_row_join_sql_text(instruc::SQLInstruction)
-  # for row in eachrow(instruc.df_join)
-  #   push!(instruc.join, """ $(row.how) JOIN $(row.b) $(row.alias_b) ON $(row.alias_a).$(row.key_a) = $(row.alias_b).$(row.key_b) """)
-  # end
   @infiltrate false
   for value in instruc.row_join
-    push!(instruc.join, """ $(value["how"]) JOIN $(value["b"]) $(value["alias_b"]) ON $(value["alias_a"]).$(value["key_a"]) = $(value["alias_b"]).$(value["key_b"]) """)
+    b_quoted = safe_table_identifier(value["b"], instruc.connection)
+    alias_b_quoted = quote_identifier(value["alias_b"], instruc.connection)
+    alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
+    key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
+    key_b_quoted = quote_identifier(value["key_b"], instruc.connection)
+    push!(instruc.join, """ $(value["how"]) JOIN $b_quoted AS $alias_b_quoted ON $alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted """)
   end
 end
 
-function build(object::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
+function build(object::SQLObject; 
+  table_alias::Union{Nothing, SQLTableAlias} = nothing, 
+  connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
+  parameters::Union{Nothing, PormGPostgresParam} = nothing)
   settings = config[object.model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
+  parameters === nothing && (parameters = get_parameter(connection))
   instruct = InstrucObject(text = "", 
     object = object,
     table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
     alias = get_alias(table_alias),
     connection = connection,
     django = settings.django_prefix === nothing ? nothing : settings.django_prefix * "_", # TODO, remover
+    parameters = parameters,
   )   
   
   get_select_query(object.values, instruct)
@@ -1663,12 +1778,20 @@ end
 
 export query
 
-function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing) # TODO -- i need create a mode to change
-  instruction = build(q.object, table_alias=table_alias, connection=connection) 
+function query(q::SQLObjectHandler; 
+  table_alias::Union{Nothing, SQLTableAlias} = nothing, 
+  connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
+  parameters::Union{Nothing, PormGPostgresParam} = nothing)
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+  
+  # Quote table name and alias to prevent SQL injection
+  safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+  
   respota = """
     SELECT
       $(q.object.distinct ? "DISTINCT" : "") $(_query_select(instruction.select ))
-    FROM $(q.object.model.name) as $(instruction.alias)
+    FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     """
   if !isempty(instruction._where)
@@ -1689,6 +1812,7 @@ function query(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} =
   if q.object.offset !== 0
     respota *= "OFFSET $(q.object.offset) \n"
   end
+  q.object.parameters = instruction.parameters
     # $(instruction.agregate && size(instruction.group, 1) > 0 ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     # $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
     # $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
@@ -1704,32 +1828,49 @@ end
 
 export do_count, do_exists
 
-function do_count(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Integer
-  settings = config[q.object.model.connect_key]
+function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Integer
+  settings = config[oq.object.model.connect_key]
   connection = settings.connections
+  q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object  
+  q.object.order = []# clear order_by
+  q.object.values = [] # clear values
+
   instruction = build(q.object, table_alias=table_alias, connection=connection) 
+  
+  # Quote table name and alias to prevent SQL injection
+  safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+  
   resposta = """
     SELECT
       COUNT($(q.object.distinct ? "DISTINCT *" : "*"))
-    FROM $(q.object.model.name) as $(instruction.alias)
+    FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     """
-  query_result = fetch(settings, resposta)
+  query_result = fetch(settings, resposta, instruction.parameters)
   return query_result[1, 1]
 end
 
-function do_exists(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)
+function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)
   try
-    settings = config[q.object.model.connect_key]
+    settings = config[oq.object.model.connect_key]
     connection = settings.connections
+    q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
+    q.object.order = [] # clear order_by
+    q.object.values = [] # clear values
     instruction = build(q.object, table_alias=table_alias, connection=connection)
     limit_clause = "LIMIT 1"
     offset_clause = q.object.offset > 0 ? "OFFSET $(q.object.offset)" : ""
+    
+    # Quote table name and alias to prevent SQL injection
+    safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+    safe_alias = quote_identifier(instruction.alias, instruction.connection)
+    
     sql = """
     SELECT 1
-    FROM $(q.object.model.name) as $(instruction.alias)
+    FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
     $(instruction.agregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")
@@ -1737,7 +1878,7 @@ function do_exists(q::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
     $offset_clause
     """    
     @infiltrate false
-    result = fetch(settings, sql) |> Tables.rowtable
+    result = fetch(settings, sql, instruction.parameters) |> Tables.rowtable
     @infiltrate false
     return length(result) > 0
   catch e
@@ -1754,6 +1895,11 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   
   # colect name of the fields
   fields = model.field_names
+
+  # Collect column names and parameter values
+  quoted_field_columns = []
+  param_values = []
+  parameters = get_parameter(connection)
   
   # check if is allowed to insert
   !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
@@ -1794,43 +1940,45 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
       end
     end
+
+     # Add safely quoted field name to columns list
+    push!(quoted_field_columns, quote_identifier(field, connection))
+
+    # Format and add value to parameters
+    push!(param_values, add_parameter!(parameters, objct.insert[field] |> model.fields[field].formater))
+
   end
-
-  # insert
-  fields_columns = join([field for field in keys(objct.insert)], ", ")
-
-  # values
-  values_insert = join([objct.insert[field] |> model.fields[field].formater for field in keys(objct.insert)], ", ")
-
+ 
   # TODO: insert a function to handle with the different types of connection and modulate the code
 
   # construct the SQL statement
+  safe_table_name = safe_table_identifier(string(model.name), connection)
   sql = """
-  INSERT INTO $(string(model.name)) (
-    $(fields_columns)
+  INSERT INTO $(safe_table_name) (
+    $(join(quoted_field_columns, ", "))
   ) VALUES (
-    $(values_insert)
+    $(join(param_values, ", "))
   )
   """
 
   # @info sql
 
-  # execute the SQL statement
+  # Execute safely
   if connection isa PormGPostgres
-    result = fetch(settings, sql * " RETURNING *;")
-    # result = LibPQ.execute(connection, sql * " RETURNING *;")
+    result = fetch(settings, sql * " RETURNING *;", parameters)
+    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
   elseif connection isa SQLite.DB
-    SQLite.execute(connection, sql)
-    # Assuming the table has an auto-increment primary key named "id"
-    last_id = SQLite.last_insert_rowid(connection)
-    result = SQLite.Query(connection, "SELECT * FROM $(string(model.name)) WHERE id = $last_id;")
+    # SQLite implementation with parameters
+    stmt = SQLite.Stmt(connection, sql)
+    for (i, param) in enumerate(parameters.parameters)
+      SQLite.bind!(stmt, i, param)
+    end
+    SQLite.execute(stmt)
+    # Similar return logic as before
   else
     throw("Unsupported connection type")
   end
-
-  pk_exist && _update_sequence(model, connection, pk_field, settings)
-
-  return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
 
 end
 
@@ -1839,11 +1987,15 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
   for field in pk_field
     if settings.change_db
       try
-        fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
+        safe_field_name = quote_identifier(field, connection)
+        safe_table_name = safe_table_identifier(string(model.name), connection)
+        fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(safe_field_name)) + 1 FROM $(safe_table_name)), true);")
       catch e
         if occursin("does not exist", e |> string)        
           _fix_sequence_name(connection, model)
-          fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(field)) + 1 FROM $(string(model.name))), true);")
+          safe_table_name = safe_table_identifier(string(model.name), connection)
+          safe_field_name = quote_identifier(field, connection)
+          fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq)', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true);")
         end
       end
     elseif settings.django_prefix !== nothing
@@ -1851,7 +2003,9 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
       try
         # For Django prefixed tables, try with django prefix pattern
         sequence_name = "$(model.name)_$(field)_seq"
-        fetch(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(model.name)), true);")
+        safe_table_name = safe_table_identifier(model.name, connection)
+        safe_field_name = quote_identifier(field, connection)
+        fetch(connection, "SELECT setval('$sequence_name', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true);")
       catch e
         if occursin("does not exist", e |> string)
           # # Try to find the actual sequence name
@@ -1916,66 +2070,105 @@ function _update_sequence(model::PormGModel, connection::SQLite.DB, pk_field::Ve
     end
   end
 end
+
+# TODO: Implement a function to handle the update with multiple dispatch
+# Helper function to check if a field is a date field
+function _is_date_field(field_name::String, instruc::SQLInstruction)
+  model = instruc.object.model
+  # @infiltrate
+  if haskey(model.fields, field_name)
+    field_type = model.fields[field_name].type
+    return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
+  elseif haskey(instruc.tab_field_cache, field_name)
+    field_type = instruc.tab_field_cache[field_name].type
+    return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
+  end 
+  return false
+end
+
 function _set_update_query(v::FExpression, instruc::SQLInstruction)
   if v.operation === nothing
-    @infiltrate false
     # Simple field reference
     parts = split(v.field_name, "__")
-    if size(parts, 1) > 1
-      
+    if size(parts, 1) > 1      
       return _build_row_join(parts, instruc)
     else
-      return string(instruc.alias, ".", _solve_field(v.field_name, instruc.object.model, instruc))
+      if !(v.field_name in instruc.object.model.field_names)
+        @error "Invalid field name for F expression" field_name=v.field_name model_name=instruc.object.model.name
+        throw(ArgumentError("Invalid field name: $(v.field_name) for model $(instruc.object.model.name)"))
+      end
+      quoted_alias = quote_identifier(instruc.alias, instruc.connection)
+      quoted_field = quote_identifier(v.field_name, instruc.connection)
+      return string(quoted_alias, ".", quoted_field)
     end
   else
-    # Field with operation
-    left_side = _set_update_query(FExpression(field_name = v.field_name, function_name = "F", column = v.field_name), instruc)
-    
+    # Field with operation - handle date arithmetic properly
+    left_side = _set_update_query(FExpression(field_name = v.field_name, function_name = "F", column = v.field_name), instruc)    
+
+    # @infiltrate
     right_side = if isa(v.operand, FExpression)
       _set_update_query(v.operand, instruc)
     elseif isa(v.operand, String)
-      # Check if it's a field reference or literal
+      # Check if it's a field reference
       if contains(v.operand, "__") || v.operand in instruc.object.model.field_names
         _set_update_query(FExpression(field_name = v.operand, function_name = "F", column = v.operand), instruc)
       else
-        "'$(v.operand)'"
+        # SECURITY: Use parameterized query for literal values
+        placeholder = add_parameter!(instruc.parameters, v.operand)
+        # For string literals that might be used in date operations, add explicit casting
+        if v.operation in ["+", "-"] && _is_date_field(v.field_name, instruc)
+          "$placeholder::text"
+        else
+          placeholder
+        end
+      end
+    elseif isa(v.operand, Integer)
+      # SECURITY: Handle integer operands for date arithmetic
+      placeholder = add_parameter!(instruc.parameters, v.operand)
+      if v.operation in ["+", "-"] && _is_date_field(v.field_name, instruc)
+        # Convert integer days to interval for date arithmetic
+        "($placeholder || ' days')::interval"
+      else
+        placeholder
       end
     else
-      string(v.operand)
+      # SECURITY: Use parameterized query for other numeric values
+      add_parameter!(instruc.parameters, v.operand)
     end
     
     return "($(left_side) $(v.operation) $(right_side))"
   end
 end
 
-function _build_from_tables(row_join::Vector{Dict{String, Any}})
-    tables = String[]
-    for join_dict in row_join
-        try
-            b = join_dict["b"]
-            alias_b = join_dict["alias_b"]
-            push!(tables, "$(b) $(alias_b)")
-        catch e
-            @error "Error building FROM tables for join: $join_dict" exception=(e, catch_backtrace())
-        end
+function _build_from_tables(row_join::Vector{Dict{String, Any}}, connection)
+  tables = String[]
+  for join_dict in row_join
+    try
+      b = safe_table_identifier(join_dict["b"], connection)
+      alias_b = quote_identifier(join_dict["alias_b"], connection)
+      push!(tables, "$b AS $alias_b")
+    catch e
+      @error "Error building FROM tables for join: $join_dict" exception=(e, catch_backtrace())
     end
-    return join(tables, ", ")
+  end
+  return join(tables, ", ")
 end
-function _build_join_conditions(row_join::Vector{Dict{String, Any}})
-    conditions = String[]
-    for join_dict in row_join
-        try
-            alias_a = join_dict["alias_a"]
-            key_a = join_dict["key_a"]
-            alias_b = join_dict["alias_b"]
-            key_b = join_dict["key_b"]
-            push!(conditions, "$(alias_a).$(key_a) = $(alias_b).$(key_b)")
-        catch e
-            @error "Error building join condition for join: $join_dict" exception=(e, catch_backtrace())
-        end
+function _build_join_conditions(row_join::Vector{Dict{String, Any}}, connection)
+  conditions = String[]
+  for join_dict in row_join
+    try
+      alias_a = quote_identifier(join_dict["alias_a"], connection)
+      key_a = quote_identifier(join_dict["key_a"], connection)
+      alias_b = quote_identifier(join_dict["alias_b"], connection)
+      key_b = quote_identifier(join_dict["key_b"], connection)
+      push!(conditions, "$alias_a.$key_a = $alias_b.$key_b")
+    catch e
+      @error "Error building join condition for join: $join_dict" exception=(e, catch_backtrace())
     end
-    return join(conditions, " AND ")
+  end
+  return join(conditions, " AND ")
 end
+
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
   model = objct.model
   settings = config[model.connect_key]
@@ -1985,13 +2178,14 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   # raize error if is used join in update
   instruction.row_join |> isempty || throw("Error in update, the join is not allowed in update")
-
   # check if is allowed to insert
   !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
-
   # don't allow to update a field without filter
   instruction._where |> isempty && throw("Error in update, the update must have a filter")
   
+  # Create parameter collection
+  parameters = instruction.parameters  # Reuse parameters from filters
+
   # colect name of the fields
   fields = model.field_names
 
@@ -2008,6 +2202,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
 
   # check if the fields are in objct.insert
+  # Handle F expressions in SET clause
+  set_clause_parts = String[]
   for field in keys(objct.insert)    
     # check if the create has a field that not exist in the model
     in(field, fields) || throw("""Error in update, the field "$(field)" not found in $(model.name)""")
@@ -2024,45 +2220,38 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
       end
     end
-  end
+    
+    quoted_field = quote_identifier(field, connection)
 
-  # Handle F expressions in SET clause
-  set_clause_parts = String[]
-  for field in keys(objct.insert)
-    if isa(objct.insert[field], SQLTypeF)
-      # Create a temporary instruction for F expression processing
-      # temp_instruction = InstrucObject(
-      #   text = "",
-      #   object = objct,
-      #   table_alias = instruction.table_alias,
-      #   alias = instruction.alias,
-      #   connection = instruction.connection,
-      #   django = instruction.django
-      # )
+    if isa(objct.insert[field], SQLTypeF)     
       @infiltrate false
       f_value = _set_update_query(objct.insert[field], instruction)
-      push!(set_clause_parts, """"$(field)" = $(f_value)""")
+      push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
       formatted_value = objct.insert[field] |> model.fields[field].formater
-      push!(set_clause_parts, """"$(field)" = $(formatted_value)""")
+      placeholder = add_parameter!(parameters, formatted_value)
+      push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end
   end
-  
+   
   set_clause = join(set_clause_parts, ", ")   
 
   # --- NEW: Support FROM clause for PostgreSQL ---
   @infiltrate false
   has_joins = !isempty(instruction.row_join)
   sql = ""
+  # Build secure UPDATE SQL
+  safe_table_name = safe_table_identifier(string(model.name), connection)
+  safe_alias = quote_identifier(instruction.alias, connection)
   if has_joins
     if connection isa PormGPostgres
-      from_tables = _build_from_tables(instruction.row_join)
-      join_conditions = _build_join_conditions(instruction.row_join)
+      from_tables = _build_from_tables(instruction.row_join, connection)
+      join_conditions = _build_join_conditions(instruction.row_join, connection)
       all_conditions = isempty(instruction._where) ? join_conditions :
           join([join_conditions, join(instruction._where, " AND ")], " AND ")
       @infiltrate false
       sql = """
-      UPDATE $(string(model.name)) AS $(instruction.alias)
+      UPDATE $(safe_table_name) AS $(safe_alias)
       SET $(set_clause)
       FROM $(from_tables)
       WHERE $(all_conditions)
@@ -2073,21 +2262,25 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     end
   else
     sql = """
-    UPDATE $(string(model.name)) as $(instruction.alias)
+    UPDATE $(safe_table_name) as $(safe_alias)
     SET $(set_clause)
     WHERE $(join(instruction._where, " AND \n   "))
     """
   end
 
-  # @info sql
+  @info sql
 
   @infiltrate false
 
-  # execute the SQL statement
+  # Execute with parameters
   if connection isa PormGPostgres
-    fetch(connection, sql)
+    fetch(settings, sql, parameters)
   elseif connection isa SQLite.DB
-    SQLite.execute(connection, sql)
+    stmt = SQLite.Stmt(connection, sql)
+    for (i, param) in enumerate(parameters.parameters)
+      SQLite.bind!(stmt, i, param)
+    end
+    SQLite.execute(stmt)
   else
     throw("Unsupported connection type")
   end
@@ -2122,7 +2315,7 @@ function list(objct::SQLObjectHandler)
 
   sql = query(objct, connection=connection)
   @infiltrate false
-  return fetch(settings, sql)
+  return fetch(settings, sql, objct.object.parameters) 
 end
 
 # ---
@@ -2264,25 +2457,32 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   for field in fields_df
     in(field, fields) || throw("""Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
   end
-
+   
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]
   count::Integer = 0
   total::Integer = size(df, 1)
+  # Security: Create parameterized query
+  parameters = get_parameter(connection)
+  param_placeholders::Vector{String} = String[]
   for (index, row) in enumerate(eachrow(df))
     values = String[]
     try
       values = [model.fields[field].formater(row[field]) for field in fields_df]
+      param_placeholders = add_parameter!(parameters, values)
     catch e
       _depuration_values_bulk_insert(fields_df, model, row, index, django_prefix)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
-    push!(rows, "($(join(values, ", ")))")
+    push!(rows, "($(join(param_placeholders, ", ")))")
     count += 1
     if count == chunk_size || index == total
-      _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query)
+      # @infiltrate
+      _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
       count = 0
       rows = String[]
+      parameters = get_parameter(connection)
+      param_placeholders = String[]
     end
   end  
 
@@ -2307,10 +2507,15 @@ end
 function _bulk_insert(model::PormGModel, connection::PormGPostgres, 
   fields::Vector{String}, rows::Vector{String}, 
   pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
-  django_prefix::Bool, show_query::Bool = false)
+  django_prefix::Bool, show_query::Bool, parameters:: PormGPostgresParam)
+
+  # Security: Quote table name and field names
+  safe_table_name = safe_table_identifier(string(model.name), connection)
+  quoted_fields = [quote_identifier(field, connection) for field in fields]
+  
   # Construct the bulk insert SQL.
   sql = """
-  INSERT INTO $(string(model.name)) ($(join(fields, ", ")))
+  INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))
   VALUES $(join(rows, ", "))
   """
 
@@ -2321,7 +2526,7 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
     # Execute the query for the given connection type.
     if connection isa PormGPostgres
       try
-        fetch(settings, sql)
+        fetch(settings, sql, parameters)
       catch e
         if occursin("duplicate key value violates unique constraint", e |> string)
           _update_sequence(model, connection, pk_field, settings)
@@ -2509,17 +2714,15 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
     end
   else
     dinanic_filters = pks    
-  end
-  
-  instruction::Union{SQLInstruction, Nothing} = nothing
+  end  
 
   objct.object.filter = [] # clear the filters
   if size(static_filters, 1) > 0
     for filter in static_filters
       objct.filter(filter)
-    end
-    instruction = build(objct.object, connection=connection) 
+    end    
   end
+  instruction = build(objct.object, connection=connection) 
 
   @infiltrate false
 
@@ -2532,25 +2735,46 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   rows = String[]
   # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
   deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
-  set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
+  # set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
+
+  # Security: Build safe SET clause with quoted identifiers
+  safe_set_parts = []
+  for field in fields_df
+    if !(field in deny_fields)
+      # @infiltrate
+      quoted_field = quote_identifier(field, connection)
+      quoted_source_field = quote_identifier(field, connection)
+      field_type = model.fields[field].type |> lowercase
+      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field::$field_type")
+    end
+  end
+  safe_set_clause = join(safe_set_parts, ", ")
+
   count::Integer = 0
   total::Integer = size(df, 1)
   @infiltrate false
+  # Security: Create parameterized query
+  parameters_initial =  deepcopy(instruction.parameters)
+  param_placeholders::Vector{String} = String[]
+  joined_columns = unique(vcat(fields_df, dinanic_filters))
+
   for (index, row) in enumerate(eachrow(df))
-    values = String[]
-    joined_columns = unique(vcat(fields_df, dinanic_filters))
+    values = String[]    
     try
       values = [model.fields[field].formater(row[field]) for field in joined_columns]
+      param_placeholders = add_parameter!(instruction.parameters, values)
     catch e
       _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix !== nothing)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
-    push!(rows, "($(join(values, ", ")))")
+    push!(rows, "($(join(param_placeholders, ", ")))")
     count += 1
     if count == chunk_size || index == total      
-      _bulk_update(model, settings, connection, joined_columns, rows, set_columns, dinanic_filters, show_query, instruction)
+      _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
       count = 0
       rows = String[]
+      instruction.parameters = deepcopy(parameters_initial) # reset parameters to initial state
+      param_placeholders = String[]
     end
   end
 
@@ -2563,7 +2787,7 @@ function _bulk_update(model::PormGModel,
   connection::PormGPostgres, 
   fields::Vector{String}, 
   rows::Vector{String}, 
-  set_columns::String, 
+  safe_set_clause::String, 
   dinanic_filters::Vector{String}, 
   show_query::Bool,
   instruction::Union{SQLInstruction, Nothing})
@@ -2572,21 +2796,35 @@ function _bulk_update(model::PormGModel,
   if instruction !== nothing && instruction.join |> length > 0
     throw("Error in bulk_update, the join is not allowed in bulk_update")
   end
-  # Construct the bulk update SQL.
-  _where::Vector{String} = []
+
+  # Security: Quote table name and field names
+  safe_table_name = safe_table_identifier(model.name, connection)
+  quoted_fields = [quote_identifier(field, connection) for field in fields]
+
+  # Security: Build safe WHERE conditions with quoted identifiers
+  safe_where_conditions::Vector{String} = []
   for filter in dinanic_filters
-    push!(_where, "Tb.$(filter) = source.$(filter)::$(model.fields[filter].type |> lowercase)")
+    quoted_tb_field = quote_identifier(filter, connection)
+    quoted_source_field = quote_identifier(filter, connection)
+    field_type = model.fields[filter].type |> lowercase
+    push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field::$field_type")
   end
+  # # Construct the bulk update SQL.
+  # _where::Vector{String} = []
+  # for filter in dinanic_filters
+  #   push!(_where, "Tb.$(filter) = source.$(filter)::$(model.fields[filter].type |> lowercase)")
+  # end
   if instruction !== nothing    
     for filter in instruction._where
-      push!(_where, filter)
+      push!(safe_where_conditions, filter)
     end
   end
+
   sql = """
-  UPDATE $(model.name) AS Tb
-  SET $(set_columns)
-  FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(fields, ",")))
-  WHERE $(join(_where, " AND \n   "))
+  UPDATE $safe_table_name AS "Tb"
+  SET $(safe_set_clause)
+  FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(quoted_fields, ",")))
+  WHERE $(join(safe_where_conditions, " AND \n   "))
   """
 
   @infiltrate false
@@ -2595,7 +2833,8 @@ function _bulk_update(model::PormGModel,
     @info sql
   else 
     # Execute the query for the given connection type.
-    fetch(connection, sql)   
+    # @infiltrate false
+    fetch(connection, sql, instruction.parameters)
   end  
 end
 

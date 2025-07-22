@@ -17,6 +17,8 @@ PormG.Configuration.load("db_2")
 # teste compation of fields
 import PormG: Models, Dialect
 import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, show_query, Max, Min
+import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
+
 
 # load models
 Base.include(PormG, "db_2/models.jl")
@@ -30,7 +32,7 @@ import PormG.models as M
 
 @testset "Database Setup and Bulk Insert" begin
     # Clear all tables
-    delete(M.Circuit |> object, allow_delete_all = true)
+    delete(M.Circuit |> object, allow_delete_all = true, show_query = false)
     delete(M.Status |> object, allow_delete_all = true)
     delete(M.Driver |> object, allow_delete_all = true)
     delete(M.Constructor |> object, allow_delete_all = true)
@@ -129,6 +131,23 @@ end
     query = M.Just_a_test_deletion |> object
     query.filter("name" => "test_update_1")
     @test query |> do_count == 1
+
+    # Bulk update with static filters
+    query = M.Just_a_test_deletion |> object
+    df = query |> list |> DataFrame
+    for (index, row) in enumerate(eachrow(df))
+        row.name = "test_bulk_update"
+    end
+    bulk_update(query, df, columns=["name"], filters=["id", "test_result" => 1], show_query=false)
+    query = M.Just_a_test_deletion |> object
+    query.filter("name" => "test_bulk_update")
+    @test query |> do_count == 1
+
+    bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
+    query = M.Just_a_test_deletion |> object
+    query.filter("name" => "test_bulk_update")
+    @test query |> do_count == 3
+
 end
 
 @testset "Filtering and Value Selection" begin
@@ -154,6 +173,33 @@ end
     @test length(names(df)) == 6
     @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
 end
+
+@testset "Test subquerys" begin
+    subquery = M.Status |> object;
+    subquery.filter("status" => "Engine");
+    subquery.values("statusid");
+    
+
+    # Subquery 
+    query = M.Result |> object;
+    query.filter("statusid__@in" => subquery);
+    query.values("resultid", "statusid", "statusid__status", "grid", "driverid");
+    df = query |> list |> DataFrame
+    @test query |> do_count == 2026
+
+    # added parameter in main query
+    query.filter("driverid__@lte" => 7);
+    # df = query |> list |> DataFrame
+    @test query |> do_count == 40
+
+    # added parameters in select
+    query.values("resultid", "statusid", "statusid__status", "grid", "driverid", "raceid__date__@quarter");
+    query.order_by("raceid__date__quarter");
+    df = query |> list |> DataFrame
+    @test query |> do_count == 40
+    @test query |> do_exists
+end
+    
 
 
 @testset "Ordering and Aggregations" begin
@@ -222,17 +268,25 @@ end
 end
 
 @testset "Comparison and In Operations" begin
-    query = M.Result |> object;
-    query.filter("positionorder__@lt" => 3);
-    query.values("raceid__circuitid__name", "driverid__forename", "constructorid__name", "positionorder");
-    query.order_by("-positionorder");
-    df = query |> list |> DataFrame
-    @test df[1, :positionorder] == 2
+  query = M.Result |> object;
+  query.filter("positionorder__@lt" => 3);
+  query.values("raceid__circuitid__name", "positionorder", "driverid__forename", "constructorid__name");
+  query.order_by("-positionorder");
+  df = query |> list |> DataFrame
+  @test df[1, :positionorder] == 2
 
-    query = M.Result |> object;
-    query.filter("positionorder__@in" => [1, 2]);
-    query.values("raceid__circuitid__name", "driverid__forename", "constructorid__name");
-    @test query |> do_count == size(df, 1)
+  query = M.Result |> object;
+  query.filter("positionorder__@in" => [1, 2]);
+  query.values("raceid__circuitid__name", "positionorder",  "driverid__forename", "constructorid__name");
+  @test query |> do_count == size(df, 1)
+
+  query = M.Result |> object;
+  query.filter("positionorder__@nin" => df.positionorder |> unique);
+  query.values("raceid__circuitid__name", "positionorder", "driverid__forename", "constructorid__name");
+  @test query |> do_count == 24497
+  df = query |> list |> DataFrame
+  @test filter(r -> r.positionorder == 1 || r.positionorder == 2, df) |> x -> nrow(x) == 0
+
 end
 
 @testset "Reverse Joins" begin
@@ -269,6 +323,13 @@ end
     query |> show_query
     @test size(df, 1) == 75
     @test df[1, :raceid__circuitid__name] == "Nürburgring" && df[1, :driverid__forename] == "Mika"    
+
+    query = M.Result |> object;
+    query.filter("driverid__forename" => "Mika");
+    query.values("raceid__circuitid__name", "until_30_years" => Sum(Case(When(Q(F("raceid__date") <= F("driverid__dob") + 10950), then=1), default=0)));
+    df = query |> list |> DataFrame
+
+
 end
 
 @testset "F Expression Updates" begin
@@ -397,19 +458,49 @@ end
     @test false  # Fail the test if an error occurs
   end
 
-  query = M.Just_a_test_deletion |> object
+  query = M.Just_a_test_deletion |> object;
   df = query |> list |> DataFrame
   for (index, row) in enumerate(eachrow(df))
     row.name = "test_update_$(index)"
   end
   try
-    bulk_update(query, df, columns=["name"], filters=["id"], show_query=true)
+    bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
     @test true
   catch e
     @error "Error during bulk_update with show_query" error=e
     @test false  # Fail the test if an error occurs
   end
 
+end
+
+@testset "SQL Injection Prevention Tests" begin
+        
+  @testset "Identifier Sanitization" begin
+    # Test the SQLSanitizer module
+    
+    # Test basic identifier quoting
+    @test quote_identifier("valid_field", nothing) == "\"valid_field\""
+    @test quote_identifier("field_with_123", nothing) == "\"field_with_123\""
+    
+    # Test malicious identifier cleaning
+    @test quote_identifier("field'; DROP TABLE users; --", nothing) == "\"fieldDROPTABLEusers\""
+    @test quote_identifier("field OR 1=1", nothing) == "\"fieldOR11\""
+    
+    # Test table name sanitization
+    @test safe_table_identifier("users", nothing) == "\"users\""
+    
+    println("✅ All identifier sanitization tests passed!")
+  end
+  
+  @testset "LIKE Pattern Escaping" begin    
+    # Test LIKE pattern escaping
+    @test escape_like_pattern("test_pattern") == "test\\_pattern"
+    @test escape_like_pattern("test%pattern") == "test\\%pattern" 
+    @test escape_like_pattern("test\\pattern") == "test\\\\pattern"
+    @test escape_like_pattern("test_%\\pattern") == "test\\_\\%\\\\pattern"
+    
+    println("✅ All LIKE pattern escaping tests passed!")
+  end
 end
 
 PormG.Configuration.__cleanup__()

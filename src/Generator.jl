@@ -61,9 +61,9 @@ function create_db_folder_and_yml(;path::String = DB_PATH)::Nothing
     nothing
 end
 
-function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::SQLConn) :: Nothing 
+function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::SQLConn; path::String = MODEL_PATH) :: Nothing 
 
-  open(joinpath(MODEL_PATH, file), "w") do f
+  open(joinpath(path, file), "w") do f
     write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
     import PormG.Models
     import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING

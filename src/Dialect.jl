@@ -464,17 +464,15 @@ end
 # Function to deal with operators
 #
 
-function contains(conn::PormGPostgres, column::String, value::String)::String
-  value = replace(value, "'" => "")
-  return """$(column) LIKE '%$(value)%'"""
+function contains(conn::PormGPostgres, column::String, value::String)::String 
+  return "$(column) LIKE $(value)"
 end
 function contains(conn::PormGPostgres, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end
 function icontains(conn::PormGPostgres, column::String, value::String)::String
-  value = replace(value, "'" => "") 
-  return """$(column) ILIKE '%$(value)%'"""
+  return "$(column) ILIKE $(value)"
 end
 function icontains(conn::PormGPostgres, column::String, value)
   throw(ArgumentError("The value must be a String"))

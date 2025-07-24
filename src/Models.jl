@@ -562,7 +562,30 @@ struct sIDField <: PormGField
   generated_always::Bool # New field to indicate GENERATED ALWAYS AS IDENTITY
 end
 
-function IDField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=true, default=nothing, editable=false, generated=true, generated_always=false)
+function IDField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :default, :editable, :generated, :generated_always
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for IDField. It will be ignored." field="IDField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  primary_key = get(kwargs, :primary_key, true)
+  auto_increment = get(kwargs, :auto_increment, true)
+  unique = get(kwargs, :unique, true)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, true)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  generated = get(kwargs, :generated, true)
+  generated_always = get(kwargs, :generated_always, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate other parameters
@@ -605,23 +628,34 @@ mutable struct sForeignKey <: PormGField
   initially_deferred::Bool
 end
 
-function ForeignKey(to::Union{String, PormGModel};
-    verbose_name=nothing,
-    primary_key=false,
-    unique=false,
-    blank=false,
-    null=false,
-    db_index=true,
-    default=nothing,
-    editable=false,
-    pk_field=nothing,
-    on_delete=nothing,
-    on_update=nothing,
-    deferrable=false,
-    initially_deferred=false,
-    how=nothing,
-    related_name=nothing,
-    db_constraint=true)
+function ForeignKey(to::Union{String, PormGModel}; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for ForeignKey. It will be ignored." field="ForeignKey" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  primary_key = get(kwargs, :primary_key, false)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, true)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  pk_field = get(kwargs, :pk_field, nothing)
+  on_delete = get(kwargs, :on_delete, nothing)
+  on_update = get(kwargs, :on_update, nothing)
+  deferrable = get(kwargs, :deferrable, false)
+  initially_deferred = get(kwargs, :initially_deferred, false)
+  how = get(kwargs, :how, nothing)
+  related_name = get(kwargs, :related_name, nothing)
+  db_constraint = get(kwargs, :db_constraint, true)
 
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
@@ -711,7 +745,7 @@ function _get_on_delete_mode(on_delete::Function)
 end
 
 
-struct sOneToOneField <: PormGField
+mutable struct sOneToOneField <: PormGField
   unique::Bool
   verbose_name::Union{String, Nothing}
   primary_key::Bool
@@ -733,23 +767,34 @@ struct sOneToOneField <: PormGField
   initially_deferred::Bool
 end
 
-function OneToOneField(to::Union{String, PormGModel};
-    verbose_name=nothing,
-    primary_key=false,
-    unique=true,
-    blank=false,
-    null=false,
-    db_index=true,
-    default=nothing,
-    editable=false,
-    pk_field=nothing,
-    on_delete=nothing,
-    on_update=nothing,
-    deferrable=false,
-    initially_deferred=false,
-    how=nothing,
-    related_name=nothing,
-    db_constraint=true)
+function OneToOneField(to::Union{String, PormGModel}; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for OneToOneField. It will be ignored." field="OneToOneField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  primary_key = get(kwargs, :primary_key, false)
+  unique = get(kwargs, :unique, true)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, true)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  pk_field = get(kwargs, :pk_field, nothing)
+  on_delete = get(kwargs, :on_delete, nothing)
+  on_update = get(kwargs, :on_update, nothing)
+  deferrable = get(kwargs, :deferrable, false)
+  initially_deferred = get(kwargs, :initially_deferred, false)
+  how = get(kwargs, :how, nothing)
+  related_name = get(kwargs, :related_name, nothing)
+  db_constraint = get(kwargs, :db_constraint, true)
 
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
@@ -772,7 +817,6 @@ function OneToOneField(to::Union{String, PormGModel};
 
   # Validate optional string parameters
   !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_delete isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_delete' must be a String or nothing"))
   !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
@@ -821,7 +865,28 @@ mutable struct sAutoField <: PormGField
   formater::Function
 end
 
-function AutoField(; verbose_name=nothing, primary_key=true, auto_increment=true, unique=true, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function AutoField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for AutoField. It will be ignored." field="AutoField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  primary_key = get(kwargs, :primary_key, true)
+  auto_increment = get(kwargs, :auto_increment, true)
+  unique = get(kwargs, :unique, true)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate other parameters
@@ -875,7 +940,29 @@ function parse_choices(choices_str::String)
   return choices
 end
 
-function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=false, null=false, db_index=false, db_column=nothing, default=nothing, choices=nothing, editable=true)  
+function CharField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :choices, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for CharField. It will be ignored." field="CharField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  max_length = get(kwargs, :max_length, 250)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
+  default = get(kwargs, :default, nothing)
+  choices = get(kwargs, :choices, nothing)
+  editable = get(kwargs, :editable, true)
+
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
@@ -921,20 +1008,39 @@ function CharField(; verbose_name=nothing, max_length=250, unique=false, blank=f
 end
 
 
-@kwdef mutable struct sIntegerField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  type::String = "INTEGER"
-  formater::Function = format_number_sql
+mutable struct sIntegerField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function IntegerField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function IntegerField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for IntegerField. It will be ignored." field="IntegerField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   
@@ -949,31 +1055,52 @@ function IntegerField(; verbose_name=nothing, unique=false, blank=false, null=fa
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
   
   return sIntegerField(
-    verbose_name=verbose_name,
-    primary_key=false,
-    unique=unique,
-    blank=blank,
-    null=null,
-    db_index=db_index,
-    default=default,
-    editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "INTEGER",
+    format_number_sql
   )  
 end
 
-@kwdef mutable struct sBigIntegerField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Int64, Nothing} = nothing
-  editable::Bool = false
-  type::String = "BIGINT"
-  formater::Function = format_number_sql
+mutable struct sBigIntegerField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function BigIntegerField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function BigIntegerField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for BigIntegerField. It will be ignored." field="BigIntegerField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   
@@ -988,32 +1115,53 @@ function BigIntegerField(; verbose_name=nothing, unique=false, blank=false, null
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
   
   return sBigIntegerField(
-    verbose_name=verbose_name,
-    primary_key=false,
-    unique=unique,
-    blank=blank,
-    null=null,
-    db_index=db_index,
-    default=default,
-    editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "BIGINT",
+    format_number_sql
   )  
 end
 
-@kwdef mutable struct sBooleanField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Bool, Nothing} = nothing
-  editable::Bool = false
-  type::String = "BOOLEAN"
-  formater::Function = format_bool_sql
+mutable struct sBooleanField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Bool, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
 
-function BooleanField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function BooleanField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for BooleanField. It will be ignored." field="BooleanField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1026,24 +1174,32 @@ function BooleanField(; verbose_name=nothing, unique=false, blank=false, null=fa
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBooleanField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "BOOLEAN",
+    format_bool_sql
   )  
 end
 
-@kwdef mutable struct sDateField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  auto_now::Bool = false
-  auto_now_add::Bool = false
-  type::String = "DATE"
-  formater::Function = format_date_sql
+mutable struct sDateField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  auto_now::Bool
+  auto_now_add::Bool
+  type::String
+  formater::Function
 end
 
 function DateField(; kwargs...)
@@ -1082,27 +1238,58 @@ function DateField(; kwargs...)
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
   # Return the field instance
   return sDateField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    auto_now,
+    auto_now_add,
+    "DATE",
+    format_date_sql
   )  
 end
 
-@kwdef mutable struct sDateTimeField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  auto_now::Bool = false
-  auto_now_add::Bool = false
-  type::String = "TIMESTAMPTZ"
-  formater::Function = format_timezone_sql 
+mutable struct sDateTimeField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  auto_now::Bool
+  auto_now_add::Bool
+  type::String
+  formater::Function
 end
 
-function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, auto_now=false, auto_now_add=false)
+function DateTimeField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :auto_now, :auto_now_add
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for DateTimeField. It will be ignored." field="DateTimeField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  auto_now = get(kwargs, :auto_now, false)
+  auto_now_add = get(kwargs, :auto_now_add, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
@@ -1117,27 +1304,58 @@ function DateTimeField(; verbose_name=nothing, unique=false, blank=false, null=f
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
   # Return the field instance
   return sDateTimeField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable, auto_now=auto_now, auto_now_add=auto_now_add
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    auto_now,
+    auto_now_add,
+    "TIMESTAMPTZ",
+    format_timezone_sql
   )  
 end
 
-@kwdef mutable struct sDecimalField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Float64, Nothing} = nothing
-  editable::Bool = false
-  max_digits::Int = 10
-  decimal_places::Int = 2
-  type::String = "DECIMAL"
-  formater::Function = format_number_sql
+mutable struct sDecimalField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Float64, Nothing}
+  editable::Bool
+  max_digits::Int
+  decimal_places::Int
+  type::String
+  formater::Function
 end
 
-function DecimalField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_digits=10, decimal_places=2)
+function DecimalField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :max_digits, :decimal_places
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for DecimalField. It will be ignored." field="DecimalField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  max_digits = get(kwargs, :max_digits, 10)
+  decimal_places = get(kwargs, :decimal_places, 2)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   
@@ -1154,33 +1372,54 @@ function DecimalField(; verbose_name=nothing, unique=false, blank=false, null=fa
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
   
   return sDecimalField(
-    verbose_name=verbose_name,
-    primary_key=false,
-    unique=unique,
-    blank=blank,
-    null=null,
-    db_index=db_index,
-    default=default,
-    editable=editable,
-    max_digits=max_digits,
-    decimal_places=decimal_places
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    max_digits,
+    decimal_places,
+    "DECIMAL",
+    format_number_sql
   )
 end
 
-@kwdef mutable struct sEmailField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  type::String = "VARCHAR"
-  formater::Function = format_text_sql
+mutable struct sEmailField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function EmailField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function EmailField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for EmailField. It will be ignored." field="EmailField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1193,25 +1432,52 @@ function EmailField(; verbose_name=nothing, unique=false, blank=false, null=fals
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sEmailField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "VARCHAR",
+    format_text_sql
   )  
 end
 
-@kwdef mutable struct sFloatField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Float64, String, Int64, Nothing} = nothing
-  editable::Bool = false
-  type::String = "FLOAT"
-  formater::Function = format_number_sql
+mutable struct sFloatField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Float64, String, Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function FloatField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function FloatField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for FloatField. It will be ignored." field="FloatField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   
@@ -1226,31 +1492,52 @@ function FloatField(; verbose_name=nothing, unique=false, blank=false, null=fals
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
   
   return sFloatField(
-    verbose_name=verbose_name,
-    primary_key=false,
-    unique=unique,
-    blank=blank,
-    null=null,
-    db_index=db_index,
-    default=default,
-    editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "FLOAT",
+    format_number_sql
   )  
 end
 
-@kwdef mutable struct sImageField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  type::String = "BLOB"
-  formater::Function = format_text_sql
+mutable struct sImageField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function ImageField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function ImageField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for ImageField. It will be ignored." field="ImageField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1263,25 +1550,47 @@ function ImageField(; verbose_name=nothing, unique=false, blank=false, null=fals
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sImageField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "BLOB",
+    format_text_sql
   )  
 end
 
-@kwdef mutable struct sTextField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  type::String = "TEXT"
-  formater::Function = format_text_sql
+mutable struct sTextField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function TextField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function TextField(; kwargs...)
+  accepted = Set([:verbose_name, :unique, :blank, :null, :db_index, :default, :editable])
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for TextField. It will be ignored." field="TextField" param=k value=v
+      end
+  end
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1294,25 +1603,52 @@ function TextField(; verbose_name=nothing, unique=false, blank=false, null=false
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTextField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "TEXT",
+    format_text_sql
   )  
 end
 
-@kwdef mutable struct sTimeField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  type::String = "TIME"
-  formater::Function = format_text_sql
+mutable struct sTimeField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function TimeField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function TimeField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for TimeField. It will be ignored." field="TimeField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1325,26 +1661,54 @@ function TimeField(; verbose_name=nothing, unique=false, blank=false, null=false
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTimeField(
-    verbose_name=verbose_name, primary_key=false, unique=unique, blank=blank, null=null,
-    db_index=db_index, default=default, editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "TIME",
+    format_text_sql
   )  
 end
 
-@kwdef mutable struct sBinaryField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{String, Nothing} = nothing
-  editable::Bool = false
-  type::String = "BLOB"
-  formater::Function = format_text_sql
-  max_length::Union{Int, Nothing} = nothing
+mutable struct sBinaryField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+  max_length::Union{Int, Nothing}
 end
 
-function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false, max_length=nothing)
+function BinaryField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :max_length
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for BinaryField. It will be ignored." field="BinaryField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+  max_length = get(kwargs, :max_length, nothing)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1369,31 +1733,53 @@ function BinaryField(; verbose_name=nothing, unique=false, blank=false, null=fal
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBinaryField(
-    verbose_name=verbose_name,
-    unique=unique,
-    blank=blank,
-    null=null,
-    db_index=db_index,
-    default=default,
-    editable=editable,
-    max_length=max_length
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "BLOB",
+    format_text_sql,
+    max_length
   )
 end
 
-@kwdef mutable struct sDurationField <: PormGField
-  verbose_name::Union{String, Nothing} = nothing
-  primary_key::Bool = false
-  unique::Bool = false
-  blank::Bool = false
-  null::Bool = false
-  db_index::Bool = false
-  default::Union{Period, Nothing} = nothing
-  editable::Bool = false
-  type::String = "INTERVAL"
-  formater::Function = format_text_sql
+mutable struct sDurationField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Period, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
 end
 
-function DurationField(; verbose_name=nothing, unique=false, blank=false, null=false, db_index=false, default=nothing, editable=false)
+function DurationField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for DurationField. It will be ignored." field="DurationField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
@@ -1406,13 +1792,16 @@ function DurationField(; verbose_name=nothing, unique=false, blank=false, null=f
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sDurationField(
-    verbose_name=verbose_name,
-    unique=unique,
-    blank=blank,
-    null=null,
-    db_index=db_index,
-    default=default,
-    editable=editable
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "INTERVAL",
+    format_text_sql
   )
 end
 

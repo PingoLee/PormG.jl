@@ -1031,7 +1031,8 @@ end
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandler
   if x.first[end] in ["in", "nin"]
-    return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    # @infiltrate
+    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
@@ -1576,7 +1577,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["in", "not in"])
-      throw("Error in values, $(v.values) is not a SQLObjectHandler")
+      @infiltrate 
+      throw("Error in values, $(v.column.field) in filter is not a object")
     end
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")

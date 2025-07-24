@@ -290,7 +290,7 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
     struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol    
     sets::Vector{String} = []
     try
-      fields = struct_name == :ForeignKey ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
+      fields = struct_name in [:ForeignKey, :OneToOneField] ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
     catch e
       @infiltrate
     end

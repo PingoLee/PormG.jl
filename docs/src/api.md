@@ -8,7 +8,7 @@ The `PormG` module provides a set of abstractions and functions for working with
 
 ### `object`
 - **Description**: Retrieves an object from the database.
-- **Usage**: `object(...)`
+- **Usage**: `query = M.Model_name |> object;`
 
 ### `show_query`
 - **Description**: Displays the SQL query that will be executed.
@@ -84,3 +84,10 @@ results = list(conn, query)  # Retrieve records based on a query
 ## Conclusion
 
 This documentation provides an overview of the API for the `PormG` module. For more detailed information on each function and type, please refer to the source code and additional documentation files.
+# API Reference
+
+```@autodocs
+Modules = [PormG, PormG.QueryBuilder, PormG.Models]
+Order   = [:function, :type]
+```
+

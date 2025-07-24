@@ -83,13 +83,19 @@ query |> do_count
 query = M.Race |> object;
 query.filter("date__@year" => 1991);
 query.values("date__@year", "date__@month", "date__@day", "rows" => Count("raceid"));
+@info query |> show_query # show the query
 df = query |> list |> DataFrame # get the result in a df
 
 query.values("date__@yyyy_mm", "rows" => Count("raceid"));
+@info query |> show_query
 df = query |> list |> DataFrame # get the result in a df
 
 query.values("date__@quarter", "rows" => Count("raceid"));
+@info query |> show_query
 df = query |> list |> DataFrame # get the result in a df
+
+query.values("date'; DROP TABLE users; --", "rows" => Count("raceid"));
+@info query |> show_query
 
 # Dealing with operations
 query = M.Result |> object;

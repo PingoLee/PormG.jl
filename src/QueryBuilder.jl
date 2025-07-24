@@ -89,13 +89,17 @@ end
 get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
 
 function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false)
-  parameters::Vector{String} = String[]
-  for v in value
-    pq.parameter_count += 1
-    push!(pq.parameters, v)
-    push!(parameters, "\$$(pq.parameter_count)")
-  end
-  return parameters
+  # parameters::Vector{String} = String[]
+  # for v in value
+  #   pq.parameter_count += 1
+  #   push!(pq.parameters, v)
+  #   push!(parameters, "\$$(pq.parameter_count)")
+  # end
+  contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
+  pq.parameter_count += 1
+  push!(pq.parameters, value)
+  # push!(pq.parameters, "ANY(\$$(pq.parameter_count))")
+  return "\$$(pq.parameter_count)"
 end
 function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false)::String
   contains && (value = string("%", value |> escape_like_pattern, "%"))  # Escape LIKE patterns if needed
@@ -1027,7 +1031,8 @@ end
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandler
   if x.first[end] in ["in", "nin"]
-    return OperObject(operator = x.first[end], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    # @infiltrate
+    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
@@ -1242,10 +1247,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][4] |> String
+    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][2] |> String
     row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
     foreign_table_name = s_model |> string
-    # @infiltrate  
+    @infiltrate false
   else
     @infiltrate
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
@@ -1299,7 +1304,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join["key_a"] = new_object.related_objects[vector[1]][4] |> String
+      row_join["key_a"] = new_object.related_objects[vector[1]][2] |> String
       row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
       vector = vector[2:end]
 
@@ -1572,7 +1577,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["in", "not in"])
-      throw("Error in values, $(v.values) is not a SQLObjectHandler")
+      @infiltrate 
+      throw("Error in values, $(v.column.field) in filter is not a object")
     end
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
@@ -1613,7 +1619,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", placeholders)     
   elseif v.operator in ["in", "not in"]
     if isa(placeholders, String)
-      return string(column, " ", v.operator, " (", placeholders, ")")
+      return string(column, " ", v.operator == "in" ? "= ANY" : "<> ALL", "(", placeholders, ")")
     elseif isa(placeholders, AbstractArray)
       return string(column, " ", v.operator, " (", join(placeholders, ", "), ")")
     else
@@ -2268,7 +2274,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     """
   end
 
-  @info sql
+  # @info sql
 
   @infiltrate false
 
@@ -2468,9 +2474,10 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   for (index, row) in enumerate(eachrow(df))
     values = String[]
     try
-      values = [model.fields[field].formater(row[field]) for field in fields_df]
-      param_placeholders = add_parameter!(parameters, values)
+      param_placeholders = [add_parameter!(parameters, model.fields[field].formater(row[field])) for field in fields_df]
+      # param_placeholders = add_parameter!(parameters, values)
     catch e
+      @infiltrate false
       _depuration_values_bulk_insert(fields_df, model, row, index, django_prefix)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
     end
@@ -2761,8 +2768,8 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   for (index, row) in enumerate(eachrow(df))
     values = String[]    
     try
-      values = [model.fields[field].formater(row[field]) for field in joined_columns]
-      param_placeholders = add_parameter!(instruction.parameters, values)
+      param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[field])) for field in joined_columns]
+      # param_placeholders = add_parameter!(instruction.parameters, values)
     catch e
       _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix !== nothing)
       throw("Error in bulk_update, the row $(index) has a problem: $(e)")
@@ -2971,7 +2978,7 @@ function delete(objct::SQLObjectHandler;
       
       # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
       for ((field, value), affected_models) in collector.field_updates
-        @infiltrate
+        @infiltrate false
         for (affected_model, keys) in affected_models
           update_field(connection, affected_model, field, value, keys, show_query, conn)
         end
@@ -3115,7 +3122,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
-    @infiltrate
+    @infiltrate false
     # check if the field allow null
     if !field.null
       throw(ArgumentError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
@@ -3220,10 +3227,11 @@ function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::Porm
   @infiltrate false
   # Execute the actual deletion SQL
   _where = String[]
+  parameters = get_parameter(connection)
   # @info keys[1][:objct] |> query
   for key in keys
     pk_field = key[:key]
-    push!(_where, """"$(pk_field)" IN ($(key[:objct] |> query))""")   
+    push!(_where, """"$(pk_field)" IN ($(query(key[:objct], parameters=parameters)))""")
   end
   sql::String = ""
   if size(keys, 1) == 1
@@ -3244,7 +3252,7 @@ function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::Porm
     deleted_counter[model.name] = _query |> do_count
     _query.values(pk_field) # Ensure the query is built
     @infiltrate false
-    sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(_query |> query))"
+    sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
   end
 
   sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
@@ -3253,23 +3261,25 @@ function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::Porm
     @info sql
     return deleted_counter  # Return count of deleted objects
   end
-  result, conn = with_transaction(connection, sql, conn=conn)
+  @infiltrate false
+  result, conn = with_transaction(connection, sql, conn=conn, params=parameters)
   return deleted_counter  # Return count of deleted objects
 end
 
 function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool, conn::Union{Nothing, LibPQ.Connection})
   # Update field values using query object like CASCADE
-  @infiltrate
+  @infiltrate false
   pk_field = keys[:key]
   _query = keys[:objct]
+  parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
-  sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(_query |> query))"
+  sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
   if show_query
     @info sql
     return
   end
-  LibPQ.execute(connection, sql)
-  with_transaction(connection, sql, conn=conn)
+  # LibPQ.execute(connection, sql)
+  with_transaction(connection, sql, conn=conn, params=parameters)
 end
 
 

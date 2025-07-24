@@ -233,6 +233,9 @@ end
     query = M.Result |> object;
     query.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "monaco"]);
     @test query |> do_count == 1664
+    query = M.Result |> object;
+    query.filter("raceid__circuitid__name__@nin" => ["Circuit de Monaco", "monaco"]);
+    @test query |> do_count == 25095
 end
 
 @testset "Date Operations" begin
@@ -290,13 +293,28 @@ end
 end
 
 @testset "Reverse Joins" begin
-    query = M.Constructor |> object;
-    query.values("result__resultid");
-    query.filter("result__resultid" => 1);
-    # @info query |> show_query
-    df = query |> list |> DataFrame
-    @test size(df, 1) == 1
-    @test df[1, :result__resultid] == 1
+  query = M.Constructor |> object;
+  query.values("result__resultid");
+  query.filter("result__resultid" => 1);
+  # @info query |> show_query
+  df = query |> list |> DataFrame
+  @test size(df, 1) == 1
+  @test df[1, :result__resultid] == 1
+
+  # get values to compare
+  query_a = M.Just_a_test_deletion |> object;
+  query_a.values("id", "name", "test_result", "test_result2");
+  df_a = query_a |> list |> DataFrame
+
+  # Test reverse join with model with id and multiple fields in reverse model
+  query = M.Result |> object;
+  query.values("test_deletion__id", "test_deletion__name", "resultid");
+  query.filter("test_deletion__id__@isnull" => false);
+  df = query |> list |> DataFrame
+  query |> show_query
+  @test size(df, 1) == size(df_a, 1)
+  @test all(in.(df.test_deletion__id, Ref(df_a.id)))
+  @test all(in.(df.test_deletion__name, Ref(df_a.name)))
 end
 
 @testset "FExpression and Filtering" begin

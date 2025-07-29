@@ -64,10 +64,10 @@ using .Models
 include("Dialect.jl")
 import .Dialect
 
-export object, show_query, list, bulk_insert, bulk_update, delete, do_count, do_exists
+export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do_count, do_exists
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, query, list, page, bulk_insert, bulk_update, delete, do_count, do_exists
+import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists
 show_query = query
 
 include("Migrations.jl")

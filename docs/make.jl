@@ -12,11 +12,12 @@ makedocs(
     modules = [PormG, PormG.QueryBuilder, PormG.Models],
     pages = [
         "Home" => "index.md",
-        "Migrations" => "migrations.md",
+        "Configuration" => "configuration.md",
         "Models" => "models.md",
-        "Search queries" => "queries.md",
-        "Function queries" => "function.md",
-        "Whrite queries" => "write.md",
+        "Migrations" => "migrations.md",
+        "Search queries" => "search_queries.md",
+        # "Function queries" => "function.md",
+        # "Whrite queries" => "write.md",
         "API" => "api.md"
     ],
     format = Documenter.HTML(),

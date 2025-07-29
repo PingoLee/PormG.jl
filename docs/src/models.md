@@ -1,5 +1,31 @@
-module models
+# Defining Models in PormG
 
+PormG models describe the structure of your database tables using Julia code, inspired by Django ORM but tailored for Julia's syntax and performance.
+
+## What is a Model?
+A model is a Julia type (usually a struct) that defines the fields (columns) and their types for a database table. Each model maps directly to a table in your PostgreSQL database.
+
+## Creating a Model
+
+1. **Edit Your Models File**
+   - By default, models are defined in `db/models.jl` or another folder like `db_2/models.jl`.
+   - Each model is a Julia struct using PormG field types.
+
+2. **Example Model Definition**
+
+```julia
+struct Driver <: PormGModel
+    id::PormGField = IDField()
+    name::PormGField = CharField(max_length=100)
+    birthdate::PormGField = DateField()
+    nationality::PormGField = CharField(max_length=50)
+end
+```
+
+2. **Example of module contruction in `db_2/models.jl`**
+
+```julia
+module models
 import PormG.Models
 import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
 
@@ -94,3 +120,41 @@ Just_a_test_deletion = Models.Model(
 Models.set_models(@__MODULE__, @__DIR__) # That is important to set the models in the module, otherwise it will not work, that need stay at the end of the file
 
 end
+```
+
+- Each field uses a PormG field constructor (e.g., `IDField`, `CharField`, `DateField`).
+- You can use keyword arguments to customize field options (e.g., `max_length`, `unique`, `null`).
+
+## Supported Field Types
+- `IDField`, `AutoField`, `CharField`, `TextField`, `IntegerField`, `BigIntegerField`, `BooleanField`, `DateField`, `DateTimeField`, `DecimalField`, `EmailField`, `FloatField`, `ImageField`, `BinaryField`, `DurationField`, `ForeignKey`, `OneToOneField`
+
+See the API documentation for details on each field type and its options.
+
+## Loading Models from the Database
+- When you run `PormG.Configuration.load("db_2")`, PormG can generate a models file from your existing database schema.
+- You can edit this file to add, remove, or change fields as needed.
+
+## Best Practices
+- Use clear, descriptive field names and types.
+- Use keyword arguments to set constraints (e.g., `unique=true`, `null=false`).
+- Keep your models file under version control.
+- After editing models, run migrations to update your database schema.
+
+## Example: Loading and Using Models
+
+```julia
+using Pkg
+Pkg.activate(".")
+using PormG
+PormG.Configuration.load("db_2")
+include("../db_2/models.jl") # or the path to your models file
+include models as M
+# Now you can use your models for queries, inserts, etc.
+query = M.User |> object;
+query.filter("name" => "John Doe")
+query.values("id", "name", "email")
+df = query |> list |> DataFrame
+```
+
+---
+For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.

@@ -1,6 +1,6 @@
 module QueryBuilder
 
-import DataFrames, Tables
+import DataFrames, Tables, JSON
 using Dates, TimeZones, Intervals
 using SQLite, LibPQ
 
@@ -2312,9 +2312,9 @@ query.order_by("-laps")
 df = query |> list |> DataFrame
 ```
 """
-function list(objct::SQLObjectHandler)
+function query_list(objct::SQLObjectHandler)
   if objct.object.model.connect_key === nothing
-    throw(ArgumentError("Error in list, the model \e[4m\e[31m$(objct.object.model.name)\e[0m not have a build correctly, please reload the app"))
+    throw(ArgumentError("Error in quering data, the model \e[4m\e[31m$(objct.object.model.name)\e[0m not have a build correctly, please reload the app"))
   end
   settings = config[objct.object.model.connect_key]
   connection = settings.connections
@@ -2323,6 +2323,83 @@ function list(objct::SQLObjectHandler)
   @infiltrate false
   return fetch(settings, sql, objct.object.parameters) 
 end
+
+"""
+Creates a DataFrame directly from a SQLObjectHandler query.
+
+This extends the DataFrame constructor to work directly with PormG query objects,
+
+# Arguments
+- `objct::SQLObjectHandler`: The SQL object handler containing the query
+
+# Returns
+- `DataFrames.DataFrame`: The query results as a DataFrame
+
+# Example
+```julia
+query = M.Result |> object
+query.filter("raceid__year" => 2020)
+query.values("driverid__forename", "constructorid__name", "laps")
+df = query |> DataFrame  # Direct conversion to DataFrame
+```
+"""
+function DataFrames.DataFrame(objct::SQLObjectHandler)
+  return query_list(objct) |> DataFrames.DataFrame
+end
+
+"""
+Fetches a list of records from the database and returns them as an array of dictionaries.
+
+This function executes the query and converts each row to a dictionary with column names as keys.
+
+# Arguments
+- `objct::SQLObjectHandler`: The SQL object handler containing the query
+
+# Returns
+- `Vector{Dict{Symbol, Any}}`: Array of dictionaries, where each dictionary represents a row
+
+# Example
+```julia
+query = M.Result |> object
+query.filter("raceid__year" => 2020)
+query.values("driverid__forename", "constructorid__name", "laps")
+records = query |> list  # Returns array of dictionaries
+# Example output: [Dict(:driverid__forename => "Lewis", :constructorid__name => "Mercedes", :laps => 58), ...]
+```
+"""
+function list(objct::SQLObjectHandler)
+  result = query_list(objct)
+  return Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
+end
+
+"""
+Fetches a list of records from the database and returns them as a JSON string.
+
+This function executes the query, converts each row to a dictionary, and serializes the result as JSON.
+
+# Arguments
+- `objct::SQLObjectHandler`: The SQL object handler containing the query
+
+# Returns
+- `String`: JSON string representation of the query results
+
+# Example
+```julia
+query = M.Result |> object
+query.filter("raceid__year" => 2020)
+query.values("driverid__forename", "constructorid__name", "laps")
+json_data = query |> list_json  # Returns JSON string
+# Example output: "[{\"driverid__forename\":\"Lewis\",\"constructorid__name\":\"Mercedes\",\"laps\":58}]"
+```
+"""
+function list_json(objct::SQLObjectHandler)
+  records = list(objct)
+  # Convert Symbol keys to String keys for JSON serialization
+  string_key_records = [Dict(String(k) => v for (k, v) in pairs(record)) for record in records]
+  return JSON.json(string_key_records)
+end
+
+
 
 # ---
 # Execute bulk insert and update
@@ -2450,6 +2527,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
         push!(fields_df, field)
       elseif model.fields[field].primary_key
+        @infiltrate false
+        push!(pk_field, field)
         continue
       elseif !model.fields[field].null
         throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
@@ -2535,9 +2614,10 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
       try
         fetch(settings, sql, parameters)
       catch e
+        @infiltrate
         if occursin("duplicate key value violates unique constraint", e |> string)
           _update_sequence(model, connection, pk_field, settings)
-          throw("Error in bulk_insert, the row has a duplicate key value")
+          throw("Error in bulk_insert, the row has a duplicate key value; try again")
         elseif occursin("violates foreign key constraint", e |> string)
           throw("Error in bulk_insert, the row has a foreign key constraint")
         else

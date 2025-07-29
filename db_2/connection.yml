@@ -1,0 +1,37 @@
+env: dev
+
+dev:
+  adapter: PostgreSQL
+  database: 
+  host: 
+  username: 
+  password: 
+  port: 
+  config:
+    change_db: true
+    change_data: true
+    time_zone: 'America/Sao_Paulo'
+
+prod:
+  adapter: PostgreSQL
+  database: 
+  host: 
+  username: 
+  password: 
+  port: 
+  config:
+    change_db: true
+    change_data: true
+    time_zone: 'America/Sao_Paulo'
+
+test:
+  adapter: PostgreSQL
+  database: 
+  host: 
+  username: 
+  password: 
+  port: 
+  config:
+    change_db: true
+    change_data: true
+    time_zone: 'America/Sao_Paulo'

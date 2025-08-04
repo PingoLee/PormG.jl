@@ -8,21 +8,21 @@ A model is a Julia type (usually a struct) that defines the fields (columns) and
 ## Creating a Model
 
 1. **Edit Your Models File**
-   - By default, models are defined in `db/models.jl` or another folder like `db_2/models.jl`.
+   - By default, models are defined in `db/models.jl`.
    - Each model is a Julia struct using PormG field types.
 
 2. **Example Model Definition**
 
 ```julia
-struct Driver <: PormGModel
-    id::PormGField = IDField()
-    name::PormGField = CharField(max_length=100)
-    birthdate::PormGField = DateField()
-    nationality::PormGField = CharField(max_length=50)
-end
+Driver = Models.Model(
+    id = Models.IDField(),
+    name = Models.CharField(max_length=100),
+    birthdate = Models.DateField(),
+    nationality = Models.CharField(max_length=50)
+)
 ```
 
-2. **Example of module contruction in `db_2/models.jl`**
+3. **Example of module contruction in `db/models.jl`**
 
 ```julia
 module models
@@ -125,36 +125,35 @@ end
 - Each field uses a PormG field constructor (e.g., `IDField`, `CharField`, `DateField`).
 - You can use keyword arguments to customize field options (e.g., `max_length`, `unique`, `null`).
 
+## Naming Conventions and Considerations
+
+### Model Naming Rules
+- **Use snake_case with capitalized first letter**: `User`, `Product`, `Order_item`
+- **Use singular nouns**: `User` not `Users`, `Product` not `Products`
+- **Be descriptive and clear**: `User_profile`, `Product_category`, `Order_history`
+
+### Model Organization
+- **Keep models in `db/models.jl`** or similar organized structure
+- **Group related models together** in logical sections
+- **Use meaningful comments** to explain complex relationships
+- **End with `Models.set_models(@__MODULE__, @__DIR__)`** to register models
+
+
 ## Supported Field Types
-- `IDField`, `AutoField`, `CharField`, `TextField`, `IntegerField`, `BigIntegerField`, `BooleanField`, `DateField`, `DateTimeField`, `DecimalField`, `EmailField`, `FloatField`, `ImageField`, `BinaryField`, `DurationField`, `ForeignKey`, `OneToOneField`
 
-See the API documentation for details on each field type and its options.
+PormG provides comprehensive field types for all common database scenarios:
 
-## Loading Models from the Database
-- When you run `PormG.Configuration.load("db_2")`, PormG can generate a models file from your existing database schema.
-- You can edit this file to add, remove, or change fields as needed.
+- **Primary Key Fields**: `IDField`, `AutoField`
+- **Text Fields**: `CharField`, `TextField`, `EmailField`
+- **Numeric Fields**: `IntegerField`, `BigIntegerField`, `FloatField`, `DecimalField`
+- **Date/Time Fields**: `DateField`, `DateTimeField`, `TimeField`, `DurationField`
+- **Other Types**: `BooleanField`, `ImageField`, `BinaryField`
+- **Relationship Fields**: `ForeignKey`, `OneToOneField`
 
-## Best Practices
-- Use clear, descriptive field names and types.
-- Use keyword arguments to set constraints (e.g., `unique=true`, `null=false`).
-- Keep your models file under version control.
-- After editing models, run migrations to update your database schema.
+For detailed documentation on each field type, including parameters, examples, and best practices, see [Field Types Reference](fields.md).
 
-## Example: Loading and Using Models
 
-```julia
-using Pkg
-Pkg.activate(".")
-using PormG
-PormG.Configuration.load("db_2")
-include("../db_2/models.jl") # or the path to your models file
-include models as M
-# Now you can use your models for queries, inserts, etc.
-query = M.User |> object;
-query.filter("name" => "John Doe")
-query.values("id", "name", "email")
-df = query |> list |> DataFrame
-```
+
 
 ---
 For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.

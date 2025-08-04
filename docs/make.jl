@@ -14,10 +14,10 @@ makedocs(
         "Home" => "index.md",
         "Configuration" => "configuration.md",
         "Models" => "models.md",
+        "Fields" => "fields.md",
         "Migrations" => "migrations.md",
-        "Search queries" => "search_queries.md",
-        # "Function queries" => "function.md",
-        # "Whrite queries" => "write.md",
+        "Writing" => "write.md",
+        "Reading" => "read.md",
         "API" => "api.md"
     ],
     format = Documenter.HTML(),

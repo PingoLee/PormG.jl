@@ -4,6 +4,11 @@
 
 > **Note:** This project is in a very early stage of development and is a personal hobby — I am not a professional programmer. The package is not yet available for general use. I am looking for people interested in contributing and helping to improve the system!
 
+## 📚 Documentation
+
+For comprehensive documentation, tutorials, and API reference, visit:
+**[https://pingolee.github.io/PormG.jl/build/index.html](https://pingolee.github.io/PormG.jl/build/index.html)**
+
 
 ---
 
@@ -52,24 +57,9 @@ query = M.User |> object;
 query.filter("name"=>"Alice")
 query.order_by("-age")
 query.values("name", "age")
-result = list(query)
+result = query |> list
 println(query)
 ```
-
----
-
-## For more examples
-
-For hands-on examples of PormG in action, navigate to the `test\pg` directory and execute the following scripts in this order:
-
-1. **connecting.jl** - Set up database connections
-2. **makemigrations.jl** - Create and apply database migrations
-3. **insertions.jl** - Add records to your database
-4. **selection.jl** - Query and retrieve data
-5. **deletion.jl** - Remove records from your database
-
-This tutorial sequence demonstrates a complete workflow from database setup to data manipulation, allowing you to explore PormG's features step by step.
-
 
 ## Contributing
 

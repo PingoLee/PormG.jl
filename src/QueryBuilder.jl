@@ -987,13 +987,14 @@ function _check_function(x::Vector{String})
       resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])  
       return _check_function(resp)
     else
-      joined_keys_with_prefix = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), "\n")
+      joined_keys_with_prefix_func = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), ", ")
+      joined_keys_with_prefix_oper = join(map(key -> " \e[33m@" * key, keys(PormGsuffix) |> collect), ", ")
       if haskey(PormGsuffix, x[end])
         yes = "you can use \"column__@\e[32m$(x[end])\e[0m\""
-        not = "you can not use \"column__\e[31m@$(x[end])__@function\e[0m\". valid functions are:\n$(joined_keys_with_prefix)\e[0m"
+        not = "you can not use \"column__\e[31m@$(x[end])__@function\e[0m\". valid functions are:\n$(joined_keys_with_prefix_func)\e[0m\nvalid operators are:\n$(joined_keys_with_prefix_oper)\e[0m"
         throw(ArgumentError("\e[4m\e[31m$(x[end])\e[0m is not allowed.\n$yes\n$not"))
       else
-        throw(ArgumentError("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid; please use a valid function:\n$(joined_keys_with_prefix)\e[0m"))
+        throw(ArgumentError("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid;\n please use a valid function:\n  - $(joined_keys_with_prefix_func)\e[0m\nor a valid operator:\n  - $(joined_keys_with_prefix_oper)\e[0m"))
       end
     end
   end    

@@ -391,7 +391,7 @@ function fetch(connection::PormGPostgres, sql::String;
   try
     return libpq_execute(conn, sql, params)
   catch e
-    @infiltrate
+    @infiltrate false
     if is_connection_error(e, connection)
       @warn "Lost connection to database. Attempting to reconnect..."
       conn = reconnect_db(connection, conn)

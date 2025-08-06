@@ -165,6 +165,29 @@ end
 
 end
 
+@testset "Single Update with joins" begin
+  # Update with JOIN - like Django's update with relationships
+  query = M.Result |> object;
+  query.filter("driverid__nationality" => "British", "resultid" => 1);
+  query.values("resultid", "driverid__forename", "driverid__nationality", "points");
+  df = query |> DataFrame
+  query.update("points" => F("points") + 10)
+  df = query |> DataFrame
+  @test df[1, :points] == 20.0
+  query.update("points" => F("points") - 10)
+
+  # Update with complex JOINs
+  query = M.Result |> object;
+  query.filter("raceid__circuitid__name__@icontains" => "Monaco", "resultid" => 7654);
+  query.values("resultid", "statusid__status", "driverid__forename", "driverid__nationality", "points");
+  df = query |> DataFrame
+  query.update("points" => 11)
+  @test df[1, :points] == 11.0
+  query.update("points" => F("points") - 1)
+  query.update("points" => 10, show_query=true)
+
+end
+
 @testset "Filtering and Value Selection" begin
     # Filter by status
     query = M.Status |> object;

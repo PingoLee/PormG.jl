@@ -709,16 +709,24 @@ function up_create!(q::SQLObject, values)
   return insert(q)
 end
 
-# function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: SQLTypeFunction)
-# function up_update!(q::SQLObject, values::NTuple{N, Pair{String, T}} where N where T <: Union{String, Integer, FExpression, SQLTypeF, Missing, Nothing, Bool})
-# function up_update!(q::SQLObject, values::NTuple{N, T} where N where T <: Union{Pair{String, String}, Pair{String, Integer}, Pair{String, FExpression}, Pair{String, SQLTypeF}, Pair{String, Missing}, Pair{String, Nothing}, Pair{String, Bool}})
-function up_update!(q::SQLObject, values)
+function up_update!(q::SQLObject, values; kwargs...)
+  # check if kwargs is not empty and check if kwargs just contains show_query
+  show_query = false
+  if !isempty(kwargs)
+    for (k, v) in kwargs
+      if k == :show_query
+        show_query = v
+      else
+        throw("Invalid keyword argument: $(k); please use :show_query")
+      end
+    end
+  end
   q.insert = Dict()
   for (k,v) in values   
     q.insert[k] = v 
   end  
 
-  return update(q)
+  return update(q, show_query=show_query)
 end
 
 function up_filter!(q::SQLObject, filter)  
@@ -802,7 +810,7 @@ mutable struct ObjectHandler <: SQLObjectHandler
                           values::Function = (x...) -> up_values!(object, x), 
                           filter::Function = (x...) -> up_filter!(object, x), 
                           create::Function = (x...) -> up_create!(object, x), 
-                          update::Function = (x...) -> up_update!(object, x), 
+                          update::Function = (x...; kwargs...) -> up_update!(object, x; kwargs...), 
                           order_by::Function = (x...) -> order_by!(object, x),
                           distinct::Function = (x...) -> distinct!(object, x))
       return new(object, values, filter, create, update, order_by, distinct) # Add distinct to new
@@ -1059,8 +1067,8 @@ function _check_filter(x::Pair)
       # @infiltrate
       return _get_pair_to_oper(check => x.second)
     catch e
-      @infiltrate
-      @error "Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.first))" exception=(e, catch_backtrace())
+      @infiltrate false
+      @error "Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.second))" exception=(e, catch_backtrace())
       rethrow(e)
     end
   else    
@@ -2176,30 +2184,24 @@ function _build_join_conditions(row_join::Vector{Dict{String, Any}}, connection)
   return join(conditions, " AND ")
 end
 
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, show_query::Bool = false)
   model = objct.model
   settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+  connection === nothing && (connection = settings.connections)
  
   instruction = build(objct, table_alias=table_alias, connection=connection) 
 
-  # raize error if is used join in update
-  instruction.row_join |> isempty || throw("Error in update, the join is not allowed in update")
-  # check if is allowed to insert
+  # Check if is allowed to update
   !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
-  # don't allow to update a field without filter
+  # Don't allow to update a field without filter
   instruction._where |> isempty && throw("Error in update, the update must have a filter")
   
-  # Create parameter collection
-  parameters = instruction.parameters  # Reuse parameters from filters
-
-  # colect name of the fields
+  parameters = instruction.parameters
   fields = model.field_names
 
-  # check if the fields need to be updated automatically
+  # Check if the fields need to be updated automatically
   for field in fields
     if !haskey(objct.insert, field)
-      # check if field allow null or if exist a default value
       if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
         objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
@@ -2208,7 +2210,6 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     end
   end
 
-  # check if the fields are in objct.insert
   # Handle F expressions in SET clause
   set_clause_parts = String[]
   for field in keys(objct.insert)    
@@ -2216,22 +2217,28 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     in(field, fields) || throw("""Error in update, the field "$(field)" not found in $(model.name)""")
     # check if field is a primary key and not allow to update
     model.fields[field].primary_key && throw("Error in update, the field \e[4m\e[31m$(field)\e[0m is a primary key and not allow to update")
-    # check if the field has max_length and validate
-    hasfield(typeof(model.fields[field]), :max_length) && length(objct.insert[field]) > model.fields[field].max_length && error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(objct.create[field]))\e[0m""")
-    # check if the field has max_digits and validate
+    
+    # Max length validation
+    if hasfield(typeof(model.fields[field]), :max_length) && isa(objct.insert[field], AbstractString)
+      length(objct.insert[field]) > model.fields[field].max_length && 
+        throw("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(objct.insert[field]))\e[0m""")
+    end
+    
+    # Max digits validation
     if hasfield(typeof(model.fields[field]), :max_digits)
       value_str = string(objct.insert[field])
-      integer_part, fractional_part = split(value_str, ".")
-      total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
-      if total_digits > model.fields[field].max_digits
-        error("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
+      if contains(value_str, ".")
+        integer_part, fractional_part = split(value_str, ".")
+        total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
+        if total_digits > model.fields[field].max_digits
+          throw("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
+        end
       end
     end
     
     quoted_field = quote_identifier(field, connection)
 
     if isa(objct.insert[field], SQLTypeF)     
-      @infiltrate false
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
@@ -2243,53 +2250,97 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
    
   set_clause = join(set_clause_parts, ", ")   
 
-  # --- NEW: Support FROM clause for PostgreSQL ---
-  @infiltrate false
-  has_joins = !isempty(instruction.row_join)
-  sql = ""
-  # Build secure UPDATE SQL
+  # Build secure UPDATE SQL with JOIN support
   safe_table_name = safe_table_identifier(string(model.name), connection)
   safe_alias = quote_identifier(instruction.alias, connection)
+  
+  has_joins = !isempty(instruction.row_join)
+  sql = ""
+  
   if has_joins
     if connection isa PormGPostgres
+      # PostgreSQL: UPDATE...FROM syntax
       from_tables = _build_from_tables(instruction.row_join, connection)
       join_conditions = _build_join_conditions(instruction.row_join, connection)
       all_conditions = isempty(instruction._where) ? join_conditions :
           join([join_conditions, join(instruction._where, " AND ")], " AND ")
-      @infiltrate false
+      
       sql = """
       UPDATE $(safe_table_name) AS $(safe_alias)
       SET $(set_clause)
       FROM $(from_tables)
       WHERE $(all_conditions)
       """
+    elseif connection isa SQLite.DB
+      # SQLite: Use subquery or multiple table syntax
+      # For SQLite, we need to use a different approach since it doesn't support UPDATE...FROM
+      # We'll use UPDATE with WHERE EXISTS or IN subqueries
+      
+      # Build subquery for the joined tables
+      subquery_conditions = String[]
+      for join_dict in instruction.row_join
+        b_table = safe_table_identifier(join_dict["b"], connection)
+        alias_a = quote_identifier(instruction.alias, connection)
+        alias_b = quote_identifier(join_dict["alias_b"], connection)
+        key_a = quote_identifier(join_dict["key_a"], connection)
+        key_b = quote_identifier(join_dict["key_b"], connection)
+        
+        push!(subquery_conditions, """
+        EXISTS (
+          SELECT 1 FROM $(b_table) AS $(alias_b) 
+          WHERE $(alias_a).$(key_a) = $(alias_b).$(key_b)
+        )
+        """)
+      end
+      
+      all_conditions = vcat(subquery_conditions, instruction._where)
+      
+      sql = """
+      UPDATE $(safe_table_name) AS $(safe_alias)
+      SET $(set_clause)
+      WHERE $(join(all_conditions, " AND "))
+      """
     else
-      @error "Error in update: JOINs in UPDATE are only supported in PostgreSQL"
-      throw("Error in update: JOINs in UPDATE are only supported in PostgreSQL")
+      @error "Error in update: Unsupported database type for JOIN operations" connection_type=typeof(connection)
+      throw("Error in update: Unsupported database type for JOIN operations")
     end
   else
+    # No joins - simple UPDATE
     sql = """
-    UPDATE $(safe_table_name) as $(safe_alias)
+    UPDATE $(safe_table_name) AS $(safe_alias)
     SET $(set_clause)
     WHERE $(join(instruction._where, " AND \n   "))
     """
   end
 
-  # @info sql
+  if show_query
+    @info sql
+    return sql
+  end
 
-  @infiltrate false
+  # @infiltrate
 
-  # Execute with parameters
-  if connection isa PormGPostgres
-    fetch(settings, sql, parameters)
-  elseif connection isa SQLite.DB
-    stmt = SQLite.Stmt(connection, sql)
-    for (i, param) in enumerate(parameters.parameters)
-      SQLite.bind!(stmt, i, param)
+  # return nothing
+
+  try
+    # Execute with parameters
+    if connection isa PormGPostgres
+      fetch(settings, sql, parameters)
+    elseif connection isa SQLite.DB
+      stmt = SQLite.Stmt(connection, sql)
+      for (i, param) in enumerate(parameters.parameters)
+        SQLite.bind!(stmt, i, param)
+      end
+      SQLite.execute(stmt)
+    else
+      throw("Unsupported connection type")
     end
-    SQLite.execute(stmt)
-  else
-    throw("Unsupported connection type")
+    
+    # @info "Update completed successfully"
+    
+  catch e
+    @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql
+    rethrow(e)
   end
 
   return nothing

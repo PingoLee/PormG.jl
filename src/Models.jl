@@ -355,6 +355,9 @@ function format_text_sql(value::AbstractArray)
   # return string("(", join(arrayref, ","), ")")
   return arrayref
 end
+function format_text_sql(value::Time)
+  return string(value)
+end  
 
 function format_number_sql(value::Integer)
   return value

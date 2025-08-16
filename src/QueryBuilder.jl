@@ -169,7 +169,7 @@ Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as)
 
 # Return a field to sql query
 mutable struct SQLField <: SQLTypeField
-  field::Union{SQLTypeText, SQLTypeFunction, String}
+  field::Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}
   _as::Union{String, Nothing}
 end
 SQLField(field::String; _as::Union{String, Nothing} = nothing) = SQLField(field, _as)
@@ -665,7 +665,7 @@ end
 
 # Why Vector{String}
 "Agora eu tenho que ver como que eu padronizo todas as variáveis para sair como SQLTypeField"
-function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: SQLTypeFunction)
+function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: Union{SQLTypeFunction, SQLTypeF})
   # every call of values, reset the values
   q.values = []
   for v in values 
@@ -674,11 +674,12 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
       push!(q.values, _check_function(v))
     elseif isa(v, SQLTypeFunction)
       push!(q.values, SQLField(_check_function(v), v._as))
-    elseif isa(v, Pair) && isa(v.second, SQLTypeFunction)
+    elseif isa(v, Pair) && isa(v.second, Union{SQLTypeFunction, SQLTypeF})
       try
         push!(q.values, SQLField(_check_function(v.second), v.first))
       catch e
         @infiltrate
+        @error "Error processing values pair: $e" exception=(e, catch_backtrace())
       end
     elseif isa(v, String)
       check = String.(split(v, "__@"))
@@ -697,6 +698,7 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
   return q
 end
 function up_values!(q::SQLObject, values)
+  @infiltrate
   @error "Invalid argument: $(values) (::$(typeof(values))); please use a string or a function (Mounth, Year, Day, Y_M ...)"
 end
   
@@ -1635,7 +1637,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       throw("Error in operator: $(v.operator), the value must be a String or a Vector of Strings")
     end
   elseif v.operator in ["contains", "icontains"]
-    # @infiltrate
+    @infiltrate false
+    instruc.parameters.parameters[end] = string("%", instruc.parameters.parameters[end], "%") # Add wildcards for contains and icontains
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else
     throw("Error in operator, $(v.operator) is not a valid operator")
@@ -1828,6 +1831,7 @@ function query(q::SQLObjectHandler;
     respota *= "OFFSET $(q.object.offset) \n"
   end
   q.object.parameters = instruction.parameters
+  # println(instruction.parameters)
     # $(instruction.agregate && size(instruction.group, 1) > 0 ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     # $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
     # $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")

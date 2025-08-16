@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Writing · PormG Documentation</title><meta name="title" content="Writing · PormG Documentation"/><meta property="og:title" content="Writing · PormG Documentation"/><meta property="twitter:title" content="Writing · PormG Documentation"/><meta name="description" content="Documentation for PormG Documentation."/><meta property="og:description" content="Documentation for PormG Documentation."/><meta property="twitter:description" content="Documentation for PormG Documentation."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG Documentation</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li><li><a class="tocitem" href="../models/">Models</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../migrations/">Migrations</a></li><li class="is-active"><a class="tocitem" href>Writing</a><ul class="internal"><li><a class="tocitem" href="#Table-of-Contents"><span>Table of Contents</span></a></li><li><a class="tocitem" href="#Creating-Records"><span>Creating Records</span></a></li><li><a class="tocitem" href="#Updating-Records"><span>Updating Records</span></a></li><li><a class="tocitem" href="#Deleting-Records"><span>Deleting Records</span></a></li><li><a class="tocitem" href="#Bulk-Operations"><span>Bulk Operations</span></a></li><li><a class="tocitem" href="#F-Expressions"><span>F Expressions</span></a></li></ul></li><li><a class="tocitem" href="../read/">Reading</a></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Writing</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Writing</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG/blob/main/docs/src/write.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Writing-Data-with-PormG"><a class="docs-heading-anchor" href="#Writing-Data-with-PormG">Writing Data with PormG</a><a id="Writing-Data-with-PormG-1"></a><a class="docs-heading-anchor-permalink" href="#Writing-Data-with-PormG" title="Permalink"></a></h1><p>This guide covers all data manipulation operations in PormG, including creating, updating, and deleting records. PormG provides both single-record and bulk operations for efficient data management.</p><h2 id="Table-of-Contents"><a class="docs-heading-anchor" href="#Table-of-Contents">Table of Contents</a><a id="Table-of-Contents-1"></a><a class="docs-heading-anchor-permalink" href="#Table-of-Contents" title="Permalink"></a></h2><ul><li><a href="#creating-records">Creating Records</a></li><li><a href="#updating-records">Updating Records</a></li><li><a href="#deleting-records">Deleting Records</a></li><li><a href="#bulk-operations">Bulk Operations</a></li><li><a href="#f-expressions">F Expressions</a></li></ul><hr/><h2 id="Creating-Records"><a class="docs-heading-anchor" href="#Creating-Records">Creating Records</a><a id="Creating-Records-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-Records" title="Permalink"></a></h2><h3 id="Single-Record-Creation"><a class="docs-heading-anchor" href="#Single-Record-Creation">Single Record Creation</a><a id="Single-Record-Creation-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Record-Creation" title="Permalink"></a></h3><p>Use the <code>.create()</code> method to insert individual records:</p><p>The <code>.create()</code> method returns a <code>Dict</code> containing the data of the newly created record, including the database-generated primary key.</p><pre><code class="language-julia hljs"># Load your models
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Writing · PormG Documentation</title><meta name="title" content="Writing · PormG Documentation"/><meta property="og:title" content="Writing · PormG Documentation"/><meta property="twitter:title" content="Writing · PormG Documentation"/><meta name="description" content="Documentation for PormG Documentation."/><meta property="og:description" content="Documentation for PormG Documentation."/><meta property="twitter:description" content="Documentation for PormG Documentation."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG Documentation</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li><li><a class="tocitem" href="../models/">Models</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../migrations/">Migrations</a></li><li class="is-active"><a class="tocitem" href>Writing</a><ul class="internal"><li><a class="tocitem" href="#Table-of-Contents"><span>Table of Contents</span></a></li><li><a class="tocitem" href="#Creating-Records"><span>Creating Records</span></a></li><li><a class="tocitem" href="#Bulk-Insert"><span>Bulk Insert</span></a></li><li><a class="tocitem" href="#Updating-Records"><span>Updating Records</span></a></li><li><a class="tocitem" href="#Deleting-Records"><span>Deleting Records</span></a></li><li><a class="tocitem" href="#F-Expressions"><span>F Expressions</span></a></li></ul></li><li><a class="tocitem" href="../read/">Reading</a></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Writing</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Writing</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/write.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Writing-Data-with-PormG"><a class="docs-heading-anchor" href="#Writing-Data-with-PormG">Writing Data with PormG</a><a id="Writing-Data-with-PormG-1"></a><a class="docs-heading-anchor-permalink" href="#Writing-Data-with-PormG" title="Permalink"></a></h1><p>This guide covers all data manipulation operations in PormG, including creating, updating, and deleting records. PormG provides both single-record and bulk operations for efficient data management.</p><h2 id="Table-of-Contents"><a class="docs-heading-anchor" href="#Table-of-Contents">Table of Contents</a><a id="Table-of-Contents-1"></a><a class="docs-heading-anchor-permalink" href="#Table-of-Contents" title="Permalink"></a></h2><ul><li><a href="#creating-records">Creating Records</a></li><li><a href="#updating-records">Updating Records</a></li><li><a href="#bulk-insert">Bulk insert</a></li><li><a href="#deleting-records">Deleting Records</a></li><li><a href="#f-expressions">F Expressions</a></li></ul><hr/><h2 id="Creating-Records"><a class="docs-heading-anchor" href="#Creating-Records">Creating Records</a><a id="Creating-Records-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-Records" title="Permalink"></a></h2><h3 id="Single-Record-Creation"><a class="docs-heading-anchor" href="#Single-Record-Creation">Single Record Creation</a><a id="Single-Record-Creation-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Record-Creation" title="Permalink"></a></h3><p>Use the <code>.create()</code> method to insert individual records:</p><p>The <code>.create()</code> method returns a <code>Dict</code> containing the data of the newly created record, including the database-generated primary key.</p><pre><code class="language-julia hljs"># Load your models
 include(&quot;db/models.jl&quot;)
 import .models as M
 
@@ -70,9 +70,58 @@ for (name, test_result) in test_data
         &quot;name&quot; =&gt; name,
         &quot;test_result&quot; =&gt; test_result
     )
-end</code></pre><hr/><h2 id="Updating-Records"><a class="docs-heading-anchor" href="#Updating-Records">Updating Records</a><a id="Updating-Records-1"></a><a class="docs-heading-anchor-permalink" href="#Updating-Records" title="Permalink"></a></h2><h3 id="Single-Record-Updates"><a class="docs-heading-anchor" href="#Single-Record-Updates">Single Record Updates</a><a id="Single-Record-Updates-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Record-Updates" title="Permalink"></a></h3><p>Update specific records using filters:</p><pre><code class="language-julia hljs"># Update a single record
+end</code></pre><hr/><h2 id="Bulk-Insert"><a class="docs-heading-anchor" href="#Bulk-Insert">Bulk Insert</a><a id="Bulk-Insert-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Insert" title="Permalink"></a></h2><h3 id="Basic-insertion"><a class="docs-heading-anchor" href="#Basic-insertion">Basic insertion</a><a id="Basic-insertion-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-insertion" title="Permalink"></a></h3><p>Efficiently insert large datasets using <code>bulk_insert()</code>:</p><pre><code class="language-julia hljs">using CSV, DataFrames
+
+# Prepare data
+df = CSV.File(&quot;drivers.csv&quot;) |&gt; DataFrame
+
+# Bulk insert from DataFrame
+query = M.Driver |&gt; object
+bulk_insert(query, df)</code></pre><p>By default, <code>bulk_insert()</code> chunks data into batches of 1000 rows for efficient insertion. However, for larger datasets with many columns, you might need to adjust the batch size to avoid hitting LibPQ limits. Unfortunately, when an insertion exceeds these limits, LibPQ can raise an unknown error. If you encounter such an error, try reducing the <code>chunk_size</code>.</p><pre><code class="language-julia hljs">query = M.Driver |&gt; object
+bulk_insert(query, df, chunk_size=500)</code></pre><h3 id="Bulk-Insert-with-error-handling"><a class="docs-heading-anchor" href="#Bulk-Insert-with-error-handling">Bulk Insert with error handling</a><a id="Bulk-Insert-with-error-handling-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Insert-with-error-handling" title="Permalink"></a></h3><p>When performing bulk inserts, especially from sources like CSV files, you might encounter data that doesn&#39;t align with your database schema. A common issue is trying to insert a string value (like <code>\N</code>, often used to represent <code>NULL</code> in CSVs) into a numeric column. This mismatch will cause <code>bulk_insert()</code> to raise an error and halt the operation.</p><h4 id="Example:-A-Failing-Insert"><a class="docs-heading-anchor" href="#Example:-A-Failing-Insert">Example: A Failing Insert</a><a id="Example:-A-Failing-Insert-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-A-Failing-Insert" title="Permalink"></a></h4><p>Imagine you&#39;re loading data from a <code>results.csv</code> file.</p><pre><code class="language-julia hljs"># Load data from a CSV file
+df = CSV.File(&quot;results.csv&quot;) |&gt; DataFrame
+
+# Attempt a bulk insert
+query = M.Result |&gt; object
+bulk_insert(query, df)</code></pre><p>If the <code>milliseconds</code> column in your CSV contains <code>\N</code> for some rows, while the corresponding database column is numeric, you&#39;ll get an error:</p><pre><code class="language-julia hljs">julia&gt; bulk_insert(query, df)
+ERROR: ArgumentError: Error in bulk_insert, the field milliseconds in row 6 has a value that can&#39;t be formatted: \N</code></pre><h4 id="The-Solution:-Pre-process-Your-Data"><a class="docs-heading-anchor" href="#The-Solution:-Pre-process-Your-Data">The Solution: Pre-process Your Data</a><a id="The-Solution:-Pre-process-Your-Data-1"></a><a class="docs-heading-anchor-permalink" href="#The-Solution:-Pre-process-Your-Data" title="Permalink"></a></h4><p>To fix this, you need to &quot;clean&quot; the data in your DataFrame before passing it to <code>bulk_insert()</code>. The goal is to convert problematic strings like <code>\N</code> into Julia&#39;s <code>missing</code> value. PormG will then correctly interpret <code>missing</code> as a <code>NULL</code> value for the database.</p><p>Here’s how you can clean the DataFrame. This code iterates through potentially problematic columns and replaces any <code>\N</code> strings with <code>missing</code>.</p><pre><code class="language-julia hljs"># Define the list of columns that need cleaning
+cols_to_clean = [
+    :position, :time, :milliseconds, :fastestlap, :rank, 
+    :fastestlaptime, :fastestlapspeed, :number
+]
+
+# In each specified column, replace &quot;\N&quot; with `missing`
+for col in cols_to_clean
+    df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, df[!, col])
+end
+
+# Now, the bulk insert will succeed
+bulk_insert(query, df)
+
+# You can verify the result
+query |&gt; do_count
+26759</code></pre><p>By pre-processing the data, you ensure it&#39;s compatible with your database schema, leading to a smooth and successful bulk insert.</p><h2 id="Updating-Records"><a class="docs-heading-anchor" href="#Updating-Records">Updating Records</a><a id="Updating-Records-1"></a><a class="docs-heading-anchor-permalink" href="#Updating-Records" title="Permalink"></a></h2><h3 id="Single-Record-Updates"><a class="docs-heading-anchor" href="#Single-Record-Updates">Single Record Updates</a><a id="Single-Record-Updates-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Record-Updates" title="Permalink"></a></h3><p>Update specific records using filters:</p><pre><code class="language-julia hljs"># Update a single record
 query = M.Driver |&gt; object;
 query.filter(&quot;forename&quot; =&gt; &quot;Lewis&quot;);
+query |&gt; do_count
+1
+df = query |&gt; DataFrame
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     44  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update(&quot;nationality&quot; =&gt; &quot;Xylos&quot;)
+
+# Verify the update
+df = query |&gt; DataFrame
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     44  Hamilton         1  hamilton   Xylos       1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
 query.update(&quot;nationality&quot; =&gt; &quot;British&quot;)
 
 # Update multiple fields
@@ -99,7 +148,6 @@ query.update(&quot;points&quot; =&gt; F(&quot;points&quot;) + 10)
 
 # if you want to see the query (without executing it)
 query.update(&quot;points&quot; =&gt; F(&quot;points&quot;) + 10, show_query=true)
-
 
 # Update with complex JOINs
 query = M.Result |&gt; object;
@@ -130,24 +178,7 @@ query.filter(&quot;raceid__year__@lt&quot; =&gt; 1960)
 delete(query)</code></pre><h3 id="Cascade-Deletion"><a class="docs-heading-anchor" href="#Cascade-Deletion">Cascade Deletion</a><a id="Cascade-Deletion-1"></a><a class="docs-heading-anchor-permalink" href="#Cascade-Deletion" title="Permalink"></a></h3><p>Foreign key relationships with <code>on_delete=&quot;CASCADE&quot;</code> will automatically delete related records:</p><pre><code class="language-julia hljs"># This will also delete related Result records if configured with CASCADE
 query = M.Race |&gt; object
 query.filter(&quot;name&quot; =&gt; &quot;Cancelled Grand Prix&quot;)
-delete(query)</code></pre><hr/><h2 id="Bulk-Operations"><a class="docs-heading-anchor" href="#Bulk-Operations">Bulk Operations</a><a id="Bulk-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Operations" title="Permalink"></a></h2><h3 id="Bulk-Insert"><a class="docs-heading-anchor" href="#Bulk-Insert">Bulk Insert</a><a id="Bulk-Insert-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Insert" title="Permalink"></a></h3><p>Efficiently insert large datasets using <code>bulk_insert()</code>:</p><pre><code class="language-julia hljs">using CSV, DataFrames
-
-# Prepare data
-df = CSV.File(&quot;drivers.csv&quot;) |&gt; DataFrame
-
-# Bulk insert from DataFrame
-query = M.Driver |&gt; object
-bulk_insert(query, df)</code></pre><h3 id="Bulk-Insert-with-Data-Processing"><a class="docs-heading-anchor" href="#Bulk-Insert-with-Data-Processing">Bulk Insert with Data Processing</a><a id="Bulk-Insert-with-Data-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Insert-with-Data-Processing" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Load and preprocess CSV data
-df = CSV.File(&quot;results.csv&quot;) |&gt; DataFrame
-
-# Handle missing values
-for col in [:position, :time, :milliseconds, :fastestlap]
-    df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, df[!, col])
-end
-
-# Bulk insert with copy optimization
-query = M.Result |&gt; object
-bulk_insert(query, df, copy=true)</code></pre><h3 id="Bulk-Update"><a class="docs-heading-anchor" href="#Bulk-Update">Bulk Update</a><a id="Bulk-Update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update" title="Permalink"></a></h3><p>Update multiple records from a DataFrame:</p><pre><code class="language-julia hljs"># Get existing data
+delete(query)</code></pre><hr/><h3 id="Bulk-Update"><a class="docs-heading-anchor" href="#Bulk-Update">Bulk Update</a><a id="Bulk-Update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update" title="Permalink"></a></h3><p>Update multiple records from a DataFrame:</p><pre><code class="language-julia hljs"># Get existing data
 query = M.Result |&gt; object
 df = query |&gt; DataFrame
 
@@ -173,54 +204,105 @@ end
 bulk_update(
     query, df, 
     columns=[&quot;milliseconds&quot;], 
+    filters=[&quot;resultid&quot;, &quot;statusid&quot; =&gt; 1],
+)</code></pre><h3 id="Bulk-Update-with-unsupported-join-in-bulk_update"><a class="docs-heading-anchor" href="#Bulk-Update-with-unsupported-join-in-bulk_update">Bulk Update with unsupported join in bulk_update</a><a id="Bulk-Update-with-unsupported-join-in-bulk_update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update-with-unsupported-join-in-bulk_update" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Unsupported join in bulk_update, you will get a error
+bulk_update(
+    query, df, 
+    columns=[&quot;milliseconds&quot;], 
     filters=[&quot;resultid&quot;, &quot;statusid__status&quot; =&gt; &quot;Finished&quot;],
-    show_query=false
-)</code></pre><hr/><h2 id="F-Expressions"><a class="docs-heading-anchor" href="#F-Expressions">F Expressions</a><a id="F-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions" title="Permalink"></a></h2><p>F expressions allow database-level operations without loading data into Julia, similar to Django&#39;s F objects.</p><h3 id="Basic-F-Expression-Usage"><a class="docs-heading-anchor" href="#Basic-F-Expression-Usage">Basic F Expression Usage</a><a id="Basic-F-Expression-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-F-Expression-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Increment a counter field
-query = M.Driver |&gt; object
-query.filter(&quot;driverid&quot; =&gt; 1)
-query.update(&quot;wins&quot; =&gt; F(&quot;wins&quot;) + 1)
+)
+ERROR: &quot;Error in bulk_update, the join is not allowed in bulk_update&quot;</code></pre><hr/><h2 id="F-Expressions"><a class="docs-heading-anchor" href="#F-Expressions">F Expressions</a><a id="F-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions" title="Permalink"></a></h2><p>F expressions allow database-level operations without loading data into Julia, similar to Django&#39;s F objects.</p><h3 id="Basic-F-Expression-Usage"><a class="docs-heading-anchor" href="#Basic-F-Expression-Usage">Basic F Expression Usage</a><a id="Basic-F-Expression-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-F-Expression-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Increment a counter field
+query = M.Driver |&gt; object;
+query.filter(&quot;driverid&quot; =&gt; 1);
+df = query |&gt; DataFrame
+
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     44  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update(&quot;number&quot; =&gt; F(&quot;number&quot;) + 1)
+
+df = query |&gt; DataFrame
+
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     45  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update(&quot;number&quot; =&gt; F(&quot;number&quot;) - 1)
 
 # Set one field equal to another
-query = M.Result |&gt; object
-query.filter(&quot;fastestlaptime&quot; =&gt; missing)
-query.update(&quot;fastestlaptime&quot; =&gt; F(&quot;time&quot;))</code></pre><h3 id="Arithmetic-Operations"><a class="docs-heading-anchor" href="#Arithmetic-Operations">Arithmetic Operations</a><a id="Arithmetic-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Arithmetic-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Mathematical operations
-query = M.Result |&gt; object
-query.filter(&quot;resultid&quot; =&gt; 1)
+query = M.Driver |&gt; object;
+query.filter(&quot;driverid&quot; =&gt; 1);
+query.update(&quot;number&quot; =&gt; F(&quot;driverid&quot;))
+
+df = query |&gt; DataFrame
+
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │      1  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update(&quot;number&quot; =&gt; 44)</code></pre><p>With F, you can do all basic mathematical operations directly in the database.</p><pre><code class="language-julia hljs">query = M.Just_a_test_deletion |&gt; object;
+query |&gt; do_exists &amp;&amp; delete(query; allow_delete_all = true)
+query.create(&quot;name&quot; =&gt; &quot;fexpr&quot;, &quot;test_result&quot; =&gt; 1)
+query.create(&quot;name&quot; =&gt; &quot;fexpr&quot;, &quot;test_result&quot; =&gt; 2)
+query.create(&quot;name&quot; =&gt; &quot;fexpr&quot;, &quot;test_result&quot; =&gt; 3)
+
+query = M.Just_a_test_deletion |&gt; object;
+query.filter(&quot;test_result&quot; =&gt; 1)
 
 # Addition
-query.update(&quot;total_time&quot; =&gt; F(&quot;time&quot;) + F(&quot;milliseconds&quot;))
+query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result&quot;) + 1)
 
 # Multiplication  
-query.update(&quot;penalty_time&quot; =&gt; F(&quot;milliseconds&quot;) * 1.1)
+query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result2&quot;) * 2)
 
 # Division
-query.update(&quot;average_speed&quot; =&gt; F(&quot;distance&quot;) / F(&quot;time&quot;))
+query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result2&quot;) / 2)
+
+# Opereations with only F expressions
+query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result&quot;) + F(&quot;test_result&quot;))
 
 # Subtraction
-query.update(&quot;time_difference&quot; =&gt; F(&quot;time&quot;) - F(&quot;fastestlaptime&quot;))</code></pre><h3 id="F-Expressions-with-Relationships"><a class="docs-heading-anchor" href="#F-Expressions-with-Relationships">F Expressions with Relationships</a><a id="F-Expressions-with-Relationships-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions-with-Relationships" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Use values from related models
+query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result2&quot;) - 1)
+</code></pre><h3 id="F-Expressions-with-Relationships"><a class="docs-heading-anchor" href="#F-Expressions-with-Relationships">F Expressions with Relationships</a><a id="F-Expressions-with-Relationships-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions-with-Relationships" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Use values from related models
 query = M.Result |&gt; object;
-query.filter(&quot;resultid&quot; =&gt; 1);
+query.filter(&quot;resultid&quot; =&gt; 3);
+df = query |&gt; DataFrame
+1×18 DataFrame
+ Row │ fastestlapspeed  points    raceid  number  time     fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
+     │ Float64?         Float64?  Int64?  Int32?  String?  Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │         216.719       6.0      18       7  +8.163   00:01:28.09            3         3      58       5         1         3          41       7       5697779              3  3                         3
+
 
 # Update using related field values 
 query.update(&quot;grid&quot; =&gt; F(&quot;driverid__number&quot;))
+
+df = query |&gt; DataFrame
+1×18 DataFrame
+ Row │ fastestlapspeed  points    raceid  number  time     fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
+     │ Float64?         Float64?  Int64?  Int32?  String?  Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │         216.719       6.0      18       7  +8.163   00:01:28.09            3         3      58       5         1         3          41       6       5697779              3  3                         3
 
 # Complex relationship traversal
 query.update(&quot;positiontext&quot; =&gt; F(&quot;raceid__circuitid__country&quot;))
 
 # Yeah, I know, nothing this make any sense, but it&#39;s just an example
 query.update(&quot;grid&quot; =&gt; F(&quot;driverid__number&quot;), show_query=true)
-query.update(&quot;positiontext&quot; =&gt; F(&quot;raceid__circuitid__country&quot;), show_query=true)</code></pre><h3 id="F-Expressions-in-Filters"><a class="docs-heading-anchor" href="#F-Expressions-in-Filters">F Expressions in Filters</a><a id="F-Expressions-in-Filters-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions-in-Filters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Compare fields within the same record
-query = M.Race |&gt; object
-query.filter(F(&quot;fp1_date&quot;) &lt;= F(&quot;date&quot;))
+┌ Info: UPDATE &quot;result&quot; AS &quot;Tb&quot;
+│ SET &quot;grid&quot; = &quot;Tb_1&quot;.&quot;number&quot;
+│ FROM &quot;driver&quot; AS &quot;Tb_1&quot;
+└ WHERE &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot; AND &quot;Tb&quot;.&quot;resultid&quot; = $1
 
-# Use F expressions with other operators
-query = M.Result |&gt; object
-query.filter(F(&quot;milliseconds&quot;) &lt; F(&quot;fastestlaptime&quot;))</code></pre><h3 id="F-Expressions-in-Annotations"><a class="docs-heading-anchor" href="#F-Expressions-in-Annotations">F Expressions in Annotations</a><a id="F-Expressions-in-Annotations-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions-in-Annotations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Calculate values in SELECT
-query = M.Result |&gt; object
-query.values(
-    &quot;driverid__forename&quot;,
-    &quot;points&quot;,
-    &quot;bonus_points&quot; =&gt; F(&quot;points&quot;) * 0.1,
-    &quot;total_points&quot; =&gt; F(&quot;points&quot;) + (F(&quot;points&quot;) * 0.1)
-)
-df = query |&gt; list |&gt; DataFrame</code></pre><hr/><p>This comprehensive guide covers all data writing operations in PormG. For more details on querying data, see the <a href="../read/">read.md</a> documentation. For field definitions and validation, refer to <a href="../fields/">fields.md</a>.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../migrations/">« Migrations</a><a class="docs-footer-nextpage" href="../read/">Reading »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.10.1 on <span class="colophon-date" title="Wednesday 6 August 2025 17:44">Wednesday 6 August 2025</span>. Using Julia version 1.11.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+query.update(&quot;positiontext&quot; =&gt; F(&quot;raceid__circuitid__country&quot;), show_query=true)
+┌ Info: UPDATE &quot;result&quot; AS &quot;Tb&quot;
+│ SET &quot;positiontext&quot; = &quot;Tb_2&quot;.&quot;country&quot;
+│ FROM &quot;race&quot; AS &quot;Tb_1&quot;, &quot;circuit&quot; AS &quot;Tb_2&quot;
+└ WHERE &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_1&quot;.&quot;raceid&quot; AND &quot;Tb_1&quot;.&quot;circuitid&quot; = &quot;Tb_2&quot;.&quot;circuitid&quot; AND &quot;Tb&quot;.&quot;resultid&quot; = $1</code></pre><hr/><p>This comprehensive guide covers all data writing operations in PormG. For more details on querying data, see the <a href="../read/">read.md</a> documentation. For field definitions and validation, refer to <a href="../fields/">fields.md</a>.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../migrations/">« Migrations</a><a class="docs-footer-nextpage" href="../read/">Reading »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Saturday 16 August 2025 13:22">Saturday 16 August 2025</span>. Using Julia version 1.11.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

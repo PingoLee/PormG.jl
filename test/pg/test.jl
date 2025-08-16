@@ -179,12 +179,14 @@ end
   # Update with complex JOINs
   query = M.Result |> object;
   query.filter("raceid__circuitid__name__@icontains" => "Monaco", "resultid" => 7654);
-  query.values("resultid", "statusid__status", "driverid__forename", "driverid__nationality", "points");
-  df = query |> DataFrame
+  query.values("resultid", "statusid__status", "driverid__forename", "driverid__nationality", "points");  
   query.update("points" => 11)
+  df = query |> DataFrame
   @test df[1, :points] == 11.0
   query.update("points" => F("points") - 1)
-  query.update("points" => 10, show_query=true)
+  df = query |> DataFrame
+  @test df[1, :points] == 10.0
+  # query.update("points" => 10, show_query=true)
 
 end
 
@@ -380,45 +382,40 @@ end
   query.create("name" => "fexpr", "test_result" => 2)
   query.create("name" => "fexpr", "test_result" => 3)
 
-  # Update a value with a F expression
   query.filter("test_result" => 1)
+
+  # Update a value with a F expression  
   query.update("test_result2" => F("test_result"))
   query2 = M.Just_a_test_deletion |> object
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 1
 
-  # F("test_result") + 1
-  query.filter("test_result" => 1)
+  # F("test_result") + 1 
   query.update("test_result2" => F("test_result") + 1)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 2
 
   # F("test_result2") * 2
-  query.filter("test_result" => 1)
   query.update("test_result2" => F("test_result2") * 2)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 4
 
   # F("test_result2") / 2
-  query.filter("test_result" => 1)
   query.update("test_result2" => F("test_result2") / 2)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 2
 
   # F("test_result") + F("test_result")
-  query.filter("test_result" => 1)
   query.update("test_result2" => F("test_result") + F("test_result"))
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 2
 
   # F("test_result2") - 1
-  query.filter("test_result" => 1)
   query.update("test_result2" => F("test_result2") - 1)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 1
 
   # Set to missing
-  query.filter("test_result" => 1)
   query.update("test_result2" => missing)
   df = query2 |> DataFrame
   @test ismissing(df[df.test_result .== 1, :test_result2][1])

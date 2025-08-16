@@ -18,6 +18,7 @@ makedocs(
         "Migrations" => "migrations.md",
         "Writing" => "write.md",
         "Reading" => "read.md",
+        "Import from Django" => "import_django.md",
         "API" => "api.md"
     ],
     format = Documenter.HTML(),

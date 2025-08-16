@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Reading · PormG Documentation</title><meta name="title" content="Reading · PormG Documentation"/><meta property="og:title" content="Reading · PormG Documentation"/><meta property="twitter:title" content="Reading · PormG Documentation"/><meta name="description" content="Documentation for PormG Documentation."/><meta property="og:description" content="Documentation for PormG Documentation."/><meta property="twitter:description" content="Documentation for PormG Documentation."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG Documentation</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li><li><a class="tocitem" href="../models/">Models</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../migrations/">Migrations</a></li><li><a class="tocitem" href="../write/">Writing</a></li><li class="is-active"><a class="tocitem" href>Reading</a><ul class="internal"><li><a class="tocitem" href="#Table-of-Contents"><span>Table of Contents</span></a></li><li><a class="tocitem" href="#Basic-Query-Operations"><span>Basic Query Operations</span></a></li><li><a class="tocitem" href="#Filtering-Data"><span>Filtering Data</span></a></li><li><a class="tocitem" href="#Value-Selection-and-Joins"><span>Value Selection and Joins</span></a></li><li><a class="tocitem" href="#Aggregations-and-Grouping"><span>Aggregations and Grouping</span></a></li><li><a class="tocitem" href="#Date-Operations"><span>Date Operations</span></a></li><li><a class="tocitem" href="#Subqueries"><span>Subqueries</span></a></li><li><a class="tocitem" href="#F-Expressions"><span>F Expressions</span></a></li><li><a class="tocitem" href="#Bulk-Operations"><span>Bulk Operations</span></a></li><li><a class="tocitem" href="#Data-Export-Formats"><span>Data Export Formats</span></a></li><li><a class="tocitem" href="#Advanced-Query-Patterns"><span>Advanced Query Patterns</span></a></li><li><a class="tocitem" href="#Performance-Tips"><span>Performance Tips</span></a></li><li><a class="tocitem" href="#Error-Handling"><span>Error Handling</span></a></li><li><a class="tocitem" href="#Summary-of-@-Syntax-Rules"><span>Summary of @ Syntax Rules</span></a></li></ul></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Reading</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Reading</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG/blob/main/docs/src/read.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Query-Examples-and-Search-Operations"><a class="docs-heading-anchor" href="#Query-Examples-and-Search-Operations">Query Examples and Search Operations</a><a id="Query-Examples-and-Search-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Query-Examples-and-Search-Operations" title="Permalink"></a></h1><p>This document provides comprehensive examples of how to perform various database operations using PormG.</p><h2 id="Table-of-Contents"><a class="docs-heading-anchor" href="#Table-of-Contents">Table of Contents</a><a id="Table-of-Contents-1"></a><a class="docs-heading-anchor-permalink" href="#Table-of-Contents" title="Permalink"></a></h2><ul><li><a href="#basic-query-operations">Basic Query Operations</a></li><li><a href="#filtering-data">Filtering Data</a></li><li><a href="#value-selection-and-joins">Value Selection and Joins</a></li><li><a href="#aggregations-and-grouping">Aggregations and Grouping</a></li><li><a href="#date-operations">Date Operations</a></li><li><a href="#subqueries">Subqueries</a></li><li><a href="#f-expressions">F Expressions</a></li><li><a href="#bulk-operations">Bulk Operations</a></li><li><a href="#data-export-formats">Data Export Formats</a></li></ul><h2 id="Basic-Query-Operations"><a class="docs-heading-anchor" href="#Basic-Query-Operations">Basic Query Operations</a><a id="Basic-Query-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Query-Operations" title="Permalink"></a></h2><h3 id="Simple-Filtering-and-Data-Retrieval"><a class="docs-heading-anchor" href="#Simple-Filtering-and-Data-Retrieval">Simple Filtering and Data Retrieval</a><a id="Simple-Filtering-and-Data-Retrieval-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Filtering-and-Data-Retrieval" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Basic filter by single field
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Reading · PormG Documentation</title><meta name="title" content="Reading · PormG Documentation"/><meta property="og:title" content="Reading · PormG Documentation"/><meta property="twitter:title" content="Reading · PormG Documentation"/><meta name="description" content="Documentation for PormG Documentation."/><meta property="og:description" content="Documentation for PormG Documentation."/><meta property="twitter:description" content="Documentation for PormG Documentation."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG Documentation</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li><li><a class="tocitem" href="../models/">Models</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../migrations/">Migrations</a></li><li><a class="tocitem" href="../write/">Writing</a></li><li class="is-active"><a class="tocitem" href>Reading</a><ul class="internal"><li><a class="tocitem" href="#Table-of-Contents"><span>Table of Contents</span></a></li><li><a class="tocitem" href="#Basic-Query-Operations"><span>Basic Query Operations</span></a></li><li><a class="tocitem" href="#Value-Selection-and-Joins"><span>Value Selection and Joins</span></a></li><li><a class="tocitem" href="#Filtering-Data"><span>Filtering Data</span></a></li><li><a class="tocitem" href="#Aggregations-and-Grouping"><span>Aggregations and Grouping</span></a></li><li><a class="tocitem" href="#Date-Operations"><span>Date Operations</span></a></li><li><a class="tocitem" href="#Subqueries"><span>Subqueries</span></a></li><li><a class="tocitem" href="#F-Expressions"><span>F Expressions</span></a></li><li><a class="tocitem" href="#Q-Object"><span>Q Object</span></a></li><li><a class="tocitem" href="#Data-Export-Formats"><span>Data Export Formats</span></a></li><li><a class="tocitem" href="#Advanced-Query-Patterns"><span>Advanced Query Patterns</span></a></li><li><a class="tocitem" href="#Summary-of-@-Syntax-Rules"><span>Summary of @ Syntax Rules</span></a></li></ul></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Reading</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Reading</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/read.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Query-Examples-and-Search-Operations"><a class="docs-heading-anchor" href="#Query-Examples-and-Search-Operations">Query Examples and Search Operations</a><a id="Query-Examples-and-Search-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Query-Examples-and-Search-Operations" title="Permalink"></a></h1><p>This document provides comprehensive examples of how to perform various database operations using PormG.</p><h2 id="Table-of-Contents"><a class="docs-heading-anchor" href="#Table-of-Contents">Table of Contents</a><a id="Table-of-Contents-1"></a><a class="docs-heading-anchor-permalink" href="#Table-of-Contents" title="Permalink"></a></h2><ul><li><a href="#basic-query-operations">Basic Query Operations</a></li><li><a href="#value-selection-and-joins">Value Selection and Joins</a></li><li><a href="#filtering-data">Filtering Data</a></li><li><a href="#aggregations-and-grouping">Aggregations and Grouping</a></li><li><a href="#date-operations">Date Operations</a></li><li><a href="#subqueries">Subqueries</a></li><li><a href="#f-expressions">F Expressions</a></li><li><a href="#q-object">Q Object</a></li><li><a href="#bulk-operations">Bulk Operations</a></li><li><a href="#data-export-formats">Data Export Formats</a></li></ul><h2 id="Basic-Query-Operations"><a class="docs-heading-anchor" href="#Basic-Query-Operations">Basic Query Operations</a><a id="Basic-Query-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Query-Operations" title="Permalink"></a></h2><h3 id="Simple-Filtering-and-Data-Retrieval"><a class="docs-heading-anchor" href="#Simple-Filtering-and-Data-Retrieval">Simple Filtering and Data Retrieval</a><a id="Simple-Filtering-and-Data-Retrieval-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Filtering-and-Data-Retrieval" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Basic filter by single field
 query = M.Status |&gt; object;
 query.filter(&quot;status&quot; =&gt; &quot;Engine&quot;);
 df = query |&gt; DataFrame
@@ -26,29 +26,157 @@ query = M.Status |&gt; object
 query.filter(&quot;status&quot; =&gt; &quot;Engine&quot;)
 sql = query |&gt; show_query
 @info sql
-# Returns the SQL query string without executing it</code></pre><h2 id="Filtering-Data"><a class="docs-heading-anchor" href="#Filtering-Data">Filtering Data</a><a id="Filtering-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Filtering-Data" title="Permalink"></a></h2><h3 id="How-to-Use-Functions-and-Operators-in-PormG"><a class="docs-heading-anchor" href="#How-to-Use-Functions-and-Operators-in-PormG">How to Use Functions and Operators in PormG</a><a id="How-to-Use-Functions-and-Operators-in-PormG-1"></a><a class="docs-heading-anchor-permalink" href="#How-to-Use-Functions-and-Operators-in-PormG" title="Permalink"></a></h3><p>PormG uses a special <code>@</code> prefix syntax to distinguish between field names and functions/operators:</p><h4 id="In-Filters-(WHERE-clauses):"><a class="docs-heading-anchor" href="#In-Filters-(WHERE-clauses):">In Filters (WHERE clauses):</a><a id="In-Filters-(WHERE-clauses):-1"></a><a class="docs-heading-anchor-permalink" href="#In-Filters-(WHERE-clauses):" title="Permalink"></a></h4><ul><li>Use <code>field__@operator</code> to apply operators to field values</li><li>Use <code>field__@function</code> to apply functions to field values before comparison</li></ul><h4 id="In-Values-(SELECT-clauses):"><a class="docs-heading-anchor" href="#In-Values-(SELECT-clauses):">In Values (SELECT clauses):</a><a id="In-Values-(SELECT-clauses):-1"></a><a class="docs-heading-anchor-permalink" href="#In-Values-(SELECT-clauses):" title="Permalink"></a></h4><ul><li>Use <code>field__@function</code> to apply functions to field values in the result set</li><li>Functions in values typically transform how the data is presented</li></ul><h4 id="Common-Operators-for-Filters:"><a class="docs-heading-anchor" href="#Common-Operators-for-Filters:">Common Operators for Filters:</a><a id="Common-Operators-for-Filters:-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Operators-for-Filters:" title="Permalink"></a></h4><ul><li><code>@lt</code>, <code>@lte</code>, <code>@gt</code>, <code>@gte</code> - Comparison operators (less than, less than or equal, etc.)</li><li><code>@in</code>, <code>@nin</code> - In and not-in operations for arrays</li><li><code>@contains</code>, <code>@icontains</code> - String containment (case-sensitive and case-insensitive)</li><li><code>@isnull</code> - Check for null values</li><li><code>@neq</code> - Not equal operator (≠) - <em>Note: Unlike Django ORM which has separate <code>.exclude()</code> method, PormG uses <code>@neq</code> in <code>.filter()</code> for &quot;not equal&quot; conditions</em></li></ul><h4 id="Common-Functions-for-Both-Filters-and-Values:"><a class="docs-heading-anchor" href="#Common-Functions-for-Both-Filters-and-Values:">Common Functions for Both Filters and Values:</a><a id="Common-Functions-for-Both-Filters-and-Values:-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Functions-for-Both-Filters-and-Values:" title="Permalink"></a></h4><ul><li><code>@year</code>, <code>@month</code>, <code>@day</code>, <code>@quarter</code> - Date component extraction</li><li><code>@date</code>, <code>@yyyy_mm</code> - Date formatting functions</li></ul><h4 id="Examples-of-@-Syntax-Usage:"><a class="docs-heading-anchor" href="#Examples-of-@-Syntax-Usage:">Examples of @ Syntax Usage:</a><a id="Examples-of-@-Syntax-Usage:-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-of-@-Syntax-Usage:" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Using functions in FILTERS (WHERE clause)
+# Returns the SQL query string without executing it</code></pre><h2 id="Value-Selection-and-Joins"><a class="docs-heading-anchor" href="#Value-Selection-and-Joins">Value Selection and Joins</a><a id="Value-Selection-and-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#Value-Selection-and-Joins" title="Permalink"></a></h2><h3 id="Basic-Field-Selection"><a class="docs-heading-anchor" href="#Basic-Field-Selection">Basic Field Selection</a><a id="Basic-Field-Selection-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Field-Selection" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Select specific fields
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Engine&quot;);
+query.values(&quot;resultid&quot;, &quot;statusid&quot;);
+df = query |&gt; DataFrame
+# Returns only the specified columns
+2026×2 DataFrame
+  Row │ resultid  statusid 
+      │ Int64?    Int64?   
+──────┼────────────────────
+    1 │        7         5
+    2 │        8         5
+    3 │       13         5
+    4 │       40         5
+  ⋮   │    ⋮         ⋮
+ 2024 │    26724         5
+ 2025 │    26761         5
+ 2026 │    26763         5</code></pre><h3 id="Joined-Field-Selection"><a class="docs-heading-anchor" href="#Joined-Field-Selection">Joined Field Selection</a><a id="Joined-Field-Selection-1"></a><a class="docs-heading-anchor-permalink" href="#Joined-Field-Selection" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Access related table fields through joins
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Engine&quot;);
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;constructorid__name&quot;, 
+             &quot;statusid__status&quot;, &quot;grid&quot;, &quot;laps&quot;);
+df = query |&gt; DataFrame
+# Automatically joins Driver, Constructor, and Status tables
+2026×6 DataFrame
+  Row │ resultid  driverid__forename  constructorid__name  statusid__status  grid    laps   
+      │ Int64?    String?             String?              String?           Int32?  Int32? 
+──────┼─────────────────────────────────────────────────────────────────────────────────────
+    1 │        7  Sébastien           Toro Rosso           Engine                17      55
+    2 │        8  Kimi                Ferrari              Engine                15      53
+    3 │       13  Felipe              Ferrari              Engine                 4      29
+    4 │       40  Sebastian           Toro Rosso           Engine                15      39
+  ⋮   │    ⋮              ⋮                    ⋮                  ⋮            ⋮       ⋮
+ 2024 │    26724  Pierre              Alpine F1 Team       Engine                 3      15
+ 2025 │    26761  Liam                RB F1 Team           Engine                12      55
+ 2026 │    26763  Franco              Williams             Engine                20      26</code></pre><h4 id="How-__-Creates-Joins"><a class="docs-heading-anchor" href="#How-__-Creates-Joins">How <code>__</code> Creates Joins</a><a id="How-__-Creates-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#How-__-Creates-Joins" title="Permalink"></a></h4><p>When PormG encounters <code>driverid__forename</code>, it:</p><ol><li><strong>Finds the foreign key</strong>: <code>driverid</code> in the Result model points to Driver table</li><li><strong>Creates a JOIN</strong>: <code>INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;</code>  </li><li><strong>Selects the field</strong>: <code>&quot;Tb_1&quot;.&quot;forename&quot;</code> from the joined Driver table</li></ol><pre><code class="language-sql hljs">-- Generated SQL for the above query
+SELECT 
+    &quot;Tb&quot;.&quot;resultid&quot; as resultid,
+    &quot;Tb_1&quot;.&quot;forename&quot; as driverid__forename,
+    &quot;Tb_2&quot;.&quot;name&quot; as constructorid__name,
+    &quot;Tb_3&quot;.&quot;status&quot; as statusid__status,
+    &quot;Tb&quot;.&quot;grid&quot; as grid,
+    &quot;Tb&quot;.&quot;laps&quot; as laps
+FROM &quot;result&quot; as &quot;Tb&quot;
+    INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+    INNER JOIN &quot;constructor&quot; AS &quot;Tb_2&quot; ON &quot;Tb&quot;.&quot;constructorid&quot; = &quot;Tb_2&quot;.&quot;constructorid&quot;  
+    INNER JOIN &quot;status&quot; AS &quot;Tb_3&quot; ON &quot;Tb&quot;.&quot;statusid&quot; = &quot;Tb_3&quot;.&quot;statusid&quot;
+WHERE &quot;Tb_3&quot;.&quot;status&quot; = $1</code></pre><h3 id="Reverse-Joins"><a class="docs-heading-anchor" href="#Reverse-Joins">Reverse Joins</a><a id="Reverse-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#Reverse-Joins" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Access child records from parent model
+query = M.Constructor |&gt; object;
+query.values(&quot;result__resultid&quot;);
+query.filter(&quot;result__resultid&quot; =&gt; 1);
+df = query |&gt; DataFrame
+# Returns constructor data with related result information
+1×1 DataFrame
+ Row │ result__resultid 
+     │ Int64?           
+─────┼──────────────────
+   1 │                1</code></pre><p>When PormG encounters <code>result__resultid</code>, it:</p><ol><li><strong>Finds the foreign key</strong>: <code>result</code> in the Constructor model points to Result table</li><li><strong>Creates a JOIN</strong>: <code>INNER JOIN &quot;result&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;resultid&quot; = &quot;Tb_1&quot;.&quot;resultid&quot;</code></li><li><strong>Selects the field</strong>: <code>&quot;Tb_1&quot;.&quot;resultid&quot;</code> from the joined Result table</li></ol><pre><code class="language-sql hljs">-- Generated SQL for the above query
+SELECT
+   &quot;Tb_1&quot;.&quot;resultid&quot; as result__resultid
+FROM &quot;constructor&quot; as &quot;Tb&quot;
+    INNER JOIN &quot;result&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;constructorid&quot; = &quot;Tb_1&quot;.&quot;constructorid&quot; 
+WHERE &quot;Tb_1&quot;.&quot;resultid&quot; = $1</code></pre><h3 id="Multi-Level-Joins"><a class="docs-heading-anchor" href="#Multi-Level-Joins">Multi-Level Joins</a><a id="Multi-Level-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Level-Joins" title="Permalink"></a></h3><p>The <code>__</code> operator can chain multiple relationships:</p><pre><code class="language-julia hljs"># Three-level relationship traversal
+query = M.Result |&gt; object
+query.filter(&quot;raceid__circuitid__country&quot; =&gt; &quot;Monaco&quot;)
+query.values(&quot;driverid__forename&quot;, &quot;raceid__circuitid__name&quot;, &quot;raceid__year&quot;)
+df = query |&gt; DataFrame</code></pre><pre><code class="language-sql hljs">-- Generated SQL shows the join chain
+SELECT 
+    &quot;Tb_1&quot;.&quot;forename&quot; as driverid__forename,
+    &quot;Tb_3&quot;.&quot;name&quot; as raceid__circuitid__name,
+    &quot;Tb_2&quot;.&quot;year&quot; as raceid__year
+FROM &quot;result&quot; as &quot;Tb&quot;
+INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+INNER JOIN &quot;race&quot; AS &quot;Tb_2&quot; ON &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_2&quot;.&quot;raceid&quot;
+INNER JOIN &quot;circuit&quot; AS &quot;Tb_3&quot; ON &quot;Tb_2&quot;.&quot;circuitid&quot; = &quot;Tb_3&quot;.&quot;circuitid&quot;
+WHERE &quot;Tb_3&quot;.&quot;country&quot; = $1</code></pre><h3 id="Join-Types"><a class="docs-heading-anchor" href="#Join-Types">Join Types</a><a id="Join-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Join-Types" title="Permalink"></a></h3><p>PormG automatically determines the appropriate join type based on field relationships:</p><ul><li><strong>INNER JOIN</strong>: Default for non-nullable foreign keys</li><li><strong>LEFT JOIN</strong>: Used for nullable foreign keys (when <code>null=true</code>)</li><li><strong>Join direction</strong>: Determined by foreign key direction</li></ul><p><strong>Note</strong>: For now, PormG does not support complex join conditions (e.g., using <code>AND</code>/<code>OR</code> within join clauses). And lack optimizations to choice the other types of joins.</p><h3 id="Common-Use-Cases"><a class="docs-heading-anchor" href="#Common-Use-Cases">Common Use Cases</a><a id="Common-Use-Cases-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Use-Cases" title="Permalink"></a></h3><h4 id="1.-Filtering-by-Related-Fields"><a class="docs-heading-anchor" href="#1.-Filtering-by-Related-Fields">1. Filtering by Related Fields</a><a id="1.-Filtering-by-Related-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Filtering-by-Related-Fields" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Filter results by driver nationality
+query = M.Result |&gt; object
+query.filter(&quot;driverid__nationality&quot; =&gt; &quot;British&quot;)</code></pre><h4 id="2.-Selecting-Related-Data"><a class="docs-heading-anchor" href="#2.-Selecting-Related-Data">2. Selecting Related Data</a><a id="2.-Selecting-Related-Data-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Selecting-Related-Data" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Get race results with driver and constructor info
+query = M.Result |&gt; object
+query.values(&quot;position&quot;, &quot;driverid__forename&quot;, &quot;driverid__surname&quot;, 
+             &quot;constructorid__name&quot;, &quot;raceid__name&quot;)</code></pre><h4 id="3.-Complex-Filtering-with-Multiple-Joins"><a class="docs-heading-anchor" href="#3.-Complex-Filtering-with-Multiple-Joins">3. Complex Filtering with Multiple Joins</a><a id="3.-Complex-Filtering-with-Multiple-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Complex-Filtering-with-Multiple-Joins" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Find results for British drivers at Monaco
+query = M.Result |&gt; object
+query.filter(
+    &quot;driverid__nationality&quot; =&gt; &quot;British&quot;,
+    &quot;raceid__circuitid__name__@icontains&quot; =&gt; &quot;monaco&quot;
+)</code></pre><h4 id="4.-Aggregations-Across-Joins"><a class="docs-heading-anchor" href="#4.-Aggregations-Across-Joins">4. Aggregations Across Joins</a><a id="4.-Aggregations-Across-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Aggregations-Across-Joins" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Count wins by constructor
+query = M.Result |&gt; object
+query.filter(&quot;position&quot; =&gt; 1)
+query.values(&quot;constructorid__name&quot;, &quot;wins&quot; =&gt; Count(&quot;resultid&quot;))</code></pre><h2 id="Filtering-Data"><a class="docs-heading-anchor" href="#Filtering-Data">Filtering Data</a><a id="Filtering-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Filtering-Data" title="Permalink"></a></h2><h3 id="How-to-Use-Functions-and-Operators-in-PormG"><a class="docs-heading-anchor" href="#How-to-Use-Functions-and-Operators-in-PormG">How to Use Functions and Operators in PormG</a><a id="How-to-Use-Functions-and-Operators-in-PormG-1"></a><a class="docs-heading-anchor-permalink" href="#How-to-Use-Functions-and-Operators-in-PormG" title="Permalink"></a></h3><p>PormG uses a special <code>@</code> prefix syntax to distinguish between field names and functions/operators:</p><h4 id="In-Filters-(WHERE-clauses):"><a class="docs-heading-anchor" href="#In-Filters-(WHERE-clauses):">In Filters (WHERE clauses):</a><a id="In-Filters-(WHERE-clauses):-1"></a><a class="docs-heading-anchor-permalink" href="#In-Filters-(WHERE-clauses):" title="Permalink"></a></h4><ul><li>Use <code>field__@operator</code> to apply operators to field values</li><li>Use <code>field__@function</code> to apply functions to field values before comparison</li></ul><h4 id="In-Values-(SELECT-clauses):"><a class="docs-heading-anchor" href="#In-Values-(SELECT-clauses):">In Values (SELECT clauses):</a><a id="In-Values-(SELECT-clauses):-1"></a><a class="docs-heading-anchor-permalink" href="#In-Values-(SELECT-clauses):" title="Permalink"></a></h4><ul><li>Use <code>field__@function</code> to apply functions to field values in the result set</li><li>Functions in values typically transform how the data is presented</li></ul><h4 id="Common-Operators-for-Filters:"><a class="docs-heading-anchor" href="#Common-Operators-for-Filters:">Common Operators for Filters:</a><a id="Common-Operators-for-Filters:-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Operators-for-Filters:" title="Permalink"></a></h4><ul><li><code>@lt</code>, <code>@lte</code>, <code>@gt</code>, <code>@gte</code> - Comparison operators (less than, less than or equal, etc.)</li><li><code>@in</code>, <code>@nin</code> - In and not-in operations for arrays</li><li><code>@contains</code>, <code>@icontains</code> - String containment (case-sensitive and case-insensitive)</li><li><code>@isnull</code> - Check for null values</li><li><code>@neq</code> - Not equal operator (≠) - <em>Note: Unlike Django ORM which has separate <code>.exclude()</code> method, PormG uses <code>@neq</code> in <code>.filter()</code> for &quot;not equal&quot; conditions</em></li></ul><h4 id="Common-Functions-for-Both-Filters-and-Values:"><a class="docs-heading-anchor" href="#Common-Functions-for-Both-Filters-and-Values:">Common Functions for Both Filters and Values:</a><a id="Common-Functions-for-Both-Filters-and-Values:-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Functions-for-Both-Filters-and-Values:" title="Permalink"></a></h4><ul><li><code>@year</code>, <code>@month</code>, <code>@day</code>, <code>@quarter</code>, <code>@quadrimester</code> - Date component extraction</li><li><code>@date</code>, <code>@yyyy_mm</code> - Date formatting functions</li></ul><h4 id="Examples-of-@-Syntax-Usage:"><a class="docs-heading-anchor" href="#Examples-of-@-Syntax-Usage:">Examples of @ Syntax Usage:</a><a id="Examples-of-@-Syntax-Usage:-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-of-@-Syntax-Usage:" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Using functions in FILTERS (WHERE clause)
 query = M.Race |&gt; object
-query.filter(&quot;date__@year&quot; =&gt; 1991)  # Filter where year equals 1991
-query.filter(&quot;name__@icontains&quot; =&gt; &quot;monaco&quot;)  # Filter where name contains &quot;monaco&quot;
-query.filter(&quot;position__@lt&quot; =&gt; 5)  # Filter where position is less than 5
+query.filter(&quot;date__@year&quot; =&gt; 2009)  # Filter where year equals 2009
+query.filter(&quot;name__@icontains&quot; =&gt; &quot;Malaysian&quot;)  # Filter where name contains &quot;Malaysian&quot;
+
+df = query |&gt; DataFrame
+1×18 DataFrame
+ Row │ raceid  fp2_date  time      sprint_date  quali_date  name                  fp3_time  round   fp1_date  fp2_time  year    date        url                                fp3_date  quali_time  circuitid  fp1_time  sprint_time 
+     │ Int64?  Date?     Time?     Date?        Date?       String?               Time?     Int32?  Date?     Time?     Int32?  Date?       String?                            Date?     Time?       Int64?     Time?     Time?       
+─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │      2  missing   09:00:00  missing      missing     Malaysian Grand Prix  missing        2  missing   missing     2009  2009-04-05  http://en.wikipedia.org/wiki/200…  missing   missing             2  missing   missing 
+
+# How you can see, each filter adds to the WHERE clause
+@info query |&gt; show_query
 
 # Using functions in VALUES (SELECT clause)  
 query.values(&quot;date__@year&quot;, &quot;date__@month&quot;)  # Select year and month components
-query.values(&quot;raceid&quot;, &quot;date__@quarter&quot;)  # Select raceid and quarter of the date
+df = query |&gt; DataFrame
+1×2 DataFrame
+ Row │ date__year  date__month 
+     │ Decimal?    Decimal?    
+─────┼─────────────────────────
+   1 │       2009            4
 
-# Using operators with aggregated fields in filters (HAVING clause)
-query.filter(&quot;count_laps__@gt&quot; =&gt; 50)  # Filter where count of laps &gt; 50 (HAVING clause)</code></pre><h4 id="Function-vs-Operator-Distinction:"><a class="docs-heading-anchor" href="#Function-vs-Operator-Distinction:">Function vs Operator Distinction:</a><a id="Function-vs-Operator-Distinction:-1"></a><a class="docs-heading-anchor-permalink" href="#Function-vs-Operator-Distinction:" title="Permalink"></a></h4><ul><li><strong>Functions</strong> transform the data: <code>date__@year</code> extracts the year from a date</li><li><strong>Operators</strong> compare values: <code>position__@lt</code> compares if position is less than a value</li><li><strong>Aggregation filters</strong> use operators on aggregated fields and create HAVING clauses</li></ul><h3 id="Basic-Comparisons"><a class="docs-heading-anchor" href="#Basic-Comparisons">Basic Comparisons</a><a id="Basic-Comparisons-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Comparisons" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Less than comparison
+# However, if you reapply values, the previous ones will be replaced
+query.values(&quot;raceid&quot;, &quot;date__@quarter&quot;)  # Select raceid and quarter of the date
+df = query |&gt; DataFrame
+1×2 DataFrame
+ Row │ raceid  date__quarter 
+     │ Int64?  String?       
+─────┼───────────────────────
+   1 │      2  2009-Q2</code></pre><h4 id="Function-vs-Operator-Distinction:"><a class="docs-heading-anchor" href="#Function-vs-Operator-Distinction:">Function vs Operator Distinction:</a><a id="Function-vs-Operator-Distinction:-1"></a><a class="docs-heading-anchor-permalink" href="#Function-vs-Operator-Distinction:" title="Permalink"></a></h4><ul><li><strong>Functions</strong> transform the data: <code>date__@year</code> extracts the year from a date</li><li><strong>Operators</strong> compare values: <code>position__@lt</code> compares if position is less than a value</li><li><strong>Aggregation filters</strong> use operators on aggregated fields and create HAVING clauses</li></ul><h3 id="Basic-Comparisons"><a class="docs-heading-anchor" href="#Basic-Comparisons">Basic Comparisons</a><a id="Basic-Comparisons-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Comparisons" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Less than comparison
 query = M.Result |&gt; object
 query.filter(&quot;positionorder__@lt&quot; =&gt; 3)
 df = query |&gt; DataFrame
-# Returns results where position order is less than 3</code></pre><h3 id="String-Operations"><a class="docs-heading-anchor" href="#String-Operations">String Operations</a><a id="String-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#String-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Case-sensitive contains
+# Returns results where position order is less than 3
+2262×18 DataFrame
+  Row │ fastestlapspeed  points    raceid  number  time         fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
+      │ Float64?         Float64?  Int64?  Int32?  String?      Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
+──────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    1 │         217.586       8.0      18       3  +5.478       00:01:27.739           2         2      58       3         1         2          41       5       5696094              2  2                         2
+    2 │         209.158      10.0      19       1  1:31:18.555  00:01:35.405           8         1      56       2         1        23          37       2       5478555              1  1                         6
+    3 │         208.033       8.0      19       4  +19.570      00:01:35.921           9         2      56       6         1        24          39       4       5498125              2  2                         2
+    4 │         208.153      10.0      20       2  1:31:06.970  00:01:33.6            13         1      57       3         1        45          38       2       5466970              1  1                         6
+  ⋮   │        ⋮            ⋮        ⋮       ⋮          ⋮             ⋮            ⋮         ⋮        ⋮       ⋮        ⋮         ⋮          ⋮         ⋮          ⋮              ⋮             ⋮              ⋮
+ 2260 │         217.429      25.0    1144       4  1:26:33.291  00:01:27.438         846         1      58       3         1     26745          52       1       5193291              1  1                         1
+ 2261 │         216.619      18.0    1144      55  +5.832       00:01:27.765         832         2      58       5         1     26746          55       3       5199123              2  2                         6
+ 2262 │         218.3        10.0      18      22  1:34:50.616  00:01:27.452           1         1      58       2         1         1          39       1       5690616              1  1                         1</code></pre><h3 id="String-Operations"><a class="docs-heading-anchor" href="#String-Operations">String Operations</a><a id="String-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#String-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Case-sensitive contains
 query = M.Result |&gt; object
 query.filter(&quot;raceid__circuitid__name__@contains&quot; =&gt; &quot;Monaco&quot;)
 count = query |&gt; do_count  # Returns: 1664
 
+query = M.Result |&gt; object
+query.filter(&quot;raceid__circuitid__name__@contains&quot; =&gt; &quot;monaco&quot;)
+count = query |&gt; do_count  # Returns: 0
+
 # Case-insensitive contains
 query = M.Result |&gt; object
 query.filter(&quot;raceid__circuitid__name__@icontains&quot; =&gt; &quot;monaco&quot;)
+count = query |&gt; do_count  # Returns: 1664
+
+query = M.Result |&gt; object
+query.filter(&quot;raceid__circuitid__name__@icontains&quot; =&gt; &quot;MONACO&quot;)
 count = query |&gt; do_count  # Returns: 1664</code></pre><h3 id="In-and-Not-In-Operations"><a class="docs-heading-anchor" href="#In-and-Not-In-Operations">In and Not In Operations</a><a id="In-and-Not-In-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#In-and-Not-In-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># In operation
 query = M.Result |&gt; object
 query.filter(&quot;raceid__circuitid__name__@in&quot; =&gt; [&quot;Circuit de Monaco&quot;, &quot;monaco&quot;])
@@ -76,45 +204,101 @@ query = M.Driver |&gt; object
 query.filter(&quot;nationality__@neq&quot; =&gt; &quot;British&quot;, &quot;nationality__@neq&quot; =&gt; &quot;German&quot;)
 # Note: This creates two separate conditions (both must be true)
 # Better approach for multiple exclusions:
-query.filter(&quot;nationality__@nin&quot; =&gt; [&quot;British&quot;, &quot;German&quot;])</code></pre><h2 id="Value-Selection-and-Joins"><a class="docs-heading-anchor" href="#Value-Selection-and-Joins">Value Selection and Joins</a><a id="Value-Selection-and-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#Value-Selection-and-Joins" title="Permalink"></a></h2><h3 id="Basic-Field-Selection"><a class="docs-heading-anchor" href="#Basic-Field-Selection">Basic Field Selection</a><a id="Basic-Field-Selection-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Field-Selection" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Select specific fields
-query = M.Result |&gt; object
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Engine&quot;)
-query.values(&quot;resultid&quot;, &quot;statusid&quot;, &quot;statusid__status&quot;)
-df = query |&gt; DataFrame
-# Returns only the specified columns</code></pre><h3 id="Joined-Field-Selection"><a class="docs-heading-anchor" href="#Joined-Field-Selection">Joined Field Selection</a><a id="Joined-Field-Selection-1"></a><a class="docs-heading-anchor-permalink" href="#Joined-Field-Selection" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Access related table fields through joins
-query = M.Result |&gt; object
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Engine&quot;)
-query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;constructorid__name&quot;, 
-             &quot;statusid__status&quot;, &quot;grid&quot;, &quot;laps&quot;)
-df = query |&gt; DataFrame
-# Automatically joins Driver, Constructor, and Status tables</code></pre><h3 id="Reverse-Joins"><a class="docs-heading-anchor" href="#Reverse-Joins">Reverse Joins</a><a id="Reverse-Joins-1"></a><a class="docs-heading-anchor-permalink" href="#Reverse-Joins" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Access child records from parent model
-query = M.Constructor |&gt; object
-query.values(&quot;result__resultid&quot;)
-query.filter(&quot;result__resultid&quot; =&gt; 1)
-df = query |&gt; DataFrame
-# Returns constructor data with related result information</code></pre><h2 id="Aggregations-and-Grouping"><a class="docs-heading-anchor" href="#Aggregations-and-Grouping">Aggregations and Grouping</a><a id="Aggregations-and-Grouping-1"></a><a class="docs-heading-anchor-permalink" href="#Aggregations-and-Grouping" title="Permalink"></a></h2><h3 id="Count,-Min,-Max-Aggregations"><a class="docs-heading-anchor" href="#Count,-Min,-Max-Aggregations">Count, Min, Max Aggregations</a><a id="Count,-Min,-Max-Aggregations-1"></a><a class="docs-heading-anchor-permalink" href="#Count,-Min,-Max-Aggregations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: Count, Max, Min
+query.filter(&quot;nationality__@nin&quot; =&gt; [&quot;British&quot;, &quot;German&quot;])</code></pre><h2 id="Aggregations-and-Grouping"><a class="docs-heading-anchor" href="#Aggregations-and-Grouping">Aggregations and Grouping</a><a id="Aggregations-and-Grouping-1"></a><a class="docs-heading-anchor-permalink" href="#Aggregations-and-Grouping" title="Permalink"></a></h2><h3 id="Count,-Min,-Max-Aggregations"><a class="docs-heading-anchor" href="#Count,-Min,-Max-Aggregations">Count, Min, Max Aggregations</a><a id="Count,-Min,-Max-Aggregations-1"></a><a class="docs-heading-anchor-permalink" href="#Count,-Min,-Max-Aggregations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: Count, Max, Min
 
-query = M.Result |&gt; object
+query = M.Result |&gt; object;
 query.values(&quot;statusid__status&quot;, &quot;raceid__circuitid__name&quot;, 
              &quot;driverid__forename&quot;, &quot;constructorid__name&quot;,
              &quot;count_grid&quot; =&gt; Count(&quot;grid&quot;), 
              &quot;max_grid&quot; =&gt; Max(&quot;grid&quot;), 
-             &quot;min_grid&quot; =&gt; Min(&quot;grid&quot;))
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;driverid__forename&quot; =&gt; &quot;Ayrton&quot;)
-query.order_by(&quot;raceid__circuitid__name&quot;)
+             &quot;min_grid&quot; =&gt; Min(&quot;grid&quot;));
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;driverid__forename&quot; =&gt; &quot;Ayrton&quot;);
+query.order_by(&quot;raceid__circuitid__name&quot;);
 df = query |&gt; DataFrame
-# Returns aggregated statistics grouped by the non-aggregated fields</code></pre><h3 id="Having-Clauses"><a class="docs-heading-anchor" href="#Having-Clauses">Having Clauses</a><a id="Having-Clauses-1"></a><a class="docs-heading-anchor-permalink" href="#Having-Clauses" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Filter on aggregated values
+# Returns aggregated statistics grouped by the non-aggregated fields
+39×7 DataFrame
+ Row │ statusid__status  raceid__circuitid__name        driverid__forename  constructorid__name  count_grid  max_grid  min_grid 
+     │ String?           String?                        String?             String?              Int64?      Int32?    Int32?   
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ Finished          Adelaide Street Circuit        Ayrton              McLaren                       3         1         1
+   2 │ Finished          Autódromo do Estoril           Ayrton              McLaren                       3         3         2
+   3 │ Finished          Autódromo do Estoril           Ayrton              Team Lotus                    1         1         1
+   4 │ Finished          Autódromo do Estoril           Ayrton              Toleman                       1         3         3
+  ⋮  │        ⋮                        ⋮                        ⋮                    ⋮               ⋮          ⋮         ⋮
+  37 │ Finished          Silverstone Circuit            Ayrton              McLaren                       2         3         2
+  38 │ Finished          Suzuka Circuit                 Ayrton              McLaren                       3         2         1
+  39 │ Finished          Suzuka Circuit                 Ayrton              Team Lotus                    1         7         7
+
+@info query |&gt; show_query
+┌ Info: SELECT
+│    &quot;Tb_1&quot;.&quot;status&quot; as statusid__status, 
+│   &quot;Tb_3&quot;.&quot;name&quot; as raceid__circuitid__name, 
+│   &quot;Tb_4&quot;.&quot;forename&quot; as driverid__forename, 
+│   &quot;Tb_5&quot;.&quot;name&quot; as constructorid__name, 
+│   COUNT(&quot;Tb&quot;.&quot;grid&quot;) as count_grid, 
+│   MAX(&quot;Tb&quot;.&quot;grid&quot;) as max_grid, 
+│   MIN(&quot;Tb&quot;.&quot;grid&quot;) as min_grid
+│ FROM &quot;result&quot; as &quot;Tb&quot;
+│  INNER JOIN &quot;status&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;statusid&quot; = &quot;Tb_1&quot;.&quot;statusid&quot; 
+│  INNER JOIN &quot;race&quot; AS &quot;Tb_2&quot; ON &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_2&quot;.&quot;raceid&quot; 
+│  INNER JOIN &quot;circuit&quot; AS &quot;Tb_3&quot; ON &quot;Tb_2&quot;.&quot;circuitid&quot; = &quot;Tb_3&quot;.&quot;circuitid&quot; 
+│  INNER JOIN &quot;driver&quot; AS &quot;Tb_4&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_4&quot;.&quot;driverid&quot; 
+│  INNER JOIN &quot;constructor&quot; AS &quot;Tb_5&quot; ON &quot;Tb&quot;.&quot;constructorid&quot; = &quot;Tb_5&quot;.&quot;constructorid&quot; 
+│ WHERE &quot;Tb_1&quot;.&quot;status&quot; = $1 AND 
+│    &quot;Tb_4&quot;.&quot;forename&quot; = $2
+│ GROUP BY 1, 2, 3, 4 
+└ ORDER BY &quot;Tb_3&quot;.&quot;name&quot; ASC</code></pre><h3 id="Having-Clauses"><a class="docs-heading-anchor" href="#Having-Clauses">Having Clauses</a><a id="Having-Clauses-1"></a><a class="docs-heading-anchor-permalink" href="#Having-Clauses" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Filter on aggregated values
 query = M.Result |&gt; object
 query.values(&quot;raceid__circuitid__name&quot;, &quot;driverid__forename&quot;, 
              &quot;constructorid__name&quot;, &quot;count_grid&quot; =&gt; Count(&quot;grid&quot;))
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;count_grid__@gt&quot; =&gt; 1)
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;count_grid__@lte&quot; =&gt; 3)
 df = query |&gt; DataFrame
-# Returns grouped results where count_grid is greater than 1</code></pre><h2 id="Date-Operations"><a class="docs-heading-anchor" href="#Date-Operations">Date Operations</a><a id="Date-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Date-Operations" title="Permalink"></a></h2><h3 id="Understanding-Date-Functions-vs-Operators"><a class="docs-heading-anchor" href="#Understanding-Date-Functions-vs-Operators">Understanding Date Functions vs Operators</a><a id="Understanding-Date-Functions-vs-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Date-Functions-vs-Operators" title="Permalink"></a></h3><p>Date operations in PormG demonstrate the difference between functions and operators clearly:</p><pre><code class="language-julia hljs"># FUNCTIONS in VALUES - Transform data for display
+# Returns grouped results where count_grid is less than or equal to 3
+4023×4 DataFrame
+  Row │ raceid__circuitid__name         driverid__forename      constructorid__name     count_grid 
+      │ Union{Missing, String}          Union{Missing, String}  Union{Missing, String}  Int64?     
+──────┼────────────────────────────────────────────────────────────────────────────────────────────
+    1 │ Shanghai International Circuit  Paul                    Force India                      3
+    2 │ Marina Bay Street Circuit       Fernando                Aston Martin                     1
+    3 │ Autodromo Nazionale di Monza    Emerson                 Team Lotus                       2
+    4 │ Hungaroring                     Giancarlo               Jordan                           1
+  ⋮   │               ⋮                           ⋮                       ⋮                 ⋮
+ 4021 │ Autodromo Nazionale di Monza    Vitaly                  Renault                          1
+ 4022 │ Red Bull Ring                   Jean-Pierre             Renault                          1
+ 4023 │ Miami International Autodrome   Daniel                  RB F1 Team                       1
+
+@info query |&gt; show_query 
+┌ Info: SELECT
+│    &quot;Tb_2&quot;.&quot;name&quot; as raceid__circuitid__name, 
+│   &quot;Tb_3&quot;.&quot;forename&quot; as driverid__forename, 
+│   &quot;Tb_4&quot;.&quot;name&quot; as constructorid__name, 
+│   COUNT(&quot;Tb&quot;.&quot;grid&quot;) as count_grid
+│ FROM &quot;result&quot; as &quot;Tb&quot;
+│  INNER JOIN &quot;race&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;raceid&quot; = &quot;Tb_1&quot;.&quot;raceid&quot; 
+│  INNER JOIN &quot;circuit&quot; AS &quot;Tb_2&quot; ON &quot;Tb_1&quot;.&quot;circuitid&quot; = &quot;Tb_2&quot;.&quot;circuitid&quot; 
+│  INNER JOIN &quot;driver&quot; AS &quot;Tb_3&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_3&quot;.&quot;driverid&quot; 
+│  INNER JOIN &quot;constructor&quot; AS &quot;Tb_4&quot; ON &quot;Tb&quot;.&quot;constructorid&quot; = &quot;Tb_4&quot;.&quot;constructorid&quot; 
+│  INNER JOIN &quot;status&quot; AS &quot;Tb_5&quot; ON &quot;Tb&quot;.&quot;statusid&quot; = &quot;Tb_5&quot;.&quot;statusid&quot; 
+│ WHERE &quot;Tb_5&quot;.&quot;status&quot; = $1
+│ GROUP BY 1, 2, 3 
+└ HAVING COUNT(&quot;Tb&quot;.&quot;grid&quot;) &lt;= 3
+</code></pre><h2 id="Date-Operations"><a class="docs-heading-anchor" href="#Date-Operations">Date Operations</a><a id="Date-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Date-Operations" title="Permalink"></a></h2><h3 id="Understanding-Date-Functions-vs-Operators"><a class="docs-heading-anchor" href="#Understanding-Date-Functions-vs-Operators">Understanding Date Functions vs Operators</a><a id="Understanding-Date-Functions-vs-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Date-Functions-vs-Operators" title="Permalink"></a></h3><p>Date operations in PormG demonstrate the difference between functions and operators clearly:</p><pre><code class="language-julia hljs"># FUNCTIONS in VALUES - Transform data for display
 query = M.Race |&gt; object
 query.values(&quot;raceid&quot;, &quot;date&quot;, &quot;date__@year&quot;, &quot;date__@month&quot;, &quot;date__@day&quot;)
 df = query |&gt; DataFrame
-# Returns: raceid | date | date__@year | date__@month | date__@day
-#          1      | 2023-03-12 | 2023 | 3 | 12
+# Returns:
+1125×5 DataFrame
+  Row │ raceid  date        date__year  date__month  date__day 
+      │ Int64?  Date?       Decimal?    Decimal?     Decimal?  
+──────┼────────────────────────────────────────────────────────
+    1 │      1  2009-03-29        2009            3         29
+    2 │      2  2009-04-05        2009            4          5
+    3 │      3  2009-04-19        2009            4         19
+    4 │      4  2009-04-26        2009            4         26
+  ⋮   │   ⋮         ⋮           ⋮            ⋮           ⋮
+ 1123 │   1142  2024-11-23        2024           11         23
+ 1124 │   1143  2024-12-01        2024           12          1
+ 1125 │   1144  2024-12-08        2024           12          8
 
 # OPERATORS in FILTERS - Compare transformed data
 query.filter(&quot;date__@year&quot; =&gt; 2023)  # WHERE EXTRACT(year FROM date) = 2023
@@ -124,7 +308,19 @@ query.filter(&quot;date__@year&quot; =&gt; 1991)
 query.values(&quot;date__@year&quot;, &quot;date__@month&quot;, &quot;date__@day&quot;, &quot;rows&quot; =&gt; Count(&quot;raceid&quot;))
 query.order_by(&quot;date__day&quot;)
 df = query |&gt; DataFrame
-# Returns races from 1991 with date components</code></pre><h3 id="Date-Format-Filtering"><a class="docs-heading-anchor" href="#Date-Format-Filtering">Date Format Filtering</a><a id="Date-Format-Filtering-1"></a><a class="docs-heading-anchor-permalink" href="#Date-Format-Filtering" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Filter by year-month format
+# Returns races from 1991 with date components
+16×4 DataFrame
+ Row │ date__year  date__month  date__day  rows   
+     │ Decimal?    Decimal?     Decimal?   Int64? 
+─────┼────────────────────────────────────────────
+   1 │       1991            6          2       1
+   2 │       1991           11          3       1
+   3 │       1991            7          7       1
+   4 │       1991            9          8       1
+  ⋮  │     ⋮            ⋮           ⋮        ⋮
+  14 │       1991            4         28       1
+  15 │       1991            7         28       1
+  16 │       1991            9         29       1</code></pre><h3 id="Date-Format-Filtering"><a class="docs-heading-anchor" href="#Date-Format-Filtering">Date Format Filtering</a><a id="Date-Format-Filtering-1"></a><a class="docs-heading-anchor-permalink" href="#Date-Format-Filtering" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Filter by year-month format
 query = M.Race |&gt; object
 query.filter(&quot;date__@yyyy_mm&quot; =&gt; &quot;1991-10&quot;)
 df = query |&gt; DataFrame
@@ -139,38 +335,158 @@ using Dates
 query = M.Race |&gt; object
 query.filter(&quot;date__@date&quot; =&gt; Date(1991, 10, 20))
 df = query |&gt; DataFrame</code></pre><h2 id="Subqueries"><a class="docs-heading-anchor" href="#Subqueries">Subqueries</a><a id="Subqueries-1"></a><a class="docs-heading-anchor-permalink" href="#Subqueries" title="Permalink"></a></h2><h3 id="Using-Subqueries-in-Filters"><a class="docs-heading-anchor" href="#Using-Subqueries-in-Filters">Using Subqueries in Filters</a><a id="Using-Subqueries-in-Filters-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Subqueries-in-Filters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create subquery
-subquery = M.Status |&gt; object
-subquery.filter(&quot;status&quot; =&gt; &quot;Engine&quot;)
-subquery.values(&quot;statusid&quot;)
+subquery = M.Status |&gt; object;
+subquery.filter(&quot;status&quot; =&gt; &quot;Engine&quot;);
+subquery.values(&quot;statusid&quot;);
 
 # Use subquery in main query
-query = M.Result |&gt; object
-query.filter(&quot;statusid__@in&quot; =&gt; subquery)
-query.values(&quot;resultid&quot;, &quot;statusid&quot;, &quot;statusid__status&quot;, &quot;grid&quot;, &quot;driverid&quot;)
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__@in&quot; =&gt; subquery);
+query.values(&quot;resultid&quot;, &quot;statusid&quot;, &quot;statusid__status&quot;, &quot;grid&quot;, &quot;driverid&quot;);
 df = query |&gt; DataFrame
-# Returns results where statusid is in the subquery results</code></pre><h3 id="Complex-Subquery-with-Additional-Filters"><a class="docs-heading-anchor" href="#Complex-Subquery-with-Additional-Filters">Complex Subquery with Additional Filters</a><a id="Complex-Subquery-with-Additional-Filters-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Subquery-with-Additional-Filters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Subquery with additional main query filters
-subquery = M.Status |&gt; object
-subquery.filter(&quot;status&quot; =&gt; &quot;Engine&quot;)
-subquery.values(&quot;statusid&quot;)
+# Returns results where statusid is in the subquery results
+2026×5 DataFrame
+  Row │ resultid  statusid  statusid__status  grid    driverid 
+      │ Int64?    Int64?    String?           Int32?  Int64?   
+──────┼────────────────────────────────────────────────────────
+    1 │        7         5  Engine                17         7
+    2 │        8         5  Engine                15         8
+    3 │       13         5  Engine                 4        13
+    4 │       40         5  Engine                15        20
+  ⋮   │    ⋮         ⋮             ⋮            ⋮        ⋮
+ 2024 │    26724         5  Engine                 3       842
+ 2025 │    26761         5  Engine                12       859
+ 2026 │    26763         5  Engine                20       861
 
-query = M.Result |&gt; object
+ @info query |&gt; show_query
+┌ Info: SELECT
+│    &quot;Tb&quot;.&quot;resultid&quot; as resultid, 
+│   &quot;Tb&quot;.&quot;statusid&quot; as statusid, 
+│   &quot;Tb_1&quot;.&quot;status&quot; as statusid__status, 
+│   &quot;Tb&quot;.&quot;grid&quot; as grid, 
+│   &quot;Tb&quot;.&quot;driverid&quot; as driverid
+│ FROM &quot;result&quot; as &quot;Tb&quot;
+│  INNER JOIN &quot;status&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;statusid&quot; = &quot;Tb_1&quot;.&quot;statusid&quot; 
+│ WHERE &quot;Tb&quot;.&quot;statusid&quot; in (SELECT
+│           &quot;R1&quot;.&quot;statusid&quot; as statusid
+│       FROM &quot;status&quot; as &quot;R1&quot;
+│ 
+│       WHERE &quot;R1&quot;.&quot;status&quot; = $1
+└ )</code></pre><h3 id="Complex-Subquery-with-Additional-Filters"><a class="docs-heading-anchor" href="#Complex-Subquery-with-Additional-Filters">Complex Subquery with Additional Filters</a><a id="Complex-Subquery-with-Additional-Filters-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Subquery-with-Additional-Filters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Subquery with additional main query filters
+subquery = M.Status |&gt; object;
+subquery.filter(&quot;status&quot; =&gt; &quot;Engine&quot;);
+subquery.values(&quot;statusid&quot;);
+
+query = M.Result |&gt; object;
 query.filter(&quot;statusid__@in&quot; =&gt; subquery, &quot;driverid__@lte&quot; =&gt; 7)
 query.values(&quot;resultid&quot;, &quot;statusid&quot;, &quot;statusid__status&quot;, &quot;grid&quot;, &quot;driverid&quot;, 
-             &quot;raceid__date__@quarter&quot;)
-query.order_by(&quot;raceid__date__quarter&quot;)
-count = query |&gt; do_count  # Returns: 40</code></pre><h2 id="F-Expressions"><a class="docs-heading-anchor" href="#F-Expressions">F Expressions</a><a id="F-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions" title="Permalink"></a></h2><h3 id="Field-Comparisons"><a class="docs-heading-anchor" href="#Field-Comparisons">Field Comparisons</a><a id="Field-Comparisons-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Comparisons" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: F, Q
+             &quot;raceid__date__@quarter&quot;);
+query.order_by(&quot;raceid__date__quarter&quot;);
+count = query |&gt; do_count  # Returns: 40
+df = query |&gt; DataFrame
+# Returns results where statusid is in the subquery and driverid is less than or equal to 7
+40×6 DataFrame
+ Row │ resultid  statusid  statusid__status  grid    driverid  raceid__date__quarter 
+     │ Int64?    Int64?    String?           Int32?  Int64?    String?               
+─────┼───────────────────────────────────────────────────────────────────────────────
+   1 │     2971         5  Engine                19         2  2000-Q1
+   2 │     3103         5  Engine                21         2  2000-Q2
+   3 │     3014         5  Engine                17         2  2000-Q2
+   4 │     3213         5  Engine                14         2  2000-Q3
+  ⋮  │    ⋮         ⋮             ⋮            ⋮        ⋮                ⋮
+  38 │    25743         5  Engine                 5         4  2022-Q4
+  39 │    25804         5  Engine                 9         4  2022-Q4
+  40 │    26343         5  Engine                11         1  2024-Q1</code></pre><h2 id="F-Expressions"><a class="docs-heading-anchor" href="#F-Expressions">F Expressions</a><a id="F-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions" title="Permalink"></a></h2><h3 id="Field-Comparisons"><a class="docs-heading-anchor" href="#Field-Comparisons">Field Comparisons</a><a id="Field-Comparisons-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Comparisons" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: F, Q
 
 # Compare fields from different tables
-query = M.Result |&gt; object
+query = M.Result |&gt; object;
 query.filter(F(&quot;driverid__dob__@day&quot;) == F(&quot;raceid__date__@day&quot;), 
              F(&quot;driverid__dob__@month&quot;) == F(&quot;raceid__date__@month&quot;), 
-             &quot;min_grid__@gt&quot; =&gt; 0)
-query.values(&quot;raceid__circuitid__name&quot;, &quot;raceid__date&quot;, &quot;driverid__forename&quot;, 
+             &quot;min_grid__@gt&quot; =&gt; 0);
+query.values(&quot;raceid__circuitid__name&quot;, &quot;raceid__date&quot;, &quot;driverid__dob&quot;, &quot;driverid__forename&quot;, 
              &quot;constructorid__name&quot;, &quot;count_grid&quot; =&gt; Count(&quot;grid&quot;), 
-             &quot;max_grid&quot; =&gt; Max(&quot;grid&quot;), &quot;min_grid&quot; =&gt; Min(&quot;grid&quot;))
-query.order_by(&quot;min_grid&quot;, &quot;-raceid__date&quot;)
+             &quot;max_grid&quot; =&gt; Max(&quot;grid&quot;), &quot;min_grid&quot; =&gt; Min(&quot;grid&quot;));
+query.order_by(&quot;min_grid&quot;, &quot;-raceid__date&quot;);
 df = query |&gt; DataFrame
-# Returns results where driver&#39;s birthday day/month matches race date</code></pre><h3 id="Complex-F-Expressions-with-Case/When"><a class="docs-heading-anchor" href="#Complex-F-Expressions-with-Case/When">Complex F Expressions with Case/When</a><a id="Complex-F-Expressions-with-Case/When-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-F-Expressions-with-Case/When" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: Sum, Case, When
+# Returns results where driver&#39;s birthday day/month matches race date
+75×8 DataFrame
+ Row │ raceid__circuitid__name        raceid__date  driverid__dob  driverid__forename      constructorid__name     count_grid  max_grid  min_grid 
+     │ Union{Missing, String}         Date?         Date?          Union{Missing, String}  Union{Missing, String}  Int64?      Int32?    Int32?   
+─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ Nürburgring                    1997-09-28    1968-09-28     Mika                    McLaren                          1         1         1
+   2 │ Circuit de Spa-Francorchamps   1995-08-27    1959-08-27     Gerhard                 Ferrari                          1         1         1
+   3 │ Circuit de Monaco              1991-05-12    1963-05-12     Stefano                 Tyrrell                          1         2         2
+   4 │ Circuit Park Zandvoort         1976-08-29    1947-08-29     James                   McLaren                          1         2         2
+  ⋮  │               ⋮                     ⋮              ⋮                  ⋮                       ⋮                 ⋮          ⋮         ⋮
+  73 │ Indianapolis Motor Speedway    1959-05-30    1926-05-30     Chuck                   Kurtis Kraft                     1        21        21
+  74 │ Nürburgring                    1995-10-01    1963-10-01     Jean-Denis              Pacific                          1        24        24
+  75 │ Watkins Glen                   1971-10-03    1941-10-03     Andrea                  March-Alfa Romeo                 1        26        26</code></pre><h3 id="F-Expressions-in-Filters"><a class="docs-heading-anchor" href="#F-Expressions-in-Filters">F Expressions in Filters</a><a id="F-Expressions-in-Filters-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions-in-Filters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Compare fields within the same record
+query = M.Race |&gt; object
+query.filter(F(&quot;fp1_date&quot;) &lt;= F(&quot;date&quot;))
+
+df = query |&gt; DataFrame
+90×18 DataFrame
+ Row │ raceid  fp2_date    time      sprint_date  quali_date  name                       fp3_time  round   fp1_date    fp2_time  year    date        url                                fp3_date    quali_time  circuitid  fp1_time  sprint_time 
+     │ Int64?  Date?       Time?     Date?        Date?       String?                    Time?     Int32?  Date?       Time?     Int32?  Date?       String?                            Date?       Time?       Int64?     Time?     Time?       
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │   1053  2021-04-16  13:00:00  missing      2021-04-17  Emilia Romagna Grand Prix  missing        2  2021-04-16  missing     2021  2021-04-18  http://en.wikipedia.org/wiki/202…  2021-04-17  missing            21  missing   missing     
+   2 │   1074  2022-03-18  15:00:00  missing      2022-03-19  Bahrain Grand Prix         12:00:00       1  2022-03-18  15:00:00    2022  2022-03-20  http://en.wikipedia.org/wiki/202…  2022-03-19  15:00:00            3  12:00:00  missing     
+   3 │   1052  2021-03-26  15:00:00  missing      2021-03-27  Bahrain Grand Prix         missing        1  2021-03-26  missing     2021  2021-03-28  http://en.wikipedia.org/wiki/202…  2021-03-27  missing             3  missing   missing     
+   4 │   1051  2021-11-19  14:00:00  missing      2021-11-20  Qatar Grand Prix           missing       20  2021-11-19  missing     2021  2021-11-21  http://en.wikipedia.org/wiki/202…  2021-11-20  missing            78  missing   missing     
+  ⋮  │   ⋮         ⋮          ⋮           ⋮           ⋮                   ⋮                 ⋮        ⋮         ⋮          ⋮        ⋮         ⋮                       ⋮                      ⋮           ⋮           ⋮         ⋮           ⋮
+  88 │   1142  2024-11-21  06:00:00  missing      2024-11-22  Las Vegas Grand Prix       02:30:00      22  2024-11-21  06:00:00    2024  2024-11-23  https://en.wikipedia.org/wiki/20…  2024-11-22  06:00:00           80  02:30:00  missing     
+  89 │   1143  2024-11-29  17:00:00  2024-11-30   2024-11-30  Qatar Grand Prix           missing       23  2024-11-29  17:30:00    2024  2024-12-01  https://en.wikipedia.org/wiki/20…  missing     17:00:00           78  13:30:00  13:00:00
+  90 │   1144  2024-12-06  13:00:00  missing      2024-12-07  Abu Dhabi Grand Prix       10:30:00      24  2024-12-06  13:00:00    2024  2024-12-08  https://en.wikipedia.org/wiki/20…  2024-12-07  14:00:00           24  09:30:00  missing   
+
+# Use F expressions with other operators
+query = M.Result |&gt; object
+query.filter(F(&quot;position&quot;) == F(&quot;rank&quot;))
+df = query |&gt; DataFrame
+929×18 DataFrame
+ Row │ fastestlapspeed  points    raceid  number  time         fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
+     │ Float64?         Float64?  Int64?  Int32?  String?      Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │         204.323       6.0      21       1  +4.187       00:01:22.017           1         3      66       3         1        69          20       5       5902238              3  3                         1
+   2 │         222.085       8.0      22       1  +3.779       00:01:26.529           1         2      58       2         1        90          31       3       5212230              2  2                         1
+   3 │         197.285       8.0      29       1  +5.611       00:01:38.884           1         2      57       2         1       230          16       2       5736950              2  2                         1
+   4 │         203.722      10.0      34       1  1:31:57.403  00:01:36.325           1         1      56       1         1       329          13       1       5516403              1  1                         1
+  ⋮  │        ⋮            ⋮        ⋮       ⋮          ⋮             ⋮            ⋮         ⋮        ⋮       ⋮        ⋮         ⋮          ⋮         ⋮          ⋮              ⋮             ⋮              ⋮
+ 927 │         233.167       6.0    1143      14  +19.867      00:01:23.667           4         7      57       7         1     26731          57       8       5484190              7  7                       117
+ 928 │         216.619       8.0    1144       1  +49.847      00:01:27.765         830         6      58       6         1     26750          56       4       5242138              6  6                         9
+ 929 │         233.803      18.0    1142       1  +7.313       00:01:35.48            1         2      50       2         1     26706          41      10       4932282              2  2                       131</code></pre><h3 id="F-Expressions-in-Annotations"><a class="docs-heading-anchor" href="#F-Expressions-in-Annotations">F Expressions in Annotations</a><a id="F-Expressions-in-Annotations-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expressions-in-Annotations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Calculate values in SELECT
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;driverid__forename&quot; =&gt; &quot;Mika&quot;);
+query.values(
+    &quot;driverid__forename&quot;,
+    &quot;points&quot;,
+    &quot;bonus_points&quot; =&gt; F(&quot;points&quot;) * 0.1,
+    &quot;total_points&quot; =&gt; F(&quot;points&quot;) + (F(&quot;points&quot;) * 0.1)
+)
+df = query |&gt; DataFrame
+84×4 DataFrame
+ Row │ driverid__forename  points    bonus_points  total_points 
+     │ String?             Float64?  Float64?      Float64?     
+─────┼──────────────────────────────────────────────────────────
+   1 │ Mika                     1.0           0.1           1.1
+   2 │ Mika                     3.0           0.3           3.3
+   3 │ Mika                     4.0           0.4           4.4
+   4 │ Mika                     1.0           0.1           1.1
+  ⋮  │         ⋮              ⋮           ⋮             ⋮
+  82 │ Mika                     3.0           0.3           3.3
+  83 │ Mika                     0.0           0.0           0.0
+  84 │ Mika                     0.0           0.0           0.0
+
+@info query |&gt; show_query
+┌ Info: SELECT
+│    &quot;Tb_1&quot;.&quot;forename&quot; as driverid__forename, 
+│   &quot;Tb&quot;.&quot;points&quot; as points, 
+│   (&quot;Tb&quot;.&quot;points&quot; * $1) as bonus_points, 
+│   (&quot;Tb&quot;.&quot;points&quot; + (&quot;Tb&quot;.&quot;points&quot; * $2)) as total_points
+│ FROM &quot;result&quot; as &quot;Tb&quot;
+│  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot; 
+│  INNER JOIN &quot;status&quot; AS &quot;Tb_2&quot; ON &quot;Tb&quot;.&quot;statusid&quot; = &quot;Tb_2&quot;.&quot;statusid&quot; 
+│ WHERE &quot;Tb_2&quot;.&quot;status&quot; = $3 AND 
+└    &quot;Tb_1&quot;.&quot;forename&quot; = $4</code></pre><h3 id="Complex-F-Expressions-with-Case/When"><a class="docs-heading-anchor" href="#Complex-F-Expressions-with-Case/When">Complex F Expressions with Case/When</a><a id="Complex-F-Expressions-with-Case/When-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-F-Expressions-with-Case/When" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: Sum, Case, When
 
 query = M.Result |&gt; object
 query.filter(&quot;driverid__forename&quot; =&gt; &quot;Mika&quot;)
@@ -178,82 +494,240 @@ query.values(&quot;raceid__circuitid__name&quot;,
              &quot;until_30_years&quot; =&gt; Sum(Case(When(Q(F(&quot;raceid__date&quot;) &lt;= F(&quot;driverid__dob&quot;) + 10950), 
                                               then=1), default=0)))
 df = query |&gt; DataFrame
-# Complex calculation using F expressions with Case/When logic</code></pre><h2 id="Bulk-Operations"><a class="docs-heading-anchor" href="#Bulk-Operations">Bulk Operations</a><a id="Bulk-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Operations" title="Permalink"></a></h2><h3 id="Bulk-Insert"><a class="docs-heading-anchor" href="#Bulk-Insert">Bulk Insert</a><a id="Bulk-Insert-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Insert" title="Permalink"></a></h3><pre><code class="language-julia hljs">using CSV, DataFrames
+# Complex calculation using F expressions with Case/When logic
+25×2 DataFrame
+ Row │ raceid__circuitid__name         until_30_years 
+     │ Union{Missing, String}          Int64?         
+─────┼────────────────────────────────────────────────
+   1 │ Adelaide Street Circuit                      7
+   2 │ Albert Park Grand Prix Circuit               4
+   3 │ Autódromo do Estoril                         8
+   4 │ Autodromo Enzo e Dino Ferrari                9
+  ⋮  │               ⋮                       ⋮
+  23 │ Sepang International Circuit                 0
+  24 │ Silverstone Circuit                          9
+  25 │ Suzuka Circuit                              10
+  </code></pre><h2 id="Q-Object"><a class="docs-heading-anchor" href="#Q-Object">Q Object</a><a id="Q-Object-1"></a><a class="docs-heading-anchor-permalink" href="#Q-Object" title="Permalink"></a></h2><p>Q objects in PormG provide a way to create complex query conditions using logical operators (<code>AND</code>, <code>OR</code>). They are similar to Django&#39;s Q objects and allow you to build sophisticated filtering logic that goes beyond simple field-value pairs.</p><h3 id="Basic-Q-Usage"><a class="docs-heading-anchor" href="#Basic-Q-Usage">Basic Q Usage</a><a id="Basic-Q-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Q-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: Q, Qor
 
-# Basic bulk insert
-query = M.Circuit |&gt; object
-df = CSV.File(&quot;circuits.csv&quot;) |&gt; DataFrame
-bulk_insert(query, df)
-
-# Bulk insert with column mapping
-query = M.Driver |&gt; object
-df = CSV.File(&quot;drivers.csv&quot;) |&gt; DataFrame
-# Handle missing values
-for col in [:number]
-    df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, df[!, col])
-end
-bulk_insert(query, df)</code></pre><h3 id="Bulk-Update"><a class="docs-heading-anchor" href="#Bulk-Update">Bulk Update</a><a id="Bulk-Update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Bulk update with filters
-query = M.Just_a_test_deletion |&gt; object
+# Simple Q expression (equivalent to regular filter)
+query = M.Result |&gt; object;
+query.filter(Q(&quot;driverid__forename&quot; =&gt; &quot;Lewis&quot;, &quot;statusid__status&quot; =&gt; &quot;Finished&quot;));
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
+df = query |&gt; DataFrame
+# Same as: query.filter(&quot;driverid__forename&quot; =&gt; &quot;Lewis&quot;, &quot;statusid__status&quot; =&gt; &quot;Finished&quot;)</code></pre><h3 id="OR-Logic-with-Qor"><a class="docs-heading-anchor" href="#OR-Logic-with-Qor">OR Logic with Qor</a><a id="OR-Logic-with-Qor-1"></a><a class="docs-heading-anchor-permalink" href="#OR-Logic-with-Qor" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Find results where driver is either Lewis or Sebastian
+query = M.Result |&gt; object
+query.filter(Qor(&quot;driverid__forename&quot; =&gt; &quot;Lewis&quot;, &quot;driverid__forename&quot; =&gt; &quot;Sebastian&quot;))
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
 df = query |&gt; DataFrame
 
-# Modify data
-for (index, row) in enumerate(eachrow(df))
-    row.name = &quot;test_update_$(index)&quot;
-end
+656×3 DataFrame
+ Row │ resultid  driverid__forename  statusid__status 
+     │ Int64?    String?             String?          
+─────┼────────────────────────────────────────────────
+   1 │       27  Lewis               Finished
+   2 │       57  Lewis               +1 Lap
+   3 │       69  Lewis               Finished
+   4 │       90  Lewis               Finished
+  ⋮  │    ⋮              ⋮                  ⋮
+ 654 │    25799  Sebastian           +1 Lap
+ 655 │    25816  Sebastian           Finished
+ 656 │    25835  Sebastian           Finished
 
-# Update with specific columns and filters
-bulk_update(query, df, columns=[&quot;name&quot;], filters=[&quot;id&quot;])
+# Multiple OR conditions
+query = M.Result |&gt; object;
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
+query.filter(Qor(
+    &quot;statusid__status&quot; =&gt; &quot;Finished&quot;,
+    &quot;statusid__status&quot; =&gt; &quot;Engine&quot;, 
+    &quot;statusid__status&quot; =&gt; &quot;+1 Lap&quot;
+));
+df = query |&gt; DataFrame
 
-# Bulk update with static filters
-bulk_update(query, df, columns=[&quot;name&quot;], filters=[&quot;id&quot;, &quot;test_result&quot; =&gt; 1])</code></pre><h3 id="F-Expression-Updates"><a class="docs-heading-anchor" href="#F-Expression-Updates">F Expression Updates</a><a id="F-Expression-Updates-1"></a><a class="docs-heading-anchor-permalink" href="#F-Expression-Updates" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Update using F expressions
-query = M.Just_a_test_deletion |&gt; object
-query.filter(&quot;test_result&quot; =&gt; 1)
+13737×3 DataFrame
+   Row │ resultid  driverid__forename  statusid__status 
+       │ Int64?    String?             String?          
+───────┼────────────────────────────────────────────────
+     1 │        2  Nick                Finished
+     2 │        3  Nico                Finished
+     3 │        4  Fernando            Finished
+     4 │        5  Heikki              Finished
+   ⋮   │    ⋮              ⋮                  ⋮
+ 13735 │    26761  Liam                Engine
+ 13736 │    26763  Franco              Engine
+ 13737 │        1  Lewis               Finished</code></pre><h3 id="Complex-AND/OR-Combinations"><a class="docs-heading-anchor" href="#Complex-AND/OR-Combinations">Complex AND/OR Combinations</a><a id="Complex-AND/OR-Combinations-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-AND/OR-Combinations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Combine Q and Qor for complex logic
+# Find British drivers who either finished or had engine problems
+query = M.Result |&gt; object;
+query.filter(
+    Q(&quot;driverid__nationality&quot; =&gt; &quot;British&quot;),  # AND condition
+    Qor(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;statusid__status&quot; =&gt; &quot;Engine&quot;)  # OR condition
+);
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
+df = query |&gt; DataFrame
 
-# Simple F expression
-query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result&quot;))
-
-# Arithmetic operations
-query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result&quot;) + 1)
-query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result2&quot;) * 2)
-query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result2&quot;) / 2)
-query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result&quot;) + F(&quot;test_result&quot;))
-query.update(&quot;test_result2&quot; =&gt; F(&quot;test_result2&quot;) - 1)
-
-# Set to missing
-query.update(&quot;test_result2&quot; =&gt; missing)</code></pre><h2 id="Data-Export-Formats"><a class="docs-heading-anchor" href="#Data-Export-Formats">Data Export Formats</a><a id="Data-Export-Formats-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Export-Formats" title="Permalink"></a></h2><h3 id="DataFrame-Export"><a class="docs-heading-anchor" href="#DataFrame-Export">DataFrame Export</a><a id="DataFrame-Export-1"></a><a class="docs-heading-anchor-permalink" href="#DataFrame-Export" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Export as DataFrame for analysis
+# Equivalent SQL: WHERE nationality = &#39;British&#39; AND (status = &#39;Finished&#39; OR status = &#39;Engine&#39;)
+1783×3 DataFrame
+  Row │ resultid  driverid__forename  statusid__status 
+      │ Int64?    String?             String?          
+──────┼────────────────────────────────────────────────
+    1 │       27  Lewis               Finished
+    2 │       31  David               Finished
+    3 │       32  Jenson              Finished
+    4 │       69  Lewis               Finished
+  ⋮   │    ⋮              ⋮                  ⋮
+ 1781 │    25124  George              Engine
+ 1782 │    25903  George              Engine
+ 1783 │    26343  Lewis               Engine</code></pre><h3 id="Nested-Q-Expressions"><a class="docs-heading-anchor" href="#Nested-Q-Expressions">Nested Q Expressions</a><a id="Nested-Q-Expressions-1"></a><a class="docs-heading-anchor-permalink" href="#Nested-Q-Expressions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Complex nested conditions
+query = M.Result |&gt; object;
+query.filter(Q(
+    &quot;raceid__year__@gte&quot; =&gt; 2000,  # After year 2000
+    Qor(  # AND (condition1 OR condition2)
+        Q(&quot;driverid__forename&quot; =&gt; &quot;Michael&quot;, &quot;driverid__surname&quot; =&gt; &quot;Schumacher&quot;),
+        Q(&quot;driverid__forename&quot; =&gt; &quot;Lewis&quot;, &quot;driverid__surname&quot; =&gt; &quot;Hamilton&quot;)
+    )
+));
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
+# Equivalent SQL: 
+# WHERE year &gt;= 2000 AND 
+#   ((forename = &#39;Michael&#39; AND surname = &#39;Schumacher&#39;) OR 
+#    (forename = &#39;Lewis&#39; AND surname = &#39;Hamilton&#39;))</code></pre><h3 id="Q-in-Complex-Filtering-Scenarios"><a class="docs-heading-anchor" href="#Q-in-Complex-Filtering-Scenarios">Q in Complex Filtering Scenarios</a><a id="Q-in-Complex-Filtering-Scenarios-1"></a><a class="docs-heading-anchor-permalink" href="#Q-in-Complex-Filtering-Scenarios" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Example: Find race results with specific criteria
 query = M.Result |&gt; object
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;)
-query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;constructorid__name&quot;)
+query.filter(Q(
+    &quot;raceid__circuitid__country__@in&quot; =&gt; [&quot;Monaco&quot;, &quot;Italy&quot;, &quot;United Kingdom&quot;],
+    Qor(
+        Q(&quot;position__@lte&quot; =&gt; 3, &quot;statusid__status&quot; =&gt; &quot;Finished&quot;),  # Podium finishers
+        Q(&quot;fastestlap__@isnull&quot; =&gt; false, &quot;rank&quot; =&gt; 1)              # OR fastest lap holders
+    )
+))
+query.values(
+    &quot;raceid__name&quot;, 
+    &quot;driverid__forename&quot;, 
+    &quot;driverid__surname&quot;,
+    &quot;position&quot;, 
+    &quot;statusid__status&quot;,
+    &quot;fastestlap&quot;,
+    &quot;rank&quot;
+)
+df = query |&gt; DataFrame
+523×7 DataFrame
+ Row │ raceid__name               driverid__forename  driverid__surname  position  statusid__status  fastestlap  rank   
+     │ String?                    String?             String?            Int32?    String?           Int32?      Int32? 
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ Monaco Grand Prix          Jenson              Button                    1  Finished                  49       2
+   2 │ Monaco Grand Prix          Rubens              Barrichello               2  Finished                  46       7
+   3 │ Monaco Grand Prix          Kimi                Räikkönen                 3  Finished                  47       5
+   4 │ Monaco Grand Prix          Felipe              Massa                     4  Finished                  50       1
+  ⋮  │             ⋮                      ⋮                   ⋮             ⋮             ⋮              ⋮         ⋮
+ 521 │ Italian Grand Prix         Charles             Leclerc                   1  Finished                  33      10
+ 522 │ Italian Grand Prix         Oscar               Piastri                   2  Finished                  53       4
+ 523 │ Italian Grand Prix         Lando               Norris                    3  Finished                  53       1</code></pre><p>&lt;!– </p><h3 id="Q-with-Aggregations-and-HAVING"><a class="docs-heading-anchor" href="#Q-with-Aggregations-and-HAVING">Q with Aggregations and HAVING</a><a id="Q-with-Aggregations-and-HAVING-1"></a><a class="docs-heading-anchor-permalink" href="#Q-with-Aggregations-and-HAVING" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Use Q expressions in HAVING clauses
+query = M.Result |&gt; object
+query.values(
+    &quot;driverid__forename&quot;,
+    &quot;driverid__surname&quot;, 
+    &quot;race_count&quot; =&gt; Count(&quot;raceid&quot;),
+    &quot;avg_position&quot; =&gt; Avg(&quot;position&quot;)
+)
+query.filter(Q(
+    &quot;statusid__status&quot; =&gt; &quot;Finished&quot;,
+    &quot;race_count__@gte&quot; =&gt; 10,  # At least 10 races
+    Qor(
+        &quot;avg_position__@lte&quot; =&gt; 5.0,  # Good average position
+        &quot;race_count__@gte&quot; =&gt; 50      # OR many races
+    )
+))
+df = query |&gt; DataFrame</code></pre><p>–&gt;</p><h3 id="Appending-condition-in-Q"><a class="docs-heading-anchor" href="#Appending-condition-in-Q">Appending condition in Q</a><a id="Appending-condition-in-Q-1"></a><a class="docs-heading-anchor-permalink" href="#Appending-condition-in-Q" title="Permalink"></a></h3><p>Eventually you will need to append conditions to your Q expressions. This can be done using <code>push!</code>.</p><pre><code class="language-julia hljs">q_object = Q(&quot;position__@lte&quot; =&gt; 3)
+push!(q_object, &quot;statusid__status&quot; =&gt; &quot;Finished&quot;)
+
+q_object2 = Q(&quot;fastestlap__@isnull&quot; =&gt; false)
+push!(q_object2, &quot;rank&quot; =&gt; 1)
+
+q_combined = Qor(q_object)
+push!(q_combined, q_object2)
+
+query = M.Result |&gt; object;
+query.filter(&quot;raceid__year&quot; =&gt; 2000)  # After year 2000
+query.filter(q_combined)
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
+df = query |&gt; DataFrame
+
+50×3 DataFrame
+ Row │ resultid  driverid__forename  statusid__status 
+     │ Int64?    String?             String?          
+─────┼────────────────────────────────────────────────
+   1 │     2931  Michael             Finished
+   2 │     2932  Rubens              Finished
+   3 │     2933  Ralf                Finished
+   4 │     2953  Michael             Finished
+  ⋮  │    ⋮              ⋮                  ⋮
+  48 │     3282  Michael             Finished
+  49 │     3283  David               Finished
+  50 │     3284  Rubens              Finished
+
+# That is equivalent to
+query = M.Result |&gt; object;
+query.filter(Q(
+    &quot;raceid__year&quot; =&gt; 2000,  # After year 2000
+    Qor(
+        Q(&quot;position__@lte&quot; =&gt; 3, &quot;statusid__status&quot; =&gt; &quot;Finished&quot;),  # Podium finishers
+        Q(&quot;fastestlap__@isnull&quot; =&gt; false, &quot;rank&quot; =&gt; 1)              # OR fastest lap holders
+    )
+));
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;statusid__status&quot;);
+df = query |&gt; DataFrame
+
+50×3 DataFrame
+ Row │ resultid  driverid__forename  statusid__status 
+     │ Int64?    String?             String?          
+─────┼────────────────────────────────────────────────
+   1 │     2931  Michael             Finished
+   2 │     2932  Rubens              Finished
+   3 │     2933  Ralf                Finished
+   4 │     2953  Michael             Finished
+  ⋮  │    ⋮              ⋮                  ⋮
+  48 │     3282  Michael             Finished
+  49 │     3283  David               Finished
+  50 │     3284  Rubens              Finished</code></pre><h2 id="Data-Export-Formats"><a class="docs-heading-anchor" href="#Data-Export-Formats">Data Export Formats</a><a id="Data-Export-Formats-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Export-Formats" title="Permalink"></a></h2><h3 id="DataFrame-Export"><a class="docs-heading-anchor" href="#DataFrame-Export">DataFrame Export</a><a id="DataFrame-Export-1"></a><a class="docs-heading-anchor-permalink" href="#DataFrame-Export" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Export as DataFrame for analysis
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;);
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;constructorid__name&quot;);
 df = query |&gt; DataFrame
 # Returns DataFrames.DataFrame for data analysis</code></pre><h3 id="Dictionary-Array-Export"><a class="docs-heading-anchor" href="#Dictionary-Array-Export">Dictionary Array Export</a><a id="Dictionary-Array-Export-1"></a><a class="docs-heading-anchor-permalink" href="#Dictionary-Array-Export" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Export as array of dictionaries
-query = M.Result |&gt; object
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;resultid&quot; =&gt; 26745)
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;resultid&quot; =&gt; 26745);
 query.values(&quot;resultid&quot;, &quot;raceid__circuitid__name&quot;, &quot;driverid__forename&quot;, 
-             &quot;constructorid__name&quot;, &quot;statusid__status&quot;, &quot;grid&quot;, &quot;laps&quot;)
+             &quot;constructorid__name&quot;, &quot;statusid__status&quot;, &quot;grid&quot;, &quot;laps&quot;);
 dict_array = query |&gt; list
 # Returns: Vector{Dict{Symbol, Any}}
-# Example: [Dict(:resultid =&gt; 26745, :laps =&gt; 58, ...)]</code></pre><h3 id="JSON-Export"><a class="docs-heading-anchor" href="#JSON-Export">JSON Export</a><a id="JSON-Export-1"></a><a class="docs-heading-anchor-permalink" href="#JSON-Export" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Export as JSON string
-query = M.Result |&gt; object
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;resultid&quot; =&gt; 26745)
-query.values(&quot;resultid&quot;, &quot;raceid__circuitid__name&quot;, &quot;driverid__forename&quot;)
+1-element Vector{Dict{Symbol, Any}}:
+ Dict(:laps =&gt; 58, :resultid =&gt; 26745, :grid =&gt; 1, :raceid__circuitid__name =&gt; &quot;Yas Marina Circuit&quot;, :driverid__forename =&gt; &quot;Lando&quot;, :statusid__status =&gt; &quot;Finished&quot;, :constructorid__name =&gt; &quot;McLaren&quot;)</code></pre><h3 id="JSON-Export"><a class="docs-heading-anchor" href="#JSON-Export">JSON Export</a><a id="JSON-Export-1"></a><a class="docs-heading-anchor-permalink" href="#JSON-Export" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Export as JSON string
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, &quot;resultid&quot; =&gt; 26745);
+query.values(&quot;resultid&quot;, &quot;raceid__circuitid__name&quot;, &quot;driverid__forename&quot;);
 json_string = query |&gt; list_json
 # Returns: JSON string for API responses
-# Example: &quot;[{\&quot;resultid\&quot;:26745,\&quot;raceid__circuitid__name\&quot;:\&quot;...\&quot;}]&quot;
+&quot;[{\&quot;raceid__circuitid__name\&quot;:\&quot;Yas Marina Circuit\&quot;,\&quot;resultid\&quot;:26745,\&quot;driverid__forename\&quot;:\&quot;Lando\&quot;}]&quot;
 
 # Parse JSON back to verify
 using JSON
-parsed_data = JSON.parse(json_string)</code></pre><h2 id="Advanced-Query-Patterns"><a class="docs-heading-anchor" href="#Advanced-Query-Patterns">Advanced Query Patterns</a><a id="Advanced-Query-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Query-Patterns" title="Permalink"></a></h2><h3 id="Pagination"><a class="docs-heading-anchor" href="#Pagination">Pagination</a><a id="Pagination-1"></a><a class="docs-heading-anchor-permalink" href="#Pagination" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: page
+parsed_data = JSON.parse(json_string)
+1-element Vector{Any}:
+ Dict{String, Any}(&quot;raceid__circuitid__name&quot; =&gt; &quot;Yas Marina Circuit&quot;, &quot;resultid&quot; =&gt; 26745, &quot;driverid__forename&quot; =&gt; &quot;Lando&quot;)</code></pre><h2 id="Advanced-Query-Patterns"><a class="docs-heading-anchor" href="#Advanced-Query-Patterns">Advanced Query Patterns</a><a id="Advanced-Query-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Query-Patterns" title="Permalink"></a></h2><h3 id="Pagination"><a class="docs-heading-anchor" href="#Pagination">Pagination</a><a id="Pagination-1"></a><a class="docs-heading-anchor-permalink" href="#Pagination" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG.QueryBuilder: page
 
 # Basic pagination
-query = M.Result |&gt; object
-query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;)
-query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;constructorid__name&quot;)
+query = M.Result |&gt; object;
+query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;);
+query.values(&quot;resultid&quot;, &quot;driverid__forename&quot;, &quot;constructorid__name&quot;);
 
 # Page with limit and offset
 df = page(query, limit=20, offset=10) |&gt; DataFrame
 
 # Alternative syntax
-df = page(query, 20, 10) |&gt; DataFrame</code></pre><h3 id="Ordering"><a class="docs-heading-anchor" href="#Ordering">Ordering</a><a id="Ordering-1"></a><a class="docs-heading-anchor-permalink" href="#Ordering" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Single field ordering
+df = page(query, 20, 10) |&gt; DataFrame
+
+# Just limit
+df = page(query, 20) |&gt; DataFrame
+# or
+df = page(query, limit=20) |&gt; DataFrame</code></pre><h3 id="Ordering"><a class="docs-heading-anchor" href="#Ordering">Ordering</a><a id="Ordering-1"></a><a class="docs-heading-anchor-permalink" href="#Ordering" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Single field ordering
 query = M.Result |&gt; object
 query.values(&quot;resultid&quot;, &quot;grid&quot;, &quot;laps&quot;)
 query.order_by(&quot;grid&quot;)
@@ -269,19 +743,4 @@ println(sql_string)
 
 # Show query in bulk operations
 bulk_insert(query, df, show_query=true)
-bulk_update(query, df, columns=[&quot;name&quot;], filters=[&quot;id&quot;], show_query=true)</code></pre><h2 id="Performance-Tips"><a class="docs-heading-anchor" href="#Performance-Tips">Performance Tips</a><a id="Performance-Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Tips" title="Permalink"></a></h2><ol><li><strong>Use Indexes</strong>: Create database indexes on frequently filtered fields</li><li><strong>Limit Results</strong>: Use pagination for large datasets</li><li><strong>Select Specific Fields</strong>: Use <code>values()</code> to select only needed columns</li><li><strong>Batch Operations</strong>: Use bulk operations for multiple inserts/updates</li><li><strong>Filter Early</strong>: Apply filters before joins when possible</li><li><strong>Use Aggregations</strong>: Let the database do calculations instead of Julia</li></ol><h2 id="Error-Handling"><a class="docs-heading-anchor" href="#Error-Handling">Error Handling</a><a id="Error-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Error-Handling" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Handle potential errors in bulk operations
-try
-    query = M.Race |&gt; object
-    bulk_insert(query, df)
-catch e
-    @error &quot;Bulk insert failed&quot; error=e
-    # Handle the error appropriately
-end
-
-# Validate data before operations
-if query |&gt; do_exists
-    # Proceed with operations
-    df = query |&gt; DataFrame
-else
-    @warn &quot;No records found matching criteria&quot;
-end</code></pre><h2 id="Summary-of-@-Syntax-Rules"><a class="docs-heading-anchor" href="#Summary-of-@-Syntax-Rules">Summary of @ Syntax Rules</a><a id="Summary-of-@-Syntax-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Summary-of-@-Syntax-Rules" title="Permalink"></a></h2><h3 id="Quick-Reference-Guide"><a class="docs-heading-anchor" href="#Quick-Reference-Guide">Quick Reference Guide</a><a id="Quick-Reference-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Reference-Guide" title="Permalink"></a></h3><table><tr><th style="text-align: right">Context</th><th style="text-align: right">Syntax</th><th style="text-align: right">Purpose</th><th style="text-align: right">Example</th></tr><tr><td style="text-align: right"><strong>Filter with Operator</strong></td><td style="text-align: right"><code>field__@operator =&gt; value</code></td><td style="text-align: right">Compare field using operator</td><td style="text-align: right"><code>&quot;age__@gte&quot; =&gt; 18</code></td></tr><tr><td style="text-align: right"><strong>Filter with Function</strong></td><td style="text-align: right"><code>field__@function =&gt; value</code></td><td style="text-align: right">Apply function then compare</td><td style="text-align: right"><code>&quot;date__@year&quot; =&gt; 2023</code></td></tr><tr><td style="text-align: right"><strong>Value with Function</strong></td><td style="text-align: right"><code>field__@function</code></td><td style="text-align: right">Transform field in result</td><td style="text-align: right"><code>&quot;date__@month&quot;</code></td></tr><tr><td style="text-align: right"><strong>Aggregation Filter</strong></td><td style="text-align: right"><code>agg_field__@operator =&gt; value</code></td><td style="text-align: right">Filter aggregated results (HAVING)</td><td style="text-align: right"><code>&quot;count_items__@gt&quot; =&gt; 5</code></td></tr><tr><td style="text-align: right"><strong>Not Equal Filter</strong></td><td style="text-align: right"><code>field__@neq =&gt; value</code></td><td style="text-align: right">Exclude specific values</td><td style="text-align: right"><code>&quot;status__@neq&quot; =&gt; &quot;Retired&quot;</code></td></tr><tr><td style="text-align: right"><strong>Null Check Filter</strong></td><td style="text-align: right"><code>field__@isnull =&gt; boolean</code></td><td style="text-align: right">Check for null/missing values</td><td style="text-align: right"><code>&quot;number__@isnull&quot; =&gt; false</code></td></tr></table><h3 id="Key-Concepts:"><a class="docs-heading-anchor" href="#Key-Concepts:">Key Concepts:</a><a id="Key-Concepts:-1"></a><a class="docs-heading-anchor-permalink" href="#Key-Concepts:" title="Permalink"></a></h3><ol><li><strong>@</strong> distinguishes between field names and operations</li><li><strong>Operators</strong> (<code>@lt</code>, <code>@gte</code>, <code>@in</code>) compare values</li><li><strong>Functions</strong> (<code>@year</code>, <code>@month</code>, <code>@icontains</code>) transform data</li><li><strong>Filters</strong> with @ create WHERE or HAVING clauses</li><li><strong>Values</strong> with @ transform data in SELECT clauses</li><li><strong>Chain operations</strong>: <code>field__@function__@operator</code> (function first, then operator)</li></ol><p>This documentation covers the most common query patterns and operations available in PormG, providing practical examples that can be adapted for various use cases.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../write/">« Writing</a><a class="docs-footer-nextpage" href="../api/">API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.10.1 on <span class="colophon-date" title="Wednesday 6 August 2025 17:44">Wednesday 6 August 2025</span>. Using Julia version 1.11.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+bulk_update(query, df, columns=[&quot;name&quot;], filters=[&quot;id&quot;], show_query=true)</code></pre><h2 id="Summary-of-@-Syntax-Rules"><a class="docs-heading-anchor" href="#Summary-of-@-Syntax-Rules">Summary of @ Syntax Rules</a><a id="Summary-of-@-Syntax-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Summary-of-@-Syntax-Rules" title="Permalink"></a></h2><h3 id="Quick-Reference-Guide"><a class="docs-heading-anchor" href="#Quick-Reference-Guide">Quick Reference Guide</a><a id="Quick-Reference-Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Reference-Guide" title="Permalink"></a></h3><table><tr><th style="text-align: right">Context</th><th style="text-align: right">Syntax</th><th style="text-align: right">Purpose</th><th style="text-align: right">Example</th></tr><tr><td style="text-align: right"><strong>Filter with Operator</strong></td><td style="text-align: right"><code>field__@operator =&gt; value</code></td><td style="text-align: right">Compare field using operator</td><td style="text-align: right"><code>&quot;age__@gte&quot; =&gt; 18</code></td></tr><tr><td style="text-align: right"><strong>Filter with Function</strong></td><td style="text-align: right"><code>field__@function =&gt; value</code></td><td style="text-align: right">Apply function then compare</td><td style="text-align: right"><code>&quot;date__@year&quot; =&gt; 2023</code></td></tr><tr><td style="text-align: right"><strong>Value with Function</strong></td><td style="text-align: right"><code>field__@function</code></td><td style="text-align: right">Transform field in result</td><td style="text-align: right"><code>&quot;date__@month&quot;</code></td></tr><tr><td style="text-align: right"><strong>Aggregation Filter</strong></td><td style="text-align: right"><code>agg_field__@operator =&gt; value</code></td><td style="text-align: right">Filter aggregated results (HAVING)</td><td style="text-align: right"><code>&quot;count_items__@gt&quot; =&gt; 5</code></td></tr><tr><td style="text-align: right"><strong>Not Equal Filter</strong></td><td style="text-align: right"><code>field__@neq =&gt; value</code></td><td style="text-align: right">Exclude specific values</td><td style="text-align: right"><code>&quot;status__@neq&quot; =&gt; &quot;Retired&quot;</code></td></tr><tr><td style="text-align: right"><strong>Null Check Filter</strong></td><td style="text-align: right"><code>field__@isnull =&gt; boolean</code></td><td style="text-align: right">Check for null/missing values</td><td style="text-align: right"><code>&quot;number__@isnull&quot; =&gt; false</code></td></tr></table><h3 id="Key-Concepts:"><a class="docs-heading-anchor" href="#Key-Concepts:">Key Concepts:</a><a id="Key-Concepts:-1"></a><a class="docs-heading-anchor-permalink" href="#Key-Concepts:" title="Permalink"></a></h3><ol><li><strong>@</strong> distinguishes between field names and operations</li><li><strong>Operators</strong> (<code>@lt</code>, <code>@gte</code>, <code>@in</code>) compare values</li><li><strong>Functions</strong> (<code>@year</code>, <code>@month</code>, <code>@icontains</code>) transform data</li><li><strong>Filters</strong> with @ create WHERE or HAVING clauses</li><li><strong>Values</strong> with @ transform data in SELECT clauses</li><li><strong>Chain operations</strong>: <code>field__@function__@operator</code> (function first, then operator)</li></ol><p>This documentation covers the most common query patterns and operations available in PormG, providing practical examples that can be adapted for various use cases.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../write/">« Writing</a><a class="docs-footer-nextpage" href="../api/">API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Saturday 16 August 2025 13:22">Saturday 16 August 2025</span>. Using Julia version 1.11.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -6,8 +6,8 @@ This guide covers all data manipulation operations in PormG, including creating,
 
 - [Creating Records](#creating-records)
 - [Updating Records](#updating-records)
+- [Bulk insert](#bulk-insert)
 - [Deleting Records](#deleting-records)
-- [Bulk Operations](#bulk-operations)
 - [F Expressions](#f-expressions)
 
 
@@ -134,6 +134,82 @@ end
 
 ---
 
+## Bulk Insert
+
+### Basic insertion
+
+Efficiently insert large datasets using `bulk_insert()`:
+
+```julia
+using CSV, DataFrames
+
+# Prepare data
+df = CSV.File("drivers.csv") |> DataFrame
+
+# Bulk insert from DataFrame
+query = M.Driver |> object
+bulk_insert(query, df)
+```
+
+By default, `bulk_insert()` chunks data into batches of 1000 rows for efficient insertion. However, for larger datasets with many columns, you might need to adjust the batch size to avoid hitting LibPQ limits. Unfortunately, when an insertion exceeds these limits, LibPQ can raise an unknown error. If you encounter such an error, try reducing the `chunk_size`.
+
+```julia
+query = M.Driver |> object
+bulk_insert(query, df, chunk_size=500)
+```
+
+### Bulk Insert with error handling
+
+When performing bulk inserts, especially from sources like CSV files, you might encounter data that doesn't align with your database schema. A common issue is trying to insert a string value (like `\N`, often used to represent `NULL` in CSVs) into a numeric column. This mismatch will cause `bulk_insert()` to raise an error and halt the operation.
+
+#### Example: A Failing Insert
+
+Imagine you're loading data from a `results.csv` file.
+
+```julia
+# Load data from a CSV file
+df = CSV.File("results.csv") |> DataFrame
+
+# Attempt a bulk insert
+query = M.Result |> object
+bulk_insert(query, df)
+```
+
+If the `milliseconds` column in your CSV contains `\N` for some rows, while the corresponding database column is numeric, you'll get an error:
+
+```julia
+julia> bulk_insert(query, df)
+ERROR: ArgumentError: Error in bulk_insert, the field milliseconds in row 6 has a value that can't be formatted: \N
+```
+
+#### The Solution: Pre-process Your Data
+
+To fix this, you need to "clean" the data in your DataFrame before passing it to `bulk_insert()`. The goal is to convert problematic strings like `\N` into Julia's `missing` value. PormG will then correctly interpret `missing` as a `NULL` value for the database.
+
+Here’s how you can clean the DataFrame. This code iterates through potentially problematic columns and replaces any `\N` strings with `missing`.
+
+```julia
+# Define the list of columns that need cleaning
+cols_to_clean = [
+    :position, :time, :milliseconds, :fastestlap, :rank, 
+    :fastestlaptime, :fastestlapspeed, :number
+]
+
+# In each specified column, replace "\N" with `missing`
+for col in cols_to_clean
+    df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+end
+
+# Now, the bulk insert will succeed
+bulk_insert(query, df)
+
+# You can verify the result
+query |> do_count
+26759
+```
+
+By pre-processing the data, you ensure it's compatible with your database schema, leading to a smooth and successful bulk insert.
+
 ## Updating Records
 
 ### Single Record Updates
@@ -144,6 +220,25 @@ Update specific records using filters:
 # Update a single record
 query = M.Driver |> object;
 query.filter("forename" => "Lewis");
+query |> do_count
+1
+df = query |> DataFrame
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     44  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update("nationality" => "Xylos")
+
+# Verify the update
+df = query |> DataFrame
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     44  Hamilton         1  hamilton   Xylos       1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
 query.update("nationality" => "British")
 
 # Update multiple fields
@@ -181,7 +276,6 @@ query.update("points" => F("points") + 10)
 
 # if you want to see the query (without executing it)
 query.update("points" => F("points") + 10, show_query=true)
-
 
 # Update with complex JOINs
 query = M.Result |> object;
@@ -261,38 +355,7 @@ delete(query)
 
 ---
 
-## Bulk Operations
 
-### Bulk Insert
-
-Efficiently insert large datasets using `bulk_insert()`:
-
-```julia
-using CSV, DataFrames
-
-# Prepare data
-df = CSV.File("drivers.csv") |> DataFrame
-
-# Bulk insert from DataFrame
-query = M.Driver |> object
-bulk_insert(query, df)
-```
-
-### Bulk Insert with Data Processing
-
-```julia
-# Load and preprocess CSV data
-df = CSV.File("results.csv") |> DataFrame
-
-# Handle missing values
-for col in [:position, :time, :milliseconds, :fastestlap]
-    df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-end
-
-# Bulk insert with copy optimization
-query = M.Result |> object
-bulk_insert(query, df, copy=true)
-```
 
 ### Bulk Update
 
@@ -331,9 +394,20 @@ end
 bulk_update(
     query, df, 
     columns=["milliseconds"], 
-    filters=["resultid", "statusid__status" => "Finished"],
-    show_query=false
+    filters=["resultid", "statusid" => 1],
 )
+```
+
+### Bulk Update with unsupported join in bulk_update
+
+```julia
+# Unsupported join in bulk_update, you will get a error
+bulk_update(
+    query, df, 
+    columns=["milliseconds"], 
+    filters=["resultid", "statusid__status" => "Finished"],
+)
+ERROR: "Error in bulk_update, the join is not allowed in bulk_update"
 ```
 
 ---
@@ -346,34 +420,71 @@ F expressions allow database-level operations without loading data into Julia, s
 
 ```julia
 # Increment a counter field
-query = M.Driver |> object
-query.filter("driverid" => 1)
-query.update("wins" => F("wins") + 1)
+query = M.Driver |> object;
+query.filter("driverid" => 1);
+df = query |> DataFrame
+
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     44  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update("number" => F("number") + 1)
+
+df = query |> DataFrame
+
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     45  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update("number" => F("number") - 1)
 
 # Set one field equal to another
-query = M.Result |> object
-query.filter("fastestlaptime" => missing)
-query.update("fastestlaptime" => F("time"))
+query = M.Driver |> object;
+query.filter("driverid" => 1);
+query.update("number" => F("driverid"))
+
+df = query |> DataFrame
+
+1×9 DataFrame
+ Row │ number  surname   driverid  driverref  nationality  dob         code     url                                forename 
+     │ Int32?  String?   Int64?    String?    String?      Date?       String?  String?                            String?  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │      1  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
+
+query.update("number" => 44)
 ```
 
-### Arithmetic Operations
+With F, you can do all basic mathematical operations directly in the database.
 
 ```julia
-# Mathematical operations
-query = M.Result |> object
-query.filter("resultid" => 1)
+query = M.Just_a_test_deletion |> object;
+query |> do_exists && delete(query; allow_delete_all = true)
+query.create("name" => "fexpr", "test_result" => 1)
+query.create("name" => "fexpr", "test_result" => 2)
+query.create("name" => "fexpr", "test_result" => 3)
+
+query = M.Just_a_test_deletion |> object;
+query.filter("test_result" => 1)
 
 # Addition
-query.update("total_time" => F("time") + F("milliseconds"))
+query.update("test_result2" => F("test_result") + 1)
 
 # Multiplication  
-query.update("penalty_time" => F("milliseconds") * 1.1)
+query.update("test_result2" => F("test_result2") * 2)
 
 # Division
-query.update("average_speed" => F("distance") / F("time"))
+query.update("test_result2" => F("test_result2") / 2)
+
+# Opereations with only F expressions
+query.update("test_result2" => F("test_result") + F("test_result"))
 
 # Subtraction
-query.update("time_difference" => F("time") - F("fastestlaptime"))
+query.update("test_result2" => F("test_result2") - 1)
+
 ```
 
 ### F Expressions with Relationships
@@ -381,46 +492,41 @@ query.update("time_difference" => F("time") - F("fastestlaptime"))
 ```julia
 # Use values from related models
 query = M.Result |> object;
-query.filter("resultid" => 1);
+query.filter("resultid" => 3);
+df = query |> DataFrame
+1×18 DataFrame
+ Row │ fastestlapspeed  points    raceid  number  time     fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
+     │ Float64?         Float64?  Int64?  Int32?  String?  Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │         216.719       6.0      18       7  +8.163   00:01:28.09            3         3      58       5         1         3          41       7       5697779              3  3                         3
+
 
 # Update using related field values 
 query.update("grid" => F("driverid__number"))
+
+df = query |> DataFrame
+1×18 DataFrame
+ Row │ fastestlapspeed  points    raceid  number  time     fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
+     │ Float64?         Float64?  Int64?  Int32?  String?  Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │         216.719       6.0      18       7  +8.163   00:01:28.09            3         3      58       5         1         3          41       6       5697779              3  3                         3
 
 # Complex relationship traversal
 query.update("positiontext" => F("raceid__circuitid__country"))
 
 # Yeah, I know, nothing this make any sense, but it's just an example
 query.update("grid" => F("driverid__number"), show_query=true)
+┌ Info: UPDATE "result" AS "Tb"
+│ SET "grid" = "Tb_1"."number"
+│ FROM "driver" AS "Tb_1"
+└ WHERE "Tb"."driverid" = "Tb_1"."driverid" AND "Tb"."resultid" = $1
+
 query.update("positiontext" => F("raceid__circuitid__country"), show_query=true)
+┌ Info: UPDATE "result" AS "Tb"
+│ SET "positiontext" = "Tb_2"."country"
+│ FROM "race" AS "Tb_1", "circuit" AS "Tb_2"
+└ WHERE "Tb"."raceid" = "Tb_1"."raceid" AND "Tb_1"."circuitid" = "Tb_2"."circuitid" AND "Tb"."resultid" = $1
 ```
-
-### F Expressions in Filters
-
-```julia
-# Compare fields within the same record
-query = M.Race |> object
-query.filter(F("fp1_date") <= F("date"))
-
-# Use F expressions with other operators
-query = M.Result |> object
-query.filter(F("milliseconds") < F("fastestlaptime"))
-```
-
-### F Expressions in Annotations
-
-```julia
-# Calculate values in SELECT
-query = M.Result |> object
-query.values(
-    "driverid__forename",
-    "points",
-    "bonus_points" => F("points") * 0.1,
-    "total_points" => F("points") + (F("points") * 0.1)
-)
-df = query |> list |> DataFrame
-```
-
-
 
 ---
 

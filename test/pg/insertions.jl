@@ -40,7 +40,7 @@ query = M.Circuit |> object;
 query |> do_count
 path_load = joinpath("f1", "circuits.csv")
 df = CSV.File(path_load) |> DataFrame
-bulk_insert(query, df)
+bulk_insert(query, df, show_query=true)
 
 
 query = M.Race |> object;
@@ -101,7 +101,7 @@ query = M.Just_a_test_deletion |> object;
 for (index, row) in eachrow(df) |> enumerate
   row.name = "test_update_$(index)"
 end
-bulk_update(query, df, columns=["name"], filters=["id"])
+bulk_update(query, df, columns=["name"], filters=["id"], show_query=true)
 query = M.Just_a_test_deletion |> object;
 df = query |> list |> DataFrame
 

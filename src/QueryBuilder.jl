@@ -1953,8 +1953,11 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # check if the field has max_digits and validate
     if hasfield(typeof(model.fields[field]), :max_digits)
       value_str = string(objct.insert[field])
-      integer_part, fractional_part = split(value_str, ".")
-      total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
+      # @infiltrate
+      parts = split(value_str, ".")
+      integer_part = parts[1]
+      fractional_part = length(parts) > 1 ? parts[2] : ""
+      total_digits = length(replace(integer_part, "-" => "")) + (fractional_part == "" ? 0 : length(fractional_part))
       if total_digits > model.fields[field].max_digits
         error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
       end
@@ -2018,7 +2021,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         end
       end
     elseif settings.django_prefix !== nothing
-      @infiltrate
+      @infiltrate false
       try
         # For Django prefixed tables, try with django prefix pattern
         sequence_name = "$(model.name)_$(field)_seq"

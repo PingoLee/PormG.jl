@@ -17,7 +17,7 @@ PormG.Configuration.load("db_2")
 
 # teste compation of fields
 import PormG: Models, Dialect
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, show_query, Max, Min
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, show_query, Max, Min, As
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
 
 
@@ -120,6 +120,23 @@ end
   dict_json = query |> list_json
   @test isa(dict_json, String)
   @test JSON.parse(dict_json)[1]["resultid"] == 26745
+end
+
+@testset "Test As functionality for custom alias" begin
+  query = M.Result |> object;
+  query.filter("statusid__status" => "Finished", "resultid" => 26745);
+  query.values("resultid", "circuit" => "raceid__circuitid__name");
+  df = query |> DataFrame
+  @test "circuit" in names(df)
+
+  query = M.Result |> object;
+  query.filter("statusid__status" => "Finished", "resultid" => 26745);
+  query.values("resultid", "circuit" => "raceid__circuitid__name", "quarter" => "raceid__date__@quarter");
+  df = query |> DataFrame
+  @test "quarter" in names(df)
+
+  dict = query |> list
+  @test haskey(dict[1], :circuit) && haskey(dict[1], :quarter)
 end
 
 @testset "Single and Bulk Insert/Update" begin

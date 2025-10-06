@@ -250,6 +250,26 @@ query.filter("position" => 1)
 query.values("constructorid__name", "wins" => Count("resultid"))
 ```
 
+### Custom Field Aliases
+
+You can assign custom aliases to fields in your query results using the `=>` syntax in the `values()` method. This allows you to rename columns in the output DataFrame or dictionary.
+
+```julia
+# Basic field aliasing
+query = M.Result |> object;
+query.filter("statusid__status" => "Finished", "resultid" => 26745);
+query.values("resultid", "circuit" => "raceid__circuitid__name");
+df = query |> DataFrame
+# The column "raceid__circuitid__name" will be renamed to "circuit"
+
+# Multiple aliases including functions
+query = M.Result |> object;
+query.filter("statusid__status" => "Finished", "resultid" => 26745);
+query.values("resultid", "circuit" => "raceid__circuitid__name", "quarter" => "raceid__date__@quarter");
+df = query |> DataFrame
+# Both "raceid__circuitid__name" and "raceid__date__@quarter" are aliased
+```
+
 ## Filtering Data
 
 ### How to Use Functions and Operators in PormG

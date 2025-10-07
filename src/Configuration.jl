@@ -368,7 +368,7 @@ export fetch
 
 function is_connection_error(e, connection::PormGPostgres)
     msg = lowercase(string(e))
-    return (e isa LibPQ.Errors.UnknownError && string(e) == "") ||
+    return (e isa LibPQ.Errors.UnknownError && string(e) == "LibPQ.Errors.UnknownError(\"\")") ||
            occursin("server closed the connection", msg) ||
            occursin("connection not open", msg)
            # occursin("connection refused", msg) ||
@@ -390,13 +390,13 @@ function fetch(connection::PormGPostgres, sql::String;
   conn === nothing && (conn = acquire_connection(connection))
   try
     return libpq_execute(conn, sql, params)
-  catch e
-    @infiltrate false
+  catch e    
     if is_connection_error(e, connection)
       @warn "Lost connection to database. Attempting to reconnect..."
       conn = reconnect_db(connection, conn)
       return libpq_execute(conn, sql, params)
     end
+    @infiltrate 
     @error "Failed to execute SQL query: $e"
     throw(e)
   finally

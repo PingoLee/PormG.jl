@@ -162,18 +162,23 @@ end
 mutable struct SQLText <: SQLTypeText
   field::String
   _as::Union{String, Nothing}
+  custom_as::Union{String, Nothing}
 end
-SQLText(field::String; _as::Union{String, Nothing} = nothing) = SQLText(field, _as)
-Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as)
+SQLText(field::String; _as::Union{String, Nothing} = nothing) = SQLText(field, _as, nothing)
+SQLText(field::String, _as::Union{String, Nothing}) = SQLText(field, _as, nothing)
+Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as, x.custom_as)
 
 
 # Return a field to sql query
 mutable struct SQLField <: SQLTypeField
   field::Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}
   _as::Union{String, Nothing}
+  custom_as::Union{String, Nothing}
 end
-SQLField(field::String; _as::Union{String, Nothing} = nothing) = SQLField(field, _as)
-Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as)
+SQLField(field::Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}; _as::Union{String, Nothing} = nothing) = SQLField(field, _as, nothing)
+SQLField(field::Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}, _as::Union{String, Nothing}) = SQLField(field, _as, nothing)
+Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as)
+
 
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
@@ -538,6 +543,7 @@ query = MyModels.model_test |> object;
 query.filter("id__@gte" => 1)
 query.values("id", "count" => Count("other_model_id", distinct=true))
 df = query |> list |> DataFrame
+```
 """
 function Count(x; distinct::Bool = false)
   return FObject(function_name = "COUNT", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
@@ -664,8 +670,19 @@ end
 #
 
 # Why Vector{String}
+function _up_values(str::String)
+  check = String.(split(str, "__@"))
+  if size(check, 1) == 1
+    return SQLField(str, str)
+  elseif haskey(PormGsuffix, check[end])
+    throw("Invalid argument: $(str) does not must contain operators (lte, gte, contains ...)")
+  else
+    @infiltrate false
+    return SQLField(_check_function(check), join(check, "__"))
+  end     
+end
 "Agora eu tenho que ver como que eu padronizo todas as variáveis para sair como SQLTypeField"
-function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: Union{SQLTypeFunction, SQLTypeF})
+function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: Union{SQLTypeFunction, SQLTypeF, String})
   # every call of values, reset the values
   q.values = []
   for v in values 
@@ -674,22 +691,24 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
       push!(q.values, _check_function(v))
     elseif isa(v, SQLTypeFunction)
       push!(q.values, SQLField(_check_function(v), v._as))
-    elseif isa(v, Pair) && isa(v.second, Union{SQLTypeFunction, SQLTypeF})
-      try
-        push!(q.values, SQLField(_check_function(v.second), v.first))
-      catch e
-        @infiltrate
-        @error "Error processing values pair: $e" exception=(e, catch_backtrace())
+    elseif isa(v, Pair)
+      if !isa(v.first, String)
+        throw("Invalid argument: $(v.first) (::$(typeof(v.first)))); please use a string as key in the pair (key => value)")
+      end
+      if isa(v.second, Union{SQLTypeFunction, SQLTypeF})
+        try
+          push!(q.values, SQLField(_check_function(v.second), v.first))
+        catch e
+          @infiltrate
+          @error "Error processing values pair: $e" exception=(e, catch_backtrace())
+        end
+      elseif isa(v.second, String)
+        z = _up_values(v.second)
+        z.custom_as = v.first
+        push!(q.values, z)
       end
     elseif isa(v, String)
-      check = String.(split(v, "__@"))
-      if size(check, 1) == 1
-        push!(q.values, SQLField(v, v))
-      elseif haskey(PormGsuffix, check[end])
-        throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
-      else    
-        push!(q.values, SQLField(_check_function(check), join(check, "__")))
-      end     
+      push!(q.values, _up_values(v))  
     else
       throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (Mounth, Year, Day, Y_M ...)")
     end    
@@ -767,7 +786,12 @@ function _query_select(array::Vector{SQLTypeField})
       if !isassigned(array, i, 1)
         return join(colect,  ", \n  ")
       else
-        push!(colect, "$(array[i, 1].field) as $(array[i, 1]._as)")
+        @infiltrate false
+        if isa(array[i, 1], SQLField) && array[i, 1].custom_as !== nothing 
+          push!(colect, "$(array[i, 1].field) as $(array[i, 1].custom_as)")
+        else
+          push!(colect, "$(array[i, 1].field) as $(array[i, 1]._as)")
+        end
       end
     end
   end   
@@ -884,7 +908,7 @@ bulk_insert(M.User |> object, df_new)
 # 8) Bulk update (by primary key)
 df_up = DataFrame(id=[1,2], name=["Alice","Bob"])
 bulk_update(M.User |> object, df_up, columns=["name"], filters=["id"])
-``
+```
 """
 function object(model::PormGModel)
   return ObjectHandler(object = SQLObjectQuery(model = model))
@@ -1953,8 +1977,11 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # check if the field has max_digits and validate
     if hasfield(typeof(model.fields[field]), :max_digits)
       value_str = string(objct.insert[field])
-      integer_part, fractional_part = split(value_str, ".")
-      total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
+      # @infiltrate
+      parts = split(value_str, ".")
+      integer_part = parts[1]
+      fractional_part = length(parts) > 1 ? parts[2] : ""
+      total_digits = length(replace(integer_part, "-" => "")) + (fractional_part == "" ? 0 : length(fractional_part))
       if total_digits > model.fields[field].max_digits
         error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
       end
@@ -2018,7 +2045,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         end
       end
     elseif settings.django_prefix !== nothing
-      @infiltrate
+      @infiltrate false
       try
         # For Django prefixed tables, try with django prefix pattern
         sequence_name = "$(model.name)_$(field)_seq"

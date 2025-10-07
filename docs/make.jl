@@ -22,8 +22,6 @@ makedocs(
         "API" => "api.md"
     ],
     format = Documenter.HTML(),
-    checkdocs = :none, # Disable checkdocs to avoid unnecessary checks during documentation build
-    
+    checkdocs = :none, # Disable checkdocs to avoid unnecessary checks during documentation build    
     # checkdocs = :exports,
-
 )

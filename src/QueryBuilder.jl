@@ -1902,7 +1902,7 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     return length(result) > 0
   catch e
     @infiltrate
-    @error "Error in do_exists for model $(q.object.model.name): $e"
+    @error "Error in do_exists for model $(oq.object.model.name): $e"
     return false
   end
 end

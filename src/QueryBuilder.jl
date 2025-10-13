@@ -682,7 +682,7 @@ function _up_values(str::String)
     return SQLField(_check_function(check), join(check, "__"))
   end     
 end
-"Agora eu tenho que ver como que eu padronizo todas as variáveis para sair como SQLTypeField"
+
 function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []

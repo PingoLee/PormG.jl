@@ -682,8 +682,8 @@ function _up_values(str::String)
     return SQLField(_check_function(check), join(check, "__"))
   end     
 end
-"Agora eu tenho que ver como que eu padronizo todas as variáveis para sair como SQLTypeField"
-function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: Union{SQLTypeFunction, SQLTypeF, String})
+
+function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []
   for v in values 
@@ -716,10 +716,6 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
   end 
   
   return q
-end
-function up_values!(q::SQLObject, values)
-  @infiltrate
-  @error "Invalid argument: $(values) (::$(typeof(values))); please use a string or a function (Mounth, Year, Day, Y_M ...)"
 end
   
 function up_create!(q::SQLObject, values)
@@ -2144,7 +2140,7 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     return length(result) > 0
   catch e
     @infiltrate
-    @error "Error in do_exists for model $(q.object.model.name): $e"
+    @error "Error in do_exists for model $(oq.object.model.name): $e"
     return false
   end
 end

@@ -682,7 +682,7 @@ function _up_values(str::String)
   end     
 end
 "Agora eu tenho que ver como que eu padronizo todas as variáveis para sair como SQLTypeField"
-function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTypeFunction, SQLTypeText, SQLTypeField, Pair{String, T}}} where N where T <: Union{SQLTypeFunction, SQLTypeF, String})
+function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []
   for v in values 
@@ -715,10 +715,6 @@ function up_values!(q::SQLObject, values::NTuple{N, Union{String, Symbol, SQLTyp
   end 
   
   return q
-end
-function up_values!(q::SQLObject, values)
-  @infiltrate
-  @error "Invalid argument: $(values) (::$(typeof(values))); please use a string or a function (Mounth, Year, Day, Y_M ...)"
 end
   
 function up_create!(q::SQLObject, values)
@@ -1287,7 +1283,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     foreign_table_name = s_model |> string
     @infiltrate false
   else
-    @infiltrate
+    @infiltrate false
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
   

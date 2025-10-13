@@ -17,7 +17,7 @@ PormG.Configuration.load("db_2")
 
 # teste compation of fields
 import PormG: Models, Dialect
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, show_query, Max, Min, As
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
 
 
@@ -30,7 +30,6 @@ import PormG.models as M
 # PormG.config["db_2"].connections.available
 
 # conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
-
 @testset "Database Setup and Bulk Insert" begin
     # Clear all tables
     delete(M.Circuit |> object, allow_delete_all = true, show_query = false)
@@ -256,9 +255,6 @@ end
     @test query |> do_count == 40
     @test query |> do_exists
 end
-    
-
-
 @testset "Ordering and Aggregations" begin
     query = M.Result |> object;
     query.values("statusid__status", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
@@ -272,7 +268,6 @@ end
     @test df[1, :raceid__circuitid__name] == "Adelaide Street Circuit"
     @test df[39, :raceid__circuitid__name] == "Suzuka Circuit"
 end
-
 @testset "Filtering" begin
     # Contains and icontains
     query = M.Result |> object;
@@ -488,6 +483,121 @@ end
   @test df[1, :count_grid] == 2
 end
 
+
+@testset "CTE with JOIN functionality" begin
+    
+    @testset "Basic CTE with JOIN" begin
+        # Example similar to the one you provided
+        # Find duplicates using CTE and join with main table
+        
+        # Create a CTE that finds duplicate evaluations
+        duplicates = M.Result |> object;
+        duplicates.filter("statusid" => 1);
+        duplicates.values("driverid", "dias" => Count("resultid"));
+        
+        # Main query that joins with the CTE
+        main_query = M.Result |> object;
+        With(main_query.object, "tb_dup", duplicates, join_field="driverid" => "driverid");
+        
+        # Now we can filter and select using CTE fields
+        main_query.filter("resultid__@lte" => 100);
+        main_query.values("resultid", "driverid", "tb_dup__dias");
+        
+        df = main_query |> DataFrame        
+        @test nrow(df) == 100
+        @test filter(row -> row.resultid == 1, df)[1, :tb_dup__dias] == 312
+        @test filter(row -> row.resultid == 1, df) |> nrow == 1
+        @test filter(row -> row.resultid == 100, df)[1, :driverid] == 5
+    end
+    
+    @testset "CTE with aggregation and multiple fields" begin
+        # Create CTE with multiple aggregated fields
+        stats = M.Result |> object;
+        stats.filter("raceid__@lte" => 100);
+        stats.values(
+            "driverid",
+            "total_results" => Count("resultid"),
+            "avg_grid" => Sum("grid")
+        );
+        
+        # Main query
+        query = M.Driver |> object;
+        With(query.object, "driver_stats", stats, join_field="driverid" => "driverid");
+        
+        query.filter("driverid__@lte" => 50);
+        query.values(
+            "driverid",
+            "forename",
+            "surname",
+            "driver_stats__total_results",
+            "driver_stats__avg_grid"
+        );
+        
+        df = query |> DataFrame
+
+        @test nrow(df) == 50
+        @test nrow(filter(row -> row.driver_stats__total_results |> !ismissing, df)) == 48
+        @test filter(row -> row.driverid == 22, df)[1, :driver_stats__total_results] == 100
+        @test filter(row -> row.driverid == 22, df)[1, :driver_stats__avg_grid] == 986
+        @test nrow(filter(row -> row.driverid == 22, df)) == 1
+        
+    end
+    
+    @testset "Multiple CTEs" begin
+        # First CTE: Recent races
+        recent_races = M.Race |> object;
+        recent_races.filter("year__@gte" => 2020);
+        recent_races.values("raceid", "name", "year");
+        
+        # Second CTE: Top drivers
+        top_drivers = M.Driver |> object;
+        top_drivers.filter("driverid__@lte" => 100);
+        top_drivers.values("driverid", "forename", "surname");
+        
+        # Main query using both CTEs
+        query = M.Result |> object;
+        With(query.object, "recent", recent_races, join_field="raceid" => "raceid");
+        With(query.object, "top_d", top_drivers, join_field="driverid" => "driverid");
+
+        query.values(
+            "resultid",
+            "recent__name",
+            "top_d__forename",
+            "points"
+        );
+        query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false);
+        
+        df = query |> DataFrame
+
+        @test nrow(df) == 294
+        @test nrow(filter(row -> row.top_d__forename == "Lewis", df)) == 106
+        @test nrow(filter(row -> row.recent__name == "Australian Grand Prix", df)) == 7
+      
+    end        
+    
+    @testset "CTE with join_type in JOIN" begin
+        # Create CTE
+        high_scorers = M.Result |> object;
+        high_scorers.filter("points__@gte" => 10);
+        high_scorers.values("driverid", "max_points" => Sum("points"));
+        
+        # Main query with F expression referencing CTE
+        query = M.Driver |> object;
+        With(query.object, "high_scorers", high_scorers, join_field="driverid" => "driverid", join_type="INNER");        
+        query.values("driverid", "forename", "max_points" => "high_scorers__max_points");
+        query.filter("driverid__@lte" => 100);
+        
+        df = query |> DataFrame
+
+        @test nrow(df) == 29
+        @test nrow(filter(row -> row.driverid == 1, df)) == 1
+        @test filter(row -> row.driverid == 22, df)[1, :max_points] == 132
+        
+    end
+    
+end
+
+
 @testset "Print Query" begin
   query = M.Result |> object;
   query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
@@ -557,5 +667,15 @@ end
     println("✅ All LIKE pattern escaping tests passed!")
   end
 end
+
+# # Deal with with CTE
+# @testset "Common Table Expressions (CTE)" begin
+#   # Simple CTE example
+#   subquery = M.Status |> object;
+#   subquery.filter("status" => "Engine");
+#   subquery.values("statusid");
+
+#   query = M.Result |> object;
+  
 
 PormG.Configuration.__cleanup__()

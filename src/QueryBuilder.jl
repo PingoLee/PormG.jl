@@ -207,11 +207,12 @@ mutable struct SQLObjectQuery <: SQLObject
   list_joins::Vector{String} # is ther a better way to do this?
   row_join::Vector{Dict{String, Any}}  
   distinct::Bool # Add distinct field
+  ctes::Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}} # CTE name => Dict("query" => handler, field_name => PormGModel)
   parameters::Union{Nothing, PormGPostgresParam}
 
   SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, parameters = nothing) = # Add distinct to constructor
-    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, parameters) # Add distinct to new
+        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, ctes = Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}}(), parameters = nothing) = # Add ctes to constructor
+    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, parameters) # Add ctes to new
 end
 
 #
@@ -777,6 +778,72 @@ end
 #   throw("Invalid argument: $(value) (::$(typeof(value))); please use a boolean value (true or false)")
 # end
 
+export With
+
+"""
+Set the field definitions from a CTE query to create temporary PormGField objects.
+This allows the CTE to be treated like a table with queryable fields for JOINs.
+"""
+function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
+    join_field::Union{Pair{String, String}, Nothing} = nothing,
+    join_type::String = "LEFT") 
+
+  if join_field === nothing
+    # If no join fields provided, assume primary key of the model
+    if haskey(query.object.model.fields, "id")
+      join_field = Pair("id", "id")
+    else
+      throw("CTE query model must have a primary key field 'id' or specify join_field")
+    end
+  end
+  table = Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}(
+    "join_type" => join_type,
+    "query" => query,
+    "join_field" => join_field
+  ) 
+
+  return table
+end
+
+"""
+Add a Common Table Expression (CTE) to the query object.
+
+CTEs can be joined like regular tables using their field names.
+
+# Arguments
+- `q::SQLObject`: The SQL object to add the CTE to
+- `name::String`: The name of the CTE (will be used as table name in JOINs)
+- `query::SQLObjectHandler`: The subquery that defines the CTE
+
+# Returns
+- The modified SQLObject with the CTE added
+
+# Examples
+```julia
+# Basic CTE with JOIN
+duplicates = MyModel.Evaluation |> object
+duplicates.filter("status" => "active")
+duplicates.values("aval_id", "dias" => Count("id"))
+
+query = MyModel.Evaluation |> object
+With(query, "tb_dup", duplicates)
+# Now you can reference tb_dup fields: "tb_dup__aval_id", "tb_dup__dias"
+query.filter("id" => F("tb_dup__aval_id"))
+query.values("id", "name", "tb_dup__dias")
+```
+"""
+function With(q::SQLObject, name::String, query::SQLObjectHandler;
+    join_field::Union{Pair{String, String}, Nothing} = nothing,
+    join_type::String = "LEFT") 
+  cte_fields = _preset_cte_fields(name, query, join_field=join_field, join_type=join_type)
+  if haskey(q.ctes, name)
+    throw("CTE with name $(name) already exists in the query; please use a different name")
+  end
+  q.ctes[name] = cte_fields
+  return q
+end
+
+
 function _query_select(array::Vector{SQLTypeField})
   if !isassigned(array, 1, 1)
     return "*"
@@ -839,7 +906,7 @@ mutable struct ObjectHandler <: SQLObjectHandler
                           update::Function = (x...; kwargs...) -> up_update!(object, x; kwargs...), 
                           order_by::Function = (x...) -> order_by!(object, x),
                           distinct::Function = (x...) -> distinct!(object, x))
-      return new(object, values, filter, create, update, order_by, distinct) # Add distinct to new
+      return new(object, values, filter, create, update, order_by, distinct)
   end
 end
 
@@ -930,7 +997,8 @@ function Base.deepcopy(obj::SQLObjectQuery)
       having = deepcopy(obj.having),
       list_joins = deepcopy(obj.list_joins),
       row_join = deepcopy(obj.row_join),
-      distinct = obj.distinct
+      distinct = obj.distinct,
+      ctes = deepcopy(obj.ctes)
     )
   catch e
     @infiltrate false
@@ -1242,7 +1310,36 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
   last_field::Union{Nothing, PormGField} = nothing
 
-  if first_column in instruct.object.model.field_names # vector moust be a field from the model    
+  # Check if first_column references a CTE table
+  if haskey(instruct.object.ctes, vector[1])
+    @infiltrate false
+    cte_name = vector[1]
+    cte_dict = instruct.object.ctes[cte_name]
+    cte_model = cte_dict["model"]::PormGModel
+    
+    length(vector) == 1 && throw("Error, CTE reference '$(cte_name)' must include a field name. Example: '$(cte_name)__field_name'")
+
+    # Get the join field configuration from the CTE
+    join_field_pair = cte_dict["join_field"]::Pair{String, String}
+    main_table_key = join_field_pair.first    # e.g., "driverid" from main table
+    cte_table_key = join_field_pair.second    # e.g., "driverid" from CTE
+    
+    # Set up the join with the CTE
+    row_join["a"] = instruct.object.model.name
+    row_join["alias_a"] = instruct.alias
+    row_join["b"] = cte_name  # CTE name becomes the table name
+    row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
+    row_join["how"] = cte_dict["join_type"]::String
+        
+    row_join["key_a"] = main_table_key
+    row_join["key_b"] = cte_table_key
+
+    @infiltrate false
+
+    foreign_table_name = cte_model
+    last_field = cte_model.fields[vector[2]]
+   
+  elseif first_column in instruct.object.model.field_names # vector moust be a field from the model    
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
     first_field = instruct.object.model.fields[first_column]
@@ -1287,7 +1384,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     foreign_table_name = s_model |> string
     @infiltrate false
   else
-    @infiltrate
+    @infiltrate false
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
   
@@ -1762,6 +1859,7 @@ function build(object::SQLObject;
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))
+  @infiltrate false
   instruct = InstrucObject(text = "", 
     object = object,
     table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
@@ -1820,18 +1918,133 @@ end
 
 export query
 
+"""
+Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
+
+# Arguments
+- `ctes::Dict{String, Dict{String, Union{SQLObjectHandler, PormGField}}}`: Dict of CTE name => fields dict
+- `connection`: Database connection for quoting identifiers
+- `parameters`: Parameterized query object to collect all parameters
+
+# Returns
+- String containing the WITH clause SQL, or empty string if no CTEs
+"""
+function build_cte_clause(ctes::Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}}, connection, parameters::Union{Nothing, PormGPostgresParam}, table_alias::Union{Nothing, SQLTableAlias})
+  isempty(ctes) && return ""
+  
+  @infiltrate false
+  cte_parts = String[]
+  for (cte_name, cte_fields) in ctes
+    # Extract the query from the fields dict
+    @infiltrate false
+    if !haskey(cte_fields, "query")
+      @error "CTE '$cte_name' does not have a query" fields=keys(cte_fields)
+      continue
+    end
+    
+    cte_query = cte_fields["query"]
+    
+    # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
+    cte_sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields)
+
+    @infiltrate false
+    
+    # Quote the CTE name
+    safe_cte_name = quote_identifier(cte_name, connection)
+    
+    # Add to CTE parts
+    push!(cte_parts, "$safe_cte_name AS (\n  $cte_sql\n)")
+  end
+  
+  return "WITH " * join(cte_parts, ",\n") * "\n"
+end
+
+function _set_field_from_sql_function(func::SQLTypeFunction, field::String, instruct::SQLInstruction)
+  if !(func.function_name in ["COUNT", "SUM", "AVG", "MIN", "MAX"])
+    throw(ArgumentError("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not an agregate function. Only agregate functions are allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX\e[0m"))
+  end
+
+  if func.function_name in ["COUNT", "SUM"]
+    return IntegerField()
+  else
+    fields = instruct.object.model.fields
+    if haskey(fields, field)
+      return fields[field]
+    else
+      throw(ArgumentError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
+    end
+  end
+ 
+end
+function _set_field_from_sql_function(func::String, field::String, instruct::SQLInstruction)
+  if haskey(instruct.tab_field_cache, field)
+    return instruct.tab_field_cache[field]
+  elseif haskey(instruct.object.model.fields, field)
+    return instruct.object.model.fields[field]
+  else
+    throw(ArgumentError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
+  end
+end
+
+function _build_cte_custom_model(cte::Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}, instruct::SQLInstruction)
+  values = instruct.object.values
+  fields = Dict{String, PormGField}()
+  @infiltrate false
+  for field_names in values
+    # fields[field_names.field] = _set_field_from_sql_function(field_names.field, field_names._as, instruct)
+    key_new = field_names.custom_as !== nothing ? field_names.custom_as : field_names._as
+    try
+      fields[key_new] = _set_field_from_sql_function(field_names.field, field_names._as, instruct)
+    catch e
+      @infiltrate
+      throw(e)
+    end
+  end
+  @infiltrate false
+
+  cte["model"] = Models.Model("", fields)   
+
+end
+
+
+
 function query(q::SQLObjectHandler; 
-  table_alias::Union{Nothing, SQLTableAlias} = nothing, 
+  table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
-  parameters::Union{Nothing, PormGPostgresParam} = nothing)
+  parameters::Union{Nothing, PormGPostgresParam} = nothing,
+  cte::Union{Nothing, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}} = nothing
+  )
+
+  @infiltrate false
+
+  # Create a shared table alias counter for both CTEs and main query
+  table_alias === nothing && (table_alias = SQLTbAlias())
+  
+  # IMPORTANT: Create the shared parameters object BEFORE building CTEs
+  # This ensures all CTEs and the main query use sequential parameter numbering
+  if parameters === nothing
+    settings = config[q.object.model.connect_key]
+    connection === nothing && (connection = settings.connections)
+    parameters = get_parameter(connection)
+  end
+
+  # Build WITH clause - passes the SAME parameters object
+  with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)  
+
+  @infiltrate false
+
+  # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+  if cte !== nothing
+    @infiltrate false
+    _build_cte_custom_model(cte, instruction)
+  end
   
   # Quote table name and alias to prevent SQL injection
   safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
-  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+  safe_alias = quote_identifier(instruction.alias, instruction.connection)  
   
-  respota = """
-    SELECT
+  respota = """$(with_clause)SELECT
       $(q.object.distinct ? "DISTINCT" : "") $(_query_select(instruction.select ))
     FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
@@ -1854,14 +2067,17 @@ function query(q::SQLObjectHandler;
   if q.object.offset !== 0
     respota *= "OFFSET $(q.object.offset) \n"
   end
+  
+  # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
+  
   # println(instruction.parameters)
     # $(instruction.agregate && size(instruction.group, 1) > 0 ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     # $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
     # $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
     # $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
     # """
-  # @info respota
+  # @info respota  
   return respota
 end
 
@@ -1884,8 +2100,10 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
   safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
   
-  resposta = """
-    SELECT
+  # Build WITH clause if CTEs are defined
+  with_clause = build_cte_clause(q.object.ctes, instruction.connection, instruction.parameters, table_alias)
+  
+  resposta = """$(with_clause)SELECT
       COUNT($(q.object.distinct ? "DISTINCT *" : "*"))
     FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))

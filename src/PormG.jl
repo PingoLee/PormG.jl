@@ -31,6 +31,7 @@ abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
 abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations 
 abstract type SQLTypeField <: SQLType end # Field to be used in the query (values, filters, etc)
 abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
+abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
 
 abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
@@ -64,10 +65,10 @@ using .Models
 include("Dialect.jl")
 import .Dialect
 
-export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do_count, do_exists
+export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do_count, do_exists, With
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists
+import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists, With
 show_query = query
 
 include("Migrations.jl")

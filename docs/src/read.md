@@ -2,19 +2,6 @@
 
 This document provides comprehensive examples of how to perform various database operations using PormG.
 
-## Table of Contents
-
-- [Basic Query Operations](#basic-query-operations)
-- [Value Selection and Joins](#value-selection-and-joins)
-- [Filtering Data](#filtering-data)
-- [Aggregations and Grouping](#aggregations-and-grouping)
-- [Date Operations](#date-operations)
-- [Subqueries](#subqueries)
-- [F Expressions](#f-expressions)
-- [Q Object](#q-object)
-- [Bulk Operations](#bulk-operations)
-- [Data Export Formats](#data-export-formats)
-
 ## Basic Query Operations
 
 ### Simple Filtering and Data Retrieval
@@ -663,6 +650,190 @@ df = query |> DataFrame
   39 │    25804         5  Engine                 9         4  2022-Q4
   40 │    26343         5  Engine                11         1  2024-Q1
 ```
+
+## Common Table Expressions (CTE)
+
+Common Table Expressions (CTEs) provide a way to define temporary named result sets that can be referenced within your main query. In PormG, CTEs are particularly useful for breaking down complex queries into more readable parts and for reusing query logic. Unlike subqueries, CTEs are defined once and can be joined with the main query, making them ideal for aggregations and complex data transformations.
+
+### What are CTEs?
+
+CTEs act as virtual tables that exist only during the execution of a query. They are defined using the `With()` function and can be joined with your main query using the `join_field` parameter. This allows you to:
+
+1. **Pre-aggregate data** and join it with the main table
+2. **Simplify complex queries** by breaking them into logical steps
+3. **Reference the same subquery multiple times** without repetition
+4. **Improve query readability** with descriptive CTE names
+
+### Basic CTE with JOIN
+
+The most common use case is creating a CTE with aggregated data and joining it with your main query:
+
+```julia
+using PormG.QueryBuilder: Count
+
+# Create a CTE that counts results per driver
+duplicates = M.Result |> object;
+duplicates.filter("statusid" => 1);  # Only finished results
+duplicates.values("driverid", "dias" => Count("resultid"));
+
+# Main query that joins with the CTE
+main_query = M.Result |> object;
+With(main_query.object, "tb_dup", duplicates, join_field="driverid" => "driverid");
+
+# Now you can filter and select using CTE fields
+main_query.filter("resultid__@lte" => 100);
+main_query.values("resultid", "driverid", "tb_dup__dias");
+
+df = main_query |> DataFrame
+
+# Example output:
+100×3 DataFrame
+ Row │ resultid  driverid  tb_dup__dias 
+     │ Int64?    Int64?    Int64?       
+─────┼──────────────────────────────────
+   1 │        1         1          312
+   2 │        2         2          228
+   3 │        3         3          161
+   4 │        4         4          223
+  ⋮  │    ⋮         ⋮          ⋮
+  98 │       98        19          153
+  99 │       99        20           82
+ 100 │      100         5          275
+```
+
+**How it works:**
+1. The CTE `tb_dup` aggregates results per driver
+2. `With()` creates the CTE and joins it to the main query using `driverid`
+3. You can reference CTE fields using the `__` syntax: `tb_dup__dias`
+4. The join happens automatically based on the `join_field` parameter
+
+### CTE with Multiple Aggregated Fields
+
+CTEs can include multiple aggregated fields, making them powerful for complex analytics:
+
+```julia
+using PormG.QueryBuilder: Count, Sum
+
+# Create CTE with multiple aggregations
+stats = M.Result |> object;
+stats.filter("raceid__@lte" => 100);
+stats.values(
+    "driverid",
+    "total_results" => Count("resultid"),
+    "total_grid_positions" => Sum("grid")
+);
+
+# Main query joins driver information with statistics
+query = M.Driver |> object;
+With(query.object, "driver_stats", stats, join_field="driverid" => "driverid");
+
+query.filter("driverid__@lte" => 50);
+query.values(
+    "driverid",
+    "forename",
+    "surname",
+    "driver_stats__total_results",
+    "driver_stats__total_grid_positions"
+);
+
+df = query |> DataFrame
+
+# Example output shows drivers with their statistics:
+50×5 DataFrame
+ Row │ driverid  forename    surname      driver_stats__total_results  driver_stats__total_grid_positions 
+     │ Int64?    String?     String?      Int64?                       Int64?                             
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │        1  Lewis       Hamilton                          missing                            missing
+   2 │        2  Nick        Heidfeld                              100                                986
+  ⋮  │    ⋮          ⋮           ⋮                     ⋮                                    ⋮
+  50 │       50  Piero       Taruffi                               100                                524
+```
+
+**Note:** Drivers without results in the filtered race range will have `missing` values for CTE fields (depending on join type).
+
+### Multiple CTEs
+
+You can use multiple CTEs in a single query, each serving a different purpose:
+
+```julia
+# First CTE: Filter recent races
+recent_races = M.Race |> object;
+recent_races.filter("year__@gte" => 2020);
+recent_races.values("raceid", "name", "year");
+
+# Second CTE: Filter top drivers
+top_drivers = M.Driver |> object;
+top_drivers.filter("driverid__@lte" => 100);
+top_drivers.values("driverid", "forename", "surname");
+
+# Main query uses both CTEs
+query = M.Result |> object;
+With(query.object, "recent", recent_races, join_field="raceid" => "raceid");
+With(query.object, "top_d", top_drivers, join_field="driverid" => "driverid");
+
+query.values(
+    "resultid",
+    "recent__name",
+    "top_d__forename",
+    "points"
+);
+query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false);
+
+df = query |> DataFrame
+
+# Returns results combining both CTE filters:
+294×4 DataFrame
+ Row │ resultid  recent__name              top_d__forename  points   
+     │ Int64?    String?                   String?          Float64? 
+─────┼────────────────────────────────────────────────────────────────
+   1 │    25568  Bahrain Grand Prix        Lewis                 25.0
+   2 │    25570  Bahrain Grand Prix        Sergio                18.0
+   3 │    25574  Bahrain Grand Prix        Lance                  1.0
+  ⋮  │    ⋮              ⋮                      ⋮             ⋮
+ 294 │    26753  Abu Dhabi Grand Prix      Lando                 10.0
+```
+
+### CTE with Join Types
+
+By default, PormG uses `LEFT JOIN` for CTEs, but you can specify the join type:
+
+```julia
+using PormG.QueryBuilder: Sum
+
+# Create CTE for high-scoring drivers
+high_scorers = M.Result |> object;
+high_scorers.filter("points__@gte" => 10);
+high_scorers.values("driverid", "max_points" => Sum("points"));
+
+# Use INNER JOIN to only include drivers with high scores
+query = M.Driver |> object;
+With(query.object, "high_scorers", high_scorers, 
+     join_field="driverid" => "driverid", 
+     join_type="INNER");
+
+query.values("driverid", "forename", "max_points" => "high_scorers__max_points");
+query.filter("driverid__@lte" => 100);
+
+df = query |> DataFrame
+
+# Only returns 29 drivers who scored 10+ points:
+29×3 DataFrame
+ Row │ driverid  forename     max_points 
+     │ Int64?    String?      Int64?     
+─────┼──────────────────────────────────
+   1 │        1  Lewis              4865
+   2 │        4  Fernando           2046
+   3 │        8  Kimi               1859
+  ⋮  │    ⋮          ⋮           ⋮
+  29 │       22  Jenson              132
+```
+
+**Available join types:**
+- `"LEFT"` (default): Includes all records from main table
+- `"INNER"`: Only includes records that match both tables
+- `"RIGHT"`: Includes all records from CTE
+- `"FULL"`: Includes all records from both tables
+
 
 ## F Expressions
 

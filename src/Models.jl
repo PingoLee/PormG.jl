@@ -202,6 +202,7 @@ end
 function format_fild_name(name::Nothing)::Nothing
   return nothing
 end
+format_fild_name(name::Symbol)::String = name |> String |> format_fild_name
 
 function format_model_name(name::String)::String  
   return format_fild_name(name)  
@@ -260,6 +261,10 @@ end
 function Model(; fields...)
   return Model("", fields |> Tuple)
 end
+
+# ---
+# Functions to write models to string
+#
 
 """
 Converts a model object to a string representation to create the model.
@@ -325,6 +330,20 @@ function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   fields *= ",\n  $field_name = Models.$struct_name(\"$to\", $(join(sets, ", ")))"
   return fields
   
+end
+
+# ---
+# Tools to manage models
+#
+
+function foreign_keys_in_model(model::PormGModel)
+  fks = Dict{String, Any}()
+  for (fname, field) in model.fields
+    if hasfield(typeof(field), :to)   # detects ForeignKey / OneToOneField
+      fks[fname] = field
+    end
+  end
+  return fks
 end
 
 
@@ -492,11 +511,16 @@ function are_model_fields_equal(new_model::PormGModel, old_model::PormGModel)::B
   for (field_name, field) in new_fields
     if haskey(old_fields, field_name)
       old_fields[field_name]["exists"] = true
-      _compare_model_field(field["field"], old_fields[field_name]["field"]) || return false     
+      _compare_model_field(field["field"], old_fields[field_name]["field"]) || return false
     else
       return false
     end
   end
+
+  if length(new_fields) != length(old_fields)
+    return false
+  end
+
   return true
 end
 function _compare_model_fields_prepare_fields(fields::Dict{String, PormGField})

@@ -264,7 +264,8 @@ end
   end
 
   function _alter_table_fields(conn::PormGPostgres, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn)::Nothing
-    if Models.are_model_fields_equal(model, current_schema[model_name][:model])
+    # @infiltrate model_name == :new_join_position
+    if Models.are_model_fields_equal(current_schema[model_name][:model], model)
       # println("Model $model_name are equal")
     else        
       # Compare fields
@@ -451,7 +452,8 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
 
   for model in models # models is olds models
     model_name = model.name |> Symbol
-    @infiltrate false 
+    # model_name = lowercase(string(model.name)) |> Symbol
+    @infiltrate false
     if haskey(current_schema, model_name)
       current_schema[model_name][:exist] = true
       _alter_table_fields(conn, migration_plan, model_name, model, current_schema, settings)
@@ -504,6 +506,8 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
    
   end
 
+  @infiltrate false
+
   # at last check all models in futher_processing to drop
   if haskey(futher_processing, :drop_table)
     for (model_name, model_info) in futher_processing[:drop_table]
@@ -543,9 +547,14 @@ function makemigrations(connection::PormGPostgres, settings::SQLConn; path::Stri
   # get module from the path
   temp_module = Module(:TemporaryModels)
   Base.include(temp_module, path)
-  current_models = get_all_models(temp_module.models)
+  # current_models = get_all_models(Base.invokelatest(getfield, temp_module, :models))
+  current_models = Base.invokelatest(get_all_models, Base.invokelatest(getfield, temp_module, :models)) # TODO : i need create abstrations to deal with change :models name
+
+  @infiltrate false
   
   migration_plan = get_migration_plan(models_array, current_models, connection, settings)
+
+  @infiltrate 
 
   # store migration_plan as pending_migrations.jl file
   if migration_plan |> isempty
@@ -616,13 +625,17 @@ function migrate(connection::PormGPostgres, settings::SQLConn; path::String = "d
   end
 
   # Load the migration plan
-  migration_plan = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")) |> get_all_dicts
+  # migration_plan = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")) |> get_all_dicts
+  temp_migration_module = include(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl"))
+  migration_plan = Base.invokelatest(get_all_dicts, temp_migration_module)
 
   # build the transaction to apply the migration plan
   fisrt_execution::Vector{String} = []
   second_execution::Vector{String} = []
   third_execution::Vector{String} = []
   last_execution::Vector{String} = []
+
+  @infiltrate false
 
   for dict_instructs in migration_plan
     # println("Executing: $dict_instructs")
@@ -725,6 +738,7 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
     # index > 4 && break
   end  
   # println(models_array)
+  # @infiltrate 
   return models_array
 end
   
@@ -846,6 +860,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     """
 
   df = DataFrame(fetch(db, query))
+  # @infiltrate false
   if nrow(df) == 0
       @warn("No tables found in the database.")
   end

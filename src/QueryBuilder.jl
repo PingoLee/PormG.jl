@@ -134,7 +134,8 @@ end
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
-  row_join::Vector{Dict{String, Any}} = [] # array of dictionary to be used in join query
+  row_join::Vector{Dict{String, Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}} = [] # array of dictionary to be used in join query
+  row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{String, PormGField} = sizehint!(Dict{String, PormGField}(), 12) # cache to be used in join query
   connection::Union{SQLite.DB, PormGPostgres, Nothing} = nothing
@@ -179,7 +180,6 @@ SQLField(field::Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}; _as::Unio
 SQLField(field::Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}, _as::Union{String, Nothing}) = SQLField(field, _as, nothing)
 Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as)
 
-
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
   field::Union{SQLTypeField, String}
@@ -207,12 +207,13 @@ mutable struct SQLObjectQuery <: SQLObject
   list_joins::Vector{String} # is ther a better way to do this?
   row_join::Vector{Dict{String, Any}}  
   distinct::Bool # Add distinct field
-  ctes::Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}} # CTE name => Dict("query" => handler, field_name => PormGModel)
+  ctes::Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}}
+  custom_join::Dict{String, Any} 
   parameters::Union{Nothing, PormGPostgresParam}
 
   SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, ctes = Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}}(), parameters = nothing) = # Add ctes to constructor
-    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, parameters) # Add ctes to new
+        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, ctes = Dict{String, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}}(), custom_join = Dict{String, Any}(), parameters = nothing) = # Add ctes and custom_join to constructor
+    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
 end
 
 #
@@ -502,6 +503,10 @@ function Base.:*(operand::Union{Integer, Float64}, f::FExpression)
   )
 end
 
+
+#
+# SQLTypeFunction Objects (functions from sql)
+#
 
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
@@ -860,6 +865,150 @@ function _query_select(array::Vector{SQLTypeField})
   end   
 end
 
+export cjoin
+
+"""
+Add a custom join to the query object that does not have to follow the model's foreign key relationships.
+
+# Arguments
+ - `q::SQLObject`: The SQL object to add the custom join to
+ - `main_join::Pair{String, String}`: A pair where the first element is the field in the main model to join on, and the second element is the related model name to join with
+ - `filters::AbstractVector`: (Optional) An array of filters (Pair, Q, Qor, OP, F) to apply to the join condition
+ - `join_type::Union{String, Nothing}`: (Optional) The type of join
+
+# Examples
+```julia
+  query = M.New_join_position |> object;
+  cjoin(query, "result" => "Result");
+  query.values("result__statusid__status", "description", "result");
+
+  @info query |> show_query
+  ┌ Info: SELECT
+  │    "Tb_2"."status" as result__statusid__status,
+  │   "Tb"."description" as description,
+  │   "Tb"."result" as result
+  │ FROM "new_join_position" as "Tb"
+  │  LEFT JOIN "result" AS "Tb_1" ON "Tb"."result" = "Tb_1"."resultid"
+  └  LEFT JOIN "status" AS "Tb_2" ON "Tb_1"."statusid" = "Tb_2"."statusid"
+```
+"""
+function cjoin(
+  q::SQLObject, 
+  main_join::Union{Pair{String, String}, Nothing},
+  filters::AbstractVector,
+  field::Union{PormGField, Nothing},
+  join_type::Union{String, Nothing})
+  
+  # # Validations
+  if main_join === nothing 
+    throw(ArgumentError("Please, main_join argument is required to create a new join."))
+  end
+
+  # if field_destination !== nothing && !contains(field_destination, "__")
+  #   throw(ArgumentError("Invalid field_destination format: '$field_destination'. Expected format 'related_model__field'."))
+  # end
+  if (split(main_join.first, "__") |> length) > 1
+    throw(ArgumentError("That is not supported yet: main_join with related fields. Please, provide just the field name of the main model."))
+  end
+
+  @infiltrate false
+  if (split(main_join.first, "__") |> length) == 1 && main_join.first ∉ q.model.field_names
+    throw(ArgumentError("The field '$(main_join.first)' is not a field in model '$(q.model.table_name)'. The fields are: $(q.model.field_names)"))
+  end
+
+  @infiltrate false
+    
+  # Parse filters into proper Q/Qor/OP objects
+  parsed_filters = Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}()
+  for filter in filters
+    if isa(filter, Pair)
+      push!(parsed_filters, _check_filter(filter))
+    elseif isa(filter, Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF})
+      push!(parsed_filters, filter)
+    else
+      throw(ArgumentError("Invalid filter type: $(typeof(filter)). Use Pair, Q, Qor, OP, or F expressions."))
+    end
+  end
+
+  @infiltrate false
+
+  if field === nothing
+    # No field provided, create a default PormGField for the join
+
+    #   test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
+    if !isdefined(q.model._module, main_join.second |> Symbol)
+      throw(ArgumentError("Model '$(main_join.second)' not found in module. Please remember that model names are case-sensitive."))
+      return nothing
+    end
+    foreign_model = getfield(q.model._module, Symbol(main_join.second))
+    @infiltrate false
+    pk_field = Models.get_model_pk_field(foreign_model)
+    if !isa(pk_field, Symbol)
+      throw(ArgumentError("Foreign model '$(foreign_model.name)' does not have a valid/single primary key field."))
+    end
+    field = Models.ForeignKey(
+      foreign_model,
+      pk_field=pk_field,
+      on_delete="RESTRICT",
+      null=true,
+      related_name="$(q.model.name)_$(main_join.second)_join",
+      how=join_type
+    )
+  end
+
+  
+  # Store in custom_join dict
+  if !haskey(q.custom_join, main_join.first)
+    q.custom_join[main_join.first] = Dict{String, Any}("filters" => parsed_filters, "field" => field)
+  else 
+    throw(ArgumentError("Join path '$(main_join.first)' already exists"))
+  end
+  
+  
+  return q
+end
+
+# Convenience function for ObjectHandler
+function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String, String}, Nothing}; kwargs...)
+    accepted = Set([:filters, :field, :join_type])
+    for k in keys(kwargs)
+      if !(k in accepted)
+        throw(ArgumentError("Invalid keyword argument: \e[31m$k\e[0m. Accepted: \e[31m$(collect(accepted))\e[0m"))
+      end
+    end
+    filters = get(kwargs, :filters, nothing)
+    field = get(kwargs, :field, nothing)
+    join_type = get(kwargs, :join_type, nothing)
+
+    _filters::Vector{Union{Pair, SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}} = Vector{Union{Pair, SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}()
+    @infiltrate false
+    if filters === nothing
+      # pass
+    elseif isa(filters, Union{Pair, SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF})
+      push!(_filters, filters)
+    elseif isa(filters, Vector)
+      for f in filters
+        if isa(f, Union{Pair, String, SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF})
+          push!(_filters, f)
+        else
+          throw(ArgumentError("Invalid filter type in array: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
+        end
+      end
+    else
+      throw(ArgumentError("Invalid filters type: $(typeof(filters)). Use a Pair, Q, Qor, OP, F expression, or an array of these."))
+    end
+
+    if field !== nothing && !isa(field, PormGField)
+      throw(ArgumentError("Invalid field type: $(typeof(field)). Use a PormGField or nothing."))
+    end
+
+    @infiltrate false
+
+    cjoin(q.object, main_join, _filters, field, join_type)
+    return q
+end
+cjoin(q::SQLObjectHandler; kwargs...) = cjoin(q, nothing; kwargs...)
+
 function order_by!(q::SQLObject, values::NTuple{N, Union{String, SQLTypeOrder}} where N)
   q.order = [] # every call of order_by, reset the order
   for v in values 
@@ -994,7 +1143,8 @@ function Base.deepcopy(obj::SQLObjectQuery)
       list_joins = deepcopy(obj.list_joins),
       row_join = deepcopy(obj.row_join),
       distinct = obj.distinct,
-      ctes = deepcopy(obj.ctes)
+      ctes = deepcopy(obj.ctes),
+      custom_join = deepcopy(obj.custom_join)
     )
   catch e
     @infiltrate false
@@ -1221,7 +1371,7 @@ function _get_alias_name(df::DataFrames.DataFrame, alias::String)
     count += 1
   end
 end
-function _get_alias_name(row_join::Vector{Dict{String, Any}}, alias::String)
+function _get_alias_name(row_join::Vector{Dict{String, Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}}, alias::String)
   array = vcat([r["alias_a"] for r in row_join], [r["alias_b"] for r in row_join])
   count = 1
   while true
@@ -1233,16 +1383,21 @@ function _get_alias_name(row_join::Vector{Dict{String, Any}}, alias::String)
   end
 end
 
-function _insert_join(row_join::Vector{Dict{String, Any}}, row::Dict{String,String})
+function _insert_join(
+  row_join::Vector{Dict{String, Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}}, 
+  row::Dict{String, Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}, 
+  row_path::Vector{String}, join_path::String)
   @infiltrate false
   if size(row_join, 1) == 0
     push!(row_join, row)
+    push!(row_path, join_path)
     return row["alias_b"]
   else
     check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"] && r["alias_a"] == row["alias_a"], row_join)
     if size(check, 1) == 0
       @infiltrate false
       push!(row_join, row)
+      push!(row_path, join_path)
       return row["alias_b"]
     else
       if size(check, 1) > 1
@@ -1299,12 +1454,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   vector = copy(field) 
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
-  row_join = sizehint!(Dict{String,String}(), 8)
+  row_join = sizehint!(Dict{String,Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}(), 8)
  
   @infiltrate false
 
   first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
   last_field::Union{Nothing, PormGField} = nothing
+  join_path = field[1]
 
   # Check if first_column references a CTE table
   if haskey(instruct.object.ctes, vector[1])
@@ -1335,11 +1491,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     foreign_table_name = cte_model
     last_field = cte_model.fields[vector[2]]
    
-  elseif first_column in instruct.object.model.field_names # vector moust be a field from the model    
+  elseif first_column in instruct.object.model.field_names || haskey(instruct.object.custom_join, join_path)
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
-    first_field = instruct.object.model.fields[first_column]
-    @infiltrate false
+    # @infiltrate
+    first_field = haskey(instruct.object.custom_join, join_path) ? instruct.object.custom_join[join_path]["field"] : instruct.object.model.fields[first_column]
+    # @infiltrate
     row_join["how"] = _determine_join_type(first_field)
     foreign_table_name = first_field.to
     if foreign_table_name === nothing
@@ -1351,7 +1508,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
     end
-    # row_join["alias_b"] = _get_alias_name(instruct.df_join) # TODO chage by row_join and test the speed
+    # @infiltrate
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["key_b"] = first_field.pk_field::String
     row_join["key_a"] = first_column
@@ -1383,23 +1540,36 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     @infiltrate false
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
+
+  if haskey(instruct.object.custom_join, join_path)
+    @infiltrate false
+    row_join["on_conditions"] = instruct.object.custom_join[join_path]["filters"]
+  end
+
+  tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path) 
   
   vector = vector[2:end]  
 
   @infiltrate false
-  tb_alias = _insert_join(instruct.row_join, row_join)
+  
   while size(vector, 1) > 1
     # get new object
     @infiltrate false
+    join_path = join(field[1:length(field)-length(vector) + 1], "__")
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
     first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+
+    # Create a new Dict for this join to avoid mutating previously inserted joins
+    prev_how = row_join["how"]
+    prev_b = row_join["b"]
+    row_join = sizehint!(Dict{String,Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}(), 8)
 
     if first_column in new_object.field_names
       first_field = new_object.fields[first_column]
       !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
-      row_join["a"] = row_join["b"]
+      row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias      
-      row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=row_join["how"])
+      row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=prev_how)
       foreign_table_name = new_object.fields[first_column].to
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
@@ -1418,10 +1588,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       reverse_model = getfield(foreing_table_module, s_model)
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
       !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
-      row_join["a"] = row_join["b"]
+      row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias
       last_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
-      row_join["how"] = _determine_join_type(last_field, previus_how=row_join["how"])
+      row_join["how"] = _determine_join_type(last_field, previus_how=prev_how)
       foreign_table_name = new_object.related_objects[vector[1]][3] |> String
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
@@ -1440,8 +1610,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
 
-    @infiltrate false
-    tb_alias = _insert_join(instruct.row_join, row_join)
+    @infiltrate false   
+    if haskey(instruct.object.custom_join, join_path)
+      row_join["on_conditions"] = instruct.object.custom_join[join_path]["filters"]
+    end
+    
+    tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
 
     vector = vector[2:end]
   end
@@ -1450,7 +1624,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # last_column is the last column in the join ex. last_login
   # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
-  @infiltrate false
+  # @infiltrate
 
   # println("$(join(field, "__"))")
   # functions must be processed here
@@ -1843,7 +2017,30 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
     key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
     key_b_quoted = quote_identifier(value["key_b"], instruc.connection)
-    push!(instruc.join, """ $(value["how"]) JOIN $b_quoted AS $alias_b_quoted ON $alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted """)
+    
+    # Build base ON clause
+    on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
+    
+    # Add additional ON conditions if present (from cjoin or CustomJoin)
+    if haskey(value, "on_conditions") && value["on_conditions"] !== nothing
+      on_conditions = value["on_conditions"]::Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}      
+      original_alias = instruc.alias
+      
+      for condition in on_conditions
+        condition_sql = _get_filter_query(condition, instruc)        
+        condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
+        
+        if haskey(value, "b")
+          table_b_name = value["b"]        
+        end
+        
+        on_clause *= " AND $condition_sql"
+      end
+      
+      instruc.alias = original_alias
+    end
+    
+    push!(instruc.join, """ $(value["how"]) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
   end
 end
 
@@ -2400,7 +2597,7 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
   end
 end
 
-function _build_from_tables(row_join::Vector{Dict{String, Any}}, connection)
+function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}}, connection)
   tables = String[]
   for join_dict in row_join
     try
@@ -2413,7 +2610,7 @@ function _build_from_tables(row_join::Vector{Dict{String, Any}}, connection)
   end
   return join(tables, ", ")
 end
-function _build_join_conditions(row_join::Vector{Dict{String, Any}}, connection)
+function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vector{Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}}}}}, connection)
   conditions = String[]
   for join_dict in row_join
     try

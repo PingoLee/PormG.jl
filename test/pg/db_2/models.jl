@@ -90,6 +90,12 @@ Just_a_test_deletion = Models.Model(
   test_result2 = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
 )
 
+New_join_position = Models.Model(
+  id = Models.IDField(),
+  description = Models.CharField(),
+  result = Models.IntegerField(null=true)
+)
+
 
 Models.set_models(@__MODULE__, @__DIR__) # That is important to set the models in the module, otherwise it will not work, that need stay at the end of the file
 

@@ -19,6 +19,7 @@ PormG.Configuration.load("db_2")
 import PormG: Models, Dialect
 import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
+import PormG.QueryBuilder: cjoin
 
 
 # load models
@@ -31,80 +32,141 @@ import PormG.models as M
 
 # conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
 @testset "Database Setup and Bulk Insert" begin
-    # Clear all tables
-    delete(M.Circuit |> object, allow_delete_all = true, show_query = false)
-    delete(M.Status |> object, allow_delete_all = true)
-    delete(M.Driver |> object, allow_delete_all = true)
-    delete(M.Constructor |> object, allow_delete_all = true)
-    delete(M.Result |> object, allow_delete_all = true)
-    delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+  # Clear all tables
+  delete(M.Circuit |> object, allow_delete_all = true, show_query = false)
+  delete(M.Status |> object, allow_delete_all = true)
+  delete(M.Driver |> object, allow_delete_all = true)
+  delete(M.Constructor |> object, allow_delete_all = true)
+  delete(M.Result |> object, allow_delete_all = true)
+  delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
 
-    # Single insertions for Status
-    path_load = joinpath("f1", "status.csv")
-    df = CSV.File(path_load) |> DataFrame
+  # Single insertions for Status
+  path_load = joinpath("f1", "status.csv")
+  df = CSV.File(path_load) |> DataFrame
 
-    query = M.Status |> object
-    initial_count = query |> do_count
-    for row in eachrow(df)
-      try
-        dt = query.create("statusid" => row.statusId, "status" => row.status)
-      catch e
-        @error "Error inserting status row" statusId=row.statusId error=e
-      end
-    end
-    @test query |> do_count == initial_count + nrow(df)
-
-    # Insert Circuits
-    query = M.Circuit |> object
-    bulk_insert(query, CSV.File(joinpath("f1", "circuits.csv")) |> DataFrame)
-
-    # Bulk insert for Race with expected error
-    query = M.Race |> object
-    path_load = joinpath("f1", "races.csv")
-    df = CSV.File(path_load) |> DataFrame
-    rename!(df, lowercase.(names(df)))
-    got_error = false
+  query = M.Status |> object
+  initial_count = query |> do_count
+  for row in eachrow(df)
     try
-        bulk_insert(query, df)
+      dt = query.create("statusid" => row.statusId, "status" => row.status)
     catch e
-        got_error = true
+      @error "Error inserting status row" statusId=row.statusId error=e
     end
-    @test got_error
+  end
+  @test query |> do_count == initial_count + nrow(df)
 
-    # Pre-processing and bulk insert for Race
-    rename!(df, lowercase.(names(df)))
-    for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
-        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-    end
-    try
-        bulk_insert(query, df, copy=true)
-    catch e
-        @error "Error in bulk_insert for Race after pre-processing" error=e
-    end
-    @test query |> do_count > 0
+  # Insert Circuits
+  query = M.Circuit |> object
+  bulk_insert(query, CSV.File(joinpath("f1", "circuits.csv")) |> DataFrame)
 
-    # Insert Drivers
-    query = M.Driver |> object
-    df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
-    for col in [:number]
-        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-    end
-    bulk_insert(query, df)
-    @test query |> do_count == 861
+  # Bulk insert for Race with expected error
+  query = M.Race |> object
+  path_load = joinpath("f1", "races.csv")
+  df = CSV.File(path_load) |> DataFrame
+  rename!(df, lowercase.(names(df)))
+  got_error = false
+  try
+      bulk_insert(query, df)
+  catch e
+      got_error = true
+  end
+  @test got_error
 
-    # Insert Constructors
-    query = M.Constructor |> object
-    bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame)
+  # Pre-processing and bulk insert for Race
+  rename!(df, lowercase.(names(df)))
+  for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
+      df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+  end
+  try
+      bulk_insert(query, df, copy=true)
+  catch e
+      @error "Error in bulk_insert for Race after pre-processing" error=e
+  end
+  @test query |> do_count > 0
 
-    query = M.Result |> object;
-    df = CSV.File(joinpath("f1", "results.csv")) |> DataFrame
-    # lowercase the column names
-    rename!(df, lowercase.(names(df)))
-    for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
-        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-    end
-    bulk_insert(query, df)
-    @test query |> do_count == 26759
+  # Insert Drivers
+  query = M.Driver |> object
+  df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
+  for col in [:number]
+      df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+  end
+  bulk_insert(query, df)
+  @test query |> do_count == 861
+
+  # Insert Constructors
+  query = M.Constructor |> object
+  bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame)
+
+  query = M.Result |> object;
+  df = CSV.File(joinpath("f1", "results.csv")) |> DataFrame
+  # lowercase the column names
+  rename!(df, lowercase.(names(df)))
+  for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
+      df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+  end
+  bulk_insert(query, df)
+  @test query |> do_count == 26759
+end
+
+@testset "Testing cjoin with simple join" begin
+  delete(M.New_join_position |> object, allow_delete_all = true, show_query = false)
+  query = M.New_join_position |> object;
+  query.create("result" => 1, "description" => "teste 1")
+  query.create("result" => 2, "description" => "teste 2")
+  query.create("result" => 3, "description" => "teste 3")
+
+  query = M.New_join_position |> object;
+  cjoin(query, "result" => "Result");
+  query.values("result__statusid__status", "description", "result");
+
+  df = query |> DataFrame
+
+  @test size(df, 1) == 3
+  @test unique(df.result__statusid__status) == ["Finished"]
+  
+end
+
+@testset "Testing cjoin with custom filter" begin
+  query = M.New_join_position |> object;
+  cjoin(query, "result" => "Result", filters=[
+      "description" => "teste 1"]);
+
+  # @info query |> show_query
+  df = query |> DataFrame
+
+  # cjoin not is applied because none filter none matches use the join informed
+  @test size(df, 1) == 3
+  @test df |> names |> length == 3
+
+
+  query = M.New_join_position |> object;
+  cjoin(query, "result" => "Result", filters=[
+      "description" => "teste 1"]);
+
+  query.values("result__statusid__status", "description", "result")
+
+  # @info query |> show_query
+  df = query |> DataFrame
+
+  @test size(df, 1) == 3
+  @test "result__statusid__status" in  df |> names 
+  @test df[df.description .== "teste 1", :result__statusid__status][1] == "Finished"
+  @test df[df.description .== "teste 2", :result__statusid__status][1] === missing
+
+  query = M.New_join_position |> object;
+  cjoin(query, "result" => "Result", filters=[
+      "description" => "teste 1"],
+      join_type="INNER");
+
+  query.values("result__statusid__status", "description", "result");
+
+  # @info query |> show_query
+  df = query |> DataFrame
+
+  @test size(df, 1) == 1
+  @test df[1, :description] == "teste 1"
+  @test df[1, :result__statusid__status] == "Finished"
+
 end
 
 @testset "Test list query" begin
@@ -139,46 +201,45 @@ end
 end
 
 @testset "Single and Bulk Insert/Update" begin
-    query = M.Just_a_test_deletion |> object;
-    query |> do_exists && delete(query; allow_delete_all = true);
-    query.create("name" => "test", "test_result" => 1)
-    query.create("name" => "test", "test_result" => 2)
-    query.create("name" => "test", "test_result" => 3)
-    @test query |> do_count == 3
+  query = M.Just_a_test_deletion |> object;
+  query |> do_exists && delete(query; allow_delete_all = true);
+  query.create("name" => "test", "test_result" => 1)
+  query.create("name" => "test", "test_result" => 2)
+  query.create("name" => "test", "test_result" => 3)
+  @test query |> do_count == 3
 
-    # Update single row
-    query.filter("test_result" => 1)
-    query.update("name" => "test_update")
-    query.filter("name" => "test_update")
-    @test query |> do_count == 1
+  # Update single row
+  query.filter("test_result" => 1)
+  query.update("name" => "test_update")
+  query.filter("name" => "test_update")
+  @test query |> do_count == 1
 
-    # Bulk update
-    query = M.Just_a_test_deletion |> object
-    df = query |> DataFrame
-    for (index, row) in enumerate(eachrow(df))
-        row.name = "test_update_$(index)"
-    end
-    bulk_update(query, df, columns=["name"], filters=["id"])
-    query = M.Just_a_test_deletion |> object
-    query.filter("name" => "test_update_1")
-    @test query |> do_count == 1
+  # Bulk update
+  query = M.Just_a_test_deletion |> object
+  df = query |> DataFrame
+  for (index, row) in enumerate(eachrow(df))
+      row.name = "test_update_$(index)"
+  end
+  bulk_update(query, df, columns=["name"], filters=["id"])
+  query = M.Just_a_test_deletion |> object
+  query.filter("name" => "test_update_1")
+  @test query |> do_count == 1
 
-    # Bulk update with static filters
-    query = M.Just_a_test_deletion |> object
-    df = query |> DataFrame
-    for (index, row) in enumerate(eachrow(df))
-        row.name = "test_bulk_update"
-    end
-    bulk_update(query, df, columns=["name"], filters=["id", "test_result" => 1], show_query=false)
-    query = M.Just_a_test_deletion |> object
-    query.filter("name" => "test_bulk_update")
-    @test query |> do_count == 1
+  # Bulk update with static filters
+  query = M.Just_a_test_deletion |> object
+  df = query |> DataFrame
+  for (index, row) in enumerate(eachrow(df))
+      row.name = "test_bulk_update"
+  end
+  bulk_update(query, df, columns=["name"], filters=["id", "test_result" => 1], show_query=false)
+  query = M.Just_a_test_deletion |> object
+  query.filter("name" => "test_bulk_update")
+  @test query |> do_count == 1
 
-    bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
-    query = M.Just_a_test_deletion |> object
-    query.filter("name" => "test_bulk_update")
-    @test query |> do_count == 3
-
+  bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
+  query = M.Just_a_test_deletion |> object
+  query.filter("name" => "test_bulk_update")
+  @test query |> do_count == 3
 end
 
 @testset "Single Update with joins" begin
@@ -207,27 +268,27 @@ end
 end
 
 @testset "Filtering and Value Selection" begin
-    # Filter by status
-    query = M.Status |> object;
-    query.filter("status" => "Engine");
-    @test query |> do_count ==  1
-    df = query |> DataFrame
-    @test "status" in names(df)
-    @test length(names(df)) == 2  # statusid and status
+  # Filter by status
+  query = M.Status |> object;
+  query.filter("status" => "Engine");
+  @test query |> do_count ==  1
+  df = query |> DataFrame
+  @test "status" in names(df)
+  @test length(names(df)) == 2  # statusid and status
 
-    # Join filter
-    query = M.Result |> object;
-    query.filter("statusid__status" => "Engine");
-    query.values("resultid", "statusid", "statusid__status");
-    df = query |> DataFrame;
-    @test query |> do_count == 2026
-    @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
+  # Join filter
+  query = M.Result |> object;
+  query.filter("statusid__status" => "Engine");
+  query.values("resultid", "statusid", "statusid__status");
+  df = query |> DataFrame;
+  @test query |> do_count == 2026
+  @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
 
-    # Chained values
-    query.values("resultid", "driverid__forename", "constructorid__name", "statusid__status", "grid", "laps");
-    df = query |> DataFrame
-    @test length(names(df)) == 6
-    @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
+  # Chained values
+  query.values("resultid", "driverid__forename", "constructorid__name", "statusid__status", "grid", "laps");
+  df = query |> DataFrame
+  @test length(names(df)) == 6
+  @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
 end
 
 @testset "Test subquerys" begin

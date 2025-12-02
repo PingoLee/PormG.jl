@@ -3,13 +3,12 @@
 using Documenter
 using PormG
 
-# Define the documentation directory
-docs_dir = "docs/src"
-
 # Build the documentation
 makedocs(
     sitename = "PormG Documentation",
     modules = [PormG, PormG.QueryBuilder, PormG.Models],
+    source = "src",
+    build = "build",
     pages = [
         "Home" => "index.md",
         "Configuration" => "configuration.md",
@@ -19,9 +18,13 @@ makedocs(
         "Writing" => "write.md",
         "Reading" => "read.md",
         "Import from Django" => "import_django.md",
+        "Custom Joins" => "custom_joins.md",
         "API" => "api.md"
     ],
-    format = Documenter.HTML(),
-    checkdocs = :none, # Disable checkdocs to avoid unnecessary checks during documentation build    
-    # checkdocs = :exports,
+    format = Documenter.HTML(
+        prettyurls = get(ENV, "CI", nothing) == "true",
+        canonical = "https://pingolee.github.io/PormG.jl",
+        assets = String[],
+    ),
+    checkdocs = :none,
 )

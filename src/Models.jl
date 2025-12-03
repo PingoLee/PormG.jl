@@ -301,9 +301,10 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
     end
   end
   model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
-  @info("""$(model.name) = Models.Model("$(model_name_abs)"$fields)""")
+  model_var_name = uppercasefirst(model.name)
+  @info("""$(model_var_name) = Models.Model("$(model_name_abs)"$fields)""")
 
-  return """$(model.name) = Models.Model("$(model_name_abs)"$fields)"""
+  return """$(model_var_name) = Models.Model("$(model_name_abs)"$fields)"""
 end
 function _model_to_str_general(field_name, field, struct_name, sets, fields)
   stadard_field = getfield(@__MODULE__, struct_name)()

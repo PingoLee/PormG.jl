@@ -719,7 +719,7 @@ Convert the database schema to models.
 # Description
 This function retrieves the database schema and converts it to models. It collects all create instructions and skips tables specified in the `ignore_table` vector. The function prints the type of each schema and returns the schema for debugging purposes. It stops processing after the fifth schema.
 """
-function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table)
+function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table, include_table::Union{Vector{String}, Nothing} = nothing)
   # Get all schema
   schemas = get_database_schema(db)
   # Colect all create instructions
@@ -730,6 +730,10 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
   for (index, schema) in enumerate(eachrow(schemas))
     # println(schema |> typeof)
     # println(schema)
+    # If include_table is specified, only include those tables
+    if include_table !== nothing
+      !any(included -> schema.table_name == included, include_table) && continue
+    end
     # check if each ignore_table value is contained in the schema.table_name
     any(ignored -> occursin(ignored, schema.table_name), ignore_table) && continue
     # println(typeof(schema), " ", convertSQLToModel(schema) |> println)
@@ -742,31 +746,113 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
   return models_array
 end
   
-function import_models_from_postgres(;db::PormGPostgres = connection(), 
-                                  force_replace::Bool=false, 
-                                  ignore_table::Vector{String} = postgres_ignore_table,
-                                  file::String="automatic_models.jl")
+"""
+    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table::Vector{String}=postgres_ignore_table, file::String="automatic_models.jl")
 
-  # check if db/models/automatic_models.jl exists
-  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
-      @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
-      return
-  elseif !ispath(joinpath(MODEL_PATH))
-      mkdir(joinpath(MODEL_PATH))
-  end
-  
-  models_array = convert_schema_to_models(db, ignore_table=ignore_table)
+Import models from a PostgreSQL database and generate a Julia file with model definitions.
 
-  # println(models_array)
+# Arguments
+- `db::String`: The database key from the configuration.
+- `force_replace::Bool=false`: Whether to overwrite the file if it already exists.
+- `ignore_table::Vector{String}=postgres_ignore_table`: A vector of table name patterns to ignore.
+- `file::String="automatic_models.jl"`: The output filename for the generated models.
 
-  # generate_models_from_db(db, file, Instructions)
-end
+# Description
+This function retrieves the database schema from PostgreSQL, converts each table to a PormG model,
+and generates a Julia module file containing all the model definitions. The generated file can be
+directly included in your project to work with the database tables.
 
+# Example
+```julia
+using PormG
+
+# Load the database configuration
+PormG.Configuration.load("db")
+
+# Import models from the database
+PormG.Migrations.import_models_from_postgres("db")
+
+# Or with options
+PormG.Migrations.import_models_from_postgres("db", force_replace=true, file="my_models.jl")
+```
+"""
 function import_models_from_postgres(db::String;
   force_replace::Bool=false, 
   ignore_table::Vector{String} = postgres_ignore_table,
-  file::String="automatic_models.jl")
-  import_models_from_postgres(db=connection(key=db), force_replace=force_replace, ignore_table=ignore_table, file=file)
+  include_table::Union{Vector{String}, Nothing} = nothing,
+  file::String="automatic_models.jl",
+  config::Dict{String,SQLConn} = config)
+  
+  settings = config[db]
+  conn = settings.connections
+  model_path = settings.db_def_folder
+  
+  # Check if the models file already exists
+  if isfile(joinpath(model_path, file)) && !force_replace
+      @warn("The file '$(joinpath(model_path, file))' already exists, use force_replace=true to replace it")
+      return nothing
+  end
+  
+  
+  # Convert the database schema to models
+  models_array = convert_schema_to_models(conn, ignore_table=ignore_table, include_table=include_table)
+  
+  if isempty(models_array)
+      @warn("No tables found in the database to import.")
+      return nothing
+  end
+  
+  # Convert each model to string representation
+  Instructions::Vector{Any} = []
+  for model in models_array
+      push!(Instructions, Models.Model_to_str(model, settings))
+  end
+  
+  # Generate the models file
+  generate_models_from_db(file, Instructions, settings, path=model_path)
+  
+  @info("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m")
+  @info("The models have been saved to '$(joinpath(model_path, file))'.")
+  
+  return nothing
+end
+
+function import_models_from_postgres(;db::PormGPostgres = connection(), 
+                                  settings::SQLConn,
+                                  force_replace::Bool=false, 
+                                  ignore_table::Vector{String} = postgres_ignore_table,
+                                  include_table::Union{Vector{String}, Nothing} = nothing,
+                                  file::String="automatic_models.jl")
+  
+  model_path = settings.db_def_folder
+  
+  # Check if the models file already exists
+  if isfile(joinpath(model_path, file)) && !force_replace
+      @warn("The file '$(joinpath(model_path, file))' already exists, use force_replace=true to replace it")
+      return nothing
+  end
+    
+  # Convert the database schema to models
+  models_array = convert_schema_to_models(db, ignore_table=ignore_table, include_table=include_table)
+  
+  if isempty(models_array)
+      @warn("No tables found in the database to import.")
+      return nothing
+  end
+  
+  # Convert each model to string representation
+  Instructions::Vector{Any} = []
+  for model in models_array
+      push!(Instructions, Models.Model_to_str(model, settings))
+  end
+  
+  # Generate the models file
+  generate_models_from_db(file, Instructions, settings, path=model_path)
+  
+  @info("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m")
+  @info("The models have been saved to '$(joinpath(model_path, file))'.")
+  
+  return nothing
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)

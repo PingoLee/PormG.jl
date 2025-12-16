@@ -46,7 +46,9 @@ PormG.Configuration.load("db_2")
 
 ## Preventing concurrent runs (PostgreSQL)
 - Use `with_advisory_lock(settings, "my_job_name") do ... end` to ensure long-running tasks (migrations, seeds, imports) do not run in parallel across processes.
-- The helper acquires a PostgreSQL advisory lock keyed by your string and releases it automatically, returning `false` if it could not acquire within the optional timeout.
+- Choose strategy: default `strategy = :poll` retries every `interval_ms`; use `strategy = :block` to let Postgres block with a `statement_timeout = timeout_ms` (avoids client-side polling).
+- Keys are hashed to a 64-bit bigint via MD5 to reduce collisions vs. `hashtext`.
+- If the session drops, Postgres releases the lock automatically; a subsequent unlock on a new session returns `false` but is harmless.
 - SQLite does not support advisory locks; the helper will no-op with a warning on that backend.
 
 ---

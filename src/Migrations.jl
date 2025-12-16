@@ -856,7 +856,25 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing)
-  # Modified query that adds identity info and checks single-column UNIQUE constraints
+  # Get PostgreSQL version to check for attidentity support
+  version_df = DataFrame(fetch(db, "SELECT split_part(version(), ' ', 2) AS version"))
+  pg_version = version_df[1, :version]
+  major_version = parse(Int, split(pg_version, ".")[1])
+  
+  # Build the identity case conditionally
+  identity_case = if major_version >= 10
+    """
+            || CASE
+                WHEN a.attidentity = 'a' THEN ' GENE_ALWAYS_IDENTITY'
+                WHEN a.attidentity = 'd' THEN ' GENE_BY_DEF_IDENTITY'
+                ELSE ''
+               END
+    """
+  else
+    ""
+  end
+  
+  # Modified query that adds identity info (if supported) and checks single-column UNIQUE constraints
   query = """
     WITH unique_constraints AS (
         SELECT
@@ -903,11 +921,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             || ' ' || format_type(a.atttypid, a.atttypmod)
             || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
             || CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END
-            || CASE
-                WHEN a.attidentity = 'a' THEN ' GENE_ALWAYS_IDENTITY'
-                WHEN a.attidentity = 'd' THEN ' GENE_BY_DEF_IDENTITY'
-                ELSE ''
-               END
+            $(identity_case)
             || CASE
                 WHEN array_length(u.unique_cols, 1) = 1
                      AND a.attname = ANY(u.unique_cols) THEN ' UNIQUE'
@@ -1124,12 +1138,19 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       unique::Bool = occursin("UNIQUE", col)
       not_null::Bool = occursin("NOT NULL", col)
       default_value = nothing
-      default_value = nothing
       if occursin("DEFAULT", col)
-          default_match = match(r"DEFAULT\s+([^ ]+)", col)
-          if default_match !== nothing
-              default_value = default_match.captures[1]
-          end
+        # Match DEFAULT followed by value, handling type casts like ::numeric
+        default_match = match(r"DEFAULT\s+((?:\([^)]+\)|[^:\s]+)(?:::[a-zA-Z_]+)?)", col)
+        if default_match !== nothing
+          raw_default = default_match.captures[1]
+          # Clean up the default value: remove type casts and parentheses for simple values
+          # e.g., "(0)::numeric" -> "0", "'value'::text" -> "value"
+          # TODO: store the type cast if necessary
+          cleaned_default = replace(raw_default, r"::[a-zA-Z_]+" => "")  # Remove type cast
+          cleaned_default = replace(cleaned_default, r"^\((.+)\)$" => s"\1")  # Remove outer parentheses
+          cleaned_default = replace(cleaned_default, r"^'(.+)'$" => s"\1")  # Remove quotes
+          default_value = cleaned_default
+        end
       end
       if primary_key
         if occursin("GENE_BY_DEF_IDENTITY", col)
@@ -1144,13 +1165,16 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         end
       end
 
-      @infiltrate false
+      # @infiltrate col == "qt_referencia bigint DEFAULT (0)::numeric"
+
+      # println(col)
       
       # Create field instance      
       field = if primary_key
           Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       elseif haskey(fk_map, col_name)
         fk_table, fk_column = fk_map[col_name]
+        fk_table = uppercasefirst(fk_table)
         if unique
           Models.OneToOneField(fk_table, pk_field=fk_column, null=!not_null, default=default_value, db_index=true)
         else
@@ -1161,7 +1185,12 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       end
 
       if max_length !== nothing
-        field.max_length = max_length
+        if max_length > 255
+          # CharField only supports max_length <= 255, use TextField for longer strings
+          field = Models.TextField(unique=unique, null=!not_null, default=default_value, db_index=db_index)
+        else
+          field.max_length = max_length
+        end
       end
 
       if max_digits !== nothing

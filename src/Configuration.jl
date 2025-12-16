@@ -9,7 +9,7 @@ import PormG.Infiltrator: @infiltrate
 import SQLite
 import LibPQ
 
-export env, Settings, connection
+export env, Settings, connection, close_pool!
 # app environments
 const DEV   = "dev"
 const PROD  = "prod"
@@ -218,7 +218,13 @@ function close_pool!(pool::PormGPostgres)
     end
   end
 end
-
+function close_pool!(db::String)
+  haskey(config, db) || throw("$(db) not found")
+  settings::SQLConn = config[db]
+  if settings.connections isa PormGPostgres
+    close_pool!(settings.connections)
+  end
+end
 
 function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_retries::Int = 20)
   start_time = time()
@@ -255,9 +261,11 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
               # @info "Created new connection in slot $i"
               return pool.connections[i]
             catch e
-              @error "Failed to create new connection in slot $i: $e" connection_string=pool.connection_string
+              
               pool.connections[i] = nothing
               pool.available[i] = true
+              @error "Failed to create new connection in slot $i: $e" connection_string=pool.connection_string
+              throw("Failed to create new connection in pool")
             end
           end
         end

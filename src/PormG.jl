@@ -66,7 +66,11 @@ using .Models
 include("Dialect.jl")
 import .Dialect
 
+include("AdvisoryLock.jl")
+using .AdvisoryLock
+
 export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin
+export with_advisory_lock, try_advisory_lock, release_advisory_lock
 
 include("QueryBuilder.jl")
 import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin, nj

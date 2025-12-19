@@ -9,7 +9,7 @@ import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn, PormGPostgres, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform
-import PormG.Configuration: fetch, with_transaction
+import PormG.Configuration: fetch, with_transaction, with_tx_context
 import PormG.Infiltrator: @infiltrate
 
 #
@@ -3533,15 +3533,8 @@ function delete(objct::SQLObjectHandler;
   if connection isa PormGPostgres
     @infiltrate false
     # Start transaction
-    # TODO: Check if the connection is in a transaction already
-    # TODO: deal with connection pools
     if show_query 
       conn = nothing
-    else
-      result, conn = with_transaction(settings, "BEGIN;")
-    end
-    
-    try
       # Process fast deletes first (objects that can be deleted directly)
       for (model, keys) in collector.fast_deletes
         delete_objects(connection, model, keys, show_query, deleted_counter, conn)
@@ -3549,7 +3542,6 @@ function delete(objct::SQLObjectHandler;
         delete!(collector.objects, model)
       end
 
-      
       # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
       for ((field, value), affected_models) in collector.field_updates
         @infiltrate false
@@ -3567,13 +3559,46 @@ function delete(objct::SQLObjectHandler;
           delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
         end
       end
-        
-      # Commit transaction
-      show_query || with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
-    catch e
-      # Rollback on error
-      show_query || with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
-      rethrow(e)
+    else
+      # Use transaction context to ensure all fetch() calls use the same connection
+      result, conn = with_transaction(settings, "BEGIN;")
+      
+      try
+        # Execute everything within transaction context
+        with_tx_context(settings.connections, conn) do
+          # Process fast deletes first (objects that can be deleted directly)
+          for (model, keys) in collector.fast_deletes
+            delete_objects(connection, model, keys, show_query, deleted_counter, conn)
+            # Remove from objects to prevent double deletion
+            delete!(collector.objects, model)
+          end
+
+          # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
+          for ((field, value), affected_models) in collector.field_updates
+            @infiltrate false
+            for (affected_model, keys) in affected_models
+              update_field(connection, affected_model, field, value, keys, show_query, conn)
+            end
+          end
+          
+          # Execute deletions in the sorted order
+          for model_to_delete in collector.sorted_models
+            @infiltrate false
+            _array = get(collector.objects, model_to_delete, [])        
+            if !isempty(_array)
+              @infiltrate false
+              delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+            end
+          end
+        end
+          
+        # Commit transaction
+        with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
+      catch e
+        # Rollback on error
+        with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
+        rethrow(e)
+      end
     end
   else
     # Similar implementation for SQLite

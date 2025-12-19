@@ -2833,6 +2833,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
     try
       return converter(default)
     catch e
+      @infiltrate
       throw(ArgumentError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end
   end

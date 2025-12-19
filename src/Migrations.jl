@@ -1322,17 +1322,22 @@ function parse_class(model_py_string::String)
       # Detect the start of a class definition
       if startswith(stripped_line, "class ")
         match_class = match(r"class\s+(\w+)\((models\.Model|AbstractUser)\).?", stripped_line)
-        class_name = match_class.captures[1]
-        class_type = match_class.captures[2]           
-        push!(class_colector, Dict("class_name" => class_name, "class_type" => class_type, "original_class" => "", "class_content" => []))
-        inside_class = true
+        if match_class !== nothing
+          class_name = match_class.captures[1]
+          class_type = match_class.captures[2]           
+          push!(class_colector, Dict("class_name" => class_name, "class_type" => class_type, "original_class" => "", "class_content" => []))
+          inside_class = true
+        end
       end
 
       # Append the line to the class content if inside a class
       # revome comments from the line      
       if inside_class
         class_colector[end]["original_class"] = class_colector[end]["original_class"] * "\n" * line
-        line = match(r"^(.*?)(#.*)?$", line).captures[1]
+        comment_match = match(r"^(.*?)(#.*)?$", line)
+        if comment_match !== nothing
+          line = comment_match.captures[1]
+        end
         push!(class_colector[end]["class_content"], line)
       end
   end 

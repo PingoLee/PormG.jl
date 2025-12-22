@@ -1520,7 +1520,6 @@ function CharField(; kwargs...)
       end
     end
     if default !== nothing
-      @infiltrate
       valid_defaults = choices isa Vector{String} ? return_just_strings(choices) : [return_just_strings(c[1]) for c in choices]
       if !(default in valid_defaults)
         throw(ArgumentError("The default value must be one of the choices"))

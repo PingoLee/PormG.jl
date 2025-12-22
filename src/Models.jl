@@ -1303,6 +1303,26 @@ function parse_choices(choices_str::String)
   return choices
 end
 
+function count_just_strings(key_value::AbstractString)
+  count = 0
+  pattern = r"^\s*['\"](.*)['\"]\s*$"
+  for line in split(key_value, '\n')
+    if occursin(pattern, line)
+      count += 1
+    end
+  end
+  return count
+end
+
+function return_just_strings(key_value::AbstractString)
+  pattern = r"^\s*['\"](.*)['\"]\s*$"
+  m = match(pattern, key_value |> String)
+  if m !== nothing
+    return m.captures[1]
+  end  
+  return key_value
+end
+
 """
     CharField(; kwargs...)
 
@@ -1495,12 +1515,12 @@ function CharField(; kwargs...)
       if !(choice[1] isa AbstractString)
         throw(ArgumentError("Choice values must be strings"))
       end
-      if length(choice[1]) > max_length
+      if count_just_strings(choice[1]) > max_length
         throw(ArgumentError("Choices cannot exceed max_length"))
       end
     end
     if default !== nothing
-      valid_defaults = choices isa Vector{String} ? choices : [c[1] for c in choices]
+      valid_defaults = choices isa Vector{String} ? return_just_strings(choices) : [return_just_strings(c[1]) for c in choices]
       if !(default in valid_defaults)
         throw(ArgumentError("The default value must be one of the choices"))
       end
@@ -2812,6 +2832,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
     try
       return converter(default)
     catch e
+      @infiltrate
       throw(ArgumentError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end
   end

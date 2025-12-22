@@ -44,5 +44,12 @@ PormG.Configuration.load("db_2")
 - The folder will also contain your models and migration files for that database.
 - If you try to load a configuration that does not exist, PormG will help you by creating a template.
 
+## Preventing concurrent runs (PostgreSQL)
+- Use `with_advisory_lock(settings, "my_job_name") do ... end` to ensure long-running tasks (migrations, seeds, imports) do not run in parallel across processes.
+- Choose strategy: default `strategy = :poll` retries every `interval_ms`; use `strategy = :block` to let Postgres block with a `statement_timeout = timeout_ms` (avoids client-side polling).
+- Keys are hashed to a 64-bit bigint via MD5 to reduce collisions vs. `hashtext`.
+- If the session drops, Postgres releases the lock automatically; a subsequent unlock on a new session returns `false` but is harmless.
+- SQLite does not support advisory locks; the helper will no-op with a warning on that backend.
+
 ---
 For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.

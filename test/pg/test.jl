@@ -33,83 +33,70 @@ import PormG.models as M
 # PormG.config["db_2"].connections.connections
 # PormG.config["db_2"].connections.available
 
-@testset "AdvisoryLock: non-blocking exclusivity" begin
-  dbname = first(keys(PormG.config))
-  key = "test_advisory_lock_$(uuid4())"
-  n = 5
-  counter = Atomic{Int}(0)
-  tasks = Vector{Task}(undef, n)
-
-  # Use wait=true with blocking strategy so tasks queue for the lock
-  @sync for i in 1:n
-    @async begin
-      try
-        # Acquire lock with server-side blocking (tasks queue if lock is held)
-        PormG.with_advisory_lock(dbname, key; wait=true, strategy=:pool, timeout_ms=6_000) do
-          # increment the counter only when the lock is held
-          @info "Inside lock block, task $i"
-          atomic_add!(counter, 1)
-          sleep(0.5)  # short critical section so all tasks can acquire in sequence
-        end
-      catch e
-        @error "Task $i failed to acquire lock" exception=e
-      end
-    end
-  end
-
-  # after all tasks complete, all 5 should have acquired and incremented
-  final_count = atomic_add!(counter, 0)
-  @info "Advisory lock test results" final_count
-  @test final_count == 5
-end
-
-@testset "AdvisoryLock: blocking with timeout" begin
-  dbname = first(keys(PormG.config))
-  key = "test_advisory_lock_timeout_$(uuid4())"
-
-  # First, acquire the lock in a separate task and hold it
-  lock_task = @async begin
-    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=10_000) do
-      @info "Lock holder task acquired lock"
-      sleep(5)  # hold the lock for 5 seconds
-      @info "Lock holder task releasing lock"
-    end
-  end
-
-  sleep(0.5)  # ensure the lock holder has started
-
-  # Now, attempt to acquire the same lock with a short timeout
-  got_error = false
-  try
-    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=1_000) do
-      @info "This should not print, as lock acquisition should time out"
-    end
-  catch e
-    @info "Expected timeout error caught" exception=e
-    got_error = true
-  end
-
-  @test got_error
-
-  # Wait for the lock holder to finish
-
-  # Now, attempt to acquire the lock again, this time it should succeed
-  acquired = false
-  try
-    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=15_000) do
-      @info "Successfully acquired lock after it was released"
-      acquired = true
-    end
-  catch e
-    @error "Failed to acquire lock unexpectedly" exception=e
-  end
-  @test acquired
-
-  wait(lock_task)
-end
-
 # conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
-@testset "Database Setup and Bulk Insert" begin
+@testset "Database Setup Insert" begin
+  @testset "Schema Evolution and Error Recovery" begin
+    # 1. Schema Evolution: Reordered columns and extra columns
+    query = M.Status |> object
+    delete(query, allow_delete_all=true)
+    
+    # Create DF with extra column and different order
+    df_evolved = DataFrame(
+      extra_col = ["ignore me", "me too"],
+      status = ["Evolved 1", "Evolved 2"],
+      statusid = [999, 1000]
+    )
+    
+    # Should work because 'extra_col' is not in model fields and others are mapped by name
+    bulk_insert(query, df_evolved)
+    query.filter("statusid" => 999)
+    @test query |> do_count == 1
+    query = M.Status |> object
+    query.filter("statusid" => 1000)
+    @test query |> do_count == 1
+    
+    # 2. Error Recovery: Atomicity on failure
+    query = M.Status |> object
+    initial_count = query |> do_count
+    df_bad = DataFrame(
+        statusid = [1001, 999, 1002], # 999 is a duplicate
+        status = ["Good", "Bad (Duplicate)", "Good"]
+    )
+    
+    got_error = false
+    try
+      bulk_insert(query, df_bad)
+    catch e
+      got_error = true  # bulk_insert now rethrows the underlying DB error (e.g., duplicate key)
+    end
+
+    @test got_error
+    # Verify atomicity: 1001 and 1002 should NOT be there
+    query = M.Status |> object
+    @test query |> do_count == initial_count
+    query.filter("statusid" => 1001)
+    @test query |> do_count == 0
+
+    # 3. Multi-chunk Error Recovery: Atomicity across chunks
+    delete(M.Status |> object, allow_delete_all=true)
+    df_multi = DataFrame(
+        statusid = [2001, 2002, 2001, 2003], # 2001 is repeated in the 3rd row
+        status = ["Chunk 1", "Chunk 1", "Chunk 2 (Fail)", "Chunk 2"]
+    )
+    
+    query = M.Status |> object;
+    got_error = false
+    try
+      bulk_insert(query, df_multi, chunk_size=2)
+    catch e
+      got_error = true  # async task failure is unwrapped, so catch sees the real constraint error
+    end
+
+    @test got_error
+    # Verify that even the first chunk (2001, 2002) was rolled back
+    @test query |> do_count == 0
+  end
+
   # Clear all tables
   delete(M.Circuit |> object, allow_delete_all = true, show_query = false)
   delete(M.Status |> object, allow_delete_all = true)
@@ -118,72 +105,78 @@ end
   delete(M.Result |> object, allow_delete_all = true)
   delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
 
-  # Single insertions for Status
-  path_load = joinpath("f1", "status.csv")
-  df = CSV.File(path_load) |> DataFrame
+  @testset "Single insertions" begin
 
-  query = M.Status |> object
-  initial_count = query |> do_count
-  for row in eachrow(df)
-    try
-      dt = query.create("statusid" => row.statusId, "status" => row.status)
-    catch e
-      @error "Error inserting status row" statusId=row.statusId error=e
+    path_load = joinpath("f1", "status.csv")
+    df = CSV.File(path_load) |> DataFrame
+
+    query = M.Status |> object
+    initial_count = query |> do_count
+    for row in eachrow(df)
+      try
+        dt = query.create("statusid" => row.statusId, "status" => row.status)
+      catch e
+        @error "Error inserting status row" statusId=row.statusId error=e
+      end
     end
-  end
-  @test query |> do_count == initial_count + nrow(df)
+    @test query |> do_count == initial_count + nrow(df)
 
-  # Insert Circuits
-  query = M.Circuit |> object
-  bulk_insert(query, CSV.File(joinpath("f1", "circuits.csv")) |> DataFrame)
-
-  # Bulk insert for Race with expected error
-  query = M.Race |> object
-  path_load = joinpath("f1", "races.csv")
-  df = CSV.File(path_load) |> DataFrame
-  rename!(df, lowercase.(names(df)))
-  got_error = false
-  try
-      bulk_insert(query, df)
-  catch e
-      got_error = true
   end
-  @test got_error
 
-  # Pre-processing and bulk insert for Race
-  rename!(df, lowercase.(names(df)))
-  for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
-      df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-  end
-  try
-      bulk_insert(query, df, copy=true)
-  catch e
-      @error "Error in bulk_insert for Race after pre-processing" error=e
-  end
-  @test query |> do_count > 0
+  @testset "Simple Bulk Insertions" begin
+    # Insert Circuits
+    query = M.Circuit |> object
+    bulk_insert(query, CSV.File(joinpath("f1", "circuits.csv")) |> DataFrame)
 
-  # Insert Drivers
-  query = M.Driver |> object
-  df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
-  for col in [:number]
-      df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-  end
-  bulk_insert(query, df)
-  @test query |> do_count == 861
+    # Bulk insert for Race with expected error
+    query = M.Race |> object
+    path_load = joinpath("f1", "races.csv")
+    df = CSV.File(path_load) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    got_error = false
+    try
+        bulk_insert(query, df)
+    catch e
+        got_error = true
+    end
+    @test got_error
 
-  # Insert Constructors
-  query = M.Constructor |> object
-  bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame)
+    # Pre-processing and bulk insert for Race
+    rename!(df, lowercase.(names(df)))
+    for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+    end
+    try
+        bulk_insert(query, df, copy=true)
+    catch e
+        @error "Error in bulk_insert for Race after pre-processing" error=e
+    end
+    @test query |> do_count > 0
 
-  query = M.Result |> object;
-  df = CSV.File(joinpath("f1", "results.csv")) |> DataFrame
-  # lowercase the column names
-  rename!(df, lowercase.(names(df)))
-  for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
-      df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-  end
-  bulk_insert(query, df)
-  @test query |> do_count == 26759
+    # Insert Drivers
+    query = M.Driver |> object
+    df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
+    for col in [:number]
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+    end
+    bulk_insert(query, df)
+    @test query |> do_count == 861
+
+    # Insert Constructors
+    query = M.Constructor |> object
+    bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, chunk_size=100)
+
+    query = M.Result |> object;
+    df = CSV.File(joinpath("f1", "results.csv")) |> DataFrame
+    # lowercase the column names
+    rename!(df, lowercase.(names(df)))
+    for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+    end
+    bulk_insert(query, df)
+    @test query |> do_count == 26759
+  end  
+
 end
 
 @testset "Testing cjoin with simple join" begin
@@ -281,18 +274,19 @@ end
 @testset "Single and Bulk Insert/Update" begin
   query = M.Just_a_test_deletion |> object;
   query |> do_exists && delete(query; allow_delete_all = true);
+  # Seed the table with a few rows so updates have targets
   query.create("name" => "test", "test_result" => 1)
   query.create("name" => "test", "test_result" => 2)
   query.create("name" => "test", "test_result" => 3)
   @test query |> do_count == 3
 
-  # Update single row
+  # Update a single row and ensure the filtered row is the only one affected
   query.filter("test_result" => 1)
   query.update("name" => "test_update")
   query.filter("name" => "test_update")
   @test query |> do_count == 1
 
-  # Bulk update
+  # Bulk update every row by reloading the query and mutating a DataFrame copy
   query = M.Just_a_test_deletion |> object
   df = query |> DataFrame
   for (index, row) in enumerate(eachrow(df))
@@ -303,7 +297,7 @@ end
   query.filter("name" => "test_update_1")
   @test query |> do_count == 1
 
-  # Bulk update with static filters
+  # Bulk update with an extra static filter to show the filter override behavior
   query = M.Just_a_test_deletion |> object
   df = query |> DataFrame
   for (index, row) in enumerate(eachrow(df))
@@ -314,6 +308,7 @@ end
   query.filter("name" => "test_bulk_update")
   @test query |> do_count == 1
 
+  # Removing the static filter restores the ability to update every row again
   bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
   query = M.Just_a_test_deletion |> object
   query.filter("name" => "test_bulk_update")
@@ -321,7 +316,7 @@ end
 end
 
 @testset "Single Update with joins" begin
-  # Update with JOIN - like Django's update with relationships
+  # Update a single joined row (driver with nationality filter) to verify F expressions invert cleanly
   query = M.Result |> object;
   query.filter("driverid__nationality" => "British", "resultid" => 1);
   query.values("resultid", "driverid__forename", "driverid__nationality", "points");
@@ -331,7 +326,7 @@ end
   @test df[1, :points] == 20.0
   query.update("points" => F("points") - 10)
 
-  # Update with complex JOINs
+  # Apply the same pattern for a more complex join path to ensure unrelated joins stay stable
   query = M.Result |> object;
   query.filter("raceid__circuitid__name__@icontains" => "Monaco", "resultid" => 7654);
   query.values("resultid", "statusid__status", "driverid__forename", "driverid__nationality", "points");  
@@ -394,6 +389,7 @@ end
     @test query |> do_count == 40
     @test query |> do_exists
 end
+
 @testset "Ordering and Aggregations" begin
     query = M.Result |> object;
     query.values("statusid__status", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
@@ -407,6 +403,7 @@ end
     @test df[1, :raceid__circuitid__name] == "Adelaide Street Circuit"
     @test df[39, :raceid__circuitid__name] == "Suzuka Circuit"
 end
+
 @testset "Filtering" begin
     # Contains and icontains
     query = M.Result |> object;
@@ -535,38 +532,38 @@ end
 
   query.filter("test_result" => 1)
 
-  # Update a value with a F expression  
+  # Update a value with a F expression so that test_result2 mirrors the filtered test_result
   query.update("test_result2" => F("test_result"))
   query2 = M.Just_a_test_deletion |> object
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 1
 
-  # F("test_result") + 1 
+  # Use F("test_result") + 1 to verify arithmetic on expressions
   query.update("test_result2" => F("test_result") + 1)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 2
 
-  # F("test_result2") * 2
+  # Double the existing test_result2 using a second F expression
   query.update("test_result2" => F("test_result2") * 2)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 4
 
-  # F("test_result2") / 2
+  # Divide test_result2 through another update to recover the original base
   query.update("test_result2" => F("test_result2") / 2)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 2
 
-  # F("test_result") + F("test_result")
+  # Use two F expressions in the same update to test expression addition
   query.update("test_result2" => F("test_result") + F("test_result"))
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 2
 
-  # F("test_result2") - 1
+  # Subtract one from F("test_result2") to ensure the builder handles subtraction
   query.update("test_result2" => F("test_result2") - 1)
   df = query2 |> DataFrame
   @test df[df.test_result .== 1, :test_result2][1] == 1
 
-  # Set to missing
+  # Set the expression column to missing to verify null propagation
   query.update("test_result2" => missing)
   df = query2 |> DataFrame
   @test ismissing(df[df.test_result .== 1, :test_result2][1])
@@ -577,6 +574,7 @@ end
   query = M.Just_a_test_deletion |> object
   query.filter("test_result" => 1)
   try
+    # Attempt to reference a joined field via F to see if the validator rejects it
     query.update("test_result2" => F("test_result__statusid"))
   catch e
     @info "Expected error or no-op for join F expression (statusid)" error=e
@@ -589,6 +587,7 @@ end
   query = M.Just_a_test_deletion |> object
   query.filter("test_result" => 1)
   try
+    # Another join-based F expression to ensure errors remain informative
     query.update("test_result2" => F("test_result__driverid__number"))
   catch e
     @info "Expected error or no-op for join F expression (driverid__number)" error=e
@@ -736,6 +735,102 @@ end
     
 end
 
+@testset "Advanced check parameters binding" begin
+  # 1. Verify basic binding order and type formatting
+  query = M.Result |> object
+  query.filter("resultid" => 1, "points" => "10.5", "driverid__forename" => "Lewis")
+  
+  # Manually build the instruction to inspect parameters before execution
+  # We use PormG.QueryBuilder.build to get the internal instruction object
+  instruc = PormG.QueryBuilder.build(query.object)
+  params = instruc.parameters.parameters
+
+  @test length(params) == 3
+  @test params[1] == 1          # resultid
+  @test params[2] == "10.5"   # points (string preserved)
+  @test params[3] == "Lewis"  # forename
+
+  # 2. Verify LIKE pattern escaping and wildcard wrapping for contains
+  query = M.Result |> object
+  query.filter("driverid__forename__@contains" => "L%wis")
+  instruc = PormG.QueryBuilder.build(query.object)
+
+  # The parameter should be escaped and wrapped in % by add_parameter!(contains=true)
+  # L%wis -> %L\%wis%
+  @test instruc.parameters.parameters[1] == "%L\\%wis%"
+
+  # 3. Verify array binding for IN clauses
+  # Arrays should be stored as a single parameter (Postgres ANY) and preserved as an AbstractVector
+  query = M.Result |> object
+  query.filter("positionorder__@in" => [1, 2])
+  instruc = PormG.QueryBuilder.build(query.object)
+  @test length(instruc.parameters.parameters) == 1
+  @test isa(instruc.parameters.parameters[1], AbstractVector)
+  @test instruc.parameters.parameters[1] == [1, 2]
+
+  # 4. Mixed types in same filter (integers, strings, dates, floats)
+  query = M.Result |> object
+  query.filter("resultid" => 1, "statusid__status" => "Finished", "raceid__date" => Date(2020,1,15))
+  instruc = PormG.QueryBuilder.build(query.object)
+  # Expect three parameters in the same order the filters were provided
+  @test length(instruc.parameters.parameters) >= 3
+  @test instruc.parameters.parameters[1] == 1
+  @test instruc.parameters.parameters[2] == "Finished"
+  # date formatting is model-dependent; ensure it is formatted as ISO string
+  @test string(instruc.parameters.parameters[3]) == "2020-01-15"
+
+  # 5. Nested Q / Qor filter parameter ordering
+  # Q groups should preserve their parameter order and Qor should append its alternatives
+  query = M.Driver |> object
+  query.filter(Q("forename" => "Lewis", "driverid__@lte" => 50), Qor("surname" => "Hamilton", "surname" => "Rosberg"))
+  instruc = PormG.QueryBuilder.build(query.object)
+  # Expect four parameters in order: forename, driverid, surname1, surname2
+  @test length(instruc.parameters.parameters) == 4
+  @test instruc.parameters.parameters[1] == "Lewis"
+  @test instruc.parameters.parameters[2] == 50
+  @test instruc.parameters.parameters[3] == "Hamilton"
+  @test instruc.parameters.parameters[4] == "Rosberg"
+
+  # 6. Multiple LIKE patterns in same query are escaped independently
+  query = M.Result |> object
+  query.filter("driverid__forename__@contains" => "A_B", "raceid__circuitid__name__@icontains" => "%C%")
+  instruc = PormG.QueryBuilder.build(query.object)
+  @test length(instruc.parameters.parameters) == 2
+  @test instruc.parameters.parameters[1] == "%A\\_B%"    # underscore escaped
+  @test instruc.parameters.parameters[2] == "%\\%C\\%%"  # percent escaped and wrapped
+
+  # 7. Verify binding in Updates (Filters + Set values) end-to-end
+  # We check the functional correctness (DB updated) which proves binding was applied.
+  query = M.Just_a_test_deletion |> object
+  # Ensure a clean state for the test
+  query |> do_exists && delete(query; allow_delete_all=true)
+  query.create("id" => 500, "name" => "original", "test_result" => 10)
+
+  # Update two columns using a filter; this exercises both WHERE and SET bindings
+  query.filter("id" => 500)
+  query.update("name" => "updated", "test_result" => 20)
+
+  query = M.Just_a_test_deletion |> object
+  query.filter("id" => 500)
+  updated_row = query |> list
+  @test updated_row[1][:name] == "updated"
+  @test updated_row[1][:test_result] == 20
+
+  # 8. Verify Date binding
+  query = M.Race |> object
+  test_date = Date(2023, 10, 22)
+  query.filter("date" => test_date)
+  instruc = PormG.QueryBuilder.build(query.object)
+
+  # The formater should have converted Date to String for the DB driver if needed,
+  # or kept it as Date if the driver handles it. Check ISO-like output.
+  @test string(instruc.parameters.parameters[1]) == "2023-10-22"
+
+  # Notes for maintainers/readers:
+  # - These tests focus on the parameter *collection* and *formatting* performed by build()/add_parameter!.
+  # - For UPDATE statements we verify the end-to-end effect in the database which implicitly tests the binding used during the DML.
+  # - Keep tests readable and commented; they are educational and help debug future regressions.
+end
 
 @testset "Print Query" begin
   query = M.Result |> object;
@@ -805,6 +900,81 @@ end
     
     println("✅ All LIKE pattern escaping tests passed!")
   end
+end
+
+@testset "AdvisoryLock: non-blocking exclusivity" begin
+  dbname = first(keys(PormG.config))
+  key = "test_advisory_lock_$(uuid4())"
+  n = 5
+  counter = Atomic{Int}(0)
+  tasks = Vector{Task}(undef, n)
+
+  # Use wait=true with blocking strategy so tasks queue for the lock
+  @sync for i in 1:n
+    @async begin
+      try
+        # Acquire lock with server-side blocking (tasks queue if lock is held)
+        PormG.with_advisory_lock(dbname, key; wait=true, strategy=:pool, timeout_ms=6_000) do
+          # increment the counter only when the lock is held
+          @info "Inside lock block, task $i"
+          atomic_add!(counter, 1)
+          sleep(0.5)  # short critical section so all tasks can acquire in sequence
+        end
+      catch e
+        @error "Task $i failed to acquire lock" exception=e
+      end
+    end
+  end
+
+  # after all tasks complete, all 5 should have acquired and incremented
+  final_count = atomic_add!(counter, 0)
+  @info "Advisory lock test results" final_count
+  @test final_count == 5
+end
+
+@testset "AdvisoryLock: blocking with timeout" begin
+  dbname = first(keys(PormG.config))
+  key = "test_advisory_lock_timeout_$(uuid4())"
+
+  # First, acquire the lock in a separate task and hold it
+  lock_task = @async begin
+    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=10_000) do
+      @info "Lock holder task acquired lock"
+      sleep(5)  # hold the lock for 5 seconds
+      @info "Lock holder task releasing lock"
+    end
+  end
+
+  sleep(0.5)  # ensure the lock holder has started
+
+  # Now, attempt to acquire the same lock with a short timeout
+  got_error = false
+  try
+    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=1_000) do
+      @info "This should not print, as lock acquisition should time out"
+    end
+  catch e
+    @info "Expected timeout error caught" exception=e
+    got_error = true
+  end
+
+  @test got_error
+
+  # Wait for the lock holder to finish
+
+  # Now, attempt to acquire the lock again, this time it should succeed
+  acquired = false
+  try
+    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=15_000) do
+      @info "Successfully acquired lock after it was released"
+      acquired = true
+    end
+  catch e
+    @error "Failed to acquire lock unexpectedly" exception=e
+  end
+  @test acquired
+
+  wait(lock_task)
 end
 
 # # Deal with with CTE

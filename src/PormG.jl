@@ -69,14 +69,14 @@ import .Dialect
 include("AdvisoryLock.jl")
 using .AdvisoryLock
 
+include("QueryBuilder.jl")
+import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin
+show_query = query
+
 export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin
 export with_advisory_lock, try_advisory_lock, release_advisory_lock
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
-
-include("QueryBuilder.jl")
-import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin, nj
-show_query = query
 
 include("Migrations.jl")
 using .Migrations

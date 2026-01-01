@@ -554,7 +554,7 @@ function makemigrations(connection::PormGPostgres, settings::SQLConn; path::Stri
   
   migration_plan = get_migration_plan(models_array, current_models, connection, settings)
 
-  @infiltrate 
+  @infiltrate false
 
   # store migration_plan as pending_migrations.jl file
   if migration_plan |> isempty

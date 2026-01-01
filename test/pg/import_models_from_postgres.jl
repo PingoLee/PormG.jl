@@ -11,4 +11,6 @@ cd("pg")
 
 PormG.Configuration.load("db")
 
+PormG.Migrations.makemigrations("db")
+
 PormG.Migrations.import_models_from_postgres("db", include_table=["just_a_test_deletion"])

@@ -8,8 +8,8 @@ import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_sym
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn, PormGPostgres, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
-import PormG: PormGsuffix, PormGtrasnform
-import PormG.Configuration: fetch, with_transaction, with_tx_context
+import PormG: PormGsuffix, PormGtrasnform, run_in_transaction
+import PormG.Configuration: fetch, with_transaction, with_tx_context, ensure_model_transaction_scope
 import PormG.Infiltrator: @infiltrate
 
 #
@@ -1929,7 +1929,6 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
   elseif v.operator in ["contains", "icontains"]
     @infiltrate false
-    instruc.parameters.parameters[end] = string("%", instruc.parameters.parameters[end], "%") # Add wildcards for contains and icontains
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else
     throw("Error in operator, $(v.operator) is not a valid operator")
@@ -2048,6 +2047,7 @@ function build(object::SQLObject;
   table_alias::Union{Nothing, SQLTableAlias} = nothing, 
   connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
   parameters::Union{Nothing, PormGPostgresParam} = nothing)
+  ensure_model_transaction_scope(object.model)
   settings = config[object.model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
   table_alias === nothing && (table_alias = SQLTbAlias())
@@ -2344,6 +2344,7 @@ end
 
 function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
   model = objct.model
+  ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
   
@@ -2628,6 +2629,7 @@ end
 
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, show_query::Bool = false)
   model = objct.model
+  ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections)
  
@@ -2906,7 +2908,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
 
   #### Arguments
   - `objct::SQLObjectHandler`: The SQL object handler to use for the operation.
-  - `df::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
+  - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
   - `columns::Vector{Union{String, Pair{String, String}}}`: Optional. Specifies the columns to insert and their mappings.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
   - `show_query::Bool`: Optional. If true, prints the generated SQL query (default: false).
@@ -2939,9 +2941,10 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], 
     chunk_size::Integer = 1000,
     show_query::Bool = false,
-    copy::Bool = false
+    copy::Bool = true
   ) 
   model = objct.object.model
+  ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
   connection = settings.connections
   django_prefix = settings.django_prefix === nothing ? false : true
@@ -3038,33 +3041,41 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   end
    
   # Build a list of row value strings by applying each model field formatter.
-  rows = String[]
-  count::Integer = 0
-  total::Integer = size(df, 1)
-  # Security: Create parameterized query
-  parameters = get_parameter(connection)
-  param_placeholders::Vector{String} = String[]
-  for (index, row) in enumerate(eachrow(df))
-    values = String[]
-    try
-      param_placeholders = [add_parameter!(parameters, model.fields[field].formater(row[field])) for field in fields_df]
-      # param_placeholders = add_parameter!(parameters, values)
-    catch e
-      @infiltrate false
-      _depuration_values_bulk_insert(fields_df, model, row, index, django_prefix)
-      throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+  insert_loop = () -> begin
+    rows = String[]
+    count::Integer = 0
+    total::Integer = size(df, 1)
+    # Security: Create parameterized query
+    parameters = get_parameter(connection)
+    param_placeholders::Vector{String} = String[]
+    for (index, row) in enumerate(eachrow(df))
+      values = String[]
+      try
+        param_placeholders = [add_parameter!(parameters, model.fields[field].formater(row[field])) for field in fields_df]
+        # param_placeholders = add_parameter!(parameters, values)
+      catch e
+        @infiltrate false
+        _depuration_values_bulk_insert(fields_df, model, row, index, django_prefix)
+        throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+      end
+      push!(rows, "($(join(param_placeholders, ", ")))")
+      count += 1
+      if count == chunk_size || index == total
+        # @infiltrate
+        _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
+        count = 0
+        rows = String[]
+        parameters = get_parameter(connection)
+        param_placeholders = String[]
+      end
     end
-    push!(rows, "($(join(param_placeholders, ", ")))")
-    count += 1
-    if count == chunk_size || index == total
-      # @infiltrate
-      _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
-      count = 0
-      rows = String[]
-      parameters = get_parameter(connection)
-      param_placeholders = String[]
-    end
-  end  
+  end
+
+  if show_query || !(connection isa PormGPostgres)
+    insert_loop()
+  else
+    run_in_transaction(insert_loop, settings)
+  end
 
   return nothing
   
@@ -3108,7 +3119,7 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
       try
         fetch(settings, sql, parameters)
       catch e
-        @infiltrate
+        @infiltrate false
         if occursin("duplicate key value violates unique constraint", e |> string)
           _update_sequence(model, connection, pk_field, settings)
           throw("Error in bulk_insert, the row has a duplicate key value; try again")
@@ -3140,6 +3151,7 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `filters`: (Optional) Specifies the filters to apply for the update. Can be a `String`, a `Pair{String, T}` where `T` is `String`, `Integer`, `Bool`, `Date`, or `DateTime`, or a `Vector` of these. If `nothing`, no filters are applied.
 - `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
+- `copy::Bool`: (Optional) If `true`, creates a copy of the DataFrame before processing. Defaults to `true`. Set to `false` to modify the original DataFrame and improve performance, but this may lead to unintended side effects when the operation is performed in asynchronous contexts.
 
 # Example
 ```julia
@@ -3153,7 +3165,8 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     columns=nothing, # what columns to update
     filters=nothing, # what columns to do the filter
     show_query::Bool=false, 
-    chunk_size::Integer=1000)
+    chunk_size::Integer=1000,
+    copy::Bool=true)
 
   _columns::Vector{Union{String, Pair{String, String}}} = []
   _filters::Vector{Union{String, Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}}} = []
@@ -3195,17 +3208,19 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, Integer, Bool, Date, DateTime}")
   end
 
-  _bulk_update(objct, df, _columns, _filters, show_query, chunk_size)
+  _bulk_update(objct, df, _columns, _filters, show_query, chunk_size, copy)
   
 end
 
-function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
+function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},
   filters::Vector{Union{String, Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}}},
   show_query::Bool,
-  chunk_size::Integer=1000)
+  chunk_size::Integer=1000,
+  copy::Bool=true)
 
   model = objct.object.model
+  ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
   connection = settings.connections
 
@@ -3213,10 +3228,12 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
 
   # If no rows then nothing to do
-  if size(df, 1) == 0
+  if size(df_o, 1) == 0
     @warn("Warning in bulk_update, the DataFrame is empty")
     return nothing
   end
+
+  df = copy ? deepcopy(df_o) : df_o 
 
   # colect name of the fields
   fields = model.field_names
@@ -3331,32 +3348,39 @@ function _bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame,
   end
   safe_set_clause = join(safe_set_parts, ", ")
 
-  count::Integer = 0
-  total::Integer = size(df, 1)
   @infiltrate false
   # Security: Create parameterized query
   parameters_initial =  deepcopy(instruction.parameters)
-  param_placeholders::Vector{String} = String[]
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
-  for (index, row) in enumerate(eachrow(df))
-    values = String[]    
-    try
-      param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[field])) for field in joined_columns]
-      # param_placeholders = add_parameter!(instruction.parameters, values)
-    catch e
-      _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix !== nothing)
-      throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+  update_loop = () -> begin
+    count::Integer = 0
+    total::Integer = size(df, 1)
+    rows = String[]
+    param_placeholders::Vector{String} = String[]
+    for (index, row) in enumerate(eachrow(df))
+      try
+        param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[field])) for field in joined_columns]
+      catch e
+        _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix !== nothing)
+        throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+      end
+      push!(rows, "($(join(param_placeholders, ", ")))")
+      count += 1
+      if count == chunk_size || index == total      
+        _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
+        count = 0
+        rows = String[]
+        instruction.parameters = deepcopy(parameters_initial) # reset parameters to initial state
+        param_placeholders = String[]
+      end
     end
-    push!(rows, "($(join(param_placeholders, ", ")))")
-    count += 1
-    if count == chunk_size || index == total      
-      _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
-      count = 0
-      rows = String[]
-      instruction.parameters = deepcopy(parameters_initial) # reset parameters to initial state
-      param_placeholders = String[]
-    end
+  end
+
+  if show_query || !(connection isa PormGPostgres)
+    update_loop()
+  else
+    run_in_transaction(update_loop, settings)
   end
 
   return nothing
@@ -3501,6 +3525,7 @@ function delete(objct::SQLObjectHandler;
     show_query::Bool = false,
     allow_delete_all::Bool = false)
   model = objct.object.model
+  ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
   connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
     
@@ -3561,6 +3586,7 @@ function delete(objct::SQLObjectHandler;
       end
     else
       # Use transaction context to ensure all fetch() calls use the same connection
+      # TODO: Maybe it would be better to adapt this to use the run_in_transaction function?
       result, conn = with_transaction(settings, "BEGIN;")
       
       try

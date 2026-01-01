@@ -11,6 +11,7 @@ jobs:
   build:
     permissions:
       contents: write
+      pages: write
       statuses: write
     runs-on: ubuntu-latest
     steps:
@@ -23,6 +24,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - name: Build and deploy
+        if: github.event_name != 'pull_request'
         working-directory: ${{ github.workspace }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token automático do GitHub

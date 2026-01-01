@@ -1,0 +1,8 @@
+name = "PormGDocs"
+uuid = "c2b6f8a6-4df6-4f4f-b8a1-6e3a2b91f123"
+
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+
+[compat]
+Documenter = "1"

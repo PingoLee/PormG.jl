@@ -90,6 +90,12 @@ Just_a_test_deletion = Models.Model(
   test_result2 = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
 )
 
+Just_a_nested_roll_back = Models.Model(
+  id = Models.IDField(),
+  test = Models.ForeignKey(Just_a_test_deletion, pk_field="id", on_delete="CASCADE", null=true),
+  description = Models.CharField()
+)
+
 New_join_position = Models.Model(
   id = Models.IDField(),
   description = Models.CharField(),

@@ -1,7 +1,7 @@
 module Configuration
 
 import YAML, Logging
-import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config
+import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT
 import PormG: Generator
 import PormG.Infiltrator: @infiltrate
@@ -10,8 +10,8 @@ import SQLite
 import LibPQ
 using Base.ScopedValues: ScopedValue, with
 
-export env, Settings, connection, close_pool!, fetch_async, await_result, FetchTask
-export with_tx_context, get_tx_connection, in_transaction_context
+export env, Settings, connection, close_pool!
+export with_tx_context
 
 # app environments
 const DEV   = "dev"
@@ -38,7 +38,7 @@ mutable struct TransactionContext
   TransactionContext() = new(nothing, nothing, 0)
 end
 
-# Task-local storage for transaction context
+# Task-local storage for transaction context; TODO i need study this more
 const _tx_context = ScopedValue(TransactionContext())
 
 """
@@ -71,35 +71,6 @@ function in_transaction_context()
   return _tx_context[].depth > 0
 end
 
-"""
-    with_tx_context(f::Function, pool::PormGPostgres, conn::LibPQ.Connection)
-
-Execute a function within a transaction context. All `fetch()` calls
-within this context will use the provided connection instead of
-acquiring a new one from the pool.
-
-This is essential for transaction isolation - ensures BEGIN/COMMIT/ROLLBACK
-and all intermediate queries use the same connection.
-
-# Example
-```julia
-conn = acquire_connection(pool)
-try
-  LibPQ.execute(conn, "BEGIN")
-  with_tx_context(pool, conn) do
-    # All these fetches use the same connection
-    fetch(pool, "INSERT INTO users (name) VALUES ('Alice')")
-    fetch(pool, "INSERT INTO orders (user_id) VALUES (1)")
-  end
-  LibPQ.execute(conn, "COMMIT")
-catch e
-  LibPQ.execute(conn, "ROLLBACK")
-  rethrow(e)
-finally
-  release_connection(pool, conn)
-end
-```
-"""
 function with_tx_context(f::Function, pool::PormGPostgres, conn::LibPQ.Connection)
   old_ctx = _tx_context[]
   new_ctx = TransactionContext()
@@ -110,6 +81,28 @@ function with_tx_context(f::Function, pool::PormGPostgres, conn::LibPQ.Connectio
   return with(_tx_context => new_ctx) do
     f()
   end
+end
+
+function connection_key_for_pool(pool::PormGPostgres)::Union{String, Nothing}
+  for (key, settings) in config
+    if settings.connections === pool
+      return key
+    end
+  end
+  return nothing
+end
+
+function ensure_model_transaction_scope(model::PormGModel)
+  tx_pool = get_tx_pool()
+  tx_pool === nothing && return
+  model.connect_key === nothing && throw(ArgumentError("Model $(model.name) is not bound to a database connection key"))
+  settings = config[model.connect_key]
+  if tx_pool === settings.connections
+    return
+  end
+  active_key = connection_key_for_pool(tx_pool)
+  active_desc = active_key === nothing ? "unknown transaction" : active_key
+  throw(ArgumentError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
 end
 
 """
@@ -565,6 +558,11 @@ function await_result(ft::FetchTask)
     return result
   catch e
     ft.completed = true
+    # Unwrap TaskFailedException so callers see the real SQL/LibPQ error
+    if e isa TaskFailedException
+      root = e.task.exception
+      throw(root)
+    end
     rethrow(e)
   finally
     # Only release connection if we're not in a transaction context
@@ -667,14 +665,18 @@ function fetch(connection::PormGPostgres, sql::String;
         return await_result(retry_task)
       end
     end
-    @infiltrate 
-    @error "Failed to execute SQL query: $e"
+    # Short-circuit composite errors to the underlying DB cause when present
+    if e isa CompositeException && length(e.exceptions) == 1
+      throw(e.exceptions[1])
+    end
     throw(e)
   end
 end
 fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing) = fetch(settings.connections, sql; conn=conn, params=params)
 fetch(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings.connections, sql; conn=conn, params=params)
 fetch(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings, sql; conn=conn, params=params)
+
+export with_transaction
 
 """
     with_transaction_async(pool::PormGPostgres, sql::String; ...) -> (FetchTask, LibPQ.Connection)
@@ -737,14 +739,31 @@ This is the recommended way to run transactions as it ensures:
 3. Automatic ROLLBACK on error
 4. Connection is properly released back to the pool
 
-# Example
+# Example using PormG objects
 ```julia
+include("db/models.jl")
+import .models as M
+
 result = run_in_transaction(pool) do
-  # All these operations use the same connection
-  fetch(pool, "INSERT INTO users (name) VALUES ('Alice')")
-  user_id = fetch(pool, "SELECT currval('users_id_seq')") |> DataFrame
-  fetch(pool, "INSERT INTO orders (user_id) VALUES (\$(user_id[1,1]))")
-  return user_id[1,1]
+  driver_query = M.Driver |> object
+  new_driver = driver_query.create(
+    "forename" => "Alice",
+    "surname" => "Lane",
+    "nationality" => "British",
+    "driverref" => "alice_lane"
+  )
+
+  race_query = M.Race |> object
+  race_query.create(
+    "year" => 2025,
+    "round" => 1,
+    "name" => "Gran Turismo",
+    "circuitid" => 1
+  )
+
+  # Keep counting or aggregate inside the transaction if needed
+  driver_count = driver_query |> do_count
+  return (new_driver[:driverid], driver_count)
 end
 ```
 """
@@ -779,19 +798,20 @@ function run_in_transaction(f::Function, pool::PormGPostgres)
   end
 end
 
+function run_in_transaction(f::Function, db::String)
+  haskey(config, db) || throw("$(db) not found")
+  settings::SQLConn = config[db]
+  return run_in_transaction(f, settings.connections)
+end
+
 run_in_transaction(f::Function, settings::SQLConn) = run_in_transaction(f, settings.connections)
+run_in_transaction(f::Function) = run_in_transaction(f, DB_PATH)
+
 
 function connection(; key::String = "db") 
   settings = config[key]
   return settings.connections
 end
-"""
-    mutable struct Settings
-
-App configuration - sets up the app's defaults. Individual options are overwritten in the corresponding environment file.
-"""
-
-
 
 function reconnect_to_db(settings::SQLConn)
   # Check if the connection is closed

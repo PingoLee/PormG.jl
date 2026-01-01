@@ -1,14 +1,14 @@
-# This file is used to build the documentation for the PormG package.
-
 using Documenter
 using PormG
 
 # Build the documentation
 makedocs(
-    sitename = "PormG Documentation",
+    sitename = "PormG.jl: Django-like ORM for Julia",
+    
     modules = [PormG, PormG.QueryBuilder, PormG.Models],
     source = "src",
     build = "build",
+    
     pages = [
         "Home" => "index.md",
         "Configuration" => "configuration.md",
@@ -21,10 +21,23 @@ makedocs(
         "Custom Joins" => "custom_joins.md",
         "API" => "api.md"
     ],
+    
     format = Documenter.HTML(
+        # prettyurls: Remove '.html' da URL quando rodando no GitHub (CI).
+        # Isso cria links limpos como ".../stable/configuration/"
         prettyurls = get(ENV, "CI", nothing) == "true",
+        
+        # Canonical: Define a URL oficial para o Google evitar conteúdo duplicado
         canonical = "https://pingolee.github.io/PormG.jl",
+        
         assets = String[],
     ),
     checkdocs = :none,
+)
+
+# Deploydocs: Configura o upload automático para a branch gh-pages
+# Isso vai criar as pastas /dev (para main) e /stable (para tags de versão)
+deploydocs(
+    repo = "github.com/pingolee/PormG.jl.git", 
+    devbranch = "main", 
 )

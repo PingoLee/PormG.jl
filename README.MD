@@ -7,7 +7,7 @@
 ## 📚 Documentation
 
 For comprehensive documentation, tutorials, and API reference, visit:
-**[https://pingolee.github.io/PormG.jl/build/index.html](https://pingolee.github.io/PormG.jl/build/index.html)**
+**[https://pingolee.github.io/PormG.jl/dev/](https://pingolee.github.io/PormG.jl/dev/)**
 
 
 ---
@@ -51,12 +51,12 @@ print(query)
 
 **PormG.jl:**
 ```julia
-Base.include(esus_back, "db/automatic_models.jl")
-import esus_back.automatic_models as M
+Base.include(your_module, "db/models.jl")
+import your_module.automatic_models as M
 query = M.User |> object;
-query.filter("name"=>"Alice")
-query.order_by("-age")
-query.values("name", "age")
+query.filter("name"=>"Alice");
+query.order_by("-age");
+query.values("name", "age");
 result = query |> list
 println(query)
 ```

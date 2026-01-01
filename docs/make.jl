@@ -37,7 +37,9 @@ makedocs(
 
 # Deploydocs: Configura o upload automático para a branch gh-pages
 # Isso vai criar as pastas /dev (para main) e /stable (para tags de versão)
-deploydocs(
-    repo = "github.com/pingolee/PormG.jl.git", 
-    devbranch = "main", 
-)
+if get(ENV, "DOCS_DEPLOY", "false") == "true"
+    deploydocs(
+        repo = "github.com/pingolee/PormG.jl.git",
+        devbranch = "main",
+    )
+end

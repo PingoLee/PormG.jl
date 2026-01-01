@@ -3,9 +3,17 @@ name: Documentation
 on:
   push:
     branches:
-      - main # ou master
+      - main
     tags: '*'
+    # Só roda se mudar arquivos nessas pastas/arquivos
+    paths:
+      - 'docs/**'
+      - 'README.MD'
   pull_request:
+    # Mesmo filtro para Pull Requests
+    paths:
+      - 'docs/**'
+      - 'README.MD'
 
 jobs:
   build:
@@ -23,10 +31,14 @@ jobs:
       - name: Configure doc environment
         working-directory: ${{ github.workspace }}
         run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
-      - name: Build and deploy
-        if: github.event_name != 'pull_request'
+      - name: Build docs
+        working-directory: ${{ github.workspace }}
+        run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
+      - name: Deploy docs
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         working-directory: ${{ github.workspace }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token automático do GitHub
-          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }} # Só necessário se o GITHUB_TOKEN falhar (raro em repos públicos)
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+          DOCS_DEPLOY: 'true'
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'

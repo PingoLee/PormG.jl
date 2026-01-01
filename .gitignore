@@ -7,7 +7,7 @@ todo.txt
 
 # --- Documentação (Gerada Automaticamente) ---
 
-docs/build/
+docs/build/*
 docs/site/
 
 # --- Arquivos de Sistema e Editor ---

@@ -39,7 +39,7 @@ makedocs(
 # Isso vai criar as pastas /dev (para main) e /stable (para tags de versão)
 if get(ENV, "DOCS_DEPLOY", "false") == "true"
     deploydocs(
-        repo = "github.com/pingolee/PormG.jl.git",
+        repo = "github.com/PingoLee/PormG.jl.git",
         devbranch = "main",
     )
 end

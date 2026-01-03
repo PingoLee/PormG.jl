@@ -7,9 +7,9 @@ using SQLite, LibPQ
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
 import PormG: Dialect, Models
 import PormG: config
-import PormG: SQLType, SQLConn, PormGPostgres, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: SQLType, SQLConn,  PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform, run_in_transaction
-import PormG.Configuration: fetch, with_transaction, with_tx_context, ensure_model_transaction_scope
+import PormG.Configuration: fetch, with_transaction, with_tx_context, ensure_model_transaction_scope, transaction_connection_for, current_task
 import PormG.Infiltrator: @infiltrate
 
 #
@@ -88,13 +88,16 @@ mutable struct PgParameterizedQuery <: PormGPostgresParam
 end
 get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
 
+mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
+  sql::String
+  parameters::Union{AbstractVector, Tuple}
+  parameter_count::Int
+  
+  SQLiteParameterizedQuery(sql::String, parameters::Union{AbstractVector, Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
+end
+get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery("", Any[], 0)
+
 function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false)
-  # parameters::Vector{String} = String[]
-  # for v in value
-  #   pq.parameter_count += 1
-  #   push!(pq.parameters, v)
-  #   push!(parameters, "\$$(pq.parameter_count)")
-  # end
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
   push!(pq.parameters, value)
@@ -106,6 +109,18 @@ function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false)::
   pq.parameter_count += 1
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)"  # PostgreSQL style
+end
+function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool = false)
+  contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
+  sq.parameter_count += 1
+  push!(sq.parameters, value)
+  return "?$(sq.parameter_count)"
+end
+function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool = false)::String
+  contains && (value = string("%", value |> escape_like_pattern, "%"))  # Escape LIKE patterns if needed
+  sq.parameter_count += 1
+  push!(sq.parameters, value)
+  return "?$(sq.parameter_count)"  # SQLite style
 end
 add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool = false) = add_parameter!(instruc.parameters, value; contains = contains)
 
@@ -1408,12 +1423,22 @@ function _insert_join(
   end
 end
 
+function _check_if_field_is_a_operator(field::String)
+  common_operators = ["exact", "iexact", "contains", "icontains", "in", "gt", "gte", "lt", "lte", 
+                     "startswith", "istartswith", "endswith", "iendswith", "range", "date", 
+                     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
+                     "hour", "minute", "second", "isnull", "regex", "iregex"]
+  if field in common_operators
+    throw(ArgumentError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
+  end
+end
 """
 This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
 """
 function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
   # check if last_column a field from the model    
   if !(field in model.field_names)
+    _check_if_field_is_a_operator(field)
     @infiltrate false
     throw(ArgumentError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
@@ -1427,7 +1452,7 @@ _solve_field(field::String, _module::Module, model_name::String, instruct::SQLIn
 _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
 
 "build a row to join"
-function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing)
+function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing, second_fild_name::Union{String, Nothing}=nothing)
   valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
 
   if previus_how !== nothing && previus_how == "LEFT"
@@ -1435,7 +1460,13 @@ function _determine_join_type(field::PormGField; previus_how::Union{String, Noth
     return "LEFT"
   end
   
-  if field.how !== nothing && !isempty(field.how)
+  @infiltrate false
+  if !hasproperty(field, :how)
+    if second_fild_name !== nothing
+      _check_if_field_is_a_operator(second_fild_name)
+    end
+    throw(ArgumentError("The field '$(field)' does not have a 'how' property"))
+  elseif field.how !== nothing && !isempty(field.how)
     join_type = uppercase(strip(field.how))
     if join_type ∉ valid_joins
       throw(ArgumentError("Invalid join type '$(field.how)'. Valid types: $(join(valid_joins, ", "))"))
@@ -1497,7 +1528,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # @infiltrate
     first_field = haskey(instruct.object.custom_join, join_path) ? instruct.object.custom_join[join_path]["field"] : instruct.object.model.fields[first_column]
     # @infiltrate
-    row_join["how"] = _determine_join_type(first_field)
+    row_join["how"] = _determine_join_type(first_field, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
     foreign_table_name = first_field.to
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(first_column) does not have a foreign key")
@@ -1521,7 +1552,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
     last_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]   
-    row_join["how"] = _determine_join_type(last_field)
+    row_join["how"] = _determine_join_type(last_field, second_fild_name= vector[2]) 
     foreign_table_name = instruct.object.model.related_objects[vector[1]][3] |> String
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
@@ -1569,7 +1600,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias      
-      row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=prev_how)
+      row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=prev_how, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
       foreign_table_name = new_object.fields[first_column].to
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(vector[2]) does not have a foreign key")
@@ -1591,7 +1622,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias
       last_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
-      row_join["how"] = _determine_join_type(last_field, previus_how=prev_how)
+      row_join["how"] = _determine_join_type(last_field, previus_how=prev_how, second_fild_name= vector[2])
       foreign_table_name = new_object.related_objects[vector[1]][3] |> String
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
@@ -1833,7 +1864,7 @@ end
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
   contains(v, "@") && return _get_filter_query(split(v, "__@"), instruc)
-  parts = split(v, "__")  
+  parts = split(v, "__")
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
   else
@@ -1897,7 +1928,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif haskey(instruc.object.model.fields, v.column.field)
       placeholders = nothing
       try
-        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values))
+        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains = v.operator in ["contains", "icontains"])
       catch e
         @infiltrate false
         if contains(string(e), "The date") && contains(string(e), "is invalid")          
@@ -2205,7 +2236,8 @@ function query(q::SQLObjectHandler;
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
   parameters::Union{Nothing, PormGPostgresParam} = nothing,
-  cte::Union{Nothing, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}} = nothing
+  cte::Union{Nothing, Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}} = nothing,
+  show_query::Bool = false
   )
 
   @infiltrate false
@@ -2271,8 +2303,14 @@ function query(q::SQLObjectHandler;
     # $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
     # """
   # @info respota  
+  if show_query
+    params_list = instruction.parameters.parameters
+    @info "SQL Query" query=respota params=params_list |> string task_id=string(current_task())
+    return nothing
+  end
   return respota
 end
+show_query(q::SQLObjectHandler) = query(q; show_query=true)
 
 # ---
 # Count or check if exists
@@ -2336,7 +2374,11 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     @infiltrate false
     return length(result) > 0
   catch e
-    @infiltrate
+    @infiltrate false
+    # Re-throw validation/argument errors so user sees helpful messages
+    if e isa ArgumentError
+      rethrow(e)
+    end
     @error "Error in do_exists for model $(oq.object.model.name): $e"
     return false
   end
@@ -2758,7 +2800,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
 
   if show_query
-    @info sql
+    params_list = (parameters === nothing) ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
+    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
     return sql
   end
 
@@ -3071,7 +3114,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     end
   end
 
-  if show_query || !(connection isa PormGPostgres)
+  if show_query || !(connection isa PormGPostgres) || transaction_connection_for(settings) !== nothing
     insert_loop()
   else
     run_in_transaction(insert_loop, settings)
@@ -3112,7 +3155,8 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
 
   # Execute the query or just show it
   if show_query
-    @info sql
+    params_list = (parameters === nothing) ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
+    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
   else
     # Execute the query for the given connection type.
     if connection isa PormGPostgres
@@ -3377,7 +3421,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     end
   end
 
-  if show_query || !(connection isa PormGPostgres)
+  has_active_tx = transaction_connection_for(settings) !== nothing
+  if show_query || !(connection isa PormGPostgres) || has_active_tx
     update_loop()
   else
     run_in_transaction(update_loop, settings)
@@ -3435,7 +3480,8 @@ function _bulk_update(model::PormGModel,
   @infiltrate false
 
   if show_query 
-    @info sql
+    params_list = instruction !== nothing && instruction.parameters !== nothing && hasproperty(instruction.parameters, :parameters) ? instruction.parameters.parameters : []
+    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
   else 
     # Execute the query for the given connection type.
     # @infiltrate false
@@ -3553,13 +3599,9 @@ function delete(objct::SQLObjectHandler;
   process_collector!(collector)
 
   @infiltrate false
- 
-  # Execute the deletion in a transaction
   if connection isa PormGPostgres
     @infiltrate false
-    # Start transaction
-    if show_query 
-      conn = nothing
+    run_deletions = function(conn::Union{Nothing, LibPQ.Connection})
       # Process fast deletes first (objects that can be deleted directly)
       for (model, keys) in collector.fast_deletes
         delete_objects(connection, model, keys, show_query, deleted_counter, conn)
@@ -3584,40 +3626,19 @@ function delete(objct::SQLObjectHandler;
           delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
         end
       end
-    else
-      # Use transaction context to ensure all fetch() calls use the same connection
-      # TODO: Maybe it would be better to adapt this to use the run_in_transaction function?
-      result, conn = with_transaction(settings, "BEGIN;")
-      
-      try
-        # Execute everything within transaction context
-        with_tx_context(settings.connections, conn) do
-          # Process fast deletes first (objects that can be deleted directly)
-          for (model, keys) in collector.fast_deletes
-            delete_objects(connection, model, keys, show_query, deleted_counter, conn)
-            # Remove from objects to prevent double deletion
-            delete!(collector.objects, model)
-          end
+    end
 
-          # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
-          for ((field, value), affected_models) in collector.field_updates
-            @infiltrate false
-            for (affected_model, keys) in affected_models
-              update_field(connection, affected_model, field, value, keys, show_query, conn)
-            end
-          end
-          
-          # Execute deletions in the sorted order
-          for model_to_delete in collector.sorted_models
-            @infiltrate false
-            _array = get(collector.objects, model_to_delete, [])        
-            if !isempty(_array)
-              @infiltrate false
-              delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
-            end
-          end
+    tx_conn = transaction_connection_for(settings)
+    if show_query
+      run_deletions(nothing)
+    elseif tx_conn !== nothing
+      run_deletions(tx_conn)
+    else
+      _, conn = with_transaction(settings, "BEGIN;")
+      try
+        with_tx_context(settings.connections, conn) do
+          run_deletions(conn)
         end
-          
         # Commit transaction
         with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
       catch e
@@ -3883,7 +3904,8 @@ function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::Porm
   sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
       
   if show_query
-    @info sql
+    params_list = parameters === nothing ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
+    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
     return deleted_counter  # Return count of deleted objects
   end
   @infiltrate false
@@ -3900,7 +3922,8 @@ function update_field(connection::PormGPostgres, model::PormGModel, field::Strin
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
   sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
   if show_query
-    @info sql
+    params_list = parameters === nothing ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
+    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
     return
   end
   # LibPQ.execute(connection, sql)

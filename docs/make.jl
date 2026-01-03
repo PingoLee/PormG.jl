@@ -16,6 +16,7 @@ makedocs(
         "Fields" => "fields.md",
         "Migrations" => "migrations.md",
         "Writing" => "write.md",
+        "Transactions" => "transaction.md",
         "Reading" => "read.md",
         "Import from Django" => "import_django.md",
         "Custom Joins" => "custom_joins.md",

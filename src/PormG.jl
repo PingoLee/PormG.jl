@@ -6,8 +6,6 @@ using Revise
 using Infiltrator
 
 import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
-import DataFrames.DataFrame
-
 
 using SQLite
 using LibPQ
@@ -15,8 +13,9 @@ using LibPQ
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
 abstract type PormGPostgres <: SQLConn end
-abstract type PormGPostgresParam <: PormGPostgres end
 abstract type PormGSQLite <: SQLConn end
+abstract type PormGPostgresParam <: PormGPostgres end
+abstract type PormGSQLiteParam <: PormGSQLite end
 abstract type SQLObject <: PormGAbstractType end
 abstract type SQLObjectHandler <: SQLObject end
 abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias
@@ -70,8 +69,7 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin
-show_query = query
+import .QueryBuilder: object, show_query, list, list_json, page, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin
 
 export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do_count, do_exists, With, cjoin
 export with_advisory_lock, try_advisory_lock, release_advisory_lock

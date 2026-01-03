@@ -1,25 +1,8 @@
-using Pkg
-Pkg.activate(".")
-ENV["PORMG_ENV"] = "dev"
-using Revise
-using PormG
-using DataFrames
-using Test
-using Dates
-using Base.Threads: Atomic, atomic_add!
-
-cd("test")
-cd("pg")
-
-# Ensure configuration is loaded
-PormG.Configuration.load("db_2")
-
-import PormG: with_transaction
-import PormG.Configuration: with_tx_context, get_tx_connection, fetch_async, await_result
-
-# load models
-Base.include(PormG, "db_2/models.jl")
-import PormG.models as M
+# Se for rodar este arquivo isoladamente durante o dev, 
+# você pode colocar um check no topo:
+if !isdefined(Main, :PormG)
+    include("common_setup.jl")
+end
 
 settings = PormG.config["db_2"]
 
@@ -71,7 +54,6 @@ settings = PormG.config["db_2"]
     delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
   end
 
-
   @testset "Transactions and Context rollback" begin
     got_error = false
     try
@@ -121,6 +103,41 @@ settings = PormG.config["db_2"]
     @test q |> do_count == 0
     df = q |> DataFrame
     @test nrow(df) == 0
+
+    delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+  end
+
+  @testset "Scheduling a pre-created Task inside a transaction does NOT inherit context" begin
+    # Create a Task *outside* any transaction (captures no tx context)
+    delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+
+    child_saw_tx = Atomic{Bool}(false)
+
+    # Task created outside a transaction - it captures the current (empty) ScopedValue
+    t = Task(() -> begin
+      # When this task runs it will see whatever ScopedValue was active at creation time
+      child_saw_tx[] = get_tx_connection() !== nothing
+      # perform a small write to prove it runs
+      (M.Just_a_test_deletion |> object).create("name" => "pre-created", "test_result" => 1)
+    end)
+
+    # Schedule/execute the task *inside* a transaction
+    try
+      PormG.run_in_transaction("db_2") do
+        schedule(t)
+        wait(t)
+        throw(ErrorException("force rollback"))
+      end
+    catch e
+      # ignore
+    end
+
+    # The task should NOT have inherited the transaction context because it was created outside
+    @test child_saw_tx[] == false
+
+    # The write performed by the task was executed outside the transaction, so it should be visible
+    q = M.Just_a_test_deletion |> object
+    @test q |> do_count == 1
 
     delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
   end
@@ -286,6 +303,91 @@ settings = PormG.config["db_2"]
     @test q |> do_count == worker_count
     @test fetch_success[] == worker_count
     delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+  end
+
+  @testset "Transaction with delection and bulk operations" begin
+    delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+
+    # Pre-insert some records
+    q = M.Just_a_test_deletion |> object
+    for i in 1:10
+      q.create("name" => "to-be-deleted-$(i)", "test_result" => 800 + i)
+    end
+
+    (M.Just_a_test_deletion |> object).create("name" => "test_update", "test_result" => 456)
+
+    q = M.Just_a_test_deletion |> object
+    q.filter("name" => "test_update")
+    df_u = q |> DataFrame
+    df_u[1, :test_result2] = 457
+
+
+    PormG.run_in_transaction(settings) do
+      q = M.Just_a_test_deletion |> object;
+      q.filter("name__@icontains" => "to-be-deleted");
+      # instruc = PormG.QueryBuilder.build(q.object);
+      # instruc.parameters.parameters[1]  
+
+      df = q |> DataFrame
+      delete(q)
+
+      # Bulk insert
+      bulk_data = [Dict("name" => "bulk-$(i)", "test_result" => 900 + i) for i in 1:5]
+      df = DataFrame(bulk_data)
+      q = M.Just_a_test_deletion |> object
+      PormG.bulk_insert(q, df)
+
+      # Bulk update
+      PormG.bulk_update(q, df_u)
+    end
+
+    q = M.Just_a_test_deletion |> object
+    @test q |> do_count == 6
+    names = sort((q |> list) .|> x -> x[:name])
+    @test names == vcat(sort(["bulk-$(i)" for i in 1:5]), ["test_update"])
+    q = M.Just_a_test_deletion |> object
+    q.filter("name" => "test_update")
+    df = q |> DataFrame
+    @test nrow(df) == 1
+    @test df[1, :test_result2] === 457
+    delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+  end
+
+  @testset "Transaction error cleanup" begin
+    delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+    
+    (M.Just_a_test_deletion |> object).create("name" => "child-in-tx", "test_result" => 456)
+
+    q = M.Just_a_test_deletion |> object
+    df = q |> DataFrame
+
+    df[1, :test_result2] = 999
+
+    got_error = false
+    try
+      PormG.run_in_transaction(settings) do
+        bulk_data = [Dict("name" => "bulk-$(i)", "test_result" => 900 + i) for i in 1:5]
+        df = DataFrame(bulk_data)
+        q = M.Just_a_test_deletion |> object
+        PormG.bulk_insert(q, df)
+
+        delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+
+        PormG.bulk_update(q, df) 
+
+        throw(ErrorException("force rollback"))
+      end
+    catch e
+      got_error = true
+    end
+
+    @test got_error
+    q = M.Just_a_test_deletion |> object
+    @test q |> do_count == 1         # no rows persisted
+    @test get_tx_connection() === nothing  # tx context cleared
+    q = M.Just_a_test_deletion |> object
+    df = q |> DataFrame
+    @test df[1, :test_result2] === missing  # no update applied
   end
 
 end

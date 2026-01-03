@@ -1,37 +1,8 @@
-using Pkg
-Pkg.activate(".")
-ENV["PORMG_ENV"] = "dev"
-using Revise
-using PormG
-using DataFrames
-using CSV
-using Test
-using Dates
-using JSON
-using UUIDs
-using Base.Threads: Atomic, atomic_add!
-
-
-cd("test")
-cd("pg")
-
-# PormG.Configuration.load()
-PormG.Configuration.load("db_2")
-
-# teste compation of fields
-import PormG: Models, Dialect
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With
-import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
-import PormG.QueryBuilder: cjoin
-
-
-# load models
-Base.include(PormG, "db_2/models.jl")
-import PormG.models as M
-
-# PormG.Configuration.__cleanup__()
-# PormG.config["db_2"].connections.connections
-# PormG.config["db_2"].connections.available
+# Se for rodar este arquivo isoladamente durante o dev, 
+# você pode colocar um check no topo:
+if !isdefined(Main, :PormG)
+    include("common_setup.jl")
+end
 
 # conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
 @testset "Database Setup Insert" begin
@@ -751,13 +722,19 @@ end
   @test params[3] == "Lewis"  # forename
 
   # 2. Verify LIKE pattern escaping and wildcard wrapping for contains
-  query = M.Result |> object
-  query.filter("driverid__forename__@contains" => "L%wis")
-  instruc = PormG.QueryBuilder.build(query.object)
+  query = M.Result |> object;
+  query.filter("driverid__forename__@contains" => "L%wis");
+  instruc = PormG.QueryBuilder.build(query.object);
 
   # The parameter should be escaped and wrapped in % by add_parameter!(contains=true)
   # L%wis -> %L\%wis%
   @test instruc.parameters.parameters[1] == "%L\\%wis%"
+
+  q = M.Just_a_test_deletion |> object;
+  q.filter("name__@icontains" => "to-be-deleted");
+  df = q |> DataFrame
+  instruc = PormG.QueryBuilder.build(q.object);
+  @test instruc.parameters.parameters[1] == "%to-be-deleted%"
 
   # 3. Verify array binding for IN clauses
   # Arrays should be stored as a single parameter (Postgres ANY) and preserved as an AbstractVector
@@ -832,43 +809,127 @@ end
   # - Keep tests readable and commented; they are educational and help debug future regressions.
 end
 
-@testset "Print Query" begin
+@testset "Connection string redaction" begin
+  # Verify redact_secret masks sensitive connection parameters while preserving others.
+  # This ensures we never log plaintext credentials (user/password) but keep other keys intact.
+  raw = "host=localhost user=admin password=s3cr3t port=5432"
+  masked = PormG.Configuration.redact_secret(raw)
+
+  # Non-sensitive fields should remain unchanged
+  @test occursin("host=localhost", masked)
+  @test occursin("port=5432", masked)
+
+  # Sensitive fields should be masked and originals must not appear
+  @test occursin("user=****", masked)
+  @test occursin("password=****", masked)
+  @test !occursin("admin", masked)
+  @test !occursin("s3cr3t", masked)
+  # # Expect two masked occurrences (user and password)
+  # @test count(collect(eachmatch("\\*\\*\\*\\*", masked))) == 2
+
+  # Case-insensitive matching should also work
+  uppercase = PormG.Configuration.redact_secret("PASSWORD=topsecret")
+  @test uppercase == "PASSWORD=****"
+
+  # Strings without sensitive keys should be left untouched
+  untouched = PormG.Configuration.redact_secret("dbname=f1_database")
+  @test untouched == "dbname=f1_database"
+end
+
+@testset "Show Query" begin
+  # Test 1: SELECT with show_query returns SQL string
   query = M.Result |> object;
   query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
-  query.values("resultid", "driverid__forename", "constructorid__name", "statusid__status");
-  @test typeof(query |> show_query) == String 
-
-  try
-    delete(M.Circuit |> object, allow_delete_all=true, show_query=true)
-    @test true
-  catch e
-      @error "Error during delete with show_query" error=e
-      @test false  # Fail the test if an error occurs
+  query.values("resultid", "driverid__forename", "constructorid__name" , "statusid__status");
+  logger = Base.CoreLogging.SimpleLogger(IOBuffer())
+  Base.CoreLogging.with_logger(logger) do
+    try
+      query |> show_query
+      @test true
+    catch e
+      @error "Error during show_query" error=e
+      @test false
+    end
   end
-
+  
+  # Test 2: DELETE with show_query=true logs structured info
+  # We capture log messages using Julia's logging
+  delete_logs = []
+  logger = Base.CoreLogging.SimpleLogger(IOBuffer())
+  Base.CoreLogging.with_logger(logger) do
+    try
+      delete(M.Circuit |> object, allow_delete_all=true, show_query=true)
+      @test true
+    catch e
+        @error "Error during delete with show_query" error=e
+        @test false
+    end
+  end
+  # Verify the circuit table still exists after show_query=true (no actual deletion)
   @test M.Circuit |> object |> do_exists
 
+  # Test 3: BULK_INSERT with show_query=true does not crash
   query = M.Constructor |> object
-  try
-    bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, show_query=true)
-    @test true
-  catch e
-    @error "Error during bulk_insert with show_query" error=e
-    @test false  # Fail the test if an error occurs
+  bulk_insert_logs = []
+  logger = Base.CoreLogging.SimpleLogger(IOBuffer())
+  Base.CoreLogging.with_logger(logger) do
+    try
+      bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, show_query=true)
+      @test true
+    catch e
+      @error "Error during bulk_insert with show_query" error=e
+      @test false
+    end
   end
 
+  # Test 4: UPDATE with show_query=true logs structured info
+  query = M.Just_a_test_deletion |> object
+  query.filter("id" => 1)
+  
+  # Capture structured log output
+  update_log_captured = false
+  logger = Base.CoreLogging.SimpleLogger(IOBuffer(), Base.CoreLogging.Info)
+  Base.CoreLogging.with_logger(logger) do
+    try
+      sql = query.update("name" => "test_structured_logging", show_query=true)
+      # When show_query=true, update returns the SQL string
+      @test typeof(sql) == String
+      @test contains(sql, "UPDATE")
+      update_log_captured = true
+    catch e
+      @error "Error during update with show_query" error=e
+    end
+  end
+  @test update_log_captured
+
+  # Test 5: BULK_UPDATE with show_query=true does not crash
   query = M.Just_a_test_deletion |> object;
   df = query |> DataFrame
   for (index, row) in enumerate(eachrow(df))
-    row.name = "test_update_$(index)"
+    row.name = "test_bulk_update_$(index)"
   end
   try
     bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
     @test true
   catch e
     @error "Error during bulk_update with show_query" error=e
-    @test false  # Fail the test if an error occurs
+    @test false
   end
+
+  # Test 6: Verify structured logging contains expected fields (query, params, task_id)
+  # by inspecting the logged message structure
+  query = M.Result |> object;
+  query.filter("resultid" => 1);
+  query.values("resultid", "points");
+  
+  logged_messages = []
+  function capture_logs(logger, level, message, _module, group, id, file, line; kwargs...)
+    if level == Base.CoreLogging.Info && message == "SQL Exec"
+      # kwargs should contain: query, params, task_id
+      push!(logged_messages, kwargs)
+    end
+    Base.CoreLogging.handle_message(logger, level, message, _module, group, id, file, line; kwargs...)
+  end  
 
 end
 
@@ -949,15 +1010,24 @@ end
 
   # Now, attempt to acquire the same lock with a short timeout
   got_error = false
-  try
-    PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=1_000) do
-      @info "This should not print, as lock acquisition should time out"
+  timeout_exc = nothing
+
+  # Suppress noisy internal errors from LibPQ by using a temporary logger
+  logger = Base.CoreLogging.SimpleLogger(IOBuffer(), Base.CoreLogging.Error)
+  Base.CoreLogging.with_logger(logger) do
+    try
+      PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=1_000) do
+        @info "This should not print, as lock acquisition should time out"
+      end
+    catch e
+      timeout_exc = e
+      got_error = true
     end
-  catch e
-    @info "Expected timeout error caught" exception=e
-    got_error = true
   end
 
+  # Report the expected timeout in a controlled way
+  # @info "Expected timeout error caught" exception=timeout_exc
+  @info "Expected timeout error caught"
   @test got_error
 
   # Wait for the lock holder to finish

@@ -13,6 +13,17 @@ using Base.ScopedValues: ScopedValue, with
 export env, Settings, connection, close_pool!
 export with_tx_context
 
+const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
+
+"""
+    redact_secret(conn_str::String)
+
+Replace sensitive connection string fields such as `password` or `user` with masked values before logging.
+"""
+function redact_secret(conn_str::String)::String
+  return replace(conn_str, _REDACT_CONNECTION_STRING_RE => s"\1=****")
+end
+
 # app environments
 const DEV   = "dev"
 const PROD  = "prod"
@@ -103,6 +114,12 @@ function ensure_model_transaction_scope(model::PormGModel)
   active_key = connection_key_for_pool(tx_pool)
   active_desc = active_key === nothing ? "unknown transaction" : active_key
   throw(ArgumentError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
+end
+
+function transaction_connection_for(settings::SQLConn)
+  tx_pool = get_tx_pool()
+  tx_conn = get_tx_connection()
+  return tx_conn !== nothing && tx_pool === settings.connections ? tx_conn : nothing
 end
 
 """
@@ -337,8 +354,8 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
                 pool.available[i] = false
                 # @info "Reconnected and acquired connection $i"
                 return pool.connections[i]
-              catch e
-                @error "Failed to reconnect connection $i: $e" connection_string=pool.connection_string
+                catch e
+                @error "Failed to reconnect connection $i: $e" connection_string=redact_secret(pool.connection_string)
                 pool.connections[i] = nothing
                 pool.available[i] = true
               end
@@ -354,7 +371,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
               
               pool.connections[i] = nothing
               pool.available[i] = true
-              @error "Failed to create new connection in slot $i: $e" connection_string=pool.connection_string
+              @error "Failed to create new connection in slot $i: $e" connection_string=redact_secret(pool.connection_string)
               throw("Failed to create new connection in pool")
             end
           end
@@ -372,7 +389,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
           @info "Expanded connection pool to $(pool.pool_size) connections"
           return new_connection
         catch e
-          @error "Failed to create new connection for pool expansion: $e" connection_string=pool.connection_string
+          @error "Failed to create new connection for pool expansion: $e" connection_string=redact_secret(pool.connection_string)
         end
       end
       
@@ -393,10 +410,10 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
   
   # If we've exhausted all retries
   if retry_count >= max_retries
-    @error "Exceeded maximum retry attempts ($max_retries) to acquire connection" pool_size=pool.pool_size connection_string=pool.connection_string
+    @error "Exceeded maximum retry attempts ($max_retries) to acquire connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
     throw("No available connections in the pool after $max_retries attempts")
   else
-    @error "Timeout after $(timeout_seconds) seconds waiting for available connection" pool_size=pool.pool_size connection_string=pool.connection_string
+    @error "Timeout after $(timeout_seconds) seconds waiting for available connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
     throw("No available connections in the pool after $(timeout_seconds) seconds")
   end
 end
@@ -811,6 +828,11 @@ run_in_transaction(f::Function) = run_in_transaction(f, DB_PATH)
 function connection(; key::String = "db") 
   settings = config[key]
   return settings.connections
+end
+
+function get_settings(key::String)
+  haskey(config, key) || throw("Settings for key '$(key)' not found")
+  return config[key]  
 end
 
 function reconnect_to_db(settings::SQLConn)

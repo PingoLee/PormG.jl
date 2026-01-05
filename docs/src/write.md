@@ -2,15 +2,6 @@
 
 This guide covers all data manipulation operations in PormG, including creating, updating, and deleting records. PormG provides both single-record and bulk operations for efficient data management.
 
-## Table of Contents
-
-- [Creating Records](#creating-records)
-- [Updating Records](#updating-records)
-- [Bulk insert](#bulk-insert)
-- [Deleting Records](#deleting-records)
-- [F Expressions](#f-expressions)
-
-
 ---
 
 ## Creating Records

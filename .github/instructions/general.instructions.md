@@ -84,6 +84,13 @@ When writing documentation, docstrings, or providing usage examples, you must st
   - `M.Circuit` (cols: `circuitid`, `name`, `location`, `country`...)
   - `M.Result` (The central fact table linking Drivers, Constructors, and Races. cols: `positionorder`, `points`, `laps`...).
 
+### Auxiliary Models for Mechanics Testing
+While user-facing documentation must strictly use the F1 dataset, specific auxiliary models are permitted **exclusively** for testing internal ORM mechanics (e.g., destructive operations, transaction isolation, complex join edge-cases) to preserve the integrity of the main dataset.
+- **Allowed Auxiliary Models:**
+  - `M.Just_a_test_deletion`: For CRUD and deletion safety tests.
+  - `M.Just_a_nested_roll_back`: For testing transaction atomicity and savepoints.
+  - `M.New_join_position`: For testing specific join mechanics or definitions.
+
 ### Reference Examples for Documentation
 
 **Bad Example (Generic):**

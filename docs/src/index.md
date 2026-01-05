@@ -56,8 +56,8 @@ using PormG
      password: your_password
      port: 5432  # default PostgreSQL port
      config:
-       change_db: true
-       change_data: true
+       change_db: true # whether to create the database if it doesn't exist or modify it
+       change_data: true # whether to modify existing data
        time_zone: 'America/Sao_Paulo'  # your timezone
    ```
 
@@ -99,7 +99,7 @@ using PormG
    import .models as M
 
    # Create records using the create method
-   user_query = M.User |> object
+   user_query = M.User.objects
    user_query.create("name" => "Alice", "email" => "alice@example.com", "age" => 30)
    user_query.create("name" => "Bob", "email" => "bob@example.com", "age" => 25)
    user_query.create("name" => "Charlie", "email" => "charlie@example.com", "age" => 35)
@@ -111,6 +111,11 @@ using PormG
    query = M.User |> object
    query.filter("name" => "Alice")
    results = query |> list
+   ```
+
+8. **Query your data with chainable methods:**
+   ```julia
+   results = M.User.objects.filter("age__gt" => 28).order_by("-age") |> list
    ```
 
 For more detailed usage instructions and examples, please refer to the [API documentation](api.md).

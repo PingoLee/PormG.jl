@@ -1048,27 +1048,13 @@ function order_by!(q::SQLObject, values)
   throw("Invalid argument: $(values) (::$(typeof(values))); please use a string or a SQLTypeOrder)")
 end
 
-  
+# ---
+# Define a struct ObjectHandler that wraps a SQLObjectQuery
+# ---
 mutable struct ObjectHandler <: SQLObjectHandler
-  object::SQLObject
-  values::Function
-  filter::Function
-  create::Function
-  update::Function
-  order_by::Function
-  distinct::Function # Add distinct function
-
-  # Constructor with keyword arguments
-  function ObjectHandler(; object::SQLObject, 
-                          values::Function = (x...) -> up_values!(object, x), 
-                          filter::Function = (x...) -> up_filter!(object, x), 
-                          create::Function = (x...) -> up_create!(object, x), 
-                          update::Function = (x...; kwargs...) -> up_update!(object, x; kwargs...), 
-                          order_by::Function = (x...) -> order_by!(object, x),
-                          distinct::Function = (x...) -> distinct!(object, x))
-      return new(object, values, filter, create, update, order_by, distinct)
-  end
+  object::SQLObject 
 end
+ObjectHandler(; object::SQLObject) = ObjectHandler(object)
 
 export object
 
@@ -1081,7 +1067,8 @@ Wraps a PormGModel into an ObjectHandler on which you can call:
 - .distinct() to add DISTINCT clause
 - .create(...) for single-row DML
 - .update(...) for single-row DML
-- plus bulk_insert, bulk_update, do_count, do_exists, list
+- .limit(...), .offset(...), .page(...) for pagination
+- plus bulk_insert, bulk_update, do_count, do_exists, list, etc.
 ```
 
 # Arguments
@@ -1092,54 +1079,104 @@ Wraps a PormGModel into an ObjectHandler on which you can call:
 using PormG, DataFrames
 
 # assume models loaded as `M`
-query = M.User |> object
+query = M.User.objects
 
 # 1) Filtering & selecting
 query.filter("is_active" => true)
 query.values("id", "username", "email")
-df = query |> list |> DataFrame
+df = query |> DataFrame
 
 # 2) Counting
-active_users = query |> do_count
+active_users = query.count()
 
 # 3) Inserting a single row
-query = M.Status |> object
-new = query.create("statusid" => 42, "status" => "Foo")  
+new = M.Status.objects.create("statusid" => 42, "status" => "Foo")  
 # returns a Dict of the inserted row
 
 # 4) Updating a single row
-query = M.Status |> object
-query.filter("statusid" => 42)
-query.update("status" => "Bar")
+M.Status.objects.filter("statusid" => 42).update("status" => "Bar")
 
 # 5) Ordering & aggregation
-query = M.Result |> object
-query.filter("raceid__year" => 2020)
+query = M.Result.objects.filter("raceid__year" => 2020)
 query.values(
   "driverid__forename", 
   "constructorid__name", 
   "laps" => Count("laps")
-)
-query.order_by("-laps")
-df2 = query |> list |> DataFrame
+).order_by("-laps")
+df2 = query |> DataFrame
 
 # 6) Existence check
-query = M.User |> object
-query.filter("id" => 1)
-exists = query |> do_exists
+exists = M.User.objects.filter("id" => 1).exists()
 
-# 7) Bulk insert
-df_new = DataFrame(name=["A","B"], age=[30,25])
-bulk_insert(M.User |> object, df_new)
-
-# 8) Bulk update (by primary key)
-df_up = DataFrame(id=[1,2], name=["Alice","Bob"])
-bulk_update(M.User |> object, df_up, columns=["name"], filters=["id"])
 ```
 """
 function object(model::PormGModel)
   return ObjectHandler(object = SQLObjectQuery(model = model))
 end
+
+# ---
+# The "Functor" for chainable methods
+# ---
+struct ChainCaller{F, T}
+    func::F
+    handler::T
+end
+
+# When called (e.g., query.filter(...)), it executes and returns the handler itself
+function (c::ChainCaller)(args...)
+    c.func(c.handler.object, args)
+    return c.handler
+end
+
+function Base.getproperty(q::ObjectHandler, sym::Symbol)
+  # === CATEGORY 1: Chainable methods (return 'q') ===
+  # Allows: query.filter(...).order_by(...)
+  if sym === :filter
+    return ChainCaller(up_filter!, q)
+  elseif sym === :values
+    return ChainCaller(up_values!, q)
+  elseif sym === :order_by
+    return ChainCaller(order_by!, q)
+  elseif sym === :limit
+    return ChainCaller(limit!, q)
+  elseif sym === :offset
+    return ChainCaller(offset!, q)
+  elseif sym === :page
+    return ChainCaller(page!, q)
+  elseif sym === :distinct
+    return ChainCaller(distinct!, q)
+      
+  # === CATEGORY 2: Terminal methods (return result) ===
+  # End the chain. E.g.: query.create(...) returns a Dict.
+  elseif sym === :create
+    # Returns a simple function that forwards to up_create!
+    return (args...) -> up_create!(q.object, args)
+  elseif sym === :update
+    return (args...; kwargs...) -> up_update!(q.object, args; kwargs...)
+  elseif sym === :count
+    return () -> do_count(q)
+  elseif sym === :exists
+    return () -> do_exists(q)
+      
+  # === CATEGORY 3: Internal fields ===
+  else
+    return getfield(q, sym)
+  end
+end
+
+function Base.getproperty(m::PormGModel, sym::Symbol)
+  if sym === :objects || sym === :object
+    return object(m)
+  else
+    return getfield(m, sym)
+  end
+end
+
+# ---
+# Deepcopy Implementations
+# ---
+
+
 function Base.deepcopy(obj::SQLObjectHandler)
   return ObjectHandler(object = deepcopy(obj.object))
 end
@@ -1181,20 +1218,12 @@ function Base.deepcopy(oper::SQLTypeOper)
     column = deepcopy(oper.column)
   )
 end
-# function object(model::String)
-#   return object(getfield(Models, Symbol(model)))
-# end
-# function object(model::Symbol)
-#   return object(getfield(Models, model))
-# end
- 
-### string(q::SQLObjectQuery, m::Type{T}) where {T<:AbstractModel} = to_fetch_sql(m, q)
 
-#
+# ---
 # Process the query entries to build the SQLObjectQuery object
 #
 
-# talvez eu não precise dessa função no inicio, mas pode ser útil na hora de processar o query
+# I may not need this function initially, but it can be useful when processing queries
 # function _check_function(f::OperObject)
 function _check_function(f::Vector{N} where N <: SQLObject)
   r_v::Vector{SQLObject} = []
@@ -2134,6 +2163,23 @@ function page(object::SQLObjectHandler, limit::Integer, offset::Integer)
   object.object.limit = limit
   object.object.offset = offset
   return object
+end
+
+function limit!(object::SQLObject, limit::Tuple{Integer})
+  object.limit = limit[1]
+end
+function limit!(object::SQLObject, limit)
+  throw(ArgumentError("Error in page, limit must be an Integer"))
+end
+function offset!(object::SQLObject, offset::Tuple{Integer})
+  object.offset = offset[1]
+end
+function offset!(object::SQLObject, offset)
+  throw(ArgumentError("Error in page, offset must be an Integer"))
+end
+function page!(object::SQLObject, v::Tuple{Integer, Integer})
+  object.limit = v[1]
+  object.offset = v[2]
 end
 
 # ---

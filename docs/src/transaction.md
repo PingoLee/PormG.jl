@@ -6,13 +6,13 @@ Because every operation runs through the async core, even synchronous-looking co
 
 ## Table of Contents
 
-- [Basic Usage](#basic-usage)
-- [Why Use Transactions](#why-use-transactions)
-- [Async Context Propagation](#async-context-propagation)
-- [Bulk Operations in Transactions](#bulk-operations-in-transactions)
-- [Multithreaded Work](#multithreaded-work)
-- [Error Handling and Rollback](#error-handling-and-rollback)
-- [Lower-Level Helpers](#lower-level-helpers)
+- [Basic Usage](#Basic-Usage)
+- [Why Use Transactions](#Why-Use-Transactions)
+- [Async Context Propagation](#Async-Context-Propagation)
+- [Bulk Operations in Transactions](#Bulk-Operations-in-Transactions)
+- [Multithreaded Work](#Multithreaded-Work)
+- [Error Handling and Rollback](#Error-Handling-and-Rollback)
+- [Lower-Level Helpers](#Lower-Level-Helpers)
 
 ---
 

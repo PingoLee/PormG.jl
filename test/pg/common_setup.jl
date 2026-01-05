@@ -6,7 +6,7 @@ using Revise
 using PormG
 using DataFrames
 using CSV
-using Test
+using Test, SafeTestsets
 using Dates
 using JSON
 using UUIDs

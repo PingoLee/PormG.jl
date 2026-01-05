@@ -6,15 +6,20 @@ include("common_setup.jl")
 
 # 2. Include individual test files
 # Each file now focuses only on test logic, without setup
-@testset "PormG Test Suite" begin
+@testset "Bateria de Testes PormG (PostgreSQL)" begin
 
-  @testset "Insertions and General Queries" begin
-    include("test.jl")
-  end
-  
-  @testset "Transactions" begin
-    include("test_transactions.jl")
-  end  
+    # CRUD Básico
+    @testset "Inserções e Schema" begin include("test_database_setup.jl") end
+    @testset "Seleção e Filtros"  begin include("test_selection.jl") end
+    @testset "Atualizações (Updates)" begin include("test_updates.jl") end
 
-  # Add new files here as the project grows
+    # Funcionalidades Avançadas
+    @testset "Joins e CTEs"       begin include("test_joins_cte.jl") end
+    @testset "Transações"         begin include("test_transactions.jl") end
+
+    # Internos e Segurança
+    @testset "Internals & Security" begin include("test_internals.jl") end
+
 end
+
+PormG.Configuration.__cleanup__()

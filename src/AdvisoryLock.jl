@@ -7,7 +7,9 @@ import PormG
 import PormG: SQLConn, PormGPostgres, PormGSQLite
 import PormG.Configuration: acquire_connection, release_connection, reconnect_db, is_connection_error
 
+import Infiltrator: @infiltrate
 export with_advisory_lock
+
 
 const ADVISORY_KEY_EXPR = "(( 'x' || substr(md5(\$1), 1, 16))::bit(64))::bigint"
 const TRY_SQL = "SELECT pg_try_advisory_lock($(ADVISORY_KEY_EXPR)) AS ok"
@@ -135,6 +137,7 @@ with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString; kwargs..
 
 # Wrapper to use by database name string
 function with_advisory_lock(f::Function, db::String, key::AbstractString; kwargs...)
+  @infiltrate false
   haskey(PormG.config, db) || throw(ErrorException("Database '$db' not found in configuration"))
   settings = PormG.config[db]
   return with_advisory_lock(f, settings, key; kwargs...)

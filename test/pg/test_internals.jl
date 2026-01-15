@@ -5,7 +5,7 @@ end
 
 @testset "Advanced check parameters binding" begin
   # 1. Verify basic binding order and type formatting
-  query = M.Result |> object
+  query = M.Result.objects
   query.filter("resultid" => 1, "points" => "10.5", "driverid__forename" => "Lewis")
   
   # Manually build the instruction to inspect parameters before execution
@@ -19,7 +19,7 @@ end
   @test params[3] == "Lewis"  # forename
 
   # 2. Verify LIKE pattern escaping and wildcard wrapping for contains
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("driverid__forename__@contains" => "L%wis");
   instruc = PormG.QueryBuilder.build(query.object);
 
@@ -27,7 +27,7 @@ end
   # L%wis -> %L\%wis%
   @test instruc.parameters.parameters[1] == "%L\\%wis%"
 
-  q = M.Just_a_test_deletion |> object;
+  q = M.Just_a_test_deletion.objects;
   q.filter("name__@icontains" => "to-be-deleted");
   df = q |> DataFrame
   instruc = PormG.QueryBuilder.build(q.object);
@@ -35,7 +35,7 @@ end
 
   # 3. Verify array binding for IN clauses
   # Arrays should be stored as a single parameter (Postgres ANY) and preserved as an AbstractVector
-  query = M.Result |> object
+  query = M.Result.objects
   query.filter("positionorder__@in" => [1, 2])
   instruc = PormG.QueryBuilder.build(query.object)
   @test length(instruc.parameters.parameters) == 1
@@ -43,7 +43,7 @@ end
   @test instruc.parameters.parameters[1] == [1, 2]
 
   # 4. Mixed types in same filter (integers, strings, dates, floats)
-  query = M.Result |> object
+  query = M.Result.objects
   query.filter("resultid" => 1, "statusid__status" => "Finished", "raceid__date" => Date(2020,1,15))
   instruc = PormG.QueryBuilder.build(query.object)
   # Expect three parameters in the same order the filters were provided
@@ -55,7 +55,7 @@ end
 
   # 5. Nested Q / Qor filter parameter ordering
   # Q groups should preserve their parameter order and Qor should append its alternatives
-  query = M.Driver |> object
+  query = M.Driver.objects
   query.filter(Q("forename" => "Lewis", "driverid__@lte" => 50), Qor("surname" => "Hamilton", "surname" => "Rosberg"))
   instruc = PormG.QueryBuilder.build(query.object)
   # Expect four parameters in order: forename, driverid, surname1, surname2
@@ -66,7 +66,7 @@ end
   @test instruc.parameters.parameters[4] == "Rosberg"
 
   # 6. Multiple LIKE patterns in same query are escaped independently
-  query = M.Result |> object
+  query = M.Result.objects
   query.filter("driverid__forename__@contains" => "A_B", "raceid__circuitid__name__@icontains" => "%C%")
   instruc = PormG.QueryBuilder.build(query.object)
   @test length(instruc.parameters.parameters) == 2
@@ -75,7 +75,7 @@ end
 
   # 7. Verify binding in Updates (Filters + Set values) end-to-end
   # We check the functional correctness (DB updated) which proves binding was applied.
-  query = M.Just_a_test_deletion |> object
+  query = M.Just_a_test_deletion.objects
   # Ensure a clean state for the test
   query |> do_exists && delete(query; allow_delete_all=true)
   query.create("id" => 500, "name" => "original", "test_result" => 10)
@@ -84,14 +84,14 @@ end
   query.filter("id" => 500)
   query.update("name" => "updated", "test_result" => 20)
 
-  query = M.Just_a_test_deletion |> object
+  query = M.Just_a_test_deletion.objects
   query.filter("id" => 500)
   updated_row = query |> list
   @test updated_row[1][:name] == "updated"
   @test updated_row[1][:test_result] == 20
 
   # 8. Verify Date binding
-  query = M.Race |> object
+  query = M.Race.objects
   test_date = Date(2023, 10, 22)
   query.filter("date" => test_date)
   instruc = PormG.QueryBuilder.build(query.object)
@@ -135,7 +135,7 @@ end
 
 @testset "Show Query" begin
   # Test 1: SELECT with show_query returns SQL string
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
   query.values("resultid", "driverid__forename", "constructorid__name" , "statusid__status");
   logger = Base.CoreLogging.SimpleLogger(IOBuffer())
@@ -155,7 +155,7 @@ end
   logger = Base.CoreLogging.SimpleLogger(IOBuffer())
   Base.CoreLogging.with_logger(logger) do
     try
-      delete(M.Circuit |> object, allow_delete_all=true, show_query=true)
+      delete(M.Circuit.objects, allow_delete_all=true, show_query=true)
       @test true
     catch e
         @error "Error during delete with show_query" error=e
@@ -163,10 +163,10 @@ end
     end
   end
   # Verify the circuit table still exists after show_query=true (no actual deletion)
-  @test M.Circuit |> object |> do_exists
+  @test M.Circuit.objects |> do_exists
 
   # Test 3: BULK_INSERT with show_query=true does not crash
-  query = M.Constructor |> object
+  query = M.Constructor.objects
   bulk_insert_logs = []
   logger = Base.CoreLogging.SimpleLogger(IOBuffer())
   Base.CoreLogging.with_logger(logger) do
@@ -180,7 +180,7 @@ end
   end
 
   # Test 4: UPDATE with show_query=true logs structured info
-  query = M.Just_a_test_deletion |> object
+  query = M.Just_a_test_deletion.objects
   query.filter("id" => 1)
   
   # Capture structured log output
@@ -200,7 +200,7 @@ end
   @test update_log_captured
 
   # Test 5: BULK_UPDATE with show_query=true does not crash
-  query = M.Just_a_test_deletion |> object;
+  query = M.Just_a_test_deletion.objects;
   df = query |> DataFrame
   for (index, row) in enumerate(eachrow(df))
     row.name = "test_bulk_update_$(index)"
@@ -215,7 +215,7 @@ end
 
   # Test 6: Verify structured logging contains expected fields (query, params, task_id)
   # by inspecting the logged message structure
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("resultid" => 1);
   query.values("resultid", "points");
   
@@ -258,4 +258,105 @@ end
     
     println("✅ All LIKE pattern escaping tests passed!")
   end
+
+  @testset "Injection in Values (Parameterization Check)" begin
+    query = M.Just_a_test_deletion.objects
+    
+    # 1. Classic attack payload ("Little Bobby Tables")
+    payload = "Robert'); DROP TABLE users; --"
+    
+    # Attempt to insert the payload as the name
+    # If parameterization failed, the 'users' table (or another) would be dropped
+    query.create("name" => payload, "test_result" => 999)
+    
+    # Check: The data must have been stored LITERALLY
+    q_check = M.Just_a_test_deletion.objects.filter("name" => payload)
+    @test q_check.count() == 1
+    
+    item = q_check |> list |> first
+    @test item[:name] == payload  # The DB should have stored the quotes and semicolon as literal text
+  end
+
+
+  @testset "Injection in Identifiers (Columns/Aliases)" begin
+    query = M.Result.objects
+    
+    # 1. Injection in ORDER BY
+    # If the ORM simply concatenates the string this would execute pg_sleep (time-based blind SQLi)
+    # or raise a syntax error if properly sanitized.
+    injection_col = "raceid; SELECT pg_sleep(10)--"
+    
+    # Expectation: ORM should turn this into something harmless like "raceidSELECTpg_sleep5"
+    # or raise a column-not-found error. It MUST NOT lock the DB for 5s.
+    caught_msg = ""
+    t = @elapsed begin
+      try
+        query.order_by(injection_col)
+        query |> DataFrame # force execution
+      catch e
+        # Error is acceptable (column doesn't exist) but should contain the injection string
+        caught_msg = string(e)
+      end
+    end
+    @test t < 1.0 # Ensure pg_sleep(5) did not run
+    @test caught_msg != ""
+    @test occursin(injection_col, caught_msg)
+    
+    # 2. Injection in Aliases (values)
+    # Attempts to break the "AS alias"
+    caught_msg = ""
+    injection_alias = "points AS points_hacked; DROP TABLE users; --"
+    try
+      query = M.Result.objects.values("resultid" => "\"id_hacked\" FROM result; --")
+      query |> DataFrame
+    catch e
+      caught_msg = string(e)
+    end
+    @test caught_msg != ""
+    @test occursin("id_hacked", caught_msg)
+    @test occursin(" FROM result; --", caught_msg)
+  end
+
+  @testset "Injection in Operators and Joins" begin
+    query = M.Result.objects
+    
+    # Attempt to inject a nonexistent operator that closes the query
+    # e.g.: try to turn "points__@gt" into "points > 10; DROP..."
+    bad_filter = "points__@gt; --"    
+    
+    # Idiomatic Julia way to catch and verify an exception
+    # We use a logger to suppress the internal @error log during this specific test
+    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+      try
+        query.filter(bad_filter => 1)
+        @test false # Should not reach here
+      catch e
+        @test e isa ArgumentError
+        @test occursin("is invalid;", e.msg)
+      end
+    end
+  end
+
+  @testset "Advanced Sanitizer Unit Tests" begin
+    # Test with Unicode and control characters
+    # Sometimes 'latin1' or other encodings allow single-quote bypasses
+    import PormG.QueryBuilder: quote_identifier
+    
+    # Empty identifier
+    @test quote_identifier("", nothing) == "\"\"" 
+    
+    # Double quotes inside (attempt to break the identifier)
+    @test quote_identifier("column\"name", nothing) == "\"columnname\"" # or "\"column\"\"name\"" depending on your logic
+    
+    # SQL comments
+    @test quote_identifier("admin--", nothing) == "\"admin\"" 
+    
+    # Whitespace (should be preserved if valid or removed if it's an injection?)
+    # "user name" is valid in SQL when quoted. 
+    # "user name; drop" is not.
+    safe = quote_identifier("user name", nothing)
+    @test startswith(safe, "\"") && endswith(safe, "\"")
+  end
+
+
 end

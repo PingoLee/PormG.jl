@@ -767,6 +767,15 @@ function up_update!(q::SQLObject, values; kwargs...)
   return update(q, show_query=show_query)
 end
 
+"""
+  up_filter!(q::SQLObject, filter)
+  Add filters to the SQLObject query.
+# Arguments
+- `q::SQLObject`: The SQL object to add filters to.
+- `filter`: A collection of filters to add. Each filter can be a `Pair`, `SQLTypeQ`, `SQLTypeQor`, `SQLTypeOper`, or `SQLTypeF`.
+# Returns
+- The modified SQLObject with the new filters added.
+"""
 function up_filter!(q::SQLObject, filter)  
   for v in filter   
     if isa(v, Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF})
@@ -821,33 +830,6 @@ function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
   return table
 end
 
-"""
-Add a Common Table Expression (CTE) to the query object.
-
-CTEs can be joined like regular tables using their field names.
-
-# Arguments
-- `q::SQLObject`: The SQL object to add the CTE to
-- `name::String`: The name of the CTE (will be used as table name in JOINs)
-- `query::SQLObjectHandler`: The subquery that defines the CTE
-
-# Returns
-- The modified SQLObject with the CTE added
-
-# Examples
-```julia
-# Basic CTE with JOIN
-duplicates = MyModel.Evaluation |> object
-duplicates.filter("status" => "active")
-duplicates.values("aval_id", "dias" => Count("id"))
-
-query = MyModel.Evaluation |> object
-With(query, "tb_dup", duplicates)
-# Now you can reference tb_dup fields: "tb_dup__aval_id", "tb_dup__dias"
-query.filter("id" => F("tb_dup__aval_id"))
-query.values("id", "name", "tb_dup__dias")
-```
-"""
 function With(q::SQLObject, name::String, query::SQLObjectHandler;
     join_field::Union{Pair{String, String}, Nothing} = nothing,
     join_type::String = "LEFT") 
@@ -859,6 +841,9 @@ function With(q::SQLObject, name::String, query::SQLObjectHandler;
   q.ctes[name] = cte_fields
   return q
 end
+With(o::SQLObjectHandler, name::String, query::SQLObjectHandler;
+    join_field::Union{Pair{String, String}, Nothing} = nothing,
+    join_type::String = "LEFT") = With(o.object, name, query, join_field=join_field, join_type=join_type)
 
 
 function _query_select(array::Vector{SQLTypeField})
@@ -1118,6 +1103,7 @@ end
 # ---
 # The "Functor" for chainable methods
 # ---
+
 struct ChainCaller{F, T}
     func::F
     handler::T
@@ -1146,6 +1132,8 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return ChainCaller(page!, q)
   elseif sym === :distinct
     return ChainCaller(distinct!, q)
+  elseif sym === :copy
+    return () -> deepcopy(q)
       
   # === CATEGORY 2: Terminal methods (return result) ===
   # End the chain. E.g.: query.create(...) returns a Dict.
@@ -1172,6 +1160,16 @@ function Base.getproperty(m::PormGModel, sym::Symbol)
     return getfield(m, sym)
   end
 end
+
+@doc """
+    filter(args...)
+
+Apply filters to the query. Chainable method that returns the query object.
+
+Usage: `query.filter("field" => value)`
+
+See [Read documentation](../read.md) for detailed filter syntax and examples.
+""" ChainCaller(up_filter!, q)
 
 # ---
 # Deepcopy Implementations
@@ -1353,7 +1351,7 @@ function _check_filter(x::Pair)
       return _get_pair_to_oper(check => x.second)
     catch e
       @infiltrate false
-      @error "Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.second))" exception=(e, catch_backtrace())
+      @error "Error in filter processing '$(x.first)'" exception=(e, catch_backtrace())
       rethrow(e)
     end
   else    
@@ -4025,5 +4023,5 @@ function update_field(connection::PormGPostgres, model::PormGModel, field::Strin
   with_transaction(connection, sql, conn=conn, params=parameters)
 end
 
-
+include("documentation/querybuilder.jl")
 end

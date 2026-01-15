@@ -18,8 +18,7 @@ include("db/models.jl")
 import .models as M
 
 # Create a new record
-query = M.Just_a_test_deletion |> object
-new_record = query.create("name" => "test", "test_result" => 1)
+new_record = M.Just_a_test_deletion.objects.create("name" => "test", "test_result" => 1)
 ```
 
 Upon success, `new_record` will contain:
@@ -35,8 +34,7 @@ PormG validates that all non-nullable fields are provided. If a required field i
 
 ```julia
 # This will fail because the 'driverref' field is required and not provided.
-query = M.Driver |> object
-driver = query.create(
+driver = M.Driver.objects.create(
     "forename" => "Lewis",
     "surname" => "Hamilton",
     "nationality" => "British",
@@ -56,8 +54,7 @@ To create a record with a `ForeignKey` relationship, you first need the ID of th
 
 ```julia
 # Create related records
-circuit_query = M.Circuit |> object
-circuit = circuit_query.create(
+circuit = M.Circuit.objects.create(
     "name" => "Monaco",
     "country" => "Monaco",
     "circuitref" => "monaco",
@@ -69,8 +66,7 @@ circuit = circuit_query.create(
 )
 
 # Create a record with a foreign key reference and other fields
-race_query = M.Race |> object;
-race = race_query.create(
+race = M.Race.objects.create(
     "year" => 2024,
     "round" => 8,
     "circuitid" => circuit[:circuitid],
@@ -114,9 +110,8 @@ test_data = [
     ("test12", 12)
 ]
 
-query = M.Just_a_test_deletion |> object
 for (name, test_result) in test_data
-    query.create(
+    M.Just_a_test_deletion.objects.create(
         "name" => name,
         "test_result" => test_result
     )
@@ -138,14 +133,14 @@ using CSV, DataFrames
 df = CSV.File("drivers.csv") |> DataFrame
 
 # Bulk insert from DataFrame
-query = M.Driver |> object
+query = M.Driver.objects
 bulk_insert(query, df)
 ```
 
 By default, `bulk_insert()` chunks data into batches of 1000 rows for efficient insertion. However, for larger datasets with many columns, you might need to adjust the batch size to avoid hitting LibPQ limits. Unfortunately, when an insertion exceeds these limits, LibPQ can raise an unknown error. If you encounter such an error, try reducing the `chunk_size`.
 
 ```julia
-query = M.Driver |> object
+query = M.Driver.objects
 bulk_insert(query, df, chunk_size=500)
 ```
 
@@ -162,7 +157,7 @@ Imagine you're loading data from a `results.csv` file.
 df = CSV.File("results.csv") |> DataFrame
 
 # Attempt a bulk insert
-query = M.Result |> object
+query = M.Result.objects
 bulk_insert(query, df)
 ```
 
@@ -209,7 +204,7 @@ Update specific records using filters:
 
 ```julia
 # Update a single record
-query = M.Driver |> object;
+query = M.Driver.objects;
 query.filter("forename" => "Lewis");
 query |> do_count
 1
@@ -233,7 +228,7 @@ df = query |> DataFrame
 query.update("nationality" => "British")
 
 # Update multiple fields
-query = M.Race |> object;
+query = M.Race.objects;
 query.filter("raceid" => 1);
 query.update(
     "name" => "Australian Grand Prix",
@@ -261,7 +256,7 @@ The return value of the `update()` when show_query is true is:
 
 ```julia
 # Update with relationships
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("driverid__nationality" => "British", "resultid" => 1);
 query.update("points" => F("points") + 10)
 
@@ -269,7 +264,7 @@ query.update("points" => F("points") + 10)
 query.update("points" => F("points") + 10, show_query=true)
 
 # Update with complex JOINs
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("raceid__circuitid__name__@icontains" => "Monaco", "resultid" => 7654);
 query.update("points" => 11)
 
@@ -287,7 +282,7 @@ If you want to use this example, first create a few records in the `Just_a_test_
 
 ```julia
 # Delete specific records
-query = M.Just_a_test_deletion |> object;
+query = M.Just_a_test_deletion.objects;
 query.filter("test_result" => 10)
 delete(query)
 ```
@@ -298,7 +293,7 @@ If you had created records with test_result values of 10, 11, and 12, the above 
 
 ```julia
 # Delete with multiple conditions (AND want just see the query without executing it)
-query = M.Just_a_test_deletion |> object;
+query = M.Just_a_test_deletion.objects;
 query.filter("test_result__@in" => [11, 12], "test_result2__@isnull" => true)
 delete(query, show_query=true)
 ```
@@ -324,11 +319,11 @@ However, if you execute the above code, remove the `show_query` parameter, it wi
 
 ```julia
 # Delete all records (requires explicit permission)
-query = M.Just_a_test_deletion |> object
+query = M.Just_a_test_deletion.objects
 delete(query, allow_delete_all=true)
 
 # Delete with conditions
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__year__@lt" => 1960)
 delete(query)
 ```
@@ -339,7 +334,7 @@ Foreign key relationships with `on_delete="CASCADE"` will automatically delete r
 
 ```julia
 # This will also delete related Result records if configured with CASCADE
-query = M.Race |> object
+query = M.Race.objects
 query.filter("name" => "Cancelled Grand Prix")
 delete(query)
 ```
@@ -354,7 +349,7 @@ Update multiple records from a DataFrame:
 
 ```julia
 # Get existing data
-query = M.Result |> object
+query = M.Result.objects
 df = query |> DataFrame
 
 # Modify data
@@ -371,7 +366,7 @@ bulk_update(query, df, columns=["points", "milliseconds"], filters=["resultid"])
 
 ```julia
 # Update with additional static filters
-query = M.Result |> object
+query = M.Result.objects
 df = query |> DataFrame
 
 # Modify lap times
@@ -411,7 +406,7 @@ F expressions allow database-level operations without loading data into Julia, s
 
 ```julia
 # Increment a counter field
-query = M.Driver |> object;
+query = M.Driver.objects;
 query.filter("driverid" => 1);
 df = query |> DataFrame
 
@@ -434,7 +429,7 @@ df = query |> DataFrame
 query.update("number" => F("number") - 1)
 
 # Set one field equal to another
-query = M.Driver |> object;
+query = M.Driver.objects;
 query.filter("driverid" => 1);
 query.update("number" => F("driverid"))
 
@@ -452,13 +447,13 @@ query.update("number" => 44)
 With F, you can do all basic mathematical operations directly in the database.
 
 ```julia
-query = M.Just_a_test_deletion |> object;
+query = M.Just_a_test_deletion.objects;
 query |> do_exists && delete(query; allow_delete_all = true)
 query.create("name" => "fexpr", "test_result" => 1)
 query.create("name" => "fexpr", "test_result" => 2)
 query.create("name" => "fexpr", "test_result" => 3)
 
-query = M.Just_a_test_deletion |> object;
+query = M.Just_a_test_deletion.objects;
 query.filter("test_result" => 1)
 
 # Addition
@@ -482,7 +477,7 @@ query.update("test_result2" => F("test_result2") - 1)
 
 ```julia
 # Use values from related models
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("resultid" => 3);
 df = query |> DataFrame
 1×18 DataFrame

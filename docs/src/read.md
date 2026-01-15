@@ -8,7 +8,7 @@ This document provides comprehensive examples of how to perform various database
 
 ```julia
 # Basic filter by single field
-query = M.Status |> object;
+query = M.Status.objects;
 query.filter("status" => "Engine");
 df = query |> DataFrame
 
@@ -23,7 +23,7 @@ df = query |> DataFrame
 
 ```julia
 # Count records matching criteria
-query = M.Status |> object;
+query = M.Status.objects;
 query.filter("status" => "Engine");
 
 julia> count = query |> do_count
@@ -34,7 +34,7 @@ julia> count = query |> do_count
 
 ```julia
 # Check if any records match the criteria
-query = M.Status |> object
+query = M.Status.objects
 query.filter("status" => "Engine")
 exists = query |> do_exists
 ```
@@ -43,7 +43,7 @@ exists = query |> do_exists
 
 ```julia
 # Select specific fields from the query
-query = M.Status |> object
+query = M.Status.objects
 query.filter("status" => "Engine")
 query.values("status")
 df = query |> DataFrame
@@ -54,7 +54,7 @@ df = query |> DataFrame
 
 ```julia
 # Show the generated SQL query
-query = M.Status |> object
+query = M.Status.objects
 query.filter("status" => "Engine")
 sql = query |> show_query
 @info sql
@@ -67,7 +67,7 @@ sql = query |> show_query
 
 ```julia
 # Select specific fields
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Engine");
 query.values("resultid", "statusid");
 df = query |> DataFrame
@@ -90,7 +90,7 @@ df = query |> DataFrame
 
 ```julia
 # Access related table fields through joins
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Engine");
 query.values("resultid", "driverid__forename", "constructorid__name", 
              "statusid__status", "grid", "laps");
@@ -140,7 +140,7 @@ WHERE "Tb_3"."status" = $1
 
 ```julia
 # Access child records from parent model
-query = M.Constructor |> object;
+query = M.Constructor.objects;
 query.values("result__resultid");
 query.filter("result__resultid" => 1);
 df = query |> DataFrame
@@ -173,7 +173,7 @@ The `__` operator can chain multiple relationships:
 
 ```julia
 # Three-level relationship traversal
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__country" => "Monaco")
 query.values("driverid__forename", "raceid__circuitid__name", "raceid__year")
 df = query |> DataFrame
@@ -207,14 +207,14 @@ PormG automatically determines the appropriate join type based on field relation
 #### 1. Filtering by Related Fields
 ```julia
 # Filter results by driver nationality
-query = M.Result |> object
+query = M.Result.objects
 query.filter("driverid__nationality" => "British")
 ```
 
 #### 2. Selecting Related Data
 ```julia
 # Get race results with driver and constructor info
-query = M.Result |> object
+query = M.Result.objects
 query.values("position", "driverid__forename", "driverid__surname", 
              "constructorid__name", "raceid__name")
 ```
@@ -222,7 +222,7 @@ query.values("position", "driverid__forename", "driverid__surname",
 #### 3. Complex Filtering with Multiple Joins
 ```julia
 # Find results for British drivers at Monaco
-query = M.Result |> object
+query = M.Result.objects
 query.filter(
     "driverid__nationality" => "British",
     "raceid__circuitid__name__@icontains" => "monaco"
@@ -232,7 +232,7 @@ query.filter(
 #### 4. Aggregations Across Joins
 ```julia
 # Count wins by constructor
-query = M.Result |> object
+query = M.Result.objects
 query.filter("position" => 1)
 query.values("constructorid__name", "wins" => Count("resultid"))
 ```
@@ -243,14 +243,14 @@ You can assign custom aliases to fields in your query results using the `=>` syn
 
 ```julia
 # Basic field aliasing
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished", "resultid" => 26745);
 query.values("resultid", "circuit" => "raceid__circuitid__name");
 df = query |> DataFrame
 # The column "raceid__circuitid__name" will be renamed to "circuit"
 
 # Multiple aliases including functions
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished", "resultid" => 26745);
 query.values("resultid", "circuit" => "raceid__circuitid__name", "quarter" => "raceid__date__@quarter");
 df = query |> DataFrame
@@ -286,7 +286,7 @@ PormG uses a special `@` prefix syntax to distinguish between field names and fu
 
 ```julia
 # Using functions in FILTERS (WHERE clause)
-query = M.Race |> object
+query = M.Race.objects
 query.filter("date__@year" => 2009)  # Filter where year equals 2009
 query.filter("name__@icontains" => "Malaysian")  # Filter where name contains "Malaysian"
 
@@ -328,7 +328,7 @@ df = query |> DataFrame
 
 ```julia
 # Less than comparison
-query = M.Result |> object
+query = M.Result.objects
 query.filter("positionorder__@lt" => 3)
 df = query |> DataFrame
 # Returns results where position order is less than 3
@@ -350,20 +350,20 @@ df = query |> DataFrame
 
 ```julia
 # Case-sensitive contains
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__name__@contains" => "Monaco")
 count = query |> do_count  # Returns: 1664
 
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__name__@contains" => "monaco")
 count = query |> do_count  # Returns: 0
 
 # Case-insensitive contains
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__name__@icontains" => "monaco")
 count = query |> do_count  # Returns: 1664
 
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__name__@icontains" => "MONACO")
 count = query |> do_count  # Returns: 1664
 ```
@@ -372,12 +372,12 @@ count = query |> do_count  # Returns: 1664
 
 ```julia
 # In operation
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "monaco"])
 count = query |> do_count  # Returns: 1664
 
 # Not in operation
-query = M.Result |> object
+query = M.Result.objects
 query.filter("raceid__circuitid__name__@nin" => ["Circuit de Monaco", "monaco"])
 count = query |> do_count  # Returns: 25095
 ```
@@ -386,7 +386,7 @@ count = query |> do_count  # Returns: 25095
 
 ```julia
 # Multiple conditions (AND logic)
-query = M.Result |> object
+query = M.Result.objects
 query.filter("statusid__status" => "Finished", "resultid" => 26745)
 query.values("resultid", "raceid__circuitid__name", "driverid__forename", 
              "constructorid__name", "statusid__status", "grid", "laps")
@@ -394,13 +394,13 @@ results = query |> list
 # Returns records matching both conditions
 
 # Using @neq for exclusion within filters
-query = M.Result |> object
+query = M.Result.objects
 query.filter("statusid__status__@neq" => "Retired", "grid__@lte" => 10)
 df = query |> DataFrame
 # Returns results where status is NOT "Retired" AND grid position <= 10
 
 # Multiple exclusions
-query = M.Driver |> object
+query = M.Driver.objects
 query.filter("nationality__@neq" => "British", "nationality__@neq" => "German")
 # Note: This creates two separate conditions (both must be true)
 # Better approach for multiple exclusions:
@@ -415,7 +415,7 @@ query.filter("nationality__@nin" => ["British", "German"])
 ```julia
 using PormG.QueryBuilder: Count, Max, Min
 
-query = M.Result |> object;
+query = M.Result.objects;
 query.values("statusid__status", "raceid__circuitid__name", 
              "driverid__forename", "constructorid__name",
              "count_grid" => Count("grid"), 
@@ -463,7 +463,7 @@ df = query |> DataFrame
 
 ```julia
 # Filter on aggregated values
-query = M.Result |> object
+query = M.Result.objects
 query.values("raceid__circuitid__name", "driverid__forename", 
              "constructorid__name", "count_grid" => Count("grid"))
 query.filter("statusid__status" => "Finished", "count_grid__@lte" => 3)
@@ -509,7 +509,7 @@ Date operations in PormG demonstrate the difference between functions and operat
 
 ```julia
 # FUNCTIONS in VALUES - Transform data for display
-query = M.Race |> object
+query = M.Race.objects
 query.values("raceid", "date", "date__@year", "date__@month", "date__@day")
 df = query |> DataFrame
 # Returns:
@@ -535,7 +535,7 @@ query.filter("date__@month__@gte" => 6)  # WHERE EXTRACT(month FROM date) >= 6
 
 ```julia
 # Filter by year
-query = M.Race |> object
+query = M.Race.objects
 query.filter("date__@year" => 1991)
 query.values("date__@year", "date__@month", "date__@day", "rows" => Count("raceid"))
 query.order_by("date__day")
@@ -559,18 +559,18 @@ df = query |> DataFrame
 
 ```julia
 # Filter by year-month format
-query = M.Race |> object
+query = M.Race.objects
 query.filter("date__@yyyy_mm" => "1991-10")
 df = query |> DataFrame
 
 # Filter by exact date (string)
-query = M.Race |> object
+query = M.Race.objects
 query.filter("date__@date" => "1991-10-20")
 df = query |> DataFrame
 
 # Filter by exact date (Date object)
 using Dates
-query = M.Race |> object
+query = M.Race.objects
 query.filter("date__@date" => Date(1991, 10, 20))
 df = query |> DataFrame
 ```
@@ -581,12 +581,12 @@ df = query |> DataFrame
 
 ```julia
 # Create subquery
-subquery = M.Status |> object;
+subquery = M.Status.objects;
 subquery.filter("status" => "Engine");
 subquery.values("statusid");
 
 # Use subquery in main query
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__@in" => subquery);
 query.values("resultid", "statusid", "statusid__status", "grid", "driverid");
 df = query |> DataFrame
@@ -625,11 +625,11 @@ df = query |> DataFrame
 
 ```julia
 # Subquery with additional main query filters
-subquery = M.Status |> object;
+subquery = M.Status.objects;
 subquery.filter("status" => "Engine");
 subquery.values("statusid");
 
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__@in" => subquery, "driverid__@lte" => 7)
 query.values("resultid", "statusid", "statusid__status", "grid", "driverid", 
              "raceid__date__@quarter");
@@ -672,13 +672,13 @@ The most common use case is creating a CTE with aggregated data and joining it w
 using PormG.QueryBuilder: Count
 
 # Create a CTE that counts results per driver
-duplicates = M.Result |> object;
+duplicates = M.Result.objects;
 duplicates.filter("statusid" => 1);  # Only finished results
 duplicates.values("driverid", "dias" => Count("resultid"));
 
 # Main query that joins with the CTE
-main_query = M.Result |> object;
-With(main_query.object, "tb_dup", duplicates, join_field="driverid" => "driverid");
+main_query = M.Result.objects;
+With(main_query, "tb_dup", duplicates, join_field="driverid" => "driverid");
 
 # Now you can filter and select using CTE fields
 main_query.filter("resultid__@lte" => 100);
@@ -702,10 +702,12 @@ df = main_query |> DataFrame
 ```
 
 **How it works:**
-1. The CTE `tb_dup` aggregates results per driver
-2. `With()` creates the CTE and joins it to the main query using `driverid`
-3. You can reference CTE fields using the `__` syntax: `tb_dup__dias`
-4. The join happens automatically based on the `join_field` parameter
+
+1.  **Define the CTE Logic:** You first create a standard PormG subquery (stored in the variable `duplicates`) to pre-process data via aggregations or complex filters.
+2.  **Alias with `With()`:** The `With()` function registers this subquery inside your `main_query`. The name `"tb_dup"` serves as an **alias** for the `duplicates` query, acting as a temporary table name in the final SQL.
+3.  **Establish the Relationship:** The `join_field` parameter maps the connection between the main table and the CTE alias (e.g., `driverid` in the main table connects to `driverid` inside the `tb_dup` alias).
+4.  **Namespace Access (The `__` Syntax):** You access the CTE's fields using the `alias__field` format (e.g., `tb_dup__dias`). PormG recognizes `"tb_dup"` is an alias for a CTE and maps the lookup accordingly.
+5.  **SQL Generation:** Under the hood, PormG prepends the `WITH "tb_dup" AS (...)` clause to the SQL, using the logic from `duplicates`, and automatically joins it to the main query.
 
 ### CTE with Multiple Aggregated Fields
 
@@ -715,7 +717,7 @@ CTEs can include multiple aggregated fields, making them powerful for complex an
 using PormG.QueryBuilder: Count, Sum
 
 # Create CTE with multiple aggregations
-stats = M.Result |> object;
+stats = M.Result.objects;
 stats.filter("raceid__@lte" => 100);
 stats.values(
     "driverid",
@@ -724,8 +726,8 @@ stats.values(
 );
 
 # Main query joins driver information with statistics
-query = M.Driver |> object;
-With(query.object, "driver_stats", stats, join_field="driverid" => "driverid");
+query = M.Driver.objects;
+With(query, "driver_stats", stats, join_field="driverid" => "driverid");
 
 query.filter("driverid__@lte" => 50);
 query.values(
@@ -757,19 +759,19 @@ You can use multiple CTEs in a single query, each serving a different purpose:
 
 ```julia
 # First CTE: Filter recent races
-recent_races = M.Race |> object;
+recent_races = M.Race.objects;
 recent_races.filter("year__@gte" => 2020);
 recent_races.values("raceid", "name", "year");
 
 # Second CTE: Filter top drivers
-top_drivers = M.Driver |> object;
+top_drivers = M.Driver.objects;
 top_drivers.filter("driverid__@lte" => 100);
 top_drivers.values("driverid", "forename", "surname");
 
 # Main query uses both CTEs
-query = M.Result |> object;
-With(query.object, "recent", recent_races, join_field="raceid" => "raceid");
-With(query.object, "top_d", top_drivers, join_field="driverid" => "driverid");
+query = M.Result.objects;
+With(query, "recent", recent_races, join_field="raceid" => "raceid");
+With(query, "top_d", top_drivers, join_field="driverid" => "driverid");
 
 query.values(
     "resultid",
@@ -801,13 +803,13 @@ By default, PormG uses `LEFT JOIN` for CTEs, but you can specify the join type:
 using PormG.QueryBuilder: Sum
 
 # Create CTE for high-scoring drivers
-high_scorers = M.Result |> object;
+high_scorers = M.Result.objects;
 high_scorers.filter("points__@gte" => 10);
 high_scorers.values("driverid", "max_points" => Sum("points"));
 
 # Use INNER JOIN to only include drivers with high scores
-query = M.Driver |> object;
-With(query.object, "high_scorers", high_scorers, 
+query = M.Driver.objects;
+With(query, "high_scorers", high_scorers, 
      join_field="driverid" => "driverid", 
      join_type="INNER");
 
@@ -843,7 +845,7 @@ df = query |> DataFrame
 using PormG.QueryBuilder: F, Q
 
 # Compare fields from different tables
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter(F("driverid__dob__@day") == F("raceid__date__@day"), 
              F("driverid__dob__@month") == F("raceid__date__@month"), 
              "min_grid__@gt" => 0);
@@ -871,7 +873,7 @@ df = query |> DataFrame
 
 ```julia
 # Compare fields within the same record
-query = M.Race |> object
+query = M.Race.objects
 query.filter(F("fp1_date") <= F("date"))
 
 df = query |> DataFrame
@@ -889,7 +891,7 @@ df = query |> DataFrame
   90 │   1144  2024-12-06  13:00:00  missing      2024-12-07  Abu Dhabi Grand Prix       10:30:00      24  2024-12-06  13:00:00    2024  2024-12-08  https://en.wikipedia.org/wiki/20…  2024-12-07  14:00:00           24  09:30:00  missing   
 
 # Use F expressions with other operators
-query = M.Result |> object
+query = M.Result.objects
 query.filter(F("position") == F("rank"))
 df = query |> DataFrame
 929×18 DataFrame
@@ -910,7 +912,7 @@ df = query |> DataFrame
 
 ```julia
 # Calculate values in SELECT
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished", "driverid__forename" => "Mika");
 query.values(
     "driverid__forename",
@@ -951,7 +953,7 @@ df = query |> DataFrame
 ```julia
 using PormG.QueryBuilder: Sum, Case, When
 
-query = M.Result |> object
+query = M.Result.objects
 query.filter("driverid__forename" => "Mika")
 query.values("raceid__circuitid__name", 
              "until_30_years" => Sum(Case(When(Q(F("raceid__date") <= F("driverid__dob") + 10950), 
@@ -983,7 +985,7 @@ Q objects in PormG provide a way to create complex query conditions using logica
 using PormG.QueryBuilder: Q, Qor
 
 # Simple Q expression (equivalent to regular filter)
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter(Q("driverid__forename" => "Lewis", "statusid__status" => "Finished"));
 query.values("resultid", "driverid__forename", "statusid__status");
 df = query |> DataFrame
@@ -994,7 +996,7 @@ df = query |> DataFrame
 
 ```julia
 # Find results where driver is either Lewis or Sebastian
-query = M.Result |> object
+query = M.Result.objects
 query.filter(Qor("driverid__forename" => "Lewis", "driverid__forename" => "Sebastian"))
 query.values("resultid", "driverid__forename", "statusid__status");
 df = query |> DataFrame
@@ -1013,7 +1015,7 @@ df = query |> DataFrame
  656 │    25835  Sebastian           Finished
 
 # Multiple OR conditions
-query = M.Result |> object;
+query = M.Result.objects;
 query.values("resultid", "driverid__forename", "statusid__status");
 query.filter(Qor(
     "statusid__status" => "Finished",
@@ -1041,7 +1043,7 @@ df = query |> DataFrame
 ```julia
 # Combine Q and Qor for complex logic
 # Find British drivers who either finished or had engine problems
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter(
     Q("driverid__nationality" => "British"),  # AND condition
     Qor("statusid__status" => "Finished", "statusid__status" => "Engine")  # OR condition
@@ -1068,7 +1070,7 @@ df = query |> DataFrame
 
 ```julia
 # Complex nested conditions
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter(Q(
     "raceid__year__@gte" => 2000,  # After year 2000
     Qor(  # AND (condition1 OR condition2)
@@ -1087,7 +1089,7 @@ query.values("resultid", "driverid__forename", "statusid__status");
 
 ```julia
 # Example: Find race results with specific criteria
-query = M.Result |> object
+query = M.Result.objects
 query.filter(Q(
     "raceid__circuitid__country__@in" => ["Monaco", "Italy", "United Kingdom"],
     Qor(
@@ -1124,7 +1126,7 @@ df = query |> DataFrame
 
 ```julia
 # Use Q expressions in HAVING clauses
-query = M.Result |> object
+query = M.Result.objects
 query.values(
     "driverid__forename",
     "driverid__surname", 
@@ -1157,7 +1159,7 @@ push!(q_object2, "rank" => 1)
 q_combined = Qor(q_object)
 push!(q_combined, q_object2)
 
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("raceid__year" => 2000)  # After year 2000
 query.filter(q_combined)
 query.values("resultid", "driverid__forename", "statusid__status");
@@ -1177,7 +1179,7 @@ df = query |> DataFrame
   50 │     3284  Rubens              Finished
 
 # That is equivalent to
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter(Q(
     "raceid__year" => 2000,  # After year 2000
     Qor(
@@ -1209,7 +1211,7 @@ df = query |> DataFrame
 
 ```julia
 # Export as DataFrame for analysis
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished");
 query.values("resultid", "driverid__forename", "constructorid__name");
 df = query |> DataFrame
@@ -1220,7 +1222,7 @@ df = query |> DataFrame
 
 ```julia
 # Export as array of dictionaries
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished", "resultid" => 26745);
 query.values("resultid", "raceid__circuitid__name", "driverid__forename", 
              "constructorid__name", "statusid__status", "grid", "laps");
@@ -1234,7 +1236,7 @@ dict_array = query |> list
 
 ```julia
 # Export as JSON string
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished", "resultid" => 26745);
 query.values("resultid", "raceid__circuitid__name", "driverid__forename");
 json_string = query |> list_json
@@ -1256,7 +1258,7 @@ parsed_data = JSON.parse(json_string)
 using PormG.QueryBuilder: page
 
 # Basic pagination
-query = M.Result |> object;
+query = M.Result.objects;
 query.filter("statusid__status" => "Finished");
 query.values("resultid", "driverid__forename", "constructorid__name");
 
@@ -1276,7 +1278,7 @@ df = page(query, limit=20) |> DataFrame
 
 ```julia
 # Single field ordering
-query = M.Result |> object
+query = M.Result.objects
 query.values("resultid", "grid", "laps")
 query.order_by("grid")
 df = query |> DataFrame
@@ -1290,7 +1292,7 @@ df = query |> DataFrame
 
 ```julia
 # Show generated SQL
-query = M.Result |> object
+query = M.Result.objects
 query.filter("statusid__status" => "Finished")
 sql_string = query |> show_query
 println(sql_string)

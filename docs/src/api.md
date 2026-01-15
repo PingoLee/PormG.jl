@@ -8,7 +8,7 @@ The `PormG` module provides a set of abstractions and functions for working with
 
 ### `object`
 - **Description**: Retrieves an object from the database.
-- **Usage**: `query = M.Model_name |> object;`
+- **Usage**: `query = M.Model_name.objects;`
 
 ### `show_query`
 - **Description**: Displays the SQL query that will be executed.

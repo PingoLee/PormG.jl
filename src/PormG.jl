@@ -47,6 +47,9 @@ end
 
 include("constants.jl")
 
+include("Passwords.jl")
+using .Passwords
+
 # upper functions
 function get_constraints_pk end
 function get_constraints_unique end
@@ -75,6 +78,8 @@ export object, show_query, list, list_json, bulk_insert, bulk_update, delete, do
 export with_advisory_lock, try_advisory_lock, release_advisory_lock
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
+export make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS # Password utilities
+export validate_password, ValidationResult, PasswordValidator  # Password validation
 
 include("Migrations.jl")
 using .Migrations

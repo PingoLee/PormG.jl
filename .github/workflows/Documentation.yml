@@ -5,15 +5,15 @@ on:
     branches:
       - main
     tags: '*'
-    # Só roda se mudar arquivos nessas pastas/arquivos
+    # Only runs if files in these folders/files change
     paths:
       - 'docs/**'
       - 'README.MD'
   pull_request:
-    # Mesmo filtro para Pull Requests
+    # Same filter for Pull Requests
     paths:
       - 'docs/**'
-      - 'README.MD'
+      - 'README.MD' 
 
 jobs:
   build:

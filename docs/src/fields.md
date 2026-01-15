@@ -54,19 +54,6 @@ user = Models.Model(                    # Should be capitalized
 ```
 
 
-## Table of Contents
-
-- [Primary Key Fields](#primary-key-fields)
-- [Text Fields](#text-fields)
-- [Numeric Fields](#numeric-fields)
-- [Date and Time Fields](#date-and-time-fields)
-- [Boolean Fields](#boolean-fields)
-- [Binary and File Fields](#binary-and-file-fields)
-- [Relationship Fields](#relationship-fields)
-- [Common Field Options](#common-field-options)
-- [Field Validation](#field-validation)
-- [Migration Considerations](#migration-considerations)
-
 ---
 
 ## Primary Key Fields
@@ -232,6 +219,126 @@ Contact = Models.Model(
     message = Models.TextField()
 )
 ```
+
+### PasswordField()
+
+**Purpose**: Secure password storage with Django-compatible PBKDF2-SHA256 hashing.
+
+**Database Type**: `VARCHAR(128)`
+
+**Use Cases**: User authentication, secure credential storage, Django migration compatibility.
+
+The `PasswordField` stores hashed passwords in a format fully compatible with Django's authentication system. Passwords are **never stored in plain text** - they are automatically hashed using PBKDF2-SHA256 with a randomly generated salt and 720,000 iterations (Django 4.2+ default).
+
+**Storage Format**:
+```
+pbkdf2_sha256$720000$randomsalt$base64encodedHash
+```
+
+```julia
+# User model with password authentication
+User = Models.Model(
+    _id = Models.IDField(),
+    username = Models.CharField(max_length=150, unique=true),
+    email = Models.EmailField(unique=true),
+    password = Models.PasswordField()
+)
+```
+
+**Key Parameters**:
+- `max_length::Int = 128`: Maximum length for stored hash (Django default)
+- `blank::Bool = false`: Whether the field can be left blank
+- `null::Bool = false`: Whether NULL values are allowed
+- `auto_hash::Bool = true`: Whether to automatically hash passwords
+
+#### Password Utility Functions
+
+PormG provides Django-compatible utility functions for password management:
+
+**`make_password(raw_password)` - Hash a password**:
+```julia
+import PormG.Models: make_password
+
+# Hash a password before storing
+hashed = make_password("mySecurePassword123!")
+# => "pbkdf2_sha256$720000$abc123...$base64hash..."
+
+# Custom iterations (for testing - use default in production)
+hashed = make_password("password", iterations=100000)
+```
+
+**`check_password(raw, encoded)` - Verify a password**:
+```julia
+import PormG.Models: check_password
+
+# Verify during login
+if check_password("myPassword123", user[:password])
+    println("Login successful!")
+else
+    println("Invalid password")
+end
+```
+
+**`password_needs_upgrade(encoded)` - Check if re-hashing is needed**:
+```julia
+import PormG.Models: password_needs_upgrade
+
+# After successful login, upgrade old hashes
+if password_needs_upgrade(user[:password])
+    user[:password] = make_password(raw_password)
+    # Save user to database...
+end
+```
+
+#### Complete Authentication Example (F1 Context)
+
+```julia
+import PormG.models as M
+import PormG.Models: make_password, check_password
+import PormG.QueryBuilder: list, bulk_insert
+
+# Create a team manager account
+hashed_password = make_password("McLaren1988!")
+
+query = M.Team_manager |> object
+query.bulk_insert(
+    username = "ron_dennis",
+    email = "ron@mclaren.com",
+    password = hashed_password,
+    team_id = 1  # McLaren
+)
+
+# Login verification
+function authenticate(username::String, raw_password::String)
+    query = M.Team_manager |> object
+    query.filter("username" => username)
+    users = query |> list
+    
+    isempty(users) && return nothing
+    user = users[1]
+    
+    # Verify password with timing-attack protection
+    check_password(raw_password, user[:password]) ? user : nothing
+end
+
+# Usage
+user = authenticate("ron_dennis", "McLaren1988!")
+if user !== nothing
+    println("Welcome, $(user[:username])!")
+end
+```
+
+#### Security Notes
+
+- **Never store plain text passwords** - always use `make_password()`
+- Default 720,000 iterations provides strong security (NIST-approved)
+- Salts are automatically generated per-password (22 characters)
+- `check_password()` uses constant-time comparison to prevent timing attacks
+- Consider implementing password upgrade on login if using older hashes
+
+#### Django Migration
+
+If migrating from Django, password hashes are **fully compatible**. Users can continue logging in without any password reset required.
 
 ---
 

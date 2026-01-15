@@ -24,11 +24,11 @@ makedocs(
     ],
     
     format = Documenter.HTML(
-        # prettyurls: Remove '.html' da URL quando rodando no GitHub (CI).
-        # Isso cria links limpos como ".../stable/configuration/"
+        # prettyurls: Remove '.html' from the URL when running on GitHub (CI).
+        # This creates clean links like ".../stable/configuration/"
         prettyurls = get(ENV, "CI", nothing) == "true",
         
-        # Canonical: Define a URL oficial para o Google evitar conteúdo duplicado
+        # Canonical: Defines the official URL for Google to avoid duplicate content
         canonical = "https://pingolee.github.io/PormG.jl",
         
         assets = String[],
@@ -36,8 +36,8 @@ makedocs(
     checkdocs = :none,
 )
 
-# Deploydocs: Configura o upload automático para a branch gh-pages
-# Isso vai criar as pastas /dev (para main) e /stable (para tags de versão)
+# Deploydocs: Sets up automatic upload to the gh-pages branch
+# This will create the /dev (for main) and /stable (for version tags) directories
 if get(ENV, "DOCS_DEPLOY", "false") == "true"
     deploydocs(
         repo = "github.com/PingoLee/PormG.jl.git",

@@ -11,6 +11,7 @@ using Dates
 using JSON
 using UUIDs
 using Base.Threads: Atomic, atomic_add!
+using Infiltrator: @infiltrate
 
 import PormG: with_transaction, Models, Dialect
 import PormG.Configuration: with_tx_context, get_tx_connection, fetch_async, await_result

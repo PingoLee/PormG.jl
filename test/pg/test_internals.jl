@@ -258,4 +258,104 @@ end
     
     println("✅ All LIKE pattern escaping tests passed!")
   end
+
+  @testset "Injection in Values (Parameterization Check)" begin
+    query = M.Just_a_test_deletion |> object
+    
+    # 1. Classic attack payload ("Little Bobby Tables")
+    payload = "Robert'); DROP TABLE users; --"
+    
+    # Attempt to insert the payload as the name
+    # If parameterization failed, the 'users' table (or another) would be dropped
+    query.create("name" => payload, "test_result" => 999)
+    
+    # Check: The data must have been stored LITERALLY
+    q_check = M.Just_a_test_deletion.objects.filter("name" => payload)
+    @test q_check.count() == 1
+    
+    item = q_check |> list |> first
+    @test item[:name] == payload  # The DB should have stored the quotes and semicolon as literal text
+  end
+
+
+  @testset "Injection in Identifiers (Columns/Aliases)" begin
+    query = M.Result |> object
+    
+    # 1. Injection in ORDER BY
+    # If the ORM simply concatenates the string this would execute pg_sleep (time-based blind SQLi)
+    # or raise a syntax error if properly sanitized.
+    injection_col = "raceid; SELECT pg_sleep(10)--"
+    
+    # Expectation: ORM should turn this into something harmless like "raceidSELECTpg_sleep5"
+    # or raise a column-not-found error. It MUST NOT lock the DB for 5s.
+    caught_msg = ""
+    t = @elapsed begin
+      try
+        query.order_by(injection_col)
+        query |> DataFrame # force execution
+      catch e
+        # Error is acceptable (column doesn't exist) but should contain the injection string
+        caught_msg = string(e)
+      end
+    end
+    @test t < 1.0 # Ensure pg_sleep(5) did not run
+    @test caught_msg != ""
+    @test occursin(injection_col, caught_msg)
+    
+    # 2. Injection in Aliases (values)
+    # Attempts to break the "AS alias"
+    caught_msg = ""
+    injection_alias = "points AS points_hacked; DROP TABLE users; --"
+    try
+      query = M.Result.objects.values("resultid" => "\"id_hacked\" FROM result; --")
+      query |> DataFrame
+    catch e
+      caught_msg = string(e)
+    end
+    @test caught_msg != ""
+    @test occursin("id_hacked", caught_msg)
+    @test occursin(" FROM result; --", caught_msg)
+  end
+
+  @testset "Injection in Operators and Joins" begin
+    query = M.Result |> object
+    
+    # Attempt to inject a nonexistent operator that closes the query
+    # e.g.: try to turn "points__@gt" into "points > 10; DROP..."
+    bad_filter = "points__@gt; --"    
+    caught_msg = ""
+    try
+      # The parser should reject unknown operators or sanitize them
+      query.filter(bad_filter => 1)
+      query |> DataFrame
+    catch e
+      caught_msg = string(e)
+      @infiltrate
+    end
+    @test caught_msg != ""
+    @test occursin(bad_filter, caught_msg)
+  end
+
+  @testset "Advanced Sanitizer Unit Tests" begin
+    # Test with Unicode and control characters
+    # Sometimes 'latin1' or other encodings allow single-quote bypasses
+    import PormG.QueryBuilder: quote_identifier
+    
+    # Empty identifier
+    @test quote_identifier("", nothing) == "\"\"" 
+    
+    # Double quotes inside (attempt to break the identifier)
+    @test quote_identifier("column\"name", nothing) == "\"columnname\"" # or "\"column\"\"name\"" depending on your logic
+    
+    # SQL comments
+    @test quote_identifier("admin--", nothing) == "\"admin\"" 
+    
+    # Whitespace (should be preserved if valid or removed if it's an injection?)
+    # "user name" is valid in SQL when quoted. 
+    # "user name; drop" is not.
+    safe = quote_identifier("user name", nothing)
+    @test startswith(safe, "\"") && endswith(safe, "\"")
+  end
+
+
 end

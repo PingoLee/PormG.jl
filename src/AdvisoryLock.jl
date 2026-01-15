@@ -22,7 +22,7 @@ function _exec_lock_query(conn::LibPQ.Connection, sql::String, key::AbstractStri
   # async_execute yields to the scheduler, allowing other Tasks to run
   async_res = LibPQ.async_execute(conn, sql, Any[key])
   
-  # CORREÇÃO: fetch() espera a task terminar e retorna o LibPQ.Result
+  # FIX: fetch() waits for the task to complete and returns the LibPQ.Result
   res = fetch(async_res)
   
   rows = collect(res)
@@ -57,7 +57,7 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
         old_timeout = nothing
       end
       
-      # CORREÇÃO: fetch() ao invés de collect() para comandos sem retorno de linhas
+      # FIX: use fetch() instead of collect() for commands without returned rows
       async_res = LibPQ.async_execute(conn, "SET statement_timeout = $(timeout_ms)")
       fetch(async_res) 
       

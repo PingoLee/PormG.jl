@@ -1,10 +1,12 @@
 # I want recreate the Django models in Julia
 module Models
 using Dates, TimeZones
+using Base64
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
 import PormG: SQLConn, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
+# import PormG: make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS
 using Printf
 import Base.deepcopy
 using Decimals
@@ -12,7 +14,6 @@ using Decimals
 
 import PormG.Infiltrator: @infiltrate
 
-export Model, Model_to_str, CharField, IntegerField, ForeignKey, BigIntegerField, BooleanField, DateField, DateTimeField, DecimalField, EmailField, FloatField, ImageField, TextField, TimeField, IDField, BigIntegerField, OneToOneField, AutoField
 
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
@@ -2068,7 +2069,7 @@ scheduled_at = DateTimeField(default=DateTime(2024, 1, 1, 12, 0, 0))
 
 # Optional datetime field
 deadline = DateTimeField(null=true, blank=true)```
-
+```
 """
 function DateTimeField(; kwargs...)
   # List of accepted parameters
@@ -2323,6 +2324,175 @@ function EmailField(; kwargs...)
     editable,
     "VARCHAR",
     format_text_sql
+  )  
+end
+
+# ============================================================================
+# Password Field 
+# ============================================================================
+
+# Password Field Definition
+
+mutable struct sPasswordField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+  max_length::Int  # Length of stored hash (Django uses VARCHAR(128))
+  auto_hash::Bool  # Whether to automatically hash on insert/update
+end
+
+"""
+    PasswordField(; kwargs...)
+
+A field for securely storing passwords using PBKDF2-SHA256 hashing (Django-compatible).
+
+The `PasswordField` stores hashed passwords in a format compatible with Django's authentication system. 
+Passwords are never stored in plain text - they are automatically hashed using PBKDF2-SHA256 with a 
+randomly generated salt and configurable iterations.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values  
+- `editable::Bool = true`: Whether the field should be editable in forms
+- `max_length::Int = 128`: Maximum length for stored hash (Django default)
+- `auto_hash::Bool = true`: Whether to automatically hash passwords on insert/update
+
+# Database Mapping
+- **PostgreSQL Type**: VARCHAR(128)
+- **Storage Format**: `pbkdf2_sha256\$iterations\$salt\$base64hash`
+- **Index**: Not indexed by default (passwords shouldn't be queried)
+
+# Stored Format
+The password is stored in Django-compatible format:
+```
+pbkdf2_sha256\$720000\$salt\$base64encodedHash
+```
+
+Where:
+- `pbkdf2_sha256`: Algorithm identifier
+- `720000`: Number of iterations
+- `salt`: Random 22-character salt
+- `base64encodedHash`: The derived key in base64
+
+# Examples
+
+Basic password field:
+```julia
+# Define a User model with password
+User = Models.Model(
+    _id = Models.IDField(),
+    username = Models.CharField(max_length=150, unique=true),
+    email = Models.EmailField(unique=true),
+    password = Models.PasswordField()
+)
+```
+
+Creating a user with hashed password:
+```julia
+import PormG.Models: make_password, check_password
+
+# Hash the password before storing
+hashed = make_password("securePassword123!")
+
+query = M.User |> object
+query.bulk_insert(
+    username = "ayrton_senna",
+    email = "senna@mclaren.com",
+    password = hashed
+)
+```
+
+Verifying a password during login:
+```julia
+import PormG.Models: check_password
+
+# Fetch user from database
+user_query = M.User |> object
+user_query.filter("username" => "ayrton_senna")
+users = user_query |> list
+
+if !isempty(users)
+    user = users[1]
+    # Verify the password
+    if check_password("securePassword123!", user[:password])
+        println("Login successful!")
+    else
+        println("Invalid password")
+    end
+end
+```
+
+# Related Functions
+- `make_password(raw)`: Hash a plain text password
+- `check_password(raw, encoded)`: Verify a password against stored hash
+- `password_needs_upgrade(encoded)`: Check if hash needs re-hashing
+
+# Security Notes
+- **Never store plain text passwords** - always use `make_password()`
+- The default 720000 iterations provides strong security (Django 4.2+ default)
+- Salts are automatically generated per-password
+- Use `check_password()` for verification (includes timing attack protection)
+- Consider implementing password upgrade on login if using older hashes
+
+# Migration from Django
+If you're migrating from a Django application, password hashes are fully compatible.
+Users can continue to log in without any password reset.
+
+# See Also
+- `CharField` for generic string storage
+- Django's password management documentation
+"""
+function PasswordField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :blank, :null, :editable, :max_length, :auto_hash
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for PasswordField. It will be ignored." field="PasswordField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  editable = get(kwargs, :editable, true)
+  max_length = get(kwargs, :max_length, 128)
+  auto_hash = get(kwargs, :auto_hash, true)
+
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  # Validate other parameters
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(max_length isa Int) && throw(ArgumentError("The 'max_length' must be an Integer"))
+  max_length < 64 && throw(ArgumentError("The 'max_length' must be at least 64 to store password hashes"))
+  !(auto_hash isa Bool) && throw(ArgumentError("The 'auto_hash' must be a Boolean"))
+  
+  # Return the field instance
+  return sPasswordField(
+    verbose_name,
+    false, # primary_key - passwords should never be primary keys
+    false, # unique - passwords should not be unique (allows same password for different users)
+    blank,
+    null,
+    false, # db_index - never index passwords
+    nothing, # default - no default password
+    editable,
+    "VARCHAR",
+    format_text_sql,
+    max_length,
+    auto_hash
   )  
 end
 

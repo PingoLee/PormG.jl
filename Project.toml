@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["PingoLee <eurafael@msn.com>"]
 
 [deps]
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
+Bcrypt = "137488db-d2e6-4fb9-97f3-1e40a263e83c"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
@@ -16,6 +18,7 @@ Intervals = "d8418881-c3e1-53bb-8760-2df7ec849ed5"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 LibPQ = "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+MbedTLS = "739be429-bea8-5141-9913-cc70e7f3736d"
 Millboard = "39ec1447-df44-5f4c-beaa-866f30b4d3b2"
 OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
@@ -29,6 +32,8 @@ XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [compat]
+Base64 = "1.11.0"
+Bcrypt = "0.1.1"
 Decimals = "0.4.1"
 Infiltrator = "1.8.3"
 OrderedCollections = "1.7.0"

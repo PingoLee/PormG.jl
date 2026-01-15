@@ -174,3 +174,20 @@ end
   sort!(df, [:count_grid])
   @test df[1, :count_grid] == 2
 end
+
+@testset "filters after aggregates stay in WHERE" begin
+  # Reproduce the regression: we demand a HAVING clause but also need the subsequent
+  # non-aggregate predicate to stay in the WHERE clause instead of being dropped.
+  query = M.Result.objects.filter("raceid__year" => 1992);
+  query.values("statusid__status", "count_grid" => Count("grid"));
+  query.filter(
+    "count_grid__@gt" => 1,
+    "milliseconds__@isnull" => true,
+  );
+
+  df = query |> DataFrame
+
+  @test nrow(filter(r -> r.statusid__status == "Finished", df)) == 0
+
+  @test nrow(df) == 20
+end

@@ -233,3 +233,29 @@ end
     end
     
 end
+
+
+# As vezes existem joins antes da chave tipo co_cid__pront__cad_id não esta em Prod_atend_ind
+# query_cad = biM.Bas_cad_ind.objects.filter("saida_id"=>3, "st_fora_area"=>false, "st_defi_auditiva" => 1, "ibge_id"=>172100);
+
+# query_df = query_cad |> deepcopy;
+
+# query_df.count()
+
+# query_at = biM.Prod_atend_ind.objects;
+# With(query_at.object, "tb_quant", query_cad.values("id", "nu_cnes_id", "quant_cad" => Sum("id")), 
+# join_field="co_cid__pront__cad_id" => "id");
+
+# query_at.filter(
+#     "ibge_id"=>172100,
+#     "dt_inicio__@gte"=>"2025-01-01",
+#     "dt_inicio__@lte"=>"2025-12-31",
+#     "co_cid__pront__cad_id__@in"=>query_df.values("id")
+# );
+
+# query_at.values("lotacao__nu_cnes__no_cnes_a", 
+#     "n_atend" => Count("id"),
+#     "tb_quant__quant_cad"
+# );
+
+# df_at = query_at |> DataFrame

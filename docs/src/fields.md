@@ -300,7 +300,7 @@ import PormG.QueryBuilder: list, bulk_insert
 # Create a team manager account
 hashed_password = make_password("McLaren1988!")
 
-query = M.Team_manager |> object
+query = M.Team_manager.objects
 query.bulk_insert(
     username = "ron_dennis",
     email = "ron@mclaren.com",
@@ -310,7 +310,7 @@ query.bulk_insert(
 
 # Login verification
 function authenticate(username::String, raw_password::String)
-    query = M.Team_manager |> object
+    query = M.Team_manager.objects
     query.filter("username" => username)
     users = query |> list
     

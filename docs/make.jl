@@ -20,6 +20,7 @@ makedocs(
         "Reading" => "read.md",
         "Import from Django" => "import_django.md",
         "Custom Joins" => "custom_joins.md",
+        "Passwords" => "passwords.md",
         "API" => "api.md"
     ],
     

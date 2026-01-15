@@ -34,7 +34,7 @@ import .models as M
 # Run a transaction
 PormG.run_in_transaction("db_2") do
   # All queries inside this block share the same connection
-  query = M.Result |> object
+  query = M.Result.objects
   query.filter(
     "raceid__year" => 2025,
     "positionorder" => 1,
@@ -67,7 +67,7 @@ When you update multiple tables and need them to succeed or fail together:
 # Real-world scenario: Record a pit stop and update driver stats
 PormG.run_in_transaction("db_2") do
   # Record the pit stop
-  stop_query = M.Pit_stop |> object
+  stop_query = M.Pit_stop.objects
   stop_query.create(
     "raceid" => 900,
     "driverid" => 1,
@@ -78,7 +78,7 @@ PormG.run_in_transaction("db_2") do
   )
   
   # Update driver pit-stop count
-  driver_query = M.Driver |> object
+  driver_query = M.Driver.objects
   driver_query.filter("driverid" => 1)
   driver_query.update("pit_stops_count" => F("pit_stops_count") + 1)
   
@@ -101,7 +101,7 @@ bulk_data = [
 ]
 df = DataFrame(bulk_data)
 
-query = M.Constructor_standing |> object
+query = M.Constructor_standing.objects
 
 # If any row fails, all 10 are rolled back
 PormG.bulk_insert(query, df, chunk_size=5)
@@ -120,7 +120,7 @@ One of PormG's key strengths is that spawned `@async` tasks automatically inheri
 child_saw_context = Atomic{Bool}(false)
 
 PormG.run_in_transaction("db_2") do
-  (M.Result |> object).create(
+  (M.Result.objects).create(
     "raceid" => 900,
     "driverid" => 11,
     "constructorid" => 6,
@@ -132,7 +132,7 @@ PormG.run_in_transaction("db_2") do
     child_saw_context[] = PormG.Configuration.get_tx_connection() !== nothing
     
     # Use the same transaction without requesting a new connection
-    query = M.Driver |> object
+    query = M.Driver.objects
     query.filter("driverid" => 11)
     query.update("code" => "WIN")
   end
@@ -174,7 +174,7 @@ You can spawn many tasks and let Julia's scheduler coordinate them:
 PormG.run_in_transaction(settings) do
   # Create base records
   for i in 1:3
-    (M.Race |> object).create(
+    (M.Race.objects).create(
       "year" => 2025,
       "round" => i,
       "name" => "Race $i",
@@ -189,7 +189,7 @@ PormG.run_in_transaction(settings) do
     @async begin
       for race_round in 1:3
         # All inserts use the same connection
-        (M.Result |> object).create(
+        (M.Result.objects).create(
           "raceid" => 900 + race_round,
           "driverid" => worker,
           "constructorid" => 1,
@@ -216,17 +216,17 @@ This example demonstrates a common pattern: delete matching rows, perform a bulk
 ```julia
 # Example: Delete matching rows, then perform bulk insert and bulk update inside a single transaction
 # Setup: remove previous data and create seed records
-delete(M.Just_a_test_deletion |> object, allow_delete_all = true)
+delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
 
 # Pre-insert some records
-q = M.Just_a_test_deletion |> object
+q = M.Just_a_test_deletion.objects
 for i in 1:10
   q.create("name" => "to-be-deleted-$(i)", "test_result" => 800 + i)
 end
 
-(M.Just_a_test_deletion |> object).create("name" => "test_update", "test_result" => 456)
+(M.Just_a_test_deletion.objects).create("name" => "test_update", "test_result" => 456)
 
-q = M.Just_a_test_deletion |> object
+q = M.Just_a_test_deletion.objects
 q.filter("name" => "test_update")
 df_u = q |> DataFrame
 # Prepare the DataFrame used for bulk_update
@@ -234,7 +234,7 @@ df_u[1, :test_result2] = 457
 
 # Perform delete + bulk-insert + bulk-update inside a single transaction
 PormG.run_in_transaction(settings) do
-  q = M.Just_a_test_deletion |> object
+  q = M.Just_a_test_deletion.objects
   q.filter("name__@icontains" => "to-be-deleted")
   df = q |> DataFrame
   delete(q)
@@ -242,7 +242,7 @@ PormG.run_in_transaction(settings) do
   # Bulk insert
   bulk_data = [Dict("name" => "bulk-$(i)", "test_result" => 900 + i) for i in 1:5]
   df_bulk = DataFrame(bulk_data)
-  q = M.Just_a_test_deletion |> object
+  q = M.Just_a_test_deletion.objects
   PormG.bulk_insert(q, df_bulk)
 
   # Bulk update (apply the single-row update prepared above)
@@ -250,7 +250,7 @@ PormG.run_in_transaction(settings) do
 end
 
 # Inspect results (non-test checks)
-q = M.Just_a_test_deletion |> object
+q = M.Just_a_test_deletion.objects
 println("Total rows after transaction: ", q |> do_count)
 println("Names: ", sort((q |> list) .|> x -> x[:name]))
 ```
@@ -272,7 +272,7 @@ PormG.run_in_transaction("db_2") do
   @sync for i in 1:Threads.nthreads()
     @async begin
       for j in 1:100
-        (M.Result |> object).create(
+        (M.Result.objects).create(
           "raceid" => 1000 + i,
           "driverid" => j,
           "constructorid" => 1,
@@ -300,7 +300,7 @@ using Logging
 
 try
   PormG.run_in_transaction("db_2") do
-    (M.Result |> object).create(
+    (M.Result.objects).create(
       "raceid" => 1,
       "driverid" => 1,
       "constructorid" => 1,
@@ -316,7 +316,7 @@ catch e
 end
 
 # The record was never inserted because the transaction rolled back
-q = M.Result |> object
+q = M.Result.objects
 q.filter("raceid" => 1)
 @test (q |> do_count) == 0
 ```
@@ -327,10 +327,10 @@ You can nest `try`/`catch` blocks and still maintain transaction semantics:
 
 ```julia
 PormG.run_in_transaction("db_2") do
-  (M.Result |> object).create("raceid" => 1, "driverid" => 1, ...)
+  (M.Result.objects).create("raceid" => 1, "driverid" => 1, ...)
   
   try
-    (M.Result |> object).create("raceid" => 999, "driverid" => 999, ...)
+    (M.Result.objects).create("raceid" => 999, "driverid" => 999, ...)
     throw(ErrorException("Simulated error"))
   catch e
     @warn "Inner block failed, outer transaction will roll back" exception=e
@@ -362,7 +362,7 @@ try
   with_tx_context(settings.connections, conn) do
     # Insert first batch
     for i in 1:5
-      (M.Result |> object).create("raceid" => i, "driverid" => 1, ...)
+      (M.Result.objects).create("raceid" => i, "driverid" => 1, ...)
     end
     
     # Create savepoint
@@ -370,7 +370,7 @@ try
     
     # Insert second batch
     for i in 6:10
-      (M.Result |> object).create("raceid" => i, "driverid" => 2, ...)
+      (M.Result.objects).create("raceid" => i, "driverid" => 2, ...)
     end
     
     # If this fails, we can rollback just the second batch

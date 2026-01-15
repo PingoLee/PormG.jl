@@ -41,9 +41,9 @@ First, let's set up some test data. The `New_join_position` model has a `result`
 
 ```julia
 # Clear and populate test data
-delete(M.New_join_position |> object, allow_delete_all = true, show_query = false)
+delete(M.New_join_position.objects, allow_delete_all = true, show_query = false)
 
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 query.create("result" => 1, "description" => "teste 1")
 query.create("result" => 2, "description" => "teste 2")
 query.create("result" => 3, "description" => "teste 3")
@@ -54,7 +54,7 @@ query.create("result" => 3, "description" => "teste 3")
 Create a custom join from an IntegerField to another model:
 
 ```julia
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 cjoin(query, "result" => "Result")
 query.values("result__statusid__status", "description", "result")
 
@@ -77,7 +77,7 @@ The `cjoin` creates a LEFT JOIN from `new_join_position.result` to `Result.resul
 Add conditions to the ON clause. When a row doesn't match the condition, the joined fields will be `missing`:
 
 ```julia
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
 query.values("result__statusid__status", "description", "result")
 
@@ -100,7 +100,7 @@ Notice that only "teste 1" has the status because the filter is applied in the O
 Use `join_type="INNER"` to only return rows that match the join condition:
 
 ```julia
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 cjoin(query, "result" => "Result", 
       filters=["description" => "teste 1"],
       join_type="INNER")
@@ -126,12 +126,12 @@ The `cjoin` configuration is only applied when you access fields through the joi
 
 ```julia
 # cjoin is NOT applied - no join path used in values()
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
 df = query |> DataFrame  # Returns all 3 rows with default columns
 
 # cjoin IS applied - accessing result__* fields
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
 query.values("result__statusid__status", "description", "result")
 df = query |> DataFrame  # Join is created with ON conditions
@@ -142,7 +142,7 @@ df = query |> DataFrame  # Join is created with ON conditions
 You can inspect the generated SQL using `show_query`:
 
 ```julia
-query = M.New_join_position |> object
+query = M.New_join_position.objects
 cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
 query.values("result__statusid__status", "description", "result")
 
@@ -167,7 +167,7 @@ When your database doesn't have proper foreign key constraints:
 
 ```julia
 # Join on a code field instead of ID
-query = M.Order |> object
+query = M.Order.objects
 cjoin(query, "product_code" => "Product")  # Joins on product_code = Product.code
 query.values("product_code__name", "quantity")
 ```
@@ -177,7 +177,7 @@ query.values("product_code__name", "quantity")
 Add tenant isolation at the join level:
 
 ```julia
-query = M.Invoice |> object
+query = M.Invoice.objects
 cjoin(query, "customer_id" => "Customer", 
       filters=["tenant_id" => current_tenant_id])
 query.values("customer_id__name", "amount")
@@ -188,7 +188,7 @@ query.values("customer_id__name", "amount")
 Join only when certain conditions are met:
 
 ```julia
-query = M.Result |> object
+query = M.Result.objects
 cjoin(query, "driverid" => "Driver",
       filters=["nationality" => "British"],
       join_type="INNER")

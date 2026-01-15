@@ -53,10 +53,7 @@ print(query)
 ```julia
 Base.include(your_module, "db/models.jl")
 import your_module.automatic_models as M
-query = M.User |> object;
-query.filter("name"=>"Alice");
-query.order_by("-age");
-query.values("name", "age");
+query = M.User.objects.filter("name"=>"Alice").order_by("-age").values("name", "age");
 result = query |> list
 println(query)
 ```

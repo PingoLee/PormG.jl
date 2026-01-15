@@ -26,7 +26,7 @@ You are an expert Julia developer assisting in the development of **PormG**, an 
 
 ### Query Building
 - **Pipe Style:** Prefer the pipe operator `|>` for query construction chain.
-  - *Example:* `query = AM.Model |> object`
+  - *Example:* `query = AM.Model.objects`
   - *Example:* `query |> DataFrame`
 - **Filter Syntax:** - Use `String` keys for field names.
   - Use double underscore `__` for joins/lookups.
@@ -96,7 +96,7 @@ While user-facing documentation must strictly use the F1 dataset, specific auxil
 **Bad Example (Generic):**
 ```julia
 # Fetch users
-q = User |> object
+q = User.objects
 q.filter("age" => 20)
 ```
 
@@ -106,7 +106,7 @@ q.filter("age" => 20)
 # We query the 'Result' model and join with 'Driver' and 'Status'
 import PormG.models as M
 
-query = M.Result |> object
+query = M.Result.objects
 query.filter(
     "driverid__forename" => "Ayrton", 
     "driverid__surname" => "Senna", 

@@ -108,7 +108,7 @@ using PormG
 7. **Query your data:**
    ```julia
    # Create and execute queries
-   query = M.User |> object
+   query = M.User.objects
    query.filter("name" => "Alice")
    results = query |> list
    ```

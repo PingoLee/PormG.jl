@@ -43,6 +43,7 @@ end
 """
 module Passwords
 
+using Printf
 using MbedTLS
 using Random
 using Base64
@@ -58,7 +59,8 @@ isalnum(c::Char) = isletter(c) || isdigit(c)
 export make_password, check_password, password_needs_upgrade
 export validate_password, ValidationResult, PasswordValidator
 export DEFAULT_PBKDF2_ITERATIONS, DEFAULT_ALGORITHM
-export PasswordEncoder, PBKDF2PasswordEncoder, BCryptPasswordEncoder, Argon2PasswordEncoder
+export PasswordEncoder, PBKDF2PasswordEncoder, BCryptPasswordEncoder
+export SpringSecurityPBKDF2PasswordEncoder
 export DelegatingPasswordEncoder
 export encode, matches, upgrade_encoding
 export get_password_encoder, set_default_algorithm!
@@ -69,11 +71,11 @@ export get_password_encoder, set_default_algorithm!
 
 const DEFAULT_PBKDF2_ITERATIONS = 720000  # Django 4.2+ default (2023)
 const BCRYPT_DEFAULT_COST = 12            # BCrypt work factor (2^12 iterations)
-const ARGON2_DEFAULT_TIME = 3             # Argon2 time cost
-const ARGON2_DEFAULT_MEMORY = 65536       # Argon2 memory cost (64 MB)
+# const ARGON2_DEFAULT_TIME = 3             # Argon2 time cost (disabled)
+# const ARGON2_DEFAULT_MEMORY = 65536       # Argon2 memory cost (disabled)
 
 # Supported algorithms (extensible)
-const SUPPORTED_ALGORITHMS = ["pbkdf2_sha256", "bcrypt", "argon2id", "argon2i"]
+const SUPPORTED_ALGORITHMS = ["pbkdf2_sha256", "bcrypt", "spring_sha256"]  # Argon2 disabled
 
 # Default algorithm (can be changed at runtime)
 const _DEFAULT_ALGORITHM = Ref{String}("pbkdf2_sha256")
@@ -304,6 +306,126 @@ function upgrade_encoding(encoder::PBKDF2PasswordEncoder, encoded_hash::Abstract
 end
 
 # ============================================================================
+# Spring Security PBKDF2 Password Encoder
+# ============================================================================
+
+"""
+    SpringSecurityPBKDF2PasswordEncoder
+
+PBKDF2-SHA256 password encoder compatible with Spring Security's PBKDF2 hasher.
+
+Spring Security uses a colon-delimited format:
+`algorithm:iterations:keyLength:base64(salt):base64(hash)`
+
+Example hash:
+`sha256:64000:32:gexlBXpu2dKK1BvW2jw8+XZAo99/g9d7:aPXcE36dbNMo0ssJV0QGiX6/r4jHu8HUfvElVQB5erA=`
+
+# Fields
+- `iterations::Int` - Number of PBKDF2 iterations (default: 310000 for Spring 6.x)
+- `salt_length::Int` - Length of generated salt in bytes (default: 24)
+- `key_length::Int` - Derived key length in bytes (default: 32)
+
+# Example
+```julia
+encoder = SpringSecurityPBKDF2PasswordEncoder(iterations=310000)
+hash = encode(encoder, "mypassword")
+matches(encoder, "mypassword", hash)  # => true
+```
+"""
+struct SpringSecurityPBKDF2PasswordEncoder <: PasswordEncoder
+  iterations::Int
+  salt_length::Int
+  key_length::Int
+  
+  function SpringSecurityPBKDF2PasswordEncoder(; 
+      iterations::Int=310000,  # Spring Security 6.x default
+      salt_length::Int=24,
+      key_length::Int=32)
+    iterations < 1 && throw(ArgumentError("Iterations must be positive"))
+    salt_length < 8 && throw(ArgumentError("Salt length must be at least 8"))
+    key_length < 16 && throw(ArgumentError("Key length must be at least 16"))
+    new(iterations, salt_length, key_length)
+  end
+end
+
+# --- Spring Security Format Implementation ---
+
+function encode(encoder::SpringSecurityPBKDF2PasswordEncoder, raw_password::AbstractString)
+  isempty(raw_password) && throw(ArgumentError("Password cannot be empty"))
+  
+  # Generate random salt (raw bytes for Spring format)
+  salt_bytes = rand(UInt8, encoder.salt_length)
+  salt_b64 = Base64.base64encode(salt_bytes)
+  
+  # Derive key using PBKDF2-SHA256
+  password_bytes = Vector{UInt8}(raw_password)
+  derived = pbkdf2_sha256_bytes(password_bytes, salt_bytes, encoder.iterations, encoder.key_length)
+  hash_b64 = Base64.base64encode(derived)
+  
+  # Spring format: algorithm:iterations:keyLength:salt:hash
+  return "sha256:$(encoder.iterations):$(encoder.key_length):$(salt_b64):$(hash_b64)"
+end
+
+function matches(encoder::SpringSecurityPBKDF2PasswordEncoder, raw_password::AbstractString, encoded_hash::AbstractString)
+  encoded_hash = strip(encoded_hash)
+  isempty(encoded_hash) && return false
+  isempty(raw_password) && return false
+  
+  # Parse Spring format: algorithm:iterations:keyLength:salt:hash
+  parts = split(encoded_hash, ':')
+  length(parts) == 5 || return false
+  
+  algorithm = parts[1]
+  algorithm == "sha256" || return false
+  
+  iterations = try
+    parse(Int, parts[2])
+  catch
+    return false
+  end
+  
+  key_length = try
+    parse(Int, parts[3])
+  catch
+    return false
+  end
+  
+  salt_b64 = String(parts[4])
+  stored_hash = String(parts[5])
+  
+  # Decode salt from Base64
+  salt_bytes = try
+    Base64.base64decode(salt_b64)
+  catch
+    return false
+  end
+  
+  # Derive key and compare
+  password_bytes = Vector{UInt8}(raw_password)
+  derived = pbkdf2_sha256_bytes(password_bytes, salt_bytes, iterations, key_length)
+  computed_hash = Base64.base64encode(derived)
+  
+  return _constant_time_compare(computed_hash, stored_hash)
+end
+
+function upgrade_encoding(encoder::SpringSecurityPBKDF2PasswordEncoder, encoded_hash::AbstractString)
+  encoded_hash = strip(encoded_hash)
+  isempty(encoded_hash) && return true
+  
+  parts = split(encoded_hash, ':')
+  length(parts) != 5 && return true
+  parts[1] != "sha256" && return true
+  
+  iterations = try
+    parse(Int, parts[2])
+  catch
+    return true
+  end
+  
+  return iterations < encoder.iterations
+end
+
+# ============================================================================
 # BCrypt Password Encoder (Using Bcrypt.jl)
 # ============================================================================
 
@@ -396,9 +518,16 @@ function upgrade_encoding(encoder::BCryptPasswordEncoder, encoded_hash::Abstract
 end
 
 # ============================================================================
-# Argon2 Password Encoder (Pure Julia Implementation)
+# Argon2 Password Encoder (DISABLED - Future Implementation)
 # ============================================================================
+# NOTE: Argon2 support is temporarily disabled to resolve precompilation issues.
+# It will be re-enabled in a future release with improved dependency management.
+# Users who need Argon2 can use the standalone Argon2.jl package.
+# See: https://github.com/fypc/Argon2.jl
 
+# Argon2PasswordEncoder struct and methods are commented out below.
+# Uncomment when ready to re-enable Argon2 support.
+#=
 """
     Argon2PasswordEncoder
 
@@ -441,8 +570,8 @@ struct Argon2PasswordEncoder <: PasswordEncoder
   variant::Symbol     # :argon2id, :argon2i, :argon2d
   
   function Argon2PasswordEncoder(;
-      time_cost::Int=ARGON2_DEFAULT_TIME,
-      memory_cost::Int=ARGON2_DEFAULT_MEMORY,
+      time_cost::Int=3,
+      memory_cost::Int=65536,
       parallelism::Int=1,
       hash_length::Int=32,
       salt_length::Int=16,
@@ -485,22 +614,17 @@ end
 
 function _argon2_not_available_error()
   throw(ErrorException("""
-    Argon2 password hashing is not available.
+    Argon2 password hashing is not currently available.
+    This feature has been disabled to resolve precompilation issues.
     
-    To use Argon2, install the Argon2.jl package:
+    Alternative secure options:
+    - BCryptPasswordEncoder: Industry standard, widely used
+    - PBKDF2PasswordEncoder: Django/NIST approved
+    - SpringSecurityPBKDF2PasswordEncoder: Spring Security compatible
     
+    If you need Argon2, install and use Argon2.jl directly:
       using Pkg
-      Pkg.add(url="https://github.com/fypc/Argon2_jll.jl")
-      Pkg.add(url="https://github.com/fypc/Argon2.jl")
-    
-    Note: On Windows, this requires build tools (make, gcc).
-    
-    Alternative: Use BCryptPasswordEncoder or PBKDF2PasswordEncoder instead,
-    which are available without additional dependencies.
-    
-    Example:
-      encoder = BCryptPasswordEncoder(cost=12)
-      hash = encode(encoder, "password")
+      Pkg.add("Argon2")
   """))
 end
 
@@ -511,45 +635,13 @@ function encode(encoder::Argon2PasswordEncoder, raw_password::AbstractString)
 end
 
 function matches(encoder::Argon2PasswordEncoder, raw_password::AbstractString, encoded_hash::AbstractString)
-  # Can verify Argon2 hashes if the format is recognized
-  encoded_hash = String(strip(encoded_hash))
-  isempty(encoded_hash) && return false
-  isempty(raw_password) && return false
-  
-  if !startswith(encoded_hash, "\$argon2")
-    return false
-  end
-  
   _argon2_not_available_error()
 end
 
 function upgrade_encoding(encoder::Argon2PasswordEncoder, encoded_hash::AbstractString)
-  # Can check if upgrade is needed without the external package
-  encoded_hash = String(strip(encoded_hash))
-  isempty(encoded_hash) && return true
-  
-  if !startswith(encoded_hash, "\$argon2")
-    return true  # Not Argon2, should upgrade
-  end
-  
-  # Parse parameters from hash
-  parts = split(encoded_hash, '\$', keepempty=false)
-  length(parts) >= 3 || return true
-  
-  params_str = parts[3]
-  params = Dict{String, Int}()
-  for param in split(params_str, ',')
-    kv = split(param, '=')
-    length(kv) == 2 || continue
-    params[kv[1]] = parse(Int, kv[2])
-  end
-  
-  # Check if parameters meet current requirements
-  memory_cost = get(params, "m", 0)
-  time_cost = get(params, "t", 0)
-  
-  return memory_cost < encoder.memory_cost || time_cost < encoder.time_cost
+  _argon2_not_available_error()
 end
+=#
 
 # ============================================================================
 # Delegating Password Encoder (Spring Security Pattern)
@@ -584,16 +676,16 @@ struct DelegatingPasswordEncoder <: PasswordEncoder
   function DelegatingPasswordEncoder(;
       default_algorithm::String=DEFAULT_ALGORITHM(),
       pbkdf2_iterations::Int=DEFAULT_PBKDF2_ITERATIONS,
-      bcrypt_cost::Int=BCRYPT_DEFAULT_COST,
-      argon2_time::Int=ARGON2_DEFAULT_TIME,
-      argon2_memory::Int=ARGON2_DEFAULT_MEMORY)
+      bcrypt_cost::Int=BCRYPT_DEFAULT_COST)
+      # Argon2 parameters removed - will be re-enabled in future release
     
     encoders = Dict{String, PasswordEncoder}(
       "pbkdf2_sha256" => PBKDF2PasswordEncoder(iterations=pbkdf2_iterations),
+      "spring_sha256" => SpringSecurityPBKDF2PasswordEncoder(),
       "bcrypt" => BCryptPasswordEncoder(cost=bcrypt_cost),
-      "argon2id" => Argon2PasswordEncoder(time_cost=argon2_time, memory_cost=argon2_memory),
-      "argon2i" => Argon2PasswordEncoder(time_cost=argon2_time, memory_cost=argon2_memory, variant=:argon2i),
-      "argon2d" => Argon2PasswordEncoder(time_cost=argon2_time, memory_cost=argon2_memory, variant=:argon2d),
+      # "argon2id" => Argon2PasswordEncoder(time_cost=argon2_time, memory_cost=argon2_memory),
+      # "argon2i" => Argon2PasswordEncoder(time_cost=argon2_time, memory_cost=argon2_memory, variant=:argon2i),
+      # "argon2d" => Argon2PasswordEncoder(time_cost=argon2_time, memory_cost=argon2_memory, variant=:argon2d),
     )
     
     default_encoder = get(encoders, default_algorithm, PBKDF2PasswordEncoder(iterations=pbkdf2_iterations))
@@ -612,14 +704,17 @@ function matches(encoder::DelegatingPasswordEncoder, raw_password::AbstractStrin
   # Detect algorithm from hash prefix and delegate to appropriate encoder
   if startswith(encoded_hash, "pbkdf2_sha256\$")
     return matches(get(encoder.encoders, "pbkdf2_sha256", encoder.default_encoder), raw_password, encoded_hash)
+  elseif startswith(encoded_hash, "sha256:")  # Spring Security PBKDF2 format
+    return matches(get(encoder.encoders, "spring_sha256", SpringSecurityPBKDF2PasswordEncoder()), raw_password, encoded_hash)
   elseif startswith(encoded_hash, "\$2a\$") || startswith(encoded_hash, "\$2b\$") || startswith(encoded_hash, "\$2y\$")
     return matches(get(encoder.encoders, "bcrypt", BCryptPasswordEncoder()), raw_password, encoded_hash)
-  elseif startswith(encoded_hash, "\$argon2id")
-    return matches(get(encoder.encoders, "argon2id", Argon2PasswordEncoder()), raw_password, encoded_hash)
-  elseif startswith(encoded_hash, "\$argon2i")
-    return matches(get(encoder.encoders, "argon2i", Argon2PasswordEncoder(variant=:argon2i)), raw_password, encoded_hash)
-  elseif startswith(encoded_hash, "\$argon2d")
-    return matches(get(encoder.encoders, "argon2d", Argon2PasswordEncoder(variant=:argon2d)), raw_password, encoded_hash)
+  # Argon2 detection disabled - will be re-enabled in future release
+  # elseif startswith(encoded_hash, "\$argon2id")
+  #   return matches(get(encoder.encoders, "argon2id", Argon2PasswordEncoder()), raw_password, encoded_hash)
+  # elseif startswith(encoded_hash, "\$argon2i")
+  #   return matches(get(encoder.encoders, "argon2i", Argon2PasswordEncoder(variant=:argon2i)), raw_password, encoded_hash)
+  # elseif startswith(encoded_hash, "\$argon2d")
+  #   return matches(get(encoder.encoders, "argon2d", Argon2PasswordEncoder(variant=:argon2d)), raw_password, encoded_hash)
   else
     # Plain text fallback (development only)
     @warn "Unknown hash format. Password may be stored in plain text." maxlog=1
@@ -632,18 +727,22 @@ function upgrade_encoding(encoder::DelegatingPasswordEncoder, encoded_hash::Abst
   if startswith(encoded_hash, "pbkdf2_sha256\$")
     pbkdf2_encoder = get(encoder.encoders, "pbkdf2_sha256", encoder.default_encoder)
     return upgrade_encoding(pbkdf2_encoder, encoded_hash)
+  elseif startswith(encoded_hash, "sha256:")  # Spring Security PBKDF2 format
+    spring_encoder = get(encoder.encoders, "spring_sha256", SpringSecurityPBKDF2PasswordEncoder())
+    return upgrade_encoding(spring_encoder, encoded_hash)
   elseif startswith(encoded_hash, "\$2a\$") || startswith(encoded_hash, "\$2b\$") || startswith(encoded_hash, "\$2y\$")
     bcrypt_encoder = get(encoder.encoders, "bcrypt", BCryptPasswordEncoder())
     return upgrade_encoding(bcrypt_encoder, encoded_hash)
-  elseif startswith(encoded_hash, "\$argon2id")
-    argon2_encoder = get(encoder.encoders, "argon2id", Argon2PasswordEncoder())
-    return upgrade_encoding(argon2_encoder, encoded_hash)
-  elseif startswith(encoded_hash, "\$argon2i")
-    argon2_encoder = get(encoder.encoders, "argon2i", Argon2PasswordEncoder(variant=:argon2i))
-    return upgrade_encoding(argon2_encoder, encoded_hash)
-  elseif startswith(encoded_hash, "\$argon2d")
-    argon2_encoder = get(encoder.encoders, "argon2d", Argon2PasswordEncoder(variant=:argon2d))
-    return upgrade_encoding(argon2_encoder, encoded_hash)
+  # Argon2 detection disabled - will be re-enabled in future release
+  # elseif startswith(encoded_hash, "\$argon2id")
+  #   argon2_encoder = get(encoder.encoders, "argon2id", Argon2PasswordEncoder())
+  #   return upgrade_encoding(argon2_encoder, encoded_hash)
+  # elseif startswith(encoded_hash, "\$argon2i")
+  #   argon2_encoder = get(encoder.encoders, "argon2i", Argon2PasswordEncoder(variant=:argon2i))
+  #   return upgrade_encoding(argon2_encoder, encoded_hash)
+  # elseif startswith(encoded_hash, "\$argon2d")
+  #   argon2_encoder = get(encoder.encoders, "argon2d", Argon2PasswordEncoder(variant=:argon2d))
+  #   return upgrade_encoding(argon2_encoder, encoded_hash)
   end
   # Any other format should be upgraded
   return true
@@ -698,6 +797,7 @@ struct PasswordValidator
   require_digit::Bool
   require_special::Bool
   common_passwords::Set{String}
+  messages::Dict{Symbol, String}
   
   function PasswordValidator(;
       min_length::Int=8,
@@ -706,7 +806,8 @@ struct PasswordValidator
       require_lowercase::Bool=true,
       require_digit::Bool=true,
       require_special::Bool=false,
-      common_passwords::Union{Set{String}, Vector{String}, Nothing}=nothing)
+      common_passwords::Union{Set{String}, Vector{String}, Nothing}=nothing,
+      messages::Union{Dict{Symbol, String}, Nothing}=nothing)
     
     common_set = if common_passwords === nothing
       DEFAULT_COMMON_PASSWORDS
@@ -715,9 +816,24 @@ struct PasswordValidator
     else
       Set(lowercase.(collect(common_passwords)))
     end
+
+    # Default messages (can be overridden)
+    default_messages = Dict(
+      :min_length => "Password must be at least %d characters long",
+      :max_length => "Password must not exceed %d characters",
+      :require_uppercase => "Password must contain at least one uppercase letter",
+      :require_lowercase => "Password must contain at least one lowercase letter",
+      :require_digit => "Password must contain at least one digit",
+      :require_special => "Password must contain at least one special character",
+      :common_password => "Password is too common and easily guessable"
+    )
+
+    if messages !== nothing
+      merge!(default_messages, messages)
+    end
     
     new(min_length, max_length, require_uppercase, require_lowercase, 
-        require_digit, require_special, common_set)
+        require_digit, require_special, common_set, default_messages)
   end
 end
 
@@ -750,29 +866,31 @@ function validate(validator::PasswordValidator, password::AbstractString)
   
   # Length checks
   if length(password) < validator.min_length
-    push!(errors, "Password must be at least $(validator.min_length) characters long")
+    fmt = Printf.Format(validator.messages[:min_length])
+    push!(errors, Printf.format(fmt, validator.min_length))
   end
   if length(password) > validator.max_length
-    push!(errors, "Password must not exceed $(validator.max_length) characters")
+    fmt = Printf.Format(validator.messages[:max_length])
+    push!(errors, Printf.format(fmt, validator.max_length))
   end
   
   # Character class checks
   if validator.require_uppercase && !any(isuppercase, password)
-    push!(errors, "Password must contain at least one uppercase letter")
+    push!(errors, validator.messages[:require_uppercase])
   end
   if validator.require_lowercase && !any(islowercase, password)
-    push!(errors, "Password must contain at least one lowercase letter")
+    push!(errors, validator.messages[:require_lowercase])
   end
   if validator.require_digit && !any(isdigit, password)
-    push!(errors, "Password must contain at least one digit")
+    push!(errors, validator.messages[:require_digit])
   end
   if validator.require_special && !any(c -> !isalnum(c), password)
-    push!(errors, "Password must contain at least one special character")
+    push!(errors, validator.messages[:require_special])
   end
   
   # Common password check
   if lowercase(password) in validator.common_passwords
-    push!(errors, "Password is too common and easily guessable")
+    push!(errors, validator.messages[:common_password])
   end
   
   # Calculate strength
@@ -999,6 +1117,7 @@ Validate password strength against security requirements.
 - `require_lowercase::Bool=true`: Require lowercase letters
 - `require_digit::Bool=true`: Require digits
 - `require_special::Bool=false`: Require special characters
+- `messages::Dict{Symbol, String}=nothing`: Custom error messages for i18n
 
 # Returns
 `ValidationResult` with:
@@ -1023,7 +1142,8 @@ function validate_password(password::AbstractString;
     require_uppercase::Bool=true,
     require_lowercase::Bool=true,
     require_digit::Bool=true,
-    require_special::Bool=false)
+    require_special::Bool=false,
+    messages::Union{Dict{Symbol, String}, Nothing}=nothing)
   
   validator = PasswordValidator(
     min_length=min_length,
@@ -1031,7 +1151,8 @@ function validate_password(password::AbstractString;
     require_uppercase=require_uppercase,
     require_lowercase=require_lowercase,
     require_digit=require_digit,
-    require_special=require_special
+    require_special=require_special,
+    messages=messages
   )
   
   return validate(validator, password)

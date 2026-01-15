@@ -4,13 +4,13 @@ end
 
 
 @testset "Testing cjoin with simple join" begin
-  delete(M.New_join_position |> object, allow_delete_all = true, show_query = false)
-  query = M.New_join_position |> object;
+  delete(M.New_join_position.objects, allow_delete_all = true, show_query = false)
+  query = M.New_join_position.objects;
   query.create("result" => 1, "description" => "teste 1")
   query.create("result" => 2, "description" => "teste 2")
   query.create("result" => 3, "description" => "teste 3")
 
-  query = M.New_join_position |> object;
+  query = M.New_join_position.objects;
   cjoin(query, "result" => "Result");
   query.values("result__statusid__status", "description", "result");
 
@@ -22,7 +22,7 @@ end
 end
 
 @testset "Testing cjoin with custom filter" begin
-  query = M.New_join_position |> object;
+  query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
       "description" => "teste 1"]);
 
@@ -34,7 +34,7 @@ end
   @test df |> names |> length == 3
 
 
-  query = M.New_join_position |> object;
+  query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
       "description" => "teste 1"]);
 
@@ -48,7 +48,7 @@ end
   @test df[df.description .== "teste 1", :result__statusid__status][1] == "Finished"
   @test df[df.description .== "teste 2", :result__statusid__status][1] === missing
 
-  query = M.New_join_position |> object;
+  query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
       "description" => "teste 1"],
       join_type="INNER");
@@ -68,13 +68,13 @@ end
 
 
 @testset "Test subquerys" begin
-    subquery = M.Status |> object;
+    subquery = M.Status.objects;
     subquery.filter("status" => "Engine");
     subquery.values("statusid");
     
 
     # Subquery 
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("statusid__@in" => subquery);
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid");
     df = query |> DataFrame
@@ -97,7 +97,7 @@ end
 
 
 @testset "Reverse Joins" begin
-  query = M.Constructor |> object;
+  query = M.Constructor.objects;
   query.values("result__resultid");
   query.filter("result__resultid" => 1);
   # @info query |> show_query
@@ -106,12 +106,12 @@ end
   @test df[1, :result__resultid] == 1
 
   # get values to compare
-  query_a = M.Just_a_test_deletion |> object;
+  query_a = M.Just_a_test_deletion.objects;
   query_a.values("id", "name", "test_result", "test_result2");
   df_a = query_a |> DataFrame
 
   # Test reverse join with model with id and multiple fields in reverse model
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.values("test_deletion__id", "test_deletion__name", "resultid");
   query.filter("test_deletion__id__@isnull" => false);
   df = query |> DataFrame
@@ -128,12 +128,12 @@ end
         # Find duplicates using CTE and join with main table
         
         # Create a CTE that finds duplicate evaluations
-        duplicates = M.Result |> object;
+        duplicates = M.Result.objects;
         duplicates.filter("statusid" => 1);
         duplicates.values("driverid", "dias" => Count("resultid"));
         
         # Main query that joins with the CTE
-        main_query = M.Result |> object;
+        main_query = M.Result.objects;
         With(main_query.object, "tb_dup", duplicates, join_field="driverid" => "driverid");
         
         # Now we can filter and select using CTE fields
@@ -149,7 +149,7 @@ end
     
     @testset "CTE with aggregation and multiple fields" begin
         # Create CTE with multiple aggregated fields
-        stats = M.Result |> object;
+        stats = M.Result.objects;
         stats.filter("raceid__@lte" => 100);
         stats.values(
             "driverid",
@@ -158,7 +158,7 @@ end
         );
         
         # Main query
-        query = M.Driver |> object;
+        query = M.Driver.objects;
         With(query.object, "driver_stats", stats, join_field="driverid" => "driverid");
         
         query.filter("driverid__@lte" => 50);
@@ -182,17 +182,17 @@ end
     
     @testset "Multiple CTEs" begin
         # First CTE: Recent races
-        recent_races = M.Race |> object;
+        recent_races = M.Race.objects;
         recent_races.filter("year__@gte" => 2020);
         recent_races.values("raceid", "name", "year");
         
         # Second CTE: Top drivers
-        top_drivers = M.Driver |> object;
+        top_drivers = M.Driver.objects;
         top_drivers.filter("driverid__@lte" => 100);
         top_drivers.values("driverid", "forename", "surname");
         
         # Main query using both CTEs
-        query = M.Result |> object;
+        query = M.Result.objects;
         With(query.object, "recent", recent_races, join_field="raceid" => "raceid");
         With(query.object, "top_d", top_drivers, join_field="driverid" => "driverid");
 
@@ -214,12 +214,12 @@ end
     
     @testset "CTE with join_type in JOIN" begin
         # Create CTE
-        high_scorers = M.Result |> object;
+        high_scorers = M.Result.objects;
         high_scorers.filter("points__@gte" => 10);
         high_scorers.values("driverid", "max_points" => Sum("points"));
         
         # Main query with F expression referencing CTE
-        query = M.Driver |> object;
+        query = M.Driver.objects;
         With(query.object, "high_scorers", high_scorers, join_field="driverid" => "driverid", join_type="INNER");        
         query.values("driverid", "forename", "max_points" => "high_scorers__max_points");
         query.filter("driverid__@lte" => 100);

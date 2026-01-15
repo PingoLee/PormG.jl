@@ -3,7 +3,7 @@ if !isdefined(Main, :PormG)
 end
 
 @testset "Test list query" begin
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("statusid__status" => "Finished", "resultid" => 26745);
   query.values("resultid", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "statusid__status", "grid", "laps");
   dict = query |> list
@@ -17,13 +17,13 @@ end
 end
 
 @testset "Test As functionality for custom alias" begin
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("statusid__status" => "Finished", "resultid" => 26745);
   query.values("resultid", "circuit" => "raceid__circuitid__name");
   df = query |> DataFrame
   @test "circuit" in names(df)
 
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("statusid__status" => "Finished", "resultid" => 26745);
   query.values("resultid", "circuit" => "raceid__circuitid__name", "quarter" => "raceid__date__@quarter");
   df = query |> DataFrame
@@ -35,7 +35,7 @@ end
 
 @testset "Filtering and Value Selection" begin
   # Filter by status
-  query = M.Status |> object;
+  query = M.Status.objects;
   query.filter("status" => "Engine");
   @test query |> do_count ==  1
   df = query |> DataFrame
@@ -43,7 +43,7 @@ end
   @test length(names(df)) == 2  # statusid and status
 
   # Join filter
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("statusid__status" => "Engine");
   query.values("resultid", "statusid", "statusid__status");
   df = query |> DataFrame;
@@ -58,7 +58,7 @@ end
 end
 
 @testset "Ordering and Aggregations" begin
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.values("statusid__status", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
     query.order_by("raceid__circuitid__name");
     query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
@@ -74,29 +74,29 @@ end
 
 @testset "Filtering" begin
     # Contains and icontains
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("raceid__circuitid__name__@contains" => "Monaco");
     @test query |> do_count == 1664
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("raceid__circuitid__name__@contains" => "monaco");
     @test query |> do_count == 0
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("raceid__circuitid__name__@icontains" => "monaco");
     @test query |> do_count == 1664
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("raceid__circuitid__name__@in" => ["Monaco", "Monza"]);
     @test query |> do_count == 0
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "monaco"]);
     @test query |> do_count == 1664
-    query = M.Result |> object;
+    query = M.Result.objects;
     query.filter("raceid__circuitid__name__@nin" => ["Circuit de Monaco", "monaco"]);
     @test query |> do_count == 25095
 end
 
 
 @testset "Date Operations" begin
-    query = M.Race |> object;
+    query = M.Race.objects;
     query.filter("date__@year" => 1991);
     query.values("date__@year", "date__@month", "date__@day", "rows" => Count("raceid"));
     query.order_by("date__day");
@@ -104,7 +104,7 @@ end
     @test size(df, 1) == 16
     @test df[16, :date__day] == 29
 
-    query = M.Race |> object;
+    query = M.Race.objects;
     query.filter("date__@yyyy_mm" => "1991-10");
     query.values("date__@year", "date__@month", "date__@day", "rows" => Count("raceid"));
     query.order_by("date__day");
@@ -112,14 +112,14 @@ end
     @test size(df, 1) == 1
     @test df[1, :date__day] == 20 && df[1, :rows] == 1
 
-    query = M.Race |> object;
+    query = M.Race.objects;
     query.filter("date__@date" => "1991-10-20");
     query.values("date__@year", "date__@month", "date__@day", "rows" => Count("raceid"));
     query.order_by("date__day");
     df = query |> DataFrame
     @test size(df, 1) == 1
 
-    query = M.Race |> object;
+    query = M.Race.objects;
     query.filter("date__@date" => Date(1991, 10, 20));
     query.values("date__@year", "date__@month", "date__@day", "rows" => Count("raceid"));
     query.order_by("date__day");
@@ -128,19 +128,19 @@ end
 end
 
 @testset "Comparison and In Operations" begin
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("positionorder__@lt" => 3);
   query.values("raceid__circuitid__name", "positionorder", "driverid__forename", "constructorid__name");
   query.order_by("-positionorder");
   df = query |> DataFrame
   @test df[1, :positionorder] == 2
 
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("positionorder__@in" => [1, 2]);
   query.values("raceid__circuitid__name", "positionorder",  "driverid__forename", "constructorid__name");
   @test query |> do_count == size(df, 1)
 
-  query = M.Result |> object;
+  query = M.Result.objects;
   query.filter("positionorder__@nin" => df.positionorder |> unique);
   query.values("raceid__circuitid__name", "positionorder", "driverid__forename", "constructorid__name");
   @test query |> do_count == 24497
@@ -151,7 +151,7 @@ end
 
 
 @testset "filters with having" begin
-  query = M.Result |> object;    
+  query = M.Result.objects;    
   query.values("raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"));
   query.filter("statusid__status" => "Finished", "count_grid__@gt" => 1);
   df = query |> DataFrame
@@ -190,4 +190,24 @@ end
   @test nrow(filter(r -> r.statusid__status == "Finished", df)) == 0
 
   @test nrow(df) == 20
+end
+
+@testset "Test copy method" begin
+  query = M.Result.objects;
+  query.filter("statusid__status" => "Finished", "resultid" => 26745);
+  query.values("resultid", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "statusid__status", "grid", "laps");
+  
+  query_copy = query.copy()
+  df_original = query |> DataFrame
+  df_copy = query_copy |> DataFrame
+
+  @test df_original == df_copy
+
+  # Modify the copy and ensure original is unchanged
+  query_copy.filter("grid__@gt" => 5)
+  df_modified_copy = query_copy |> DataFrame
+  df_original = query |> DataFrame
+
+  @test nrow(df_modified_copy) == 0
+  @test nrow(df_original) == 1
 end

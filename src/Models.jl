@@ -156,7 +156,7 @@ function set_models(_module::Module, path::String)::Nothing
           @infiltrate false
           if field.related_name === nothing 
             field.related_name = string(get_model_name(model, settings), "_", field_name) |> lowercase
-            @warn("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
+            @info("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
           end
           if haskey(field_to.related_objects, field.related_name)
             throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))

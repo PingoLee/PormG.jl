@@ -10,7 +10,7 @@ import SQLite
 import LibPQ
 using Base.ScopedValues: ScopedValue, with
 
-export env, Settings, connection, close_pool!
+export env, Settings, connection, close_pool!, get_settings
 export with_tx_context
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")

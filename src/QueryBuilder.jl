@@ -814,7 +814,7 @@ function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
   end
   table = Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}(
     "join_type" => join_type,
-    "query" => query,
+    "query" => deepcopy(query),
     "join_field" => join_field
   ) 
 
@@ -855,6 +855,7 @@ function With(q::SQLObject, name::String, query::SQLObjectHandler;
   if haskey(q.ctes, name)
     throw("CTE with name $(name) already exists in the query; please use a different name")
   end
+  @infiltrate false
   q.ctes[name] = cte_fields
   return q
 end
@@ -1527,6 +1528,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     @infiltrate false
     cte_name = vector[1]
     cte_dict = instruct.object.ctes[cte_name]
+    if !haskey(cte_dict, "model")
+      throw(ArgumentError("Internal error: CTE $(cte_name) has not been materialized yet"))
+    end
     cte_model = cte_dict["model"]::PormGModel
     
     length(vector) == 1 && throw("Error, CTE reference '$(cte_name)' must include a field name. Example: '$(cte_name)__field_name'")
@@ -1535,15 +1539,33 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     join_field_pair = cte_dict["join_field"]::Pair{String, String}
     main_table_key = join_field_pair.first    # e.g., "driverid" from main table
     cte_table_key = join_field_pair.second    # e.g., "driverid" from CTE
+    @infiltrate false
+    
+    if !haskey(cte_model.fields, cte_table_key)
+      available = join(collect(keys(cte_model.fields)), ", ")
+      throw(ArgumentError("CTE join_field column '$(cte_table_key)' not found in $(cte_name); available fields: $(available)"))
+    end
+    
+
+    if (main_table_key in instruct.object.model.field_names)
+      row_join["alias_a"] = instruct.alias
+      row_join["key_a"] = main_table_key
+    elseif haskey(instruct.cache, main_table_key)
+      instruct.cache[main_table_key]
+      v_split = split(instruct.cache[main_table_key].field |> x -> replace(x,  '"' => ""), ".")
+      row_join["alias_a"] = v_split[1] |> string
+      row_join["key_a"] = v_split[2] |> string
+    else
+      throw(ArgumentError("Main table join_field column '$(main_table_key)' not found in $(instruct.object.model.name); available fields: $(join(instruct.object.model.field_names, ", "))"))
+    end
     
     # Set up the join with the CTE
     row_join["a"] = instruct.object.model.name
-    row_join["alias_a"] = instruct.alias
+    
     row_join["b"] = cte_name  # CTE name becomes the table name
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["how"] = cte_dict["join_type"]::String
         
-    row_join["key_a"] = main_table_key
     row_join["key_b"] = cte_table_key
 
     @infiltrate false
@@ -1597,7 +1619,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     foreign_table_name = s_model |> string
     @infiltrate false
   else
-    @infiltrate false
+    @infiltrate
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
 
@@ -1964,6 +1986,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
           throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
         @infiltrate
+        rethrow(e)
       end      
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @infiltrate false
@@ -2049,14 +2072,19 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       @infiltrate false
       if isa(v.column, SQLTypeField) && isa(v.column.field, String) && !contains(v.column.field, "__") && !(v.column.field in instruc.object.model.field_names)
         # @infiltrate false
-        field = instruc.cache[v.column._as].field
+        field = try
+          instruc.cache[v.column._as].field
+        catch e
+          # @infiltrate
+          rethrow(e)
+        end
         if haskey(instruc.tab_field_cache, v.column._as)
           _validation = instruc.tab_field_cache[instruc.cache[v.column._as]._as]
         else
           _validation = IntegerField()
         end
         push!(instruc.having, "$(field) $(v.operator) $(_validation.formater(v.values))")
-        return nothing
+        continue
       end
       push!(instruc._where, _get_filter_query(v, instruc))
     elseif isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeF})
@@ -2998,7 +3026,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   #### Arguments
   - `objct::SQLObjectHandler`: The SQL object handler to use for the operation.
   - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
-  - `columns::Vector{Union{String, Pair{String, String}}}`: Optional. Specifies the columns to insert and their mappings.
+  - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns from the DataFrame are used.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
   - `show_query::Bool`: Optional. If true, prints the generated SQL query (default: false).
   - `copy::Bool`: Optional. If true, creates a copy of the DataFrame before processing (default: false).
@@ -3027,7 +3055,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   ```
 """
 function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
-    columns::Vector{Union{String, Pair{String, String}}} = Union{String, Pair{String, String}}[], 
+    columns = nothing, 
     chunk_size::Integer = 1000,
     show_query::Bool = false,
     copy::Bool = true
@@ -3051,12 +3079,33 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   df = copy ? deepcopy(df_o) : df_o 
 
+  # Process columns argument
+  _columns::Vector{Union{String, Pair{String, String}}} = []
+  if columns === nothing
+  elseif columns isa AbstractString
+    push!(_columns, columns)
+  elseif columns isa Pair{String, String}
+    push!(_columns, columns)
+  elseif columns isa Vector
+    for column in columns
+      if column isa AbstractString
+        push!(_columns, column)
+      elseif column isa Pair{String, String}
+        push!(_columns, column)
+      else
+        throw(ArgumentError("Invalid column specification: $column"))
+      end
+    end
+  else
+    throw(ArgumentError("Invalid columns argument: $columns"))
+  end
+
   # colect name of the fields
   fields = model.field_names
   fields_df::Vector{String} = []
-  if !isempty(columns)   
-    if length(columns) > 0
-      for column in columns
+  if !isempty(_columns)   
+    if length(_columns) > 0
+      for column in _columns
         if column isa Pair
           if !(column.first in df |> names)
             @error("""Error in bulk_insert, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")

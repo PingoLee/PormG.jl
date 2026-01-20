@@ -196,7 +196,145 @@ query |> do_count
 
 By pre-processing the data, you ensure it's compatible with your database schema, leading to a smooth and successful bulk insert.
 
-## Updating Records
+---
+
+## Ultra-Fast Bulk Inserts with PostgreSQL COPY
+
+### bulk_copy: PostgreSQL Native High-Performance Insertion
+
+For truly massive datasets, PormG provides `bulk_copy()`, which uses PostgreSQL's native `COPY FROM STDIN` protocol—the fastest way to bulk insert data into PostgreSQL.
+
+The `COPY` protocol bypasses the standard SQL statement parser for each row, achieving **10-100x faster insertion** than `bulk_insert()` on large datasets.
+
+#### Why Use bulk_copy?
+
+- **Raw Speed**: Uses PostgreSQL's optimized binary protocol, not SQL statements
+- **Memory Efficient**: Streams data without loading everything into memory simultaneously
+- **Safe by Design**: Data is completely isolated from SQL parsing (immune to SQL injection)
+- **Ideal for**: Large initial data loads, data migrations, ETL pipelines
+
+#### Basic Usage
+
+```julia
+using DataFrames
+import PormG.models as M
+
+# Prepare your data (as a DataFrame)
+df = DataFrame(
+    forename = ["Lewis", "Max", "Lando"],
+    surname = ["Hamilton", "Verstappen", "Norris"],
+    nationality = ["British", "Dutch", "British"]
+)
+
+# Fast bulk insert via COPY protocol
+query = M.Driver.objects
+bulk_copy(query, df)
+
+# Verify
+query |> do_count
+3
+```
+
+#### Advanced: Column Mapping
+
+If your DataFrame column names differ from the database schema, use the `columns` parameter:
+
+```julia
+# DataFrame with different column names
+df_raw = DataFrame(
+    first_name = ["Lewis", "Max"],
+    last_name = ["Hamilton", "Verstappen"],
+    country = ["British", "Dutch"]
+)
+
+# Map DataFrame columns to model fields
+bulk_copy(query, df_raw, columns = [
+    "first_name" => "forename",
+    "last_name" => "surname",
+    "country" => "nationality"
+])
+```
+
+#### Chunking Large Datasets
+
+For very large datasets, `bulk_copy()` automatically chunks data to ensure stable insertion:
+
+```julia
+# Insert 1 million rows in chunks of 10,000
+df_huge = CSV.File("massive_drivers.csv") |> DataFrame
+
+bulk_copy(query, df_huge, chunk_size = 10_000)
+```
+
+#### Automatic Sequence Management
+
+After bulk insertion, PormG automatically updates PostgreSQL `SERIAL`/`IDENTITY` sequences to prevent ID collisions on subsequent `create()` calls:
+
+```julia
+# Bulk insert 100 drivers
+bulk_copy(query, df)
+
+# Create a new driver—the ID sequence is already synchronized
+new_driver = query.create("forename" => "Oscar", "surname" => "Piastri", "nationality" => "Australian")
+
+# new_driver will have a unique ID (not colliding with bulk-inserted rows)
+```
+
+#### Example: Loading F1 Data at Scale
+
+```julia
+# Load drivers from CSV
+drivers_csv = CSV.File("f1/drivers.csv") |> DataFrame
+M.Driver.objects |> do_exists && bulk_copy(M.Driver.objects, drivers_csv)
+
+# Load constructors
+constructors_csv = CSV.File("f1/constructors.csv") |> DataFrame
+bulk_copy(M.Constructor.objects, constructors_csv)
+
+# Load races
+races_csv = CSV.File("f1/races.csv") |> DataFrame
+bulk_copy(M.Race.objects, races_csv)
+
+# Load results (with relationships intact)
+results_csv = CSV.File("f1/results.csv") |> DataFrame
+bulk_copy(M.Result.objects, results_csv)
+
+# Verify all loaded
+M.Driver.objects |> do_count          # 800+
+M.Constructor.objects |> do_count     # 200+
+M.Race.objects |> do_count            # 1100+
+M.Result.objects |> do_count          # 25000+
+```
+
+#### Safety: SQL Injection Protection
+
+`bulk_copy()` is inherently immune to SQL injection because:
+
+1. **Data is never parsed as SQL** — `COPY FROM STDIN` treats all input as pure data
+2. **CSV escaping is automatic** — Quotes, commas, newlines are handled safely by Julia's `CSV.jl`
+3. **No string interpolation** — Table and column names are sanitized via `quote_identifier`
+
+You can safely insert rows containing SQL metacharacters:
+
+```julia
+# These strings are stored as-is, not executed
+df_safe = DataFrame(
+    name = [
+        "'; DROP TABLE drivers; --",
+        "\" OR \"1\"=\"1",
+        "UNION SELECT * FROM races"
+    ],
+    code = ["INJECT1", "INJECT2", "INJECT3"]
+)
+
+bulk_copy(M.Just_a_test_deletion.objects, df_safe)
+
+# All rows are safely retrieved without any SQL being executed
+M.Just_a_test_deletion.objects |> do_count
+3
+```
+
+
 
 ### Single Record Updates
 

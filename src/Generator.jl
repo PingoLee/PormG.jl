@@ -66,7 +66,7 @@ function generate_models_from_db(file::String, Instructions::Vector{Any}, settin
   open(joinpath(path, file), "w") do f
     write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
     import PormG.Models
-    import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
+    import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 
     """)
     for table in Instructions

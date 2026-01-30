@@ -612,10 +612,11 @@ orders = await_result(task2)
 """
 function fetch_async(connection::PormGPostgres, sql::String; 
   conn::Union{Nothing, LibPQ.Connection} = nothing, 
-  params::Union{Nothing, PormGPostgresParam} = nothing)
+  params::Union{Nothing, PormGPostgresParam} = nothing,
+  ignore_tx::Bool = false)
   
   # Check for transaction context first
-  tx_conn = get_tx_connection()
+  tx_conn = ignore_tx ? nothing : get_tx_connection()
   use_tx_context = conn === nothing && tx_conn !== nothing
   
   if use_tx_context
@@ -642,13 +643,13 @@ function fetch_async(connection::PormGPostgres, sql::String;
     end
   end
 end
-fetch_async(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing) = fetch_async(settings.connections, sql; conn=conn, params=params)
-fetch_async(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch_async(settings.connections, sql; conn=conn, params=params)
-fetch_async(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch_async(settings, sql; conn=conn, params=params)
+fetch_async(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 
 """
-    fetch(connection::PormGPostgres, sql::String; params=nothing) -> LibPQ.Result
+    fetch(connection::PormGPostgres, sql::String; params=nothing, ignore_tx=false) -> LibPQ.Result
 
 Execute a database query synchronously (blocking).
 Internally uses async execution but immediately awaits the result.
@@ -664,11 +665,12 @@ df = DataFrame(result)
 """
 function fetch(connection::PormGPostgres, sql::String; 
   conn::Union{Nothing, LibPQ.Connection} = nothing, 
-  params::Union{Nothing, PormGPostgresParam} = nothing)
+  params::Union{Nothing, PormGPostgresParam} = nothing,
+  ignore_tx::Bool = false)
   @infiltrate false
   
   # Use async-first approach: start async query then await
-  fetch_task = fetch_async(connection, sql; conn=conn, params=params)
+  fetch_task = fetch_async(connection, sql; conn=conn, params=params, ignore_tx=ignore_tx)
   
   try
     return await_result(fetch_task)
@@ -678,7 +680,7 @@ function fetch(connection::PormGPostgres, sql::String;
       # Get a fresh connection and retry
       new_conn = reconnect_db(connection, fetch_task.conn)
       if new_conn !== nothing
-        retry_task = fetch_async(connection, sql; conn=new_conn, params=params)
+        retry_task = fetch_async(connection, sql; conn=new_conn, params=params, ignore_tx=ignore_tx)
         return await_result(retry_task)
       end
     end
@@ -689,9 +691,9 @@ function fetch(connection::PormGPostgres, sql::String;
     throw(e)
   end
 end
-fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing) = fetch(settings.connections, sql; conn=conn, params=params)
-fetch(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings.connections, sql; conn=conn, params=params)
-fetch(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing) = fetch(settings, sql; conn=conn, params=params)
+fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 export fetch_copy
 

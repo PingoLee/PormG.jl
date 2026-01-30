@@ -695,6 +695,42 @@ fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = n
 fetch(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
+export fetch_copy
+
+"""
+    fetch_copy(connection::PormGPostgres, sql::String, data_itr)
+
+Execute a PostgreSQL `COPY FROM STDIN` operation using an iterable of data chunks.
+Uses `LibPQ.execute` with `LibPQ.CopyIn` for high-performance data transfer.
+"""
+function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
+  # Check for transaction context
+  tx_conn = get_tx_connection()
+  use_tx_context = tx_conn !== nothing
+  
+  if use_tx_context
+    conn = tx_conn
+    try
+        res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
+        close(res)
+    catch e
+        throw(e)
+    end
+  else
+    # TEMPORARY TEST: Use fresh connection and close it
+    conn = LibPQ.Connection(connection.connection_string)
+    try
+        res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
+        close(res)
+    catch e
+      rethrow(e)
+    finally
+      close(conn)
+    end
+  end
+end
+fetch_copy(settings::SQLConn, sql::String, data_itr) = fetch_copy(settings.connections, sql, data_itr)
+
 export with_transaction
 
 """

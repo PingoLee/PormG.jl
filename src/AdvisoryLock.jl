@@ -32,8 +32,34 @@ function _exec_lock_query(conn::LibPQ.Connection, sql::String, key::AbstractStri
 end
 
 """
-with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; ...)
-...
+    with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; wait::Bool=false, timeout_ms::Int=5_000, strategy::Symbol=:poll)
+
+Execute a function `f` while holding a PostgreSQL session-level advisory lock identified by `key`.
+
+Advisory locks are an application-level locking mechanism provided by PostgreSQL. They are useful for ensuring exclusivity for tasks that don't map directly to a database row, such as synchronizing external API calls or preventing concurrent expensive calculations.
+
+# Arguments
+- `f::Function`: The function to execute while holding the lock.
+- `pool::PormGPostgres`: The PostgreSQL connection pool.
+- `key::AbstractString`: A unique string identifying the lock. It will be hashed to a 64-bit integer.
+
+# Keywords
+- `wait::Bool=false`: If `true`, the function will wait until the lock becomes available or the timeout is reached. If `false`, it throws an error immediately if the lock is already held.
+- `timeout_ms::Int=5_000`: Maximum time to wait for the lock (in milliseconds).
+- `strategy::Symbol=:poll`: The waiting strategy:
+    - `:poll`: (Default) Periodically retries lock acquisition from the Julia client. Safe and recommended for most cases.
+    - `:block`: Uses PostgreSQL's server-side blocking mechanism. Efficient but holds a connection and uses `statement_timeout`.
+- `interval_ms::Int=100`: Retry interval for the `:poll` strategy.
+
+# Examples
+```julia
+# Lock around a critical update for a specific constructor
+PormG.with_advisory_lock(M.Constructor.objects.object.model.connect_key, "update_constructor_1") do
+    # This block is protected by the lock "update_constructor_1"
+    # Perform complex logic here...
+    @info "Exclusive access granted"
+end
+```
 """
 function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; 
                             wait::Bool = false, 

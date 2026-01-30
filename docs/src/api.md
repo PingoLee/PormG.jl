@@ -38,6 +38,10 @@ The `PormG` module provides a set of abstractions and functions for working with
 - **Description**: Checks if any records exist that match a query.
 - **Usage**: `do_exists(...)`
 
+### `with_advisory_lock`
+- **Description**: Executes a function while holding a PostgreSQL advisory lock.
+- **Usage**: `with_advisory_lock(db_key, lock_key) do ... end`
+
 ## Abstract Types
 
 ### `PormGAbstractType`

@@ -1168,7 +1168,7 @@ Apply filters to the query. Chainable method that returns the query object.
 
 Usage: `query.filter("field" => value)`
 
-See [Read documentation](../read.md) for detailed filter syntax and examples.
+See [Read documentation](read.md) for detailed filter syntax and examples.
 """ ChainCaller(up_filter!, q)
 
 # ---

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Transactions · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Transactions · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Transactions · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Transactions · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/transaction/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/transaction/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/transaction/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li><li><a class="tocitem" href="../models/">Models</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../migrations/">Migrations</a></li><li><a class="tocitem" href="../write/">Writing</a></li><li class="is-active"><a class="tocitem" href>Transactions</a><ul class="internal"><li><a class="tocitem" href="#Table-of-Contents"><span>Table of Contents</span></a></li><li><a class="tocitem" href="#Basic-Usage"><span>Basic Usage</span></a></li><li><a class="tocitem" href="#Why-Use-Transactions"><span>Why Use Transactions</span></a></li><li><a class="tocitem" href="#Async-Context-Propagation"><span>Async Context Propagation</span></a></li><li><a class="tocitem" href="#Bulk-Operations-in-Transactions"><span>Bulk Operations in Transactions</span></a></li><li><a class="tocitem" href="#Multithreaded-Work"><span>Multithreaded Work</span></a></li><li><a class="tocitem" href="#Error-Handling-and-Rollback"><span>Error Handling and Rollback</span></a></li><li><a class="tocitem" href="#Lower-Level-Helpers"><span>Lower-Level Helpers</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li></ul></li><li><a class="tocitem" href="../read/">Reading</a></li><li><a class="tocitem" href="../import_django/">Import from Django</a></li><li><a class="tocitem" href="../custom_joins/">Custom Joins</a></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Transactions</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Transactions</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/transaction.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Transactions-and-run_in_transaction"><a class="docs-heading-anchor" href="#Transactions-and-run_in_transaction">Transactions and <code>run_in_transaction</code></a><a id="Transactions-and-run_in_transaction-1"></a><a class="docs-heading-anchor-permalink" href="#Transactions-and-run_in_transaction" title="Permalink"></a></h1><p>PormG transactions are <strong>async-aware</strong> and <strong>connection-aware</strong>, designed to integrate seamlessly with multithreaded Julia code and web frameworks like Genie.jl. The primary entry point is <code>run_in_transaction</code>, which borrows a connection from the pool, executes your block inside a PostgreSQL transaction, and either commits or rolls back automatically.</p><p>Because every operation runs through the async core, even synchronous-looking code never blocks the scheduler. This means you can safely wrap database work inside <code>@async</code> tasks, web request handlers, or multithreaded <code>@sync</code> loops without deadlocking.</p><h2 id="Table-of-Contents"><a class="docs-heading-anchor" href="#Table-of-Contents">Table of Contents</a><a id="Table-of-Contents-1"></a><a class="docs-heading-anchor-permalink" href="#Table-of-Contents" title="Permalink"></a></h2><ul><li><a href="#Basic-Usage">Basic Usage</a></li><li><a href="#Why-Use-Transactions">Why Use Transactions</a></li><li><a href="#Async-Context-Propagation">Async Context Propagation</a></li><li><a href="#Bulk-Operations-in-Transactions">Bulk Operations in Transactions</a></li><li><a href="#Multithreaded-Work">Multithreaded Work</a></li><li><a href="#Error-Handling-and-Rollback">Error Handling and Rollback</a></li><li><a href="#Lower-Level-Helpers">Lower-Level Helpers</a></li></ul><hr/><h2 id="Basic-Usage"><a class="docs-heading-anchor" href="#Basic-Usage">Basic Usage</a><a id="Basic-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Usage" title="Permalink"></a></h2><p>The simplest pattern: pass your <code>&quot;db_2&quot;</code> database key to <code>run_in_transaction</code>, then execute your query block inside the callback.</p><pre><code class="language-julia hljs">using PormG
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Transactions · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Transactions · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Transactions · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Transactions · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/transaction/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/transaction/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/transaction/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li><li><a class="tocitem" href="../models/">Models</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../migrations/">Migrations</a></li><li><a class="tocitem" href="../write/">Writing</a></li><li class="is-active"><a class="tocitem" href>Transactions</a><ul class="internal"><li><a class="tocitem" href="#Table-of-Contents"><span>Table of Contents</span></a></li><li><a class="tocitem" href="#Basic-Usage"><span>Basic Usage</span></a></li><li><a class="tocitem" href="#Why-Use-Transactions"><span>Why Use Transactions</span></a></li><li><a class="tocitem" href="#Async-Context-Propagation"><span>Async Context Propagation</span></a></li><li><a class="tocitem" href="#Bulk-Operations-in-Transactions"><span>Bulk Operations in Transactions</span></a></li><li><a class="tocitem" href="#Multithreaded-Work"><span>Multithreaded Work</span></a></li><li><a class="tocitem" href="#Error-Handling-and-Rollback"><span>Error Handling and Rollback</span></a></li><li><a class="tocitem" href="#Lower-Level-Helpers"><span>Lower-Level Helpers</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li></ul></li><li><a class="tocitem" href="../read/">Reading</a></li><li><a class="tocitem" href="../import_django/">Import from Django</a></li><li><a class="tocitem" href="../custom_joins/">Custom Joins</a></li><li><a class="tocitem" href="../passwords/">Passwords</a></li><li><a class="tocitem" href="../advisory_lock/">Advisory Locks</a></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Transactions</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Transactions</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/transaction.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Transactions-and-run_in_transaction"><a class="docs-heading-anchor" href="#Transactions-and-run_in_transaction">Transactions and <code>run_in_transaction</code></a><a id="Transactions-and-run_in_transaction-1"></a><a class="docs-heading-anchor-permalink" href="#Transactions-and-run_in_transaction" title="Permalink"></a></h1><p>PormG transactions are <strong>async-aware</strong> and <strong>connection-aware</strong>, designed to integrate seamlessly with multithreaded Julia code and web frameworks like Genie.jl. The primary entry point is <code>run_in_transaction</code>, which borrows a connection from the pool, executes your block inside a PostgreSQL transaction, and either commits or rolls back automatically.</p><p>Because every operation runs through the async core, even synchronous-looking code never blocks the scheduler. This means you can safely wrap database work inside <code>@async</code> tasks, web request handlers, or multithreaded <code>@sync</code> loops without deadlocking.</p><h2 id="Table-of-Contents"><a class="docs-heading-anchor" href="#Table-of-Contents">Table of Contents</a><a id="Table-of-Contents-1"></a><a class="docs-heading-anchor-permalink" href="#Table-of-Contents" title="Permalink"></a></h2><ul><li><a href="#Basic-Usage">Basic Usage</a></li><li><a href="#Why-Use-Transactions">Why Use Transactions</a></li><li><a href="#Async-Context-Propagation">Async Context Propagation</a></li><li><a href="#Bulk-Operations-in-Transactions">Bulk Operations in Transactions</a></li><li><a href="#Multithreaded-Work">Multithreaded Work</a></li><li><a href="#Error-Handling-and-Rollback">Error Handling and Rollback</a></li><li><a href="#Lower-Level-Helpers">Lower-Level Helpers</a></li></ul><hr/><h2 id="Basic-Usage"><a class="docs-heading-anchor" href="#Basic-Usage">Basic Usage</a><a id="Basic-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Usage" title="Permalink"></a></h2><p>The simplest pattern: pass your <code>&quot;db_2&quot;</code> database key to <code>run_in_transaction</code>, then execute your query block inside the callback.</p><pre><code class="language-julia hljs">using PormG
 using DataFrames
 
 # Load configuration
@@ -12,7 +12,7 @@ import .models as M
 # Run a transaction
 PormG.run_in_transaction(&quot;db_2&quot;) do
   # All queries inside this block share the same connection
-  query = M.Result |&gt; object
+  query = M.Result.objects
   query.filter(
     &quot;raceid__year&quot; =&gt; 2025,
     &quot;positionorder&quot; =&gt; 1,
@@ -30,7 +30,7 @@ PormG.run_in_transaction(&quot;db_2&quot;) do
 end</code></pre><p>The connection is automatically returned to the pool when the block exits. If any exception is raised inside the block, the transaction is rolled back and the exception rethrows.</p><hr/><h2 id="Why-Use-Transactions"><a class="docs-heading-anchor" href="#Why-Use-Transactions">Why Use Transactions</a><a id="Why-Use-Transactions-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Use-Transactions" title="Permalink"></a></h2><h3 id="Atomicity-with-Multiple-Writes"><a class="docs-heading-anchor" href="#Atomicity-with-Multiple-Writes">Atomicity with Multiple Writes</a><a id="Atomicity-with-Multiple-Writes-1"></a><a class="docs-heading-anchor-permalink" href="#Atomicity-with-Multiple-Writes" title="Permalink"></a></h3><p>When you update multiple tables and need them to succeed or fail together:</p><pre><code class="language-julia hljs"># Real-world scenario: Record a pit stop and update driver stats
 PormG.run_in_transaction(&quot;db_2&quot;) do
   # Record the pit stop
-  stop_query = M.Pit_stop |&gt; object
+  stop_query = M.Pit_stop.objects
   stop_query.create(
     &quot;raceid&quot; =&gt; 900,
     &quot;driverid&quot; =&gt; 1,
@@ -41,7 +41,7 @@ PormG.run_in_transaction(&quot;db_2&quot;) do
   )
   
   # Update driver pit-stop count
-  driver_query = M.Driver |&gt; object
+  driver_query = M.Driver.objects
   driver_query.filter(&quot;driverid&quot; =&gt; 1)
   driver_query.update(&quot;pit_stops_count&quot; =&gt; F(&quot;pit_stops_count&quot;) + 1)
   
@@ -54,14 +54,14 @@ bulk_data = [
 ]
 df = DataFrame(bulk_data)
 
-query = M.Constructor_standing |&gt; object
+query = M.Constructor_standing.objects
 
 # If any row fails, all 10 are rolled back
 PormG.bulk_insert(query, df, chunk_size=5)
 </code></pre><hr/><h2 id="Async-Context-Propagation"><a class="docs-heading-anchor" href="#Async-Context-Propagation">Async Context Propagation</a><a id="Async-Context-Propagation-1"></a><a class="docs-heading-anchor-permalink" href="#Async-Context-Propagation" title="Permalink"></a></h2><p>One of PormG&#39;s key strengths is that spawned <code>@async</code> tasks automatically inherit the transaction context. This lets you write elegant concurrent code without worrying about connection pools.</p><h3 id="Single-Async-Task"><a class="docs-heading-anchor" href="#Single-Async-Task">Single Async Task</a><a id="Single-Async-Task-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Async-Task" title="Permalink"></a></h3><pre><code class="language-julia hljs">child_saw_context = Atomic{Bool}(false)
 
 PormG.run_in_transaction(&quot;db_2&quot;) do
-  (M.Result |&gt; object).create(
+  (M.Result.objects).create(
     &quot;raceid&quot; =&gt; 900,
     &quot;driverid&quot; =&gt; 11,
     &quot;constructorid&quot; =&gt; 6,
@@ -73,7 +73,7 @@ PormG.run_in_transaction(&quot;db_2&quot;) do
     child_saw_context[] = PormG.Configuration.get_tx_connection() !== nothing
     
     # Use the same transaction without requesting a new connection
-    query = M.Driver |&gt; object
+    query = M.Driver.objects
     query.filter(&quot;driverid&quot; =&gt; 11)
     query.update(&quot;code&quot; =&gt; &quot;WIN&quot;)
   end
@@ -97,7 +97,7 @@ end
 @info &quot;Task saw tx?&quot; saw_tx=child_saw_tx[]  # expected: false</code></pre><p>If you need a task to participate in a transaction, create and start it from inside <code>run_in_transaction</code> (e.g., with <code>@async</code>) or explicitly acquire and install the transaction connection with <code>with_tx_context</code> before running the work.</p><h3 id="Multiple-Concurrent-Tasks"><a class="docs-heading-anchor" href="#Multiple-Concurrent-Tasks">Multiple Concurrent Tasks</a><a id="Multiple-Concurrent-Tasks-1"></a><a class="docs-heading-anchor-permalink" href="#Multiple-Concurrent-Tasks" title="Permalink"></a></h3><p>You can spawn many tasks and let Julia&#39;s scheduler coordinate them:</p><pre><code class="language-julia hljs">PormG.run_in_transaction(settings) do
   # Create base records
   for i in 1:3
-    (M.Race |&gt; object).create(
+    (M.Race.objects).create(
       &quot;year&quot; =&gt; 2025,
       &quot;round&quot; =&gt; i,
       &quot;name&quot; =&gt; &quot;Race $i&quot;,
@@ -112,7 +112,7 @@ end
     @async begin
       for race_round in 1:3
         # All inserts use the same connection
-        (M.Result |&gt; object).create(
+        (M.Result.objects).create(
           &quot;raceid&quot; =&gt; 900 + race_round,
           &quot;driverid&quot; =&gt; worker,
           &quot;constructorid&quot; =&gt; 1,
@@ -123,17 +123,17 @@ end
   end
 end</code></pre><p>When the <code>@sync</code> block finishes, all tasks have completed and the transaction commits.</p><hr/><h2 id="Bulk-Operations-in-Transactions"><a class="docs-heading-anchor" href="#Bulk-Operations-in-Transactions">Bulk Operations in Transactions</a><a id="Bulk-Operations-in-Transactions-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Operations-in-Transactions" title="Permalink"></a></h2><p>PormG provides <code>bulk_insert</code> and <code>bulk_update</code> for efficient batch operations. Always wrap them in a transaction to ensure all-or-nothing semantics.</p><h3 id="Transaction-with-deletion-and-bulk-operations-(example)"><a class="docs-heading-anchor" href="#Transaction-with-deletion-and-bulk-operations-(example)">Transaction with deletion and bulk operations (example)</a><a id="Transaction-with-deletion-and-bulk-operations-(example)-1"></a><a class="docs-heading-anchor-permalink" href="#Transaction-with-deletion-and-bulk-operations-(example)" title="Permalink"></a></h3><p>This example demonstrates a common pattern: delete matching rows, perform a bulk insert, and then run a bulk update — all inside a single transaction so either all changes persist or none do.</p><pre><code class="language-julia hljs"># Example: Delete matching rows, then perform bulk insert and bulk update inside a single transaction
 # Setup: remove previous data and create seed records
-delete(M.Just_a_test_deletion |&gt; object, allow_delete_all = true)
+delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
 
 # Pre-insert some records
-q = M.Just_a_test_deletion |&gt; object
+q = M.Just_a_test_deletion.objects
 for i in 1:10
   q.create(&quot;name&quot; =&gt; &quot;to-be-deleted-$(i)&quot;, &quot;test_result&quot; =&gt; 800 + i)
 end
 
-(M.Just_a_test_deletion |&gt; object).create(&quot;name&quot; =&gt; &quot;test_update&quot;, &quot;test_result&quot; =&gt; 456)
+(M.Just_a_test_deletion.objects).create(&quot;name&quot; =&gt; &quot;test_update&quot;, &quot;test_result&quot; =&gt; 456)
 
-q = M.Just_a_test_deletion |&gt; object
+q = M.Just_a_test_deletion.objects
 q.filter(&quot;name&quot; =&gt; &quot;test_update&quot;)
 df_u = q |&gt; DataFrame
 # Prepare the DataFrame used for bulk_update
@@ -141,7 +141,7 @@ df_u[1, :test_result2] = 457
 
 # Perform delete + bulk-insert + bulk-update inside a single transaction
 PormG.run_in_transaction(settings) do
-  q = M.Just_a_test_deletion |&gt; object
+  q = M.Just_a_test_deletion.objects
   q.filter(&quot;name__@icontains&quot; =&gt; &quot;to-be-deleted&quot;)
   df = q |&gt; DataFrame
   delete(q)
@@ -149,7 +149,7 @@ PormG.run_in_transaction(settings) do
   # Bulk insert
   bulk_data = [Dict(&quot;name&quot; =&gt; &quot;bulk-$(i)&quot;, &quot;test_result&quot; =&gt; 900 + i) for i in 1:5]
   df_bulk = DataFrame(bulk_data)
-  q = M.Just_a_test_deletion |&gt; object
+  q = M.Just_a_test_deletion.objects
   PormG.bulk_insert(q, df_bulk)
 
   # Bulk update (apply the single-row update prepared above)
@@ -157,7 +157,7 @@ PormG.run_in_transaction(settings) do
 end
 
 # Inspect results (non-test checks)
-q = M.Just_a_test_deletion |&gt; object
+q = M.Just_a_test_deletion.objects
 println(&quot;Total rows after transaction: &quot;, q |&gt; do_count)
 println(&quot;Names: &quot;, sort((q |&gt; list) .|&gt; x -&gt; x[:name]))</code></pre><p>Note: This mirrors <code>test_transactions.jl</code> coverage — it demonstrates delete + bulk insert + bulk update inside one transaction and shows how a later rollback would revert all operations.</p><hr/><h2 id="Multithreaded-Work"><a class="docs-heading-anchor" href="#Multithreaded-Work">Multithreaded Work</a><a id="Multithreaded-Work-1"></a><a class="docs-heading-anchor-permalink" href="#Multithreaded-Work" title="Permalink"></a></h2><p>When mixing transactions with Julia&#39;s thread pool, <code>run_in_transaction</code> ensures all workers see the same connection, avoiding race conditions on the pool.</p><pre><code class="language-julia hljs">using Base.Threads: Atomic, atomic_add!
 
@@ -167,7 +167,7 @@ PormG.run_in_transaction(&quot;db_2&quot;) do
   @sync for i in 1:Threads.nthreads()
     @async begin
       for j in 1:100
-        (M.Result |&gt; object).create(
+        (M.Result.objects).create(
           &quot;raceid&quot; =&gt; 1000 + i,
           &quot;driverid&quot; =&gt; j,
           &quot;constructorid&quot; =&gt; 1,
@@ -183,7 +183,7 @@ end
 
 try
   PormG.run_in_transaction(&quot;db_2&quot;) do
-    (M.Result |&gt; object).create(
+    (M.Result.objects).create(
       &quot;raceid&quot; =&gt; 1,
       &quot;driverid&quot; =&gt; 1,
       &quot;constructorid&quot; =&gt; 1,
@@ -199,13 +199,13 @@ catch e
 end
 
 # The record was never inserted because the transaction rolled back
-q = M.Result |&gt; object
+q = M.Result.objects
 q.filter(&quot;raceid&quot; =&gt; 1)
 @test (q |&gt; do_count) == 0</code></pre><h3 id="Nested-Exception-Handling"><a class="docs-heading-anchor" href="#Nested-Exception-Handling">Nested Exception Handling</a><a id="Nested-Exception-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Nested-Exception-Handling" title="Permalink"></a></h3><p>You can nest <code>try</code>/<code>catch</code> blocks and still maintain transaction semantics:</p><pre><code class="language-julia hljs">PormG.run_in_transaction(&quot;db_2&quot;) do
-  (M.Result |&gt; object).create(&quot;raceid&quot; =&gt; 1, &quot;driverid&quot; =&gt; 1, ...)
+  (M.Result.objects).create(&quot;raceid&quot; =&gt; 1, &quot;driverid&quot; =&gt; 1, ...)
   
   try
-    (M.Result |&gt; object).create(&quot;raceid&quot; =&gt; 999, &quot;driverid&quot; =&gt; 999, ...)
+    (M.Result.objects).create(&quot;raceid&quot; =&gt; 999, &quot;driverid&quot; =&gt; 999, ...)
     throw(ErrorException(&quot;Simulated error&quot;))
   catch e
     @warn &quot;Inner block failed, outer transaction will roll back&quot; exception=e
@@ -221,7 +221,7 @@ try
   with_tx_context(settings.connections, conn) do
     # Insert first batch
     for i in 1:5
-      (M.Result |&gt; object).create(&quot;raceid&quot; =&gt; i, &quot;driverid&quot; =&gt; 1, ...)
+      (M.Result.objects).create(&quot;raceid&quot; =&gt; i, &quot;driverid&quot; =&gt; 1, ...)
     end
     
     # Create savepoint
@@ -229,7 +229,7 @@ try
     
     # Insert second batch
     for i in 6:10
-      (M.Result |&gt; object).create(&quot;raceid&quot; =&gt; i, &quot;driverid&quot; =&gt; 2, ...)
+      (M.Result.objects).create(&quot;raceid&quot; =&gt; i, &quot;driverid&quot; =&gt; 2, ...)
     end
     
     # If this fails, we can rollback just the second batch
@@ -243,4 +243,4 @@ try
 catch e
   with_transaction(settings, &quot;ROLLBACK;&quot;, conn=conn, release_conn=true)
   rethrow(e)
-end</code></pre><p><strong>Important:</strong> When manually managing connections, always pair <code>get_tx_connection()</code> calls with <code>release_conn=true</code> so the pool recovers the connection.</p><hr/><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><table><tr><th style="text-align: right">Pattern</th><th style="text-align: right">Use Case</th></tr><tr><td style="text-align: right"><code>run_in_transaction(settings) do ... end</code></td><td style="text-align: right">Most common; automatic commit/rollback</td></tr><tr><td style="text-align: right">Async tasks inside transaction</td><td style="text-align: right">Spawn concurrent workers that share the connection</td></tr><tr><td style="text-align: right">Bulk operations inside transaction</td><td style="text-align: right">Ensure all-or-nothing for large batch inserts/updates</td></tr><tr><td style="text-align: right">Manual <code>with_tx_context</code> + <code>with_transaction</code></td><td style="text-align: right">Fine-grained control; savepoints; multi-statement workflows</td></tr></table><p>Start with <code>run_in_transaction</code> for all your database work. Drop to the lower-level helpers only when you need explicit savepoints or multi-database coordination.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../write/">« Writing</a><a class="docs-footer-nextpage" href="../read/">Reading »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 5 January 2026 14:12">Monday 5 January 2026</span>. Using Julia version 1.12.3.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+end</code></pre><p><strong>Important:</strong> When manually managing connections, always pair <code>get_tx_connection()</code> calls with <code>release_conn=true</code> so the pool recovers the connection.</p><hr/><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><table><tr><th style="text-align: right">Pattern</th><th style="text-align: right">Use Case</th></tr><tr><td style="text-align: right"><code>run_in_transaction(settings) do ... end</code></td><td style="text-align: right">Most common; automatic commit/rollback</td></tr><tr><td style="text-align: right">Async tasks inside transaction</td><td style="text-align: right">Spawn concurrent workers that share the connection</td></tr><tr><td style="text-align: right">Bulk operations inside transaction</td><td style="text-align: right">Ensure all-or-nothing for large batch inserts/updates</td></tr><tr><td style="text-align: right">Manual <code>with_tx_context</code> + <code>with_transaction</code></td><td style="text-align: right">Fine-grained control; savepoints; multi-statement workflows</td></tr></table><p>Start with <code>run_in_transaction</code> for all your database work. Drop to the lower-level helpers only when you need explicit savepoints or multi-database coordination.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../write/">« Writing</a><a class="docs-footer-nextpage" href="../read/">Reading »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 17:24">Friday 30 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

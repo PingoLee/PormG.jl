@@ -2554,20 +2554,20 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
 end
 
-function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::SQLConn)
+function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::SQLConn; ignore_tx::Bool = false)
   @infiltrate false
   for field in pk_field
     if settings.change_db
       try
         safe_field_name = quote_identifier(field, connection)
         safe_table_name = safe_table_identifier(string(model.name), connection)
-        fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(safe_field_name)) + 1 FROM $(safe_table_name)), true);")
+        fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(safe_field_name)) + 1 FROM $(safe_table_name)), true)"; ignore_tx=ignore_tx)
       catch e
         if occursin("does not exist", e |> string)        
-          _fix_sequence_name(connection, model)
+          _fix_sequence_name(connection, model, ignore_tx=ignore_tx)
           safe_table_name = safe_table_identifier(string(model.name), connection)
           safe_field_name = quote_identifier(field, connection)
-          fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq)', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true);")
+          fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true)"; ignore_tx=ignore_tx)
         end
       end
     elseif settings.django_prefix !== nothing
@@ -2577,7 +2577,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         sequence_name = "$(model.name)_$(field)_seq"
         safe_table_name = safe_table_identifier(model.name, connection)
         safe_field_name = quote_identifier(field, connection)
-        fetch(connection, "SELECT setval('$sequence_name', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true);")
+        fetch(connection, "SELECT setval('$sequence_name', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true)"; ignore_tx=ignore_tx)
       catch e
         if occursin("does not exist", e |> string)
           # # Try to find the actual sequence name
@@ -2602,11 +2602,11 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
   end
 end
 
-function _fix_sequence_name(connection::PormGPostgres, model::PormGModel) # TODO maby i need use Migration get_sequence_name aproach
+function _fix_sequence_name(connection::PormGPostgres, model::PormGModel; ignore_tx::Bool = false) # TODO maby i need use Migration get_sequence_name aproach
   pk_field = [field for field in keys(model.fields) if model.fields[field].primary_key]
   sequences = fetch(connection, """SELECT *
       FROM pg_sequences
-      WHERE sequencename LIKE '$(model.name |> lowercase)%';""") |> DataFrames.DataFrame  
+      WHERE sequencename LIKE '$(model.name |> lowercase)%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame  
   for (index, row) in enumerate(eachrow(sequences))
     if index == 1 && row.sequencename != "$(model.name |> lowercase)_$(pk_field[1])_seq"
       if length(pk_field) == 0
@@ -2614,9 +2614,9 @@ function _fix_sequence_name(connection::PormGPostgres, model::PormGModel) # TODO
       elseif length(pk_field) > 1
         throw("Error in _fix_sequence_name, the model $(model.name) has more than one primary key")
       end
-      fetch(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;")
+      fetch(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;"; ignore_tx=ignore_tx)
     else
-      fetch(connection, "DROP SEQUENCE $(row.sequencename);")
+      fetch(connection, "DROP SEQUENCE $(row.sequencename);"; ignore_tx=ignore_tx)
     end
   end
 end
@@ -3256,9 +3256,9 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
       try
         fetch(settings, sql, parameters)
       catch e
-        @infiltrate false
+        @infiltrate
         if occursin("duplicate key value violates unique constraint", e |> string)
-          _update_sequence(model, connection, pk_field, settings)
+          _update_sequence(model, connection, pk_field, settings, ignore_tx=true)
           throw("Error in bulk_insert, the row has a duplicate key value; try again")
         elseif occursin("violates foreign key constraint", e |> string)
           throw("Error in bulk_insert, the row has a foreign key constraint")

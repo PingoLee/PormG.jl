@@ -33,4 +33,5 @@ import PormG.models as M
 # include("utils/custom_macros.jl")
 
 # julia -t auto --project=. -i test/pg/common_setup.jl
-
+# julia -t auto --project=. test/pg/test_bulk_copy.jl
+# include("test_bulk_copy.jl")

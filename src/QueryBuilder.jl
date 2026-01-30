@@ -1,6 +1,6 @@
 module QueryBuilder
 
-import DataFrames, Tables, JSON
+import DataFrames, Tables, JSON, CSV
 using Dates, TimeZones, Intervals
 using SQLite, LibPQ
 
@@ -9,7 +9,7 @@ import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn,  PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform, run_in_transaction
-import PormG.Configuration: fetch, with_transaction, with_tx_context, ensure_model_transaction_scope, transaction_connection_for, current_task
+import PormG.Configuration: fetch, fetch_copy, with_transaction, with_tx_context, ensure_model_transaction_scope, transaction_connection_for, current_task
 import PormG.Infiltrator: @infiltrate
 
 #
@@ -3016,7 +3016,7 @@ end
 # Execute bulk insert and update
 #
 
-export bulk_insert
+export bulk_insert, bulk_copy
 
 """
 Inserts multiple rows into the database in bulk from a DataFrame.
@@ -3211,6 +3211,181 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     insert_loop()
   else
     run_in_transaction(insert_loop, settings)
+  end
+
+  return nothing
+  
+end
+
+"""
+    bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; kwargs...)
+
+Performs a high-speed bulk insert operation using PostgreSQL's `COPY` protocol.
+This is significantly faster than `bulk_insert` for large datasets.
+
+# Arguments
+- `objct::SQLObjectHandler`: The database handler object (e.g., `M.Model.objects`).
+- `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
+- `columns`: (Optional) Specifies which columns to insert. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these.
+- `copy::Bool = true`: If `true`, creates a copy of the DataFrame before processing.
+- `show_query::Bool = false`: If `true`, prints the `COPY` command (note: data stream is not printed).
+
+# Example
+```julia
+bulk_copy(M.Driver.objects, df)
+```
+"""
+function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
+    columns = nothing, 
+    show_query::Bool = false,
+    copy::Bool = true
+  ) 
+  model = objct.object.model
+  ensure_model_transaction_scope(model)
+  settings = config[model.connect_key]
+  connection = settings.connections
+  
+  !(connection isa PormGPostgres) && throw(ArgumentError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
+
+  # check if is allowed to insert
+  !settings.change_data && throw(ArgumentError("Error in bulk_copy, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+
+  # If no rows then nothing to do
+  if size(df_o, 1) == 0
+    @warn("Warning in bulk_copy, the DataFrame is empty")
+    return nothing
+  end
+
+  df = copy ? deepcopy(df_o) : df_o 
+
+  # Process columns argument
+  _columns::Vector{Union{String, Pair{String, String}}} = []
+  if columns === nothing
+  elseif columns isa AbstractString
+    push!(_columns, columns)
+  elseif columns isa Pair{String, String}
+    push!(_columns, columns)
+  elseif columns isa Vector
+    for column in columns
+      if column isa AbstractString
+        push!(_columns, column)
+      elseif column isa Pair{String, String}
+        push!(_columns, column)
+      else
+        throw(ArgumentError("Invalid column specification: $column"))
+      end
+    end
+  else
+    throw(ArgumentError("Invalid columns argument: $columns"))
+  end
+
+  # colect name of the fields
+  fields = model.field_names
+  fields_df::Vector{String} = []
+  if !isempty(_columns)   
+    if length(_columns) > 0
+      for column in _columns
+        if column isa Pair
+          if !(column.first in df |> names)
+            @error("""Error in bulk_copy, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
+          end
+          if column.second in df |> names
+            DataFrames.select!(df, DataFrames.Not(column.second |> Symbol))
+          end
+          DataFrames.rename!(df, column.first => column.second)
+          push!(fields_df, column.second)
+        else
+          push!(fields_df, column)
+        end
+      end
+    end
+  else
+    for field in names(df)
+      fld_ = field |> lowercase
+      if fld_ in fields
+        push!(fields_df, fld_)
+      end
+      if fld_ != field
+        DataFrames.rename!(df, field => fld_)
+      end
+    end    
+  end  
+
+  # check if missing fields in fields_df are not null or dont have a default value
+  pk_exist::Bool = false
+  pk_field::Vector{String} = []
+  for field in fields
+    if in(field, fields_df)
+      if model.fields[field].default !== nothing
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
+      elseif !model.fields[field].null
+        if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
+          throw(ArgumentError("Error in bulk_copy, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
+        end
+      elseif model.fields[field].primary_key
+        pk_exist = true
+      end
+    else
+      if model.fields[field].default !== nothing
+        df[!, field] = map(x -> model.fields[field].default, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
+        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
+        push!(fields_df, field)
+      elseif model.fields[field].primary_key
+        push!(pk_field, field)
+        continue
+      elseif !model.fields[field].null
+        throw(ArgumentError("Error in bulk_copy, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
+      end
+    end   
+  end 
+
+  # check if the fields_df are not in fields
+  for field in fields_df
+    in(field, fields) || throw("""Error in bulk_copy, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
+  end
+
+  # Security: Quote table name and field names
+  safe_table_name = safe_table_identifier(string(model.name), connection)
+  quoted_fields = [quote_identifier(field, connection) for field in fields_df]
+  
+  # Construct the COPY command (using CSV format for safety)
+  sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE)"
+  
+  if show_query
+    @info "SQL Query (COPY)" query=sql task_id=string(current_task())
+  end
+
+  # Process in chunks
+  chunk_size = 10000
+  total_rows = size(df, 1)
+  
+  try
+    for i in 1:chunk_size:total_rows
+      end_idx = min(i + chunk_size - 1, total_rows)
+      df_chunk = df[i:end_idx, fields_df]
+      
+      # Use CSV to format the data safely as a block
+      io = IOBuffer()
+      CSV.write(io, df_chunk; header=false)
+      csv_data = String(take!(io))
+      
+      fetch_copy(settings, sql, [csv_data])
+    end
+    
+    # Update sequence if PK was provided
+    pk_exist && _update_sequence(model, connection, pk_field, settings)
+  catch e
+    @error "Error in bulk_copy" exception=e sql=sql
+    rethrow(e)
   end
 
   return nothing

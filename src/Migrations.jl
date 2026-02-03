@@ -10,6 +10,8 @@ using SQLite
 using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
+import PormG.ConnectionPool: fetch, with_transaction
+import PormG.Configuration: get_settings
 using Logging
 
 
@@ -23,7 +25,6 @@ import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres
 import PormG: MODEL_PATH, SQLConn, DB_PATH
 
 import PormG.Generator: generate_models_from_db, generate_migration_plan
-import PormG.Configuration: with_transaction, fetch
 
 
 # ---

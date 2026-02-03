@@ -62,6 +62,9 @@ import Inflector
 include("Configuration.jl")
 using .Configuration
 
+include("ConnectionPool.jl")
+using .ConnectionPool
+
 include("Models.jl")
 using .Models
 

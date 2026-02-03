@@ -14,7 +14,8 @@ using Base.Threads: Atomic, atomic_add!
 using Infiltrator: @infiltrate
 
 import PormG: with_transaction, Models, Dialect
-import PormG.Configuration: with_tx_context, get_tx_connection, fetch_async, await_result
+import PormG.Configuration: with_tx_context, get_tx_connection
+import PormG.ConnectionPool: fetch_async, await_result
 import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
 import PormG.QueryBuilder: cjoin

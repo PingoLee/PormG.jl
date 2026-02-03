@@ -5,7 +5,7 @@ import LibPQ
 
 import PormG
 import PormG: SQLConn, PormGPostgres, PormGSQLite
-import PormG.Configuration: acquire_connection, release_connection, reconnect_db, is_connection_error
+import PormG.ConnectionPool: acquire_connection, release_connection, reconnect_db, is_connection_error
 
 import Infiltrator: @infiltrate
 export with_advisory_lock

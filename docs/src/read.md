@@ -273,14 +273,23 @@ PormG uses a special `@` prefix syntax to distinguish between field names and fu
 
 #### Common Operators for Filters:
 - `@lt`, `@lte`, `@gt`, `@gte` - Comparison operators (less than, less than or equal, etc.)
+- `@range` - Range comparison (e.g., `driverid__@range => [1, 10]`)
 - `@in`, `@nin` - In and not-in operations for arrays
 - `@contains`, `@icontains` - String containment (case-sensitive and case-insensitive)
 - `@isnull` - Check for null values
 - `@neq` - Not equal operator (≠) - *Note: Unlike Django ORM which has separate `.exclude()` method, PormG uses `@neq` in `.filter()` for "not equal" conditions*
 
-#### Common Functions for Both Filters and Values:
-- `@year`, `@month`, `@day`, `@quarter`, `@quadrimester` - Date component extraction
-- `@date`, `@yyyy_mm` - Date formatting functions
+#### Common Functions for Filters and Values:
+
+**Using `@` syntax** (field modifiers - single field):
+- **Date**: `@year`, `@month`, `@day`, `@quarter`, `@quadrimester`, `@date`, `@yyyy_mm`
+- **Math**: `@round`, `@floor`, `@ceil`, `@sqrt`, `@abs`, `@power`, `@mod`
+
+**Using function calls** (require explicit function syntax):
+- **String**: `Lower(...)`, `Upper(...)`, `Length(...)`, `Replace(...)`, `Trim(...)`, `LTrim(...)`, `RTrim(...)`
+- **Logic**: `Coalesce(...)` - Return first non-null value
+- **Extremes**: `Greatest(...)`, `Least(...)` - Maximum/minimum from multiple values
+- `NullIf(...)` - Return null if two values are equal
 
 #### Examples of @ Syntax Usage:
 
@@ -344,6 +353,21 @@ df = query |> DataFrame
  2260 │         217.429      25.0    1144       4  1:26:33.291  00:01:27.438         846         1      58       3         1     26745          52       1       5193291              1  1                         1
  2261 │         216.619      18.0    1144      55  +5.832       00:01:27.765         832         2      58       5         1     26746          55       3       5199123              2  2                         6
  2262 │         218.3        10.0      18      22  1:34:50.616  00:01:27.452           1         1      58       2         1         1          39       1       5690616              1  1                         1
+```
+
+### Range Filter
+
+The `@range` operator translates to SQL `BETWEEN`. It accepts a `Vector` or a `Tuple` with exactly two values.
+
+```julia
+# Filter results within a range of IDs
+query = M.Driver.objects.filter("driverid__@range" => [1, 5])
+df = query |> DataFrame
+# Result: Drivers with IDs 1, 2, 3, 4, 5
+
+# Using a Tuple for the range
+query = M.Driver.objects.filter("driverid__@range" => (10, 15))
+df = query |> DataFrame
 ```
 
 ### String Operations
@@ -574,6 +598,80 @@ query = M.Race.objects
 query.filter("date__@date" => Date(1991, 10, 20))
 df = query |> DataFrame
 ```
+
+## Mathematical and Logical Functions
+
+PormG supports a wide range of SQL functions for both selecting values and filtering.
+
+### Mathematical Functions
+
+Mathematical functions like `Round`, `Floor`, `Ceil`, `Abs`, `Sqrt`, `Power`, and `Mod` are available. In PostgreSQL, these automatically apply necessary numeric casts to ensure compatibility.
+
+```julia
+# Use math functions in values()
+query = M.Driver.objects;
+query.values(
+    "driverid",
+    "rounded_id" => "driverid__@round",
+    "sqrt_val"   => "driverid__@sqrt",
+    "custom_pow" => Power("driverid", Value(2))
+)
+query.filter("driverid" => 1)
+df = query |> DataFrame
+```
+
+### Logical and Conditional Functions
+
+- `Coalesce`: Returns the first non-null value in the list of arguments.
+- `Greatest` / `Least`: Returns the maximum or minimum value from a set of columns or constant values.
+- `NullIf`: Returns null if two values are equal.
+- `Case` / `When`: Implements conditional logic on the database side.
+
+```julia
+using PormG.QueryBuilder: Case, When, Value
+
+# Categorize drivers based on their nationality
+query = M.Driver.objects;
+query.values(
+    "surname",
+    "region" => Case([
+        When("nationality" => "British", then = Value("UK")),
+        When("nationality__@in" => ["French", "Italian", "Spanish"], then = Value("Europe")),
+        When("nationality" => "Brazilian", then = Value("South America"))
+    ], default = Value("Other"))
+)
+query.limit(10)
+df = query |> DataFrame
+```
+
+### Complex Conditional Logic
+
+You can nest `Case` and `When` functions, and use `Q` or `F` objects inside `When` for complex conditions.
+
+```julia
+using PormG.QueryBuilder: Case, When, Sum, Q, F
+
+# Reporting: results grouped by circuit where the driver was under ~30 years old
+query = M.Result.objects
+query.filter("driverid__forename" => "Mika")
+query.values(
+    "raceid__circuitid__name", 
+    "under_30_victories" => Sum(
+        Case(
+            When(
+                Q(
+                    F("raceid__date") <= F("driverid__dob") + 10957, # date arithmetic
+                    "positionorder" => 1                             # combined with simple filter
+                ), 
+                then = 1
+            ), 
+            default = 0
+        )
+    )
+)
+df = query |> DataFrame
+```
+
 
 ## Subqueries
 
@@ -836,6 +934,36 @@ df = query |> DataFrame
 - `"RIGHT"`: Includes all records from CTE
 - `"FULL"`: Includes all records from both tables
 
+### CTE with Deep Join Paths
+
+PormG allows you to join a CTE using fields from related tables in your main query. This is useful when the link between your main table and the CTE is not a direct foreign key but a field reachable through a join path.
+
+```julia
+using PormG.QueryBuilder: Count
+
+# CTE: Summarize statistics by driver nationality
+nat_stats = M.Driver.objects;
+nat_stats.values("nationality", "driver_count" => Count("driverid"));
+
+# Main query: Results
+query = M.Result.objects;
+
+# Join Results to Nationality stats using the driver's nationality
+# "driverid__nationality" triggers an automatic join to the Driver table
+With(query, "stats", nat_stats, 
+     join_field="driverid__nationality" => "nationality");
+
+query.filter("raceid__year" => 2023);
+query.values("raceid__name", "driverid__surname", "stats__driver_count");
+
+df = query |> DataFrame
+```
+
+When you use a double-underscore path like `"driverid__nationality"` in the `join_field`, PormG automatically:
+1.  Detects that it's a join path.
+2.  Ensures the necessary intermediate tables (e.g., `Driver`) are joined.
+3.  Caches the join result so it can be reused in your `values()` or `filter()` calls.
+
 
 ## F Expressions
 
@@ -871,42 +999,31 @@ df = query |> DataFrame
 
 ### F Expressions in Filters
 
+F expressions allow you to compare the value of one field against another field, optionally with mathematical calculations.
+
+#### Field-to-Field Comparisons
 ```julia
-# Compare fields within the same record
-query = M.Race.objects
-query.filter(F("fp1_date") <= F("date"))
-
-df = query |> DataFrame
-90×18 DataFrame
- Row │ raceid  fp2_date    time      sprint_date  quali_date  name                       fp3_time  round   fp1_date    fp2_time  year    date        url                                fp3_date    quali_time  circuitid  fp1_time  sprint_time 
-     │ Int64?  Date?       Time?     Date?        Date?       String?                    Time?     Int32?  Date?       Time?     Int32?  Date?       String?                            Date?       Time?       Int64?     Time?     Time?       
-─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   1 │   1053  2021-04-16  13:00:00  missing      2021-04-17  Emilia Romagna Grand Prix  missing        2  2021-04-16  missing     2021  2021-04-18  http://en.wikipedia.org/wiki/202…  2021-04-17  missing            21  missing   missing     
-   2 │   1074  2022-03-18  15:00:00  missing      2022-03-19  Bahrain Grand Prix         12:00:00       1  2022-03-18  15:00:00    2022  2022-03-20  http://en.wikipedia.org/wiki/202…  2022-03-19  15:00:00            3  12:00:00  missing     
-   3 │   1052  2021-03-26  15:00:00  missing      2021-03-27  Bahrain Grand Prix         missing        1  2021-03-26  missing     2021  2021-03-28  http://en.wikipedia.org/wiki/202…  2021-03-27  missing             3  missing   missing     
-   4 │   1051  2021-11-19  14:00:00  missing      2021-11-20  Qatar Grand Prix           missing       20  2021-11-19  missing     2021  2021-11-21  http://en.wikipedia.org/wiki/202…  2021-11-20  missing            78  missing   missing     
-  ⋮  │   ⋮         ⋮          ⋮           ⋮           ⋮                   ⋮                 ⋮        ⋮         ⋮          ⋮        ⋮         ⋮                       ⋮                      ⋮           ⋮           ⋮         ⋮           ⋮
-  88 │   1142  2024-11-21  06:00:00  missing      2024-11-22  Las Vegas Grand Prix       02:30:00      22  2024-11-21  06:00:00    2024  2024-11-23  https://en.wikipedia.org/wiki/20…  2024-11-22  06:00:00           80  02:30:00  missing     
-  89 │   1143  2024-11-29  17:00:00  2024-11-30   2024-11-30  Qatar Grand Prix           missing       23  2024-11-29  17:30:00    2024  2024-12-01  https://en.wikipedia.org/wiki/20…  missing     17:00:00           78  13:30:00  13:00:00
-  90 │   1144  2024-12-06  13:00:00  missing      2024-12-07  Abu Dhabi Grand Prix       10:30:00      24  2024-12-06  13:00:00    2024  2024-12-08  https://en.wikipedia.org/wiki/20…  2024-12-07  14:00:00           24  09:30:00  missing   
-
-# Use F expressions with other operators
+# Compare fields within the same record (Grid vs Final Position)
 query = M.Result.objects
-query.filter(F("position") == F("rank"))
-df = query |> DataFrame
-929×18 DataFrame
- Row │ fastestlapspeed  points    raceid  number  time         fastestlaptime  driverid  position  laps    rank    statusid  resultid  fastestlap  grid    milliseconds  positionorder  positiontext  constructorid 
-     │ Float64?         Float64?  Int64?  Int32?  String?      Time?           Int64?    Int32?    Int32?  Int32?  Int64?    Int64?    Int32?      Int32?  Int32?        Int32?         String?       Int64?        
-─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   1 │         204.323       6.0      21       1  +4.187       00:01:22.017           1         3      66       3         1        69          20       5       5902238              3  3                         1
-   2 │         222.085       8.0      22       1  +3.779       00:01:26.529           1         2      58       2         1        90          31       3       5212230              2  2                         1
-   3 │         197.285       8.0      29       1  +5.611       00:01:38.884           1         2      57       2         1       230          16       2       5736950              2  2                         1
-   4 │         203.722      10.0      34       1  1:31:57.403  00:01:36.325           1         1      56       1         1       329          13       1       5516403              1  1                         1
-  ⋮  │        ⋮            ⋮        ⋮       ⋮          ⋮             ⋮            ⋮         ⋮        ⋮       ⋮        ⋮         ⋮          ⋮         ⋮          ⋮              ⋮             ⋮              ⋮
- 927 │         233.167       6.0    1143      14  +19.867      00:01:23.667           4         7      57       7         1     26731          57       8       5484190              7  7                       117
- 928 │         216.619       8.0    1144       1  +49.847      00:01:27.765         830         6      58       6         1     26750          56       4       5242138              6  6                         9
- 929 │         233.803      18.0    1142       1  +7.313       00:01:35.48            1         2      50       2         1     26706          41      10       4932282              2  2                       131
+query.filter(F("grid") == F("positionorder"))
 ```
+
+#### Arithmetic in Filters
+PormG supports basic arithmetic (`+`, `-`, `*`, `/`) within F expressions. For date fields, integers are automatically treated as days.
+
+```julia
+# Find results where the race happened within 30 days of the driver's birthday
+query = M.Result.objects
+query.filter(
+    F("raceid__date") > F("driverid__dob"),
+    F("raceid__date") <= F("driverid__dob") + 30
+)
+```
+
+#### Best Practice: F() vs @ Syntax
+*   **Use `@operator`** (e.g., `"points__@gt" => 15`) for simple comparisons against constant values. This is more readable and efficient.
+*   **Use `F()`** (e.g., `F("grid") == F("position")`) only when you need to compare two database fields or perform database-side calculations.
+
 
 ### F Expressions in Annotations
 

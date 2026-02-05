@@ -62,6 +62,9 @@ import Inflector
 include("Configuration.jl")
 using .Configuration
 
+include("ConnectionPool.jl")
+using .ConnectionPool
+
 include("Models.jl")
 using .Models
 
@@ -72,9 +75,9 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, show_query, list, list_json, page, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin
+import .QueryBuilder: object, show_query, list, list_json, page, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 
-export object, show_query, list, list_json, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin
+export object, show_query, list, list_json, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 export with_advisory_lock, try_advisory_lock, release_advisory_lock
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers

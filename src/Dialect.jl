@@ -11,6 +11,36 @@ import PormG.Models: Migration, get_model_pk_field
 import PormG.Infiltrator: @infiltrate
 
 
+# Date Part Wrappers
+function YEAR(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+    return EXTRACT(column, Dict{String, Any}("part" => "YEAR"), conn)
+end
+function MONTH(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+    return EXTRACT(column, Dict{String, Any}("part" => "MONTH"), conn)
+end
+function DAY(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+    return EXTRACT(column, Dict{String, Any}("part" => "DAY"), conn)
+end
+function DATE(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+    return CAST(column, Dict{String, Any}("type" => "date"), conn)
+end
+function Y_M(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+    return EXTRACT_DATE(column, Dict{String, Any}("format" => "YYYY-MM"), conn)
+end
+function QUARTER(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+    return "EXTRACT(QUARTER FROM $(column))"
+end
+function QUARTER(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+    return "((strftime('%m', $(column)) - 1) / 3) + 1"
+end
+function QUADRIMESTER(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+    return "CEIL(EXTRACT(MONTH FROM $(column)) / 4.0)"
+end
+function QUADRIMESTER(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+    return "((strftime('%m', $(column)) - 1) / 4) + 1"
+end
+
+
 # PostgreSQL
 function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   format_str = format["format"]
@@ -60,8 +90,20 @@ end
 # # 					When(**{ f'{data}__month__lte': 12 }, then=Value('3')),
 # # 					output_field=CharField()
 # # 				)))
+function VALUE(value::Nothing, conn::PormGPostgres)
+  return "NULL"
+end
+function VALUE(value::Number, conn::PormGPostgres)
+  return "$value"
+end
 function VALUE(value::String, conn::PormGPostgres)
   return "('$(value)')::text"
+end
+function VALUE(value::Nothing, conn::SQLite.DB)
+  return "NULL"
+end
+function VALUE(value::Number, conn::SQLite.DB)
+  return "$value"
 end
 function VALUE(value::String, conn::SQLite.DB)
   return "'$(value)'"
@@ -86,11 +128,12 @@ function EXTRACT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   end
 end
 function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
-  if format["output_field"] != ""
+  output_field = get(format, "output_field", nothing)
+  if !isnothing(output_field) && output_field != ""
     return """(CASE
     $(join(column, "\n"))
     ELSE $(format["else"])
-    END)::$(format["output_field"])
+    END)::$(output_field)
     """
   else 
     return """CASE
@@ -109,8 +152,9 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
     ELSE $(format["else"])
     END
     """
-  if format["output_field"] != ""
-    return CAST(resp, Dict{String, Any}("type" => format["output_field"]), conn)    
+  output_field = get(format, "output_field", nothing)  
+  if !isnothing(output_field) && output_field != ""
+    return CAST(resp, Dict{String, Any}("type" => output_field), conn)    
   else 
     return resp
   end
@@ -118,6 +162,120 @@ end
 
 function WHEN(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})
   return "WHEN $(column) THEN $(format["then"])" |> string
+end
+
+function COALESCE(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  sql = "COALESCE($(join(columns, ", ")))"
+  if get(format, "output_field", nothing) !== nothing && conn isa PormGPostgres
+    return "($sql)::$(format["output_field"])"
+  end
+  return sql
+end
+
+function GREATEST(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "GREATEST($(join(columns, ", ")))"
+end
+
+function LEAST(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "LEAST($(join(columns, ", ")))"
+end
+
+function NULLIF(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "NULLIF($(columns[1]), $(columns[2]))"
+end
+
+function LOWER(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "LOWER($(column))"
+end
+
+function UPPER(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "UPPER($(column))"
+end
+
+function LENGTH(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "LENGTH($(column))"
+end
+
+function ABS(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return "ABS(($(column))::numeric)"
+end
+function ABS(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+  return "ABS($(column))"
+end
+
+function ROUND(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  precision = get(format, "precision", 0)
+  # println("DEBUG: Postgres ROUND precision=$precision type=$(typeof(precision))")
+  if precision == 0
+    return "ROUND(($(column))::numeric)"
+  else
+    return "ROUND(($(column))::numeric, $(precision))"
+  end
+end
+
+function REPLACE(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "REPLACE($(columns[1]), $(columns[2]), $(columns[3]))"
+end
+
+function TRIM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "TRIM($(column))"
+end
+
+function LTRIM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "LTRIM($(column))"
+end
+
+function RTRIM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, SQLite.DB})
+  return "RTRIM($(column))"
+end
+
+function FLOOR(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return "FLOOR(($(column))::numeric)"
+end
+function FLOOR(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+  return "FLOOR($(column))"
+end
+
+function CEIL(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return "CEIL(($(column))::numeric)"
+end
+function CEIL(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+  return "CEIL($(column))"
+end
+
+function SQRT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return "SQRT(($(column))::numeric)"
+end
+function SQRT(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+  return "SQRT($(column))"
+end
+
+function EXP(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return "EXP(($(column))::numeric)"
+end
+function EXP(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+  return "EXP($(column))"
+end
+
+function LN(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return "LN(($(column))::numeric)"
+end
+function LN(column::String, format::Dict{String, Any}, conn::SQLite.DB)
+  return "LN($(column))"
+end
+
+function POWER(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
+  return "POWER(($(columns[1]))::numeric, ($(columns[2]))::numeric)"
+end
+function POWER(columns::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
+  return "POWER($(columns[1]), $(columns[2]))"
+end
+
+function MOD(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
+  return "MOD(($(columns[1]))::numeric, ($(columns[2]))::numeric)"
+end
+function MOD(columns::Vector{Any}, format::Dict{String, Any}, conn::SQLite.DB)
+  return "MOD($(columns[1]), $(columns[2]))"
 end
 
 function F(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,SQLite.DB})

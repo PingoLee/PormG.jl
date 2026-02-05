@@ -25,13 +25,13 @@ driver_id = 1
 lock_key = "driver_update_$(driver_id)"
 
 PormG.with_advisory_lock("db_2", lock_key; wait=true, timeout_ms=10000) do
-    # Critical section code here
-    # While inside this block, no other process using this lock_key 
-    # can enter its own with_advisory_lock block.
-    
-    driver = M.Driver.objects.filter("driverid" => driver_id) |> DataFrame
-    @info "Updating stats for $(driver[1, :surname])"
-    sleep(2) # Simulate work
+  # Critical section code here
+  # While inside this block, no other process using this lock_key 
+  # can enter its own with_advisory_lock block.
+  
+  driver = M.Driver.objects.filter("driverid" => driver_id) |> DataFrame
+  @info "Updating stats for $(driver[1, :surname])"
+  sleep(2) # Simulate work
 end
 ```
 

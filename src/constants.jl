@@ -42,6 +42,7 @@ const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "nin" => "not in",
   "contains" => "contains",
   "icontains" => "icontains",
+  "range" => "BETWEEN",
 )
 
 const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS

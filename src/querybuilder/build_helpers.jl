@@ -32,8 +32,8 @@ end
 function _check_function(f::Union{SQLText, SQLField})
   return f
 end
-function _check_function(f::Vector{SQLType})
-  for i in 1:size(f, 1)    
+function _check_function(f::Vector{T}) where T <: Union{SQLType, Any}
+  for i in 1:length(f)
     f[i] = _check_function(f[i])   
   end  
   return f
@@ -87,17 +87,17 @@ end
   - `OperObject`: An OperObject with the corresponding operator and values.
 
 """
-function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Integer, Bool}
+function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Number, Bool, Dates.TimeType}
   if haskey(PormGsuffix, x.first[end])
     return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else    
     return OperObject(operator = "=", values = x.second, column = SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end  
 end
-function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Integer, Bool, Date}
+function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Number, Bool, Dates.Date, Dates.DateTime, Dates.TimeType}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{Missing, String, Integer, Bool}
+function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{Missing, String, Number, Bool, Dates.TimeType}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end  
 # Store SQLObject, to use __@in operator
@@ -109,12 +109,24 @@ function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandl
     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Integer, Bool}
+function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Number, Bool, Dates.TimeType}
   if x.first[end] in ["in", "nin"]
     @infiltrate false
     return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  elseif x.first[end] == "range"
+    if length(x.second) != 2
+      throw(ArgumentError("Error in filter, 'range' operator requires exactly 2 values, got $(length(x.second))"))
+    end
+    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
+    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in, nin and range'\e[0m is allowed with a vector of values"))
+  end
+end
+function _get_pair_to_oper(x::Pair{Vector{String}, Tuple{T, T}}) where T
+  if x.first[end] == "range"
+    return OperObject(operator = PormGsuffix[x.first[end]], values = [x.second[1], x.second[2]], column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'range'\e[0m is allowed with a tuple of values"))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String}, Date})
@@ -282,25 +294,10 @@ end
 function _get_select_query(v::SQLText, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
   return Dialect.VALUE(v.field, instruc.connection)
 end
-function _get_select_query(v::Vector{SQLObject}, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  @infiltrate
+function _get_select_query(v::Vector{T}, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing) where T
   resp = []
-  for v in v
-    push!(resp, _get_select_query(v, instruc, _as=_as))
-  end
-  return resp
-end
-function _get_select_query(v::Vector{SQLType}, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  resp = []
-  for v in v
-    push!(resp, _get_select_query(v, instruc, _as=_as))
-  end
-  return resp
-end
-function _get_select_query(v::Vector{FObject}, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  resp = []
-  for v in v
-    push!(resp, _get_select_query(v, instruc, _as=_as))
+  for item in v
+    push!(resp, _get_select_query(item, instruc, _as=_as))
   end
   return resp
 end
@@ -325,15 +322,17 @@ function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction; _as::Union{N
   return _get_filter_query(v, instruc)
 end
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  @infiltrate false
-  return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc, _as=_as), v.kwargs, instruc.connection)
-  try
-    return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc, _as=_as), v.kwargs, instruc.connection)
-  catch e
-    @infiltrate 
-    throw(ArgumentError("Error in function \e[4m\e[31m$(v.function_name)\e[0m, the function does not exist or is not implemented for the dialect \e[4m\e[32m$(instruc.dialect)\e[0m. Please check the function name and the dialect."))
+  # Resolve kwargs that might be SQLObject or SQLType
+  resolved_kwargs = Dict{String, Any}()
+  for (k, val) in v.kwargs
+    if isa(val, Union{SQLObject, SQLType})
+      resolved_kwargs[k] = _get_select_query(val, instruc)
+    else
+      resolved_kwargs[k] = val
+    end
   end
 
+  return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc, _as=_as), resolved_kwargs, instruc.connection)
 end
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
   resp = []
@@ -351,31 +350,28 @@ function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Noth
   return "(" * join(resp, " AND ") * ")"
 end
 function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  # TODO check if the field is in the model
-  @infiltrate false
-  if q.operation !== nothing
-    return _set_update_query(q, instruc)
-  elseif q.field in instruc.object.model.field_names
-    return string(instruc.alias, ".", _solve_field(q.field, instruc.object.model, instruc))
-  else
-    throw(ArgumentError("The field \e[31m$(q.field)\e[0m not found in \e[34m$(instruc.object.model.name)\e[0m: \e[32m$(join(instruc.object.model.field_names, ", "))\e[0m"))
-  end
+  return _set_update_query(q, instruc)
 end
 
 
-function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction, )
-  # what to do with the functions?
-  @infiltrate
-  v = String.(v)
-  text = _build_row_join(v[1], instruc, as=false)
-  i = 2
-  to = size(v, 1)
+function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction)
+  v_str = String.(v)
+  # column is the first part
+  text = _get_filter_query(v_str[1], instruc)
   
-  while i <= to
-    function_name = functions[end]      
-    text = getfield(Dialect, Symbol(PormGtrasnform[string(function_name)]))(text)
-    functions = functions[1:end-1]
+  # Apply functions in sequence
+  for i in 2:length(v_str)
+    func_key = v_str[i]
+    if haskey(PormGtrasnform, func_key)
+        func_name = Symbol(PormGtrasnform[func_key])
+        # Note: Dialect functions usually take (column, format_dict, connection)
+        # We need to construct the format_dict if needed, but for date parts it's simple
+        text = getfield(Dialect, func_name)(text, Dict{String, Any}(), instruc.connection)
+    else
+        throw(ArgumentError("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
+    end
   end
+  return text
 end
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
@@ -441,6 +437,26 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
     if v.operator in ["ISNULL"]
       return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
+    elseif v.operator == "BETWEEN"
+      # Handle BETWEEN with two parameters
+      column_sql = _get_filter_query(v.column, instruc)
+      field_name = ""
+      if isa(v.column, SQLTypeField)
+        if isa(v.column.field, String)
+          field_name = v.column.field
+        end
+      end
+      
+      if field_name != "" && haskey(instruc.object.model.fields, field_name)
+         formater = instruc.object.model.fields[field_name].formater
+         p1 = add_parameter!(instruc, formater(v.values[1]))
+         p2 = add_parameter!(instruc, formater(v.values[2]))
+         return string(column_sql, " BETWEEN ", p1, " AND ", p2)
+      else
+         p1 = add_parameter!(instruc, v.values[1])
+         p2 = add_parameter!(instruc, v.values[2])
+         return string(column_sql, " BETWEEN ", p1, " AND ", p2)
+      end
     elseif haskey(instruc.object.model.fields, v.column.field)
       placeholders = nothing
       try
@@ -497,21 +513,5 @@ function _get_filter_query(q::SQLTypeQor, instruc::SQLInstruction)
   return "(" * join(resp, " OR ") * ")"
 end
 function _get_filter_query(v::SQLTypeF, instruc::SQLInstruction)
-  if v.operation === nothing
-    @infiltrate
-    @error "Operation is nothing, this is not a valid SQLTypeF"
-  else
-    # Field with operation
-    @infiltrate false
-    left_side = _get_select_query(_check_function(v.field_name), instruc)
-    
-    right_side = if isa(v.operand, SQLTypeF)
-      _get_select_query(_check_function(v.operand.field_name), instruc)
-    else
-      @infiltrate
-      @error "Operand is not a SQLTypeF: $(typeof(v.operand))"
-    end
-    
-    return "($(left_side) $(v.operation) $(right_side))"
-  end
+  return _get_select_query(v, instruc)
 end

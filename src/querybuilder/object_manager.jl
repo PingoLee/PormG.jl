@@ -33,7 +33,7 @@ function up_values!(q::SQLObject, values)
         try
           push!(q.values, SQLField(_check_function(v.second), v.first))
         catch e
-          @infiltrate
+          @infiltrate false
           @error "Error processing values pair: $e" exception=(e, catch_backtrace())
         end
       elseif isa(v.second, String)

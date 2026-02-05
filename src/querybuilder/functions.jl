@@ -44,6 +44,11 @@ end
 #
 
 
+"""
+    Sum(column; distinct=false)
+
+Computes the sum of all values in the column.
+"""
 function Sum(x; distinct::Bool = false)
   return FObject(function_name = "SUM", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end  
@@ -77,40 +82,63 @@ end
 function Min(x)
   return FObject(function_name = "MIN", column = x, agregate = true)
 end
-function Value(x::String)
+"""
+    Value(x)
+
+Wraps a literal value (String, Number, or Nothing) for use in SQL queries.
+"""
+function Value(x::Any)
   return SQLText(x)
 end
 
+"""
+    Cast(expression, type)
+
+Casts a column or expression to a specific SQL type.
+"""
 function Cast(x::Union{String, SQLTypeText, SQLTypeFunction}, type::String)
   return FObject(function_name = "CAST", column = x, kwargs = Dict{String, Any}("type" => type))
 end
 function Cast(x::Union{String, SQLTypeText, SQLTypeFunction}, type::PormGField)
   return Cast(x, type.type)
 end
-function Concat(x::Union{Vector{String}, Vector{N}} where N <: SQLType; output_field::Union{N, String, Nothing} where N <: PormGField = nothing, _as::String="")
+
+"""
+    Concat(expressions; output_field=nothing)
+
+Concatenates multiple strings or columns.
+"""
+function Concat(x::Vector; output_field::Union{N, String, Nothing} where N <: PormGField = nothing, _as::String="")
   if isa(output_field, PormGField)
     output_field = output_field.type
   end
   return FObject(function_name = "CONCAT", column = x, kwargs = Dict{String, Any}("output_field" => output_field, "as" => _as))
 end
+
+"""
+    Extract(column, part)
+
+Extracts a component (YEAR, MONTH, DAY, etc.) from a date/time column.
+"""
 function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String; formater::Union{Nothing, Function, PormGField} = nothing)
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part))
 end
+
 function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
-function When(x::NTuple{N, Pair{String, Union{T, Vector{T}}}}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing) where {T, N}
+function When(x::NTuple{N, Pair{String, T}}; then::Any = 0, _else::Any = missing) where {T, N}
   return When(Q(x), then = then, _else = _else)
 end
-function  When(x::Union{Pair{String, Vector{T}}}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing) where T <: Union{Missing, String, Integer, Bool, SQLTypeFunction}
-  return FObject(function_name = "WHEN", column = x |> _get_pair_to_oper, kwargs = Dict{String, Any}("then" => then, "else" => _else))
+function  When(x::Pair{String, T}; then::Any = 0, _else::Any = missing) where T
+  return FObject(function_name = "WHEN", column = _get_pair_to_oper(x), kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
-function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing)
+function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Any = 0, _else::Any = missing)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
-function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Union{String, Integer, Bool, SQLTypeFunction} = 0, _else::Union{String, Integer, Bool, SQLTypeFunction, Missing} = missing)
+function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Any = 0, _else::Any = missing)
   return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
 end
 function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
@@ -129,6 +157,209 @@ function To_char(x::Union{String, SQLTypeFunction, Vector{String}}, format::Stri
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT_DATE", column = x, formater = formater, kwargs = Dict{String, Any}("format" => format))
 end
+
+
+"""
+    Coalesce(args...; output_field=nothing)
+
+Returns the first non-null value in the list of arguments.
+"""
+function Coalesce(x...; output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+  if isa(output_field, PormGField)
+    output_field = output_field.type
+  end
+  processed_cols = [isa(v, String) ? SQLField(v) : v for v in x]
+  return FObject(function_name = "COALESCE", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
+end
+
+"""
+    Greatest(args...; output_field=nothing)
+
+Returns the greatest value in the list of arguments.
+"""
+function Greatest(x...; output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+  if isa(output_field, PormGField)
+    output_field = output_field.type
+  end
+  processed_cols = [isa(v, String) ? SQLField(v) : v for v in x]
+  return FObject(function_name = "GREATEST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
+end
+
+"""
+    Least(args...; output_field=nothing)
+
+Returns the least value in the list of arguments.
+"""
+function Least(x...; output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
+  if isa(output_field, PormGField)
+    output_field = output_field.type
+  end
+  processed_cols = [isa(v, String) ? SQLField(v) : v for v in x]
+  return FObject(function_name = "LEAST", column = processed_cols, kwargs = Dict{String, Any}("output_field" => output_field))
+end
+
+
+
+"""
+    Lower(column)
+
+Converts a string to lowercase.
+"""
+function Lower(x)
+  return FObject(function_name = "LOWER", column = x)
+end
+
+"""
+    Upper(column)
+
+Converts a string to uppercase.
+"""
+function Upper(x)
+  return FObject(function_name = "UPPER", column = x)
+end
+
+"""
+    Length(column)
+
+Returns the length of a string.
+"""
+function Length(x)
+  return FObject(function_name = "LENGTH", column = x, formater = Models.format_number_sql)
+end
+
+"""
+    Abs(column)
+
+Returns the absolute value of a number.
+"""
+function Abs(x)
+  return FObject(function_name = "ABS", column = x, formater = Models.format_number_sql)
+end
+
+"""
+    Round(column, precision=0)
+
+Rounds a number to the specified precision.
+"""
+function Round(x, precision::Integer = 0)
+  return FObject(function_name = "ROUND", column = x, kwargs = Dict{String, Any}("precision" => precision), formater = Models.format_number_sql)
+end
+
+"""
+    NullIf(field1, field2)
+
+Returns NULL if field1 equals field2, otherwise returns field1.
+"""
+function NullIf(x, y)
+  return FObject(function_name = "NULLIF", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y])
+end
+
+
+"""
+    Replace(column, find, replace)
+
+Replaces all occurrences of `find` with `replace` in the string.
+"""
+function Replace(x, find, replace)
+  return FObject(function_name = "REPLACE", column = [
+    isa(x, String) ? SQLField(x) : x, 
+    isa(find, String) ? Value(find) : find, 
+    isa(replace, String) ? Value(replace) : replace
+  ])
+end
+
+"""
+    Trim(column)
+
+Removes leading and trailing whitespace from a string.
+"""
+function Trim(x)
+  return FObject(function_name = "TRIM", column = x)
+end
+
+"""
+    LTrim(column)
+
+Removes leading whitespace from a string.
+"""
+function LTrim(x)
+  return FObject(function_name = "LTRIM", column = x)
+end
+
+"""
+    RTrim(column)
+
+Removes trailing whitespace from a string.
+"""
+function RTrim(x)
+  return FObject(function_name = "RTRIM", column = x)
+end
+
+"""
+    Floor(column)
+
+Returns the largest integer less than or equal to a number.
+"""
+function Floor(x)
+  return FObject(function_name = "FLOOR", column = x, formater = Models.format_number_sql)
+end
+
+"""
+    Ceil(column)
+
+Returns the smallest integer greater than or equal to a number.
+"""
+function Ceil(x)
+  return FObject(function_name = "CEIL", column = x, formater = Models.format_number_sql)
+end
+
+
+
+"""
+    Sqrt(column)
+
+Returns the square root of a number.
+"""
+function Sqrt(x)
+  return FObject(function_name = "SQRT", column = x, formater = Models.format_number_sql)
+end
+
+"""
+    Exp(column)
+
+Returns the exponential value (e^x) of a number.
+"""
+function Exp(x)
+  return FObject(function_name = "EXP", column = x, formater = Models.format_number_sql)
+end
+
+"""
+    Ln(column)
+
+Returns the natural logarithm of a number.
+"""
+function Ln(x)
+  return FObject(function_name = "LN", column = x, formater = Models.format_number_sql)
+end
+
+"""
+    Power(base, exponent)
+
+Returns `base` raised to the power of `exponent`.
+"""
+function Power(x, y)
+  return FObject(function_name = "POWER", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formater = Models.format_number_sql)
+end
+
+"""
+    Mod(dividend, divisor)
+
+Returns the remainder (modulo) of a division.
+"""
+function Mod(x, y)
+  return FObject(function_name = "MOD", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formater = Models.format_number_sql)
+end
+
 
 MONTH(x) = Extract(x, "MONTH", formater = Models.format_number_sql)
 YEAR(x) = Extract(x, "YEAR", formater = Models.format_number_sql)

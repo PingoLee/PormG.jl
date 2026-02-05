@@ -24,6 +24,32 @@ function _determine_join_type(field::PormGField; previus_how::Union{String, Noth
   
   return field.null ? "LEFT" : "INNER"
 end
+
+"""
+    _cache_join(field::String, instruct::SQLInstruction)
+
+Checks if a join path `field` is already in the cache. If not, and it's a join path (contains `__`), 
+it attempts to build the join and cache it. Returns `true` if the field is in cache 
+(either before or after the attempt), `false` otherwise.
+"""
+function _cache_join(field::String, instruct::SQLInstruction)
+  haskey(instruct.cache, field) && return true
+  
+  if contains(field, "__")
+    try
+      # Build the join and get the SQL selector (e.g., "Tb.column")
+      sql_selector = _build_row_join(split(field, "__") |> Vector{String}, instruct)
+      
+      # Populate the cache so it can be used immediately
+      instruct.cache[field] = SQLField(sql_selector, field)
+      return true
+    catch e
+      return false
+    end
+  end
+  return false
+end
+
 function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
   # convert the field to a vector of string
   vector = String.(field)
@@ -68,9 +94,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if (main_table_key in instruct.object.model.field_names)
       row_join["alias_a"] = instruct.alias
       row_join["key_a"] = main_table_key
-    elseif haskey(instruct.cache, main_table_key)
-      instruct.cache[main_table_key]
-      v_split = split(instruct.cache[main_table_key].field |> x -> replace(x,  '"' => ""), ".")
+    elseif haskey(instruct.cache, main_table_key) || _cache_join(main_table_key, instruct)
+      cache_item = instruct.cache[main_table_key]
+      v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
       row_join["alias_a"] = v_split[1] |> string
       row_join["key_a"] = v_split[2] |> string
     else

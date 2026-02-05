@@ -74,12 +74,12 @@ end
 
 # Return a value to sql query, like value from DjangoSQLText
 mutable struct SQLText <: SQLTypeText
-  field::String
+  field::Any
   _as::OptionalString
   custom_as::OptionalString
 end
-SQLText(field::String; _as::OptionalString = nothing) = SQLText(field, _as, nothing)
-SQLText(field::String, _as::OptionalString) = SQLText(field, _as, nothing)
+SQLText(field::Any; _as::OptionalString = nothing) = SQLText(field, _as, nothing)
+SQLText(field::Any, _as::OptionalString) = SQLText(field, _as, nothing)
 Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as, x.custom_as)
 
 
@@ -185,7 +185,7 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String, Integer, Bool, SQLObjectHandler, SQLTypeF, Vector{T}} where T <: Union{Missing, String, DateTime, Integer, Bool, Date, SQLTypeF}
+  values::Union{String, Number, Bool, SQLObjectHandler, SQLTypeF, Vector{T}} where T <: Union{Missing, String, Dates.TimeType, Number, Bool, SQLTypeF}
   column::ColumnPart # Vector{String} is needed
 end
 OP(column::String, value) = OperObject(operator = "=", values = value, column = SQLField(column))
@@ -411,7 +411,7 @@ end
 
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
-  column::Union{String, SQLTypeField, N, Vector{N}, Vector{String}, SQLTypeOper, SQLTypeQ, SQLTypeQor, Vector{M}} where {N <: SQLTypeFunction, M <: SQLType} # TODO Vector{M} is needed?
+  column::Union{String, SQLTypeField, SQLTypeText, N, Vector{N}, Vector{T}, SQLTypeOper, SQLTypeQ, SQLTypeQor} where {N <: SQLTypeFunction, T}
   agregate::Bool = false
   formater::Union{Nothing, Function} = nothing # function to format the value
   _as::OptionalString = nothing

@@ -9,16 +9,22 @@ include("common_setup.jl")
 @testset "Bateria de Testes PormG (PostgreSQL)" begin
 
     # CRUD Básico
-    @testset "Inserções e Schema" begin include("test_database_setup.jl") end
-    @testset "Seleção e Filtros"  begin include("test_selection.jl") end
-    @testset "Atualizações (Updates)" begin include("test_updates.jl") end
+    @testset "Inserções e Schema"       begin include("test_database_setup.jl") end
+    @testset "Seleção e Filtros"        begin include("test_selection.jl") end
+    @testset "Atualizações (Updates)"   begin include("test_updates.jl") end
+    @testset "Bulk copy"                begin include("test_bulk_copy.jl") end
+    @testset "Functions SQL"            begin include("test_sql_functions.jl") end
 
     # Funcionalidades Avançadas
-    @testset "Joins e CTEs"       begin include("test_joins_cte.jl") end
-    @testset "Transações"         begin include("test_transactions.jl") end
+    @testset "Joins e CTEs"             begin include("test_joins_cte.jl") end
+    @testset "Joins com Cache"          begin include("test_cache_join.jl") end
+    @testset "Transações"               begin include("test_transactions.jl") end
+    @testset "Advisory Locks"           begin include("test_advisorylock.jl") end
 
     # Internos e Segurança
-    @testset "Internals & Security" begin include("test_internals.jl") end
+    @testset "Internals & Security"     begin include("test_internals.jl") end
+    @testset "Test Password"            begin include("test_password.jl") end
+    @testset "Test Password i18n"       begin include("test_password_i18n.jl") end
 
 end
 

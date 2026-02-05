@@ -353,19 +353,8 @@ end
 
 function _set_update_query(v::FExpression, instruc::SQLInstruction)
   if v.operation === nothing
-    # Simple field reference
-    parts = split(v.field_name, "__")
-    if size(parts, 1) > 1      
-      return _build_row_join(parts, instruc)
-    else
-      if !(v.field_name in instruc.object.model.field_names)
-        @error "Invalid field name for F expression" field_name=v.field_name model_name=instruc.object.model.name
-        throw(ArgumentError("Invalid field name: $(v.field_name) for model $(instruc.object.model.name)"))
-      end
-      quoted_alias = quote_identifier(instruc.alias, instruc.connection)
-      quoted_field = quote_identifier(v.field_name, instruc.connection)
-      return string(quoted_alias, ".", quoted_field)
-    end
+    # Resolve the field using existing logic for joins and modifiers
+    return _get_filter_query(v.field_name, instruc)
   else
     # Field with operation - handle date arithmetic properly
     left_side = _set_update_query(FExpression(field_name = v.field_name, function_name = "F", column = v.field_name), instruc)    

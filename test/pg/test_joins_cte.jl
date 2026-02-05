@@ -1,3 +1,5 @@
+# julia -t auto  --project=. test/pg/test_joins_cte.jl
+
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
@@ -29,7 +31,7 @@ end
   # @info query |> show_query
   df = query |> DataFrame
 
-  # cjoin not is applied because none filter none matches use the join informed
+  # cjoin is not applied because none of the filters match; the explicitly provided join is used
   @test size(df, 1) == 3
   @test df |> names |> length == 3
 
@@ -235,7 +237,7 @@ end
 end
 
 
-# As vezes existem joins antes da chave tipo co_cid__pront__cad_id não esta em Prod_atend_ind
+# Sometimes there are joins before the key (e.g., co_cid__pront__cad_id) which are not present in Prod_atend_ind
 # query_cad = biM.Bas_cad_ind.objects.filter("saida_id"=>3, "st_fora_area"=>false, "st_defi_auditiva" => 1, "ibge_id"=>172100);
 
 # query_df = query_cad |> deepcopy;
@@ -259,3 +261,111 @@ end
 # );
 
 # df_at = query_at |> DataFrame
+
+
+@testset "Complex CTE Scenarios and Parameter Ordering" begin
+    # Scenario: Test whether parameter ordering is preserved when both the CTE and the Main Query have filters.
+    # This is vital for future support of '?' (MySQL)
+    
+    # 1. Define the CTE with complex filters and deep joins
+    # Filter races in "Monaco" (CTE Param 1) in recent years (CTE Param 2)
+    cte_source = M.Result.objects
+    cte_source.filter(
+        "raceid__circuitid__name__@icontains" => "Monaco", # CTE parameter
+        "raceid__year__@gte" => 2010                       # CTE parameter
+    )
+    
+    # Aggregate points by constructor in this scenario
+    cte_source.values(
+        "constructorid", 
+        "total_points" => Sum("points")
+    )
+
+    # 2. Main Query
+    main_query = M.Constructor.objects
+    
+    # Inject the CTE
+    With(main_query.object, "monaco_stats", cte_source, 
+         join_field="constructorid" => "constructorid")
+
+    # 3. Filters on the Main Query
+    # Filter constructors that are not 'Ferrari' (Global Query Param 3)
+    main_query.filter("name__@neq" => "Ferrari")
+    
+    # Select data mixing main table and CTE
+    main_query.values(
+        "name",
+        "nationality",
+        "monaco_stats__total_points"
+    )
+
+    # Order for consistency in the test
+    main_query.order_by("-monaco_stats__total_points")
+
+    df = main_query |> DataFrame
+
+    # Assertions
+    @test "monaco_stats__total_points" in names(df)
+    @test size(df, 1) > 0
+    
+    # Verify data integrity (Red Bull should be in the list, Ferrari should not)
+    @test "Red Bull" in df.name
+    @test !("Ferrari" in df.name)
+    
+    # Verify that points are present (not missing for those who scored)
+    row_rb = df[df.name .== "Red Bull", :]
+    @test !ismissing(row_rb[1, :monaco_stats__total_points])
+    @test row_rb[1, :monaco_stats__total_points] == 390
+    
+    # @info main_query |> show_query 
+    # Enable the above log to visually check whether the parameter ordering in the generated SQL
+    # follows the logic: [CTE params..., Main Query params...]
+end
+
+@testset "CTE referencing same table (Self-Reference Logic)" begin
+    # CTE Definição: Motoristas nascidos antes de 1980
+    drivers_old = M.Driver.objects.filter("dob__@year__@lt" => 1980).values("driverid", "dob")
+    
+    # --- CENÁRIO 1: Default (LEFT JOIN) ---
+    # Lewis Hamilton (1985) deve aparecer, mas com colunas do CTE vazias (missing)
+    query = M.Driver.objects 
+    With(query.object, "old_guard", drivers_old, join_field="driverid" => "driverid")
+    
+    query.filter("nationality" => "British")
+    query.values("forename", "surname", "old_guard__dob")
+    
+    df = query |> DataFrame
+    
+    # Lewis Hamilton (British, 1985) não está no 'old_guard', mas aparece no LEFT JOIN
+    lewis = df[df.forename .== "Lewis", :]
+    @test !isempty(lewis)
+    @test ismissing(lewis[1, :old_guard__dob]) 
+
+    # David Coulthard (British, 1971) está no 'old_guard' e aparece preenchido
+    david = df[df.forename .== "David", :]
+    @test !isempty(david)
+    @test !ismissing(david[1, :old_guard__dob])
+    @test david[1, :old_guard__dob] == Date(1971, 3, 27)
+
+    # --- CENÁRIO 2: INNER JOIN ---
+    # Lewis Hamilton deve desaparecer completamente do resultado
+    query_inner = M.Driver.objects
+    With(query_inner.object, "old_guard_inner", drivers_old, 
+         join_field="driverid" => "driverid", 
+         join_type="INNER") # Forçando o Inner Join
+    
+    query_inner.filter("nationality" => "British")
+    query_inner.values("forename", "surname", "old_guard_inner__dob")
+    
+    df_inner = query_inner |> DataFrame
+    
+    # Teste de Exclusão: Lewis não satisfaz a condição do CTE (nasceu em 1985, CTE é < 1980)
+    # Como é INNER JOIN, ele deve ser removido da lista final
+    lewis_inner = df_inner[df_inner.forename .== "Lewis", :]
+    @test isempty(lewis_inner)
+    
+    # Teste de Inclusão: David satisfaz ambas as condições (British E < 1980)
+    david_inner = df_inner[df_inner.forename .== "David", :]
+    @test !isempty(david_inner)
+    @test !ismissing(david_inner[1, :old_guard_inner__dob])
+end

@@ -49,6 +49,53 @@ You are an expert Julia developer assisting in the development of **PormG**, an 
 - **`test/sqlite/`:** Future development.
   - **Execution:** `julia --project=. test/sqlite/conect.jl`.
 
+## 3b. Model Loading & Hot-Reloading
+
+### The `@import_models` Macro
+PormG provides the **`@import_models`** macro for loading model definitions with automatic hot-reload support:
+
+```julia
+# In your main module or app initialization:
+PormG.@import_models "path/to/models.jl" my_models
+import .my_models as M
+
+# Now use: M.Driver, M.Result, etc.
+```
+
+### What `@import_models` Does
+1. **Resolves paths** relative to the calling file (or absolute if provided)
+2. **Includes the module** via `Revise.includet` if available (for hot-reload)
+3. **Injects `__init__()`** so models persist after precompilation
+4. **Registers with Revise callbacks** to detect file changes and auto-refresh model metadata
+
+### Hot-Reloading During Development
+When using `Revise.jl` in an interactive REPL:
+- Edit your `models.jl` file (add/modify fields, change field names, etc.)
+- Revise detects the file change and automatically triggers a reload
+- PormG's callback invokes `reload_module_contents!()` to inject new expressions into the existing module
+- **Result:** Your models update at runtime without restarting Julia or losing REPL state
+
+**Example:**
+```julia
+# Initial model in models.jl:
+Driver = Models.Model("drivers",
+  id = Models.IDField(),
+  name = Models.CharField()
+)
+
+# Edit the file to add a field, save, and it's automatically available:
+Driver.fields  # now includes "nickname" field
+```
+
+### When `@import_models` Is Not Enough: Manual Registration
+If defining models inline (not in a separate file), use the **`@models_module`** macro instead:
+```julia
+PormG.@models_module DB "path" begin
+  Driver = Models.Model("drivers", ...)
+  # Models are auto-registered; no need for set_models
+end
+```
+
 ## 4. Developer Workflows & Testing
 
 ### Testing Rules (Pedagogical Focus)

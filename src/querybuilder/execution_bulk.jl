@@ -200,6 +200,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   return nothing
   
 end
+bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_insert(model |> object, df; kwargs...)
 
 """
     bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; kwargs...)
@@ -208,7 +209,7 @@ Performs a high-speed bulk insert operation using PostgreSQL's `COPY` protocol.
 This is significantly faster than `bulk_insert` for large datasets.
 
 # Arguments
-- `objct::SQLObjectHandler`: The database handler object (e.g., `M.Model.objects`).
+- `objct::SQLObjectHandler`: The database handler object (e.g., `M.Model`).
 - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
 - `columns`: (Optional) Specifies which columns to insert. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these.
 - `copy::Bool = true`: If `true`, creates a copy of the DataFrame before processing.
@@ -216,7 +217,7 @@ This is significantly faster than `bulk_insert` for large datasets.
 
 # Example
 ```julia
-bulk_copy(M.Driver.objects, df)
+bulk_copy(M.Driver, df)
 ```
 """
 function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
@@ -375,6 +376,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   return nothing
   
 end
+bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
 
 function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer, django_prefix::Bool)
   for field in fields
@@ -435,7 +437,6 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
   end
 end
 
-export bulk_update
 
 """
 Performs a bulk update operation on a database table using the provided `DataFrame` and a query object.
@@ -507,6 +508,7 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   _bulk_update(objct, df, _columns, _filters, show_query, chunk_size, copy)
   
 end
+bulk_update(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_update(model |> object, df; kwargs...)
 
 function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},

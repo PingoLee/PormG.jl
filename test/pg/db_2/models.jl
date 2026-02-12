@@ -181,6 +181,6 @@ New_join_position = Models.Model(
 )
 
 
-Models.set_models(@__MODULE__, @__DIR__) # That is important to set the models in the module, otherwise it will not work, that need stay at the end of the file
+# Models.set_models(@__MODULE__, @__DIR__) # This is no longer needed if using @import_models or if self-healing is working
 
 end

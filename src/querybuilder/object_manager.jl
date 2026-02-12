@@ -220,6 +220,8 @@ end
 
 function Base.getproperty(m::PormGModel, sym::Symbol)
   if sym === :objects
+    # Self-healing: Ensure models are initialized before returning objects
+    Models.ensure_model_initialized(m)
     return object(m)
   else
     return getfield(m, sym)

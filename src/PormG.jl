@@ -67,6 +67,10 @@ using .ConnectionPool
 include("Models.jl")
 using .Models
 
+include("Utils.jl")
+using .Utils
+export @models_module, @import_models
+
 include("Dialect.jl")
 import .Dialect
 

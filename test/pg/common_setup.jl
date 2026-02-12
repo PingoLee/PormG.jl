@@ -26,13 +26,13 @@ cd(@__DIR__)  # Ensure we're in the test/pg directory
 PormG.Configuration.load("db_2")
 
 # Load the models and expose the alias `M`
-# Important: Doing this here avoids repeating `Base.include` everywhere
-Base.include(PormG, "db_2/models.jl")
-import PormG.models as M
+# Using the new @import_models macro which handles registration automatically
+PormG.@import_models "db_2/models.jl" models
+import .models as M
 
 # If you have custom test macros, define or include them here
 # include("utils/custom_macros.jl")
 
 # julia -t auto --project=. -i test/pg/common_setup.jl
-# julia -t auto --project=. test/pg/test_bulk_copy.jl
+# julia -t auto --project=. test/pg/test_reload.jl
 # include("test_bulk_copy.jl")

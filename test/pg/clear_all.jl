@@ -20,8 +20,8 @@ import PormG: Models, Dialect
 import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, page, do_count, do_exists
 
 # load models
-Base.include(PormG, "db_2/models.jl")
-import PormG.models as M
+PormG.@import_models "db_2/models.jl" models
+import .models as M
 
 query = M.Circuit |> object;
 query |> do_count

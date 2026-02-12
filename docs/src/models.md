@@ -136,8 +136,79 @@ end
 - **Keep models in `db/models.jl`** or similar organized structure
 - **Group related models together** in logical sections
 - **Use meaningful comments** to explain complex relationships
-- **End with `Models.set_models(@__MODULE__, @__DIR__)`** to register models
 
+## Loading Models in Your Application
+
+### Using `@import_models` (Recommended)
+The `@import_models` macro is the recommended way to load models in your application:
+
+```julia
+# In your main module (e.g., mypkg.jl):
+module MyApp
+    using PormG
+    
+    # Load models from external file with hot-reload support
+    PormG.@import_models "db/models.jl" my_models
+    import .my_models as M
+    
+    # Now use M.Driver, M.Race, M.Result, etc.
+    # Models automatically update when you edit db/models.jl and save
+end
+```
+
+#### What `@import_models` Does
+1. **Resolves the model file path** relative to your source file
+2. **Tracks the file with Revise** (if available) for hot-reloading in interactive sessions
+3. **Registers models** with PormG so fields and metadata are indexed
+4. **Injects `__init__()`** to re-register models after package precompilation
+5. **Enables hot-reloading**: Edit your `models.jl`, save, and model changes appear instantly in the REPL
+
+### Manual Registration (Inline Models)
+If you define models directly in code instead of a separate file:
+
+```julia
+module my_models
+    import PormG.Models as M
+    
+    Driver = M.Model("drivers",
+        driverId = M.IDField(),
+        forename = M.CharField()
+    )
+    
+    # REQUIRED: Register the module
+    M.set_models(@__MODULE__, @__DIR__)
+end
+```
+
+### Legacy: Direct `set_models()` Call
+At the end of your `db/models.jl` file, you **no longer need** to call `Models.set_models()` manually if using `@import_models`. However, if loading the model module directly, include this line at the end:
+
+```julia
+Models.set_models(@__MODULE__, @__DIR__)
+```
+
+
+## Hot-Reloading Model Definitions
+
+When using `@import_models` with `Revise.jl`, model changes are automatically detected and applied:
+
+```julia
+# Your REPL session (with Revise.jl loaded):
+julia> using MyApp
+julia> M.Driver.fields  # Shows current fields: id, name
+
+# Edit db/models.jl to add a field, save the file...
+
+julia> M.Driver.fields  # Automatically updated with new field!
+```
+
+This enables rapid development and testing without restarting Julia. When you modify models:
+- Add new fields
+- Remove fields
+- Change field types
+- Adjust field parameters
+
+All changes are automatically reloaded and available in the next REPL command.
 
 ## Supported Field Types
 
@@ -154,6 +225,14 @@ For detailed documentation on each field type, including parameters, examples, a
 
 
 
+
+## Post-Precompilation Behavior
+
+When your package is precompiled (e.g., after `import MyPkg`), the `@import_models` macro ensures models are **automatically re-registered** via injected `__init__()` functions. This means:
+
+- Models are available in package code without manual registration
+- Hot-reloading continues to work in interactive sessions
+- No additional setup is required for REPL users
 
 ---
 For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.

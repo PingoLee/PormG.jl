@@ -72,7 +72,6 @@ function generate_models_from_db(file::String, Instructions::Vector{Any}, settin
     for table in Instructions
       write(f, "$(table)\n\n")      
     end
-    write(f, "Models.set_models(@__MODULE__, @__DIR__)\n\n")
     write(f, "end\n")
   end
 

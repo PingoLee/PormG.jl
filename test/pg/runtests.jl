@@ -26,6 +26,9 @@ include("common_setup.jl")
     @testset "Test Password"            begin include("test_password.jl") end
     @testset "Test Password i18n"       begin include("test_password_i18n.jl") end
 
+    # Hot-Reloading e Desenvolvimento
+    @testset "Hot-Reloading"            begin include("test_reload.jl") end
+
 end
 
 PormG.Configuration.__cleanup__()

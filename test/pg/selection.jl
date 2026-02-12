@@ -17,8 +17,8 @@ PormG.Configuration.load("db_2")
 import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, show_query, Max, Min
 
 # load models
-Base.include(PormG, "db_2/models.jl")
-import PormG.models as M
+PormG.@import_models "db_2/models.jl" models
+import .models as M
 
 
 # select all results with status = 5 (Engine)

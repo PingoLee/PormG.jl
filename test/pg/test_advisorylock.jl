@@ -3,7 +3,7 @@ if !isdefined(Main, :PormG)
 end
 
 @testset "AdvisoryLock: non-blocking exclusivity" begin
-  dbname = first(keys(PormG.config))
+  dbname = haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))
   key = "test_advisory_lock_$(uuid4())"
   n = 5
   counter = Atomic{Int}(0)
@@ -33,7 +33,7 @@ end
 end
 
 @testset "AdvisoryLock: blocking with timeout" begin
-  dbname = first(keys(PormG.config))
+  dbname = haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))
   key = "test_advisory_lock_timeout_$(uuid4())"
 
   # First, acquire the lock in a separate task and hold it

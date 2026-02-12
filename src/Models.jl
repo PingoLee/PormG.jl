@@ -49,6 +49,9 @@ end
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Management/Reflection
 #═══════════════════════════════════════════════════════════════════════════════
+
+const REGISTERED_MODULES = Dict{Module, String}()
+
 """
 Returns a vector containing all the models defined in the given module.
 
@@ -64,7 +67,12 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
   model_names = []
   for name in names(modules; all=true, imported=true)
     # Check if the attribute is an instance of Model_Type
-    attr = getfield(modules, name)
+    # Use invokelatest to avoid World Age issues in Julia 1.12+
+    attr = try
+        Base.invokelatest(getfield, modules, name)
+    catch
+        nothing
+    end
     if isa(attr, PormGModel)
       if attr.name == ""
         attr.name = name |> format_model_name
@@ -118,22 +126,46 @@ end
 function set_models(_module::Module, path::String)::Nothing
   @infiltrate false
   models = get_all_models(_module)  
-  # Detect OS and extract connect_key accordingly
-  if Sys.iswindows()
-    connect_key = split(path, "\\")[end]
-  else
-    connect_key = split(path, "/")[end]
+
+  # Register for lazy loading / self-healing
+  REGISTERED_MODULES[_module] = path
+  
+  # Try to inject a fallback constant into the module so it survives precompilation
+  # This allows Models.ensure_model_initialized to recover even if REGISTERED_MODULES is lost.
+  try
+    if !isdefined(_module, :__pormg_init_path__)
+        # We use Core.eval to define a constant in the module
+        Base.invokelatest(Core.eval, _module, :(const __pormg_init_path__ = $path))
+    end
+  catch e
+    # Ignore errors if the module is closed or already has it
+  end
+
+  abs_path = abspath(path)
+
+  # Find if this path is already loaded under any key
+  connect_key = nothing
+  for (k, v) in config
+    v_path_abs = abspath(v.db_def_folder)
+    if v_path_abs == abs_path || v.db_def_folder == path || basename(v.db_def_folder) == basename(path)
+        connect_key = k
+        break
+    end
   end
 
   @infiltrate false
-  if haskey(config, connect_key) == false
-    Configuration.load()
+  if isnothing(connect_key)
+    # Try to load using the path as the primary key
+    Configuration.load(path)
+    connect_key = path
   end
+  
   settings::SQLConn = config[connect_key]
 
-  # set the original module in models
+  # set the original module in models and clear related objects for idempotency
   for model in models
     model._module = _module
+    empty!(model.related_objects)
   end
   # Validate like django related_name, if the model has more than one foreign key to the same model the related_name must be defined
   for model in models
@@ -196,6 +228,91 @@ function set_models(_module::Module, path::String)::Nothing
   end
  
   return nothing
+end
+
+"""
+    ensure_model_initialized(model::PormGModel)
+
+Checks if a model has been initialized (i.e., has a connect_key that exists in `config`).
+If not, attempts self-healing by:
+1. Remapping stale path-based keys to current session alias keys
+2. Re-registering via REGISTERED_MODULES
+3. Scanning loaded modules for __pormg_init_path__ markers
+4. Using the model's own `_module` reference (survives precompilation)
+"""
+function ensure_model_initialized(model::PormGModel)
+    # Fast path: already properly initialized
+    if !isnothing(model.connect_key) && haskey(config, model.connect_key)
+        return true
+    end
+
+    # Case 1: Key exists but is not in config (likely a path mismatch after precompilation)
+    if !isnothing(model.connect_key) && !haskey(config, model.connect_key)
+        abs_key = abspath(model.connect_key)
+        for (k, v) in config
+            if abspath(v.db_def_folder) == abs_key || basename(v.db_def_folder) == basename(model.connect_key)
+                @info "Self-healing: Remapping connect_key '$(model.connect_key)' → '$k'"
+                model.connect_key = k
+                return true
+            end
+        end
+    end
+
+    # Case 2: Uninitialized or lost registration
+    @infiltrate false
+    
+    # 2a. Check explicitly registered modules
+    for (mod, path) in REGISTERED_MODULES
+        models_in_mod = get_all_models(mod)
+        for m in models_in_mod
+            if m === model
+                @info "Self-healing: Initializing model $(model.name) from registered module $(mod)"
+                set_models(mod, path)
+                return true
+            end
+        end
+    end
+
+    # 2b. If the model has _module set (survives precompilation), try to re-register it directly.
+    #     The module's __init__ may not have fired yet, or may have failed because config wasn't loaded.
+    if !isnothing(model._module) && !isempty(config)
+        mod = model._module
+        # Try to find the matching config entry by checking db_def_folder patterns
+        for (k, v) in config
+            try
+                # Get all models in the module to check if model belongs to it
+                models_in_mod = get_all_models(mod)
+                if any(m === model for m in models_in_mod)
+                    @info "Self-healing: Re-registering module $(mod) with key '$k'"
+                    set_models(mod, v.db_def_folder)
+                    if !isnothing(model.connect_key) && haskey(config, model.connect_key)
+                        return true
+                    end
+                end
+            catch
+                continue
+            end
+        end
+    end
+
+    # 2c. Scan loaded packages for __pormg_init_path__ markers (injected by @models_module)
+    for (pkgid, mod) in Base.loaded_modules
+        if isdefined(mod, :__pormg_init_path__)
+            path = getfield(mod, :__pormg_init_path__)
+            @info "Self-healing: Recovered registration for $(mod) from __pormg_init_path__"
+            try
+                set_models(mod, path)
+            catch
+                continue
+            end
+            models_in_mod = get_all_models(mod)
+            if any(m === model for m in models_in_mod)
+                return true
+            end
+        end
+    end
+
+    return false
 end
 
 function format_fild_name(name::String)::String

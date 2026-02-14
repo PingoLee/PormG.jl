@@ -148,7 +148,7 @@ end
 
 function build(object::SQLObject; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing, 
-  connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
+  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
   parameters::Union{Nothing, PormGPostgresParam} = nothing)
   ensure_model_transaction_scope(object.model)
   settings = config[object.model.connect_key]

@@ -14,7 +14,7 @@ const ColumnPart = Union{SQLTypeField, SQLTypeFunction, String, SQLTypeF, Vector
 const OptionalString = Union{String, Nothing}
 
 """Database connections."""
-const ConnType = Union{SQLite.DB, PormGPostgres, Nothing}
+const ConnType = Union{PormGSQLite, PormGPostgres, Nothing}
 
 """CTE configuration dictionary."""
 const CTEDict = Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}
@@ -501,7 +501,7 @@ end
 mutable struct DeletionCollector{T}
   model::PormGModel  # The main model being deleted from
   settings::SQLConn  # Connection settings
-  connection::Union{PormGPostgres, SQLite.DB}  # Database connection
+  connection::Union{PormGPostgres, PormGSQLite}  # Database connection
   objects::Dict{PormGModel, Vector{Dict{Symbol, T}}}  # Models and their objects to delete
   dependencies::Dict{PormGModel, Set{PormGModel}}  # Model dependencies
   field_updates::Dict{Tuple{String, Any}, Dict{PormGModel, Dict{Symbol, T}}}  # Field updates for SET_NULL etc.

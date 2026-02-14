@@ -112,14 +112,17 @@ const postgres_type_map = Dict{String, Symbol}(
 const sqlite_type_map_reverse = Dict{String, String}(
   "VARCHAR" => "TEXT",
   "CHAR" => "TEXT",
+  "TEXT" => "TEXT",
   "INTEGER" => "INTEGER",
   "BIGINT" => "INTEGER",
   "FLOAT" => "REAL",
   "DECIMAL" => "DECIMAL",
   "DATETIME" => "DATETIME",
+  "TIMESTAMPTZ" => "DATETIME",
   "TIME" => "TIME",
   "DATE" => "DATE",
   "BLOB" => "BLOB",
+  "BOOLEAN" => "BOOLEAN"
 )
 
 const postgres_type_map_reverse = Dict{String, String}(
@@ -139,6 +142,7 @@ const postgres_type_map_reverse = Dict{String, String}(
   "TEXT" => "text",
   "BYTEA" => "bytea",
   "TIMESTAMPTZ" => "timestamptz",
+  "TIMESTAMP" => "timestamp",
   "DATE" => "date",
   "TIME" => "time",  
   "INTERVAL" => "interval",

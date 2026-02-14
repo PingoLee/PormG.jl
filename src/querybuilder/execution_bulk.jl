@@ -427,7 +427,7 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
           throw(e)
         end
       end
-    elseif connection isa SQLite.DB
+    elseif connection isa PormGSQLite
       SQLite.execute(connection, sql)
     else
       throw("Unsupported connection type")

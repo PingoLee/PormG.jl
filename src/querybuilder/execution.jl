@@ -1,7 +1,7 @@
 
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
-  connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
+  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
   parameters::Union{Nothing, PormGPostgresParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
   show_query::Bool = false
@@ -149,7 +149,7 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   end
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
   model = objct.model
   ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
@@ -233,7 +233,7 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
-  elseif connection isa SQLite.DB
+  elseif connection isa PormGSQLite
     # SQLite implementation with parameters
     stmt = SQLite.Stmt(connection, sql)
     for (i, param) in enumerate(parameters.parameters)
@@ -324,7 +324,7 @@ end
 #     end
 #   end
 # end
-function _update_sequence(model::PormGModel, connection::SQLite.DB, pk_field::Vector{String})
+function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String})
   for field in pk_field
     max_id_query = "SELECT MAX($(field)) FROM $(string(model.name |> lowercase));"
     max_id_result = SQLite.Query(connection, max_id_query) |> DataFrame
@@ -423,7 +423,7 @@ function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vect
   return join(conditions, " AND ")
 end
 
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, show_query::Bool = false)
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Bool = false)
   model = objct.model
   ensure_model_transaction_scope(model)
   settings = config[model.connect_key]
@@ -511,7 +511,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       FROM $(from_tables)
       WHERE $(all_conditions)
       """
-    elseif connection isa SQLite.DB
+    elseif connection isa PormGSQLite
       # SQLite: Use subquery or multiple table syntax
       # For SQLite, we need to use a different approach since it doesn't support UPDATE...FROM
       # We'll use UPDATE with WHERE EXISTS or IN subqueries
@@ -567,7 +567,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # Execute with parameters
     if connection isa PormGPostgres
       fetch(settings, sql, parameters)
-    elseif connection isa SQLite.DB
+    elseif connection isa PormGSQLite
       stmt = SQLite.Stmt(connection, sql)
       for (i, param) in enumerate(parameters.parameters)
         SQLite.bind!(stmt, i, param)

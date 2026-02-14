@@ -49,7 +49,7 @@ total, dict = delete(query; allow_delete_all = true)
 """
 function delete(objct::SQLObjectHandler; 
     table_alias::Union{Nothing, SQLTableAlias} = nothing, 
-    connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, 
+    connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, 
     show_query::Bool = false,
     allow_delete_all::Bool = false)
   model = objct.object.model
@@ -350,7 +350,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
   end
 end
 
-function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection})
   @infiltrate false
   # Execute the actual deletion SQL

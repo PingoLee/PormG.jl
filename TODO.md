@@ -4,6 +4,17 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🚀 High Priority: Core ORM Parity
 
+- [x] **SQLite Migration Improvements**
+  - [x] Use PRAGMA for introspection (reliable schema reading).
+  - [x] Support multiple dispatch for Dialect (Postgres vs SQLite separation).
+  - [x] Consistent type mapping using `type_map`.
+
+- [ ] **Modern Testing & CI**
+  - [x] Create root `test/runtests.jl` for unified test entry.
+  - [x] Implement **Unit Tests** for SQL generation (Mocked migrations).
+  - [ ] Add **GitHub Actions CI** configuration to run unit tests on push.
+  - [ ] Move existing DB tests to `test/integration`.
+
 - [ ] **Advanced Query Expressions**
   - [ ] Support for **Subqueries** (using `OuterRef`).
   - [ ] **Window Functions** (`OVER`, `RANK`, `ROW_NUMBER`).

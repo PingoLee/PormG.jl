@@ -21,7 +21,7 @@ makedocs(
             "Updating Records" => "write/update.md",
             "Deleting Records" => "write/delete.md",
             "Bulk Operations" => "write/bulk.md",
-            "Transactions" => "transaction.md",
+            "Transactions" => "write/transaction.md",
         ],        
         "Reading" => "read.md",
         "Import from Django" => "import_django.md",

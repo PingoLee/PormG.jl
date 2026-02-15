@@ -20,7 +20,7 @@ import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_coun
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
 import PormG.QueryBuilder: cjoin
 
-cd(@__DIR__)  # Ensure we're in the test/pg directory
+cd(@__DIR__)  # Ensure we're in the test/integration directory
 
 # Load configurations once
 PormG.Configuration.load("db_2")
@@ -33,6 +33,6 @@ import .models as M
 # If you have custom test macros, define or include them here
 # include("utils/custom_macros.jl")
 
-# julia -t auto --project=. -i test/pg/common_setup.jl
-# julia -t auto --project=. test/pg/test_reload.jl
+# julia -t auto --project=. -i test/integration/common_setup.jl
+# julia -t auto --project=. test/integration/test_reload.jl
 # include("test_bulk_copy.jl")

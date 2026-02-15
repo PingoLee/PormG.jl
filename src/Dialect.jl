@@ -517,7 +517,8 @@ function create_table(conn::PormGSQLite, model::PormGModel)
   for (field_name, field) in model.fields
     if field isa sForeignKey && field.db_constraint
       on_delete_str = isnothing(field.on_delete) ? "NO ACTION" : (string(field.on_delete) |> x -> split(x, ".")[end] |> uppercase)
-      push!(columns, "FOREIGN KEY (\"$field_name\") REFERENCES \"$(field.to |> format_model_name)\"(\"$(field.pk_field)\") ON DELETE $on_delete_str")
+      target_pk = isnothing(field.pk_field) ? "id" : field.pk_field
+      push!(columns, "FOREIGN KEY (\"$field_name\") REFERENCES \"$(field.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
   
@@ -683,25 +684,47 @@ function get_columns(conn::PormGSQLite, table_name::String)
   return res.name
 end
 
-function alter_field(conn::PormGSQLite, table_name::Union{Symbol, String}, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})
+function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})
+  return alter_field(conn, model.name |> lowercase, field_name, new_field, old_field, colect_not_equal)
+end
+
+function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})
   # SQLite implementation using table recreation
+  table_name = model.name |> lowercase
   new_table_name = "$(table_name)_new"
-  cols = get_columns(conn, string(table_name))
-  
-  # Prepare columns for CREATE TABLE
-  # We assume for now that we have the full model in the planner to do a proper recreation, 
-  # but here we only have the field being altered. This is tricky.
-  # A better approach for SQLite is to have a 'recreate_table' function that takes the new PormGModel.
-  
-  # For now, let's provide a warning or a simple version if possible.
-  # The real fix is to make the planner call a recreate_table if it's SQLite.
-  
-  @warn "SQLite alter_field via recreation is partially implemented. Significant changes might require manual migration."
-  
-  # If it's just a rename, we can handle it easily (though rename_field is separate)
-  # For type changes or nullability, we need the full schema.
-  
-  return "SELECT 1; -- SQLite: Alter field $field_name in $table_name (recreation needed)"
+
+  # 1. Define columns for the NEW table (using current model state)
+  columns_defs = []
+  for (f_name, f) in model.fields
+    push!(columns_defs, field_to_column(f_name |> string, f, conn))
+  end
+
+  # Add foreign key constraints
+  for (f_name, f) in model.fields
+    if f isa sForeignKey && f.db_constraint
+      on_delete_str = isnothing(f.on_delete) ? "NO ACTION" : (string(f.on_delete) |> x -> split(x, ".")[end] |> uppercase)
+      target_pk = isnothing(f.pk_field) ? "id" : f.pk_field
+      push!(columns_defs, "FOREIGN KEY (\"$f_name\") REFERENCES \"$(f.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
+    end
+  end
+
+  create_sql = """CREATE TABLE "$new_table_name" (
+  $(join(columns_defs, ",\n  "))
+);"""
+
+  # 2. Get common columns between old and new to preserve data
+  old_cols = get_columns(conn, string(table_name))
+  model_cols = [string(k) for k in keys(model.fields)]
+  common_cols = intersect(old_cols, model_cols)
+  cols_joined = join(["\"$c\"" for c in common_cols], ", ")
+
+  insert_sql = """INSERT INTO "$new_table_name" ($cols_joined) SELECT $cols_joined FROM "$table_name";"""
+
+  return """DROP TABLE IF EXISTS "$new_table_name";
+$create_sql;
+$insert_sql;
+DROP TABLE "$table_name";
+ALTER TABLE "$new_table_name" RENAME TO "$table_name";"""
 end
 
 function rename_field(conn::Union{PormGSQLite, PormGPostgres}, table_name::Union{String, Symbol}, old_field_name::Union{String, Symbol}, new_field_name::Union{String, Symbol})

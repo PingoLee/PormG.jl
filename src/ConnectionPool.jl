@@ -632,7 +632,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     end
   end
 end
-with_transaction(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, release_conn::Bool = false, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
+with_transaction(pool::SQLConn, sql::AbstractString; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, release_conn::Bool = false, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
 with_transaction_async(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
 
 """

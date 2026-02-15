@@ -2,7 +2,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-# julia -t auto  --project=. test/pg/test_password.jl
+# julia -t auto  --project=. test/integration/test_password.jl
 
 import PormG.Passwords: encode, matches, upgrade_encoding, PBKDF2PasswordEncoder, BCryptPasswordEncoder, 
                          DelegatingPasswordEncoder, SpringSecurityPBKDF2PasswordEncoder

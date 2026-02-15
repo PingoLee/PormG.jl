@@ -368,6 +368,24 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   return result[1, :indexname]
 end
 
+function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name::String)
+  # table_name is Symbol like :migrationtest
+  tname = string(table_name)
+  idx_list = fetch(conn, "PRAGMA index_list(\"$tname\")") |> DataFrame
+  if isempty(idx_list)
+    return nothing
+  end
+  
+  for row in eachrow(idx_list)
+    idx_name = row.name
+    idx_info = fetch(conn, "PRAGMA index_info(\"$idx_name\")") |> DataFrame
+    if !isempty(idx_info) && field_name in idx_info.name
+      return idx_name
+    end
+  end
+  return nothing
+end
+
 function get_constraints_pk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
   SELECT

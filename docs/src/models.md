@@ -3,7 +3,7 @@
 PormG models describe the structure of your database tables using Julia code, inspired by Django ORM but tailored for Julia's syntax and performance.
 
 ## What is a Model?
-A model is a Julia type (usually a struct) that defines the fields (columns) and their types for a database table. Each model maps directly to a table in your PostgreSQL database.
+A model is a Julia object that defines the fields (columns) and their types for a database table. Each model maps directly to a table in your PostgreSQL or SQLite database.
 
 ## Creating a Model
 
@@ -137,6 +137,26 @@ end
 - **Group related models together** in logical sections
 - **Use meaningful comments** to explain complex relationships
 
+## Development Workflow
+
+PormG supports two primary workflows for model creation:
+
+### 1. Model-First (Recommended for New Projects)
+1. Define your models in a `models.jl` file.
+2. Use `PormG.Migrations.makemigrations()` to detect changes.
+3. Use `PormG.Migrations.migrate()` to apply them to your database.
+
+### 2. DB-First (Legacy or Existing Databases)
+If you already have a database, you can use the **`PormG.setup()`** utility to generate your model code automatically:
+
+```julia
+using PormG
+# This will introspect the DB and create a basic models.jl for you
+PormG.setup("path/to/my/db") 
+```
+
+---
+
 ## Loading Models in Your Application
 
 ### Using `@import_models` (Recommended)
@@ -175,7 +195,7 @@ module my_models
         forename = M.CharField()
     )
     
-    # REQUIRED: Register the module
+    # REQUIRED: Register the module so PormG can find it for queries and migrations
     M.set_models(@__MODULE__, @__DIR__)
 end
 ```
@@ -235,4 +255,4 @@ When your package is precompiled (e.g., after `import MyPkg`), the `@import_mode
 - No additional setup is required for REPL users
 
 ---
-For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.
+For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/integration/` folder.

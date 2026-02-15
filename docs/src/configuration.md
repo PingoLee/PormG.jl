@@ -5,7 +5,7 @@ PormG uses a flexible configuration system to manage connections to your Postgre
 ## Static Configuration (File-based)
 
 - By default, PormG looks for a folder named `db` containing a `connection.yml` file.
-- You can use any folder name (e.g., `db_2`, `test/pg/f1`) to manage multiple separate databases. Each folder represents a unique connection key.
+- You can use any folder name (e.g., `db_2`, `test/integration/f1`) to manage multiple separate databases. Each folder represents a unique connection key.
 
 ### Supported Adapters
 - **PostgreSQL**: Primary adapter using `LibPQ.jl`. Supports high-performance async operations.
@@ -13,7 +13,14 @@ PormG uses a flexible configuration system to manage connections to your Postgre
 
 ### Creating a Configuration
 
-To set up a new database connection:
+The easiest way to set up a new project is using the interactive setup tool:
+
+```julia
+using PormG
+PormG.setup() # Guide you through folder and connection.yml creation
+```
+
+Alternatively, you can set it up manually:
 
 1. **Create a Folder**
    - Example: `db_tenant_a`
@@ -72,4 +79,4 @@ results = M.Driver.objects.db("tenant_42").list()
 - SQLite does not support advisory locks; the helper will no-op with a warning on that backend.
 
 ---
-For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.
+For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/integration/` folder.

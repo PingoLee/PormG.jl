@@ -1,6 +1,6 @@
 # PormG Field Types Reference
 
-This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia and PostgreSQL. Each field type maps to specific PostgreSQL data types and provides validation, constraints, and formatting capabilities.
+This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia. Each field type maps to appropriate data types in PostgreSQL or SQLite and provides validation, constraints, and formatting capabilities.
 
 ## Naming Conventions and Considerations
 
@@ -60,9 +60,11 @@ user = Models.Model(                    # Should be capitalized
 
 ### IDField()
 
-**Purpose**: Auto-incrementing 64-bit integer primary key using PostgreSQL IDENTITY columns.
+**Purpose**: Auto-incrementing 64-bit integer primary key.
 
-**Database Type**: `BIGINT` with `GENERATED AS IDENTITY`
+**Database Type**: 
+- **PostgreSQL**: `BIGINT` with `GENERATED AS IDENTITY`
+- **SQLite**: `INTEGER PRIMARY KEY AUTOINCREMENT`
 
 **Use Cases**: Large-scale applications, future-proof primary keys, modern PostgreSQL features.
 
@@ -89,9 +91,11 @@ Order = Models.Model(
 
 ### AutoField()
 
-**Purpose**: Auto-incrementing 32-bit integer primary key using PostgreSQL SERIAL.
+**Purpose**: Auto-incrementing 32-bit integer primary key.
 
-**Database Type**: `INTEGER` with `SERIAL`
+**Database Type**:
+- **PostgreSQL**: `INTEGER` with `SERIAL`
+- **SQLite**: `INTEGER PRIMARY KEY AUTOINCREMENT`
 
 **Use Cases**: Small to medium applications, legacy compatibility, storage efficiency.
 

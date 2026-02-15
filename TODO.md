@@ -1,4 +1,4 @@
-# PormG.jl TODO List
+# TODO List
 
 This document tracks missing features and planned improvements for PormG.jl, with a focus on reaching parity with Django-style ORM capabilities and leveraging PostgreSQL-specific power features.
 
@@ -8,6 +8,24 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [x] Use PRAGMA for introspection (reliable schema reading).
   - [x] Support multiple dispatch for Dialect (Postgres vs SQLite separation).
   - [x] Consistent type mapping using `type_map`.
+
+- [x] **Complete Migration Support**
+  - [x] **Integration Tests**: Migration integration tests for SQLite (15/15 tests).
+  - [ ] **Unit Tests**: Mocked tests for SQL generation in migrations.
+  - [ ] **Rename Operations**: Better detection and handling of renamed models/fields.
+  - [ ] **Migration Locking**: Use `AdvisoryLock` to prevent concurrent migration runs during deployment.  
+  - [ ] **Destructive Guard**: Prevent `DROP` operations unless a `--force` or `destructive=true` flag is passed.
+  - [ ] **Data Migration Support**: Support manual SQL or Julia functions in `pending_migrations.jl` for complex transformations (e.g., splitting columns).  
+
+- [ ] **Refactor QueryBuilder Parameter Handling (Contextual Buckets Strategy)**
+  - **Context:** Currently, the query builder generates PostgreSQL parameters (`$1`, `$2`...) sequentially. MySQL/MariaDB and SQLite use positional parameters (`?`), which require a "Bucket" strategy because code execution order (e.g., Processing `WHERE` before `JOIN` to determine needs) doesn't match SQL string order.
+  - **Goal:** Implement this in [src/querybuilder/parameters.jl](src/querybuilder/parameters.jl) using Multiple Dispatch.
+  - **Implementation Details:**
+    1. **Abstract Base Type**: `AbstractPormGParam`.
+    2. **PostgreSQL**: `PormGPostgresParam <: AbstractPormGParam` (single vector/counter).
+    3. **Positional (MySQL/SQLite)**: `PormGPositionalParam <: AbstractPormGParam` with distinct buckets for `cte_params`, `select_params`, `join_params`, `where_params`, `having_params`.
+    4. **Context Control**: `set_context!(params, context::Symbol)` to direct parameters to the correct bucket.
+    5. **Finalization**: `get_final_parameters` returns `vcat` of buckets in standard SQL order.
 
 - [ ] **Modern Testing & CI**
   - [x] Create root `test/runtests.jl` for unified test entry.
@@ -25,9 +43,6 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] **Savepoints**: Support for nested transactions/atomic blocks.
   - [ ] **Row-Level Locking**: `select_for_update()` with `SKIP LOCKED` and `OF` support.
 
-- [ ] **Complete Migration Support**
-  - [ ] **Rename Operations**: Better detection and handling of renamed models/fields.
-  - [ ] **Forward/Backward migrations**: Ensure all operations are reversible.
 
 ## 🐘 PostgreSQL Specific Enhancements
 
@@ -63,3 +78,9 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Expand the Formula 1 dataset examples in the docs.
   - [ ] Add a "PostgreSQL Power User" guide.
 - [ ] **Thread Safety**: Audit connection pool for concurrent `Async` safety.
+
+
+## Future Considerations
+- [ ] **Advanced Migration Architecture (Future)**
+  - [ ] **Migration History Table**: Create `pormg_migrations` table in DB to track applied migrations (stop relying only on filesystem).
+  - [ ] **State-based Rollback**: Implement `rollback()` to automatically restore schema from `old_models.jl` history.

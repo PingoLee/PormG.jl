@@ -1,4 +1,4 @@
-# test/pg/test_sql_functions.jl
+# test/integration/test_sql_functions.jl
 # This test file validates SQL functions (aggregates, string, math, logic) and filter modifiers.
 # Each test set explains the expected SQL and the logic being tested.
 

@@ -40,14 +40,13 @@ using PormG
 
 ### Quick Start
 
-1. **Set up database configuration:**
+1. **Initialize your project:**
    ```julia
    using PormG
-   PormG.Configuration.load("db")  # Creates template if doesn't exist
+   PormG.setup() # Interactive setup for database and models
    ```
-   This will create a `db/` folder with a `connection.yml` template if it doesn't exist.
 
-2. **Edit your database connection:**
+2. **Define your models:**
    Open `db/connection.yml` and configure your PostgreSQL connection:
    ```yaml
    env: dev

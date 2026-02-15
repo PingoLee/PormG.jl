@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Bulk Operations · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Bulk Operations · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Bulk Operations · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Bulk Operations · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/write/bulk/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/write/bulk/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/write/bulk/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../configuration/">Configuration</a></li><li><a class="tocitem" href="../../models/">Models</a></li><li><a class="tocitem" href="../../fields/">Fields</a></li><li><a class="tocitem" href="../../migrations/">Migrations</a></li><li><span class="tocitem">Writing</span><ul><li><a class="tocitem" href="../">Overview</a></li><li><a class="tocitem" href="../create/">Creating Records</a></li><li><a class="tocitem" href="../update/">Updating Records</a></li><li><a class="tocitem" href="../delete/">Deleting Records</a></li><li class="is-active"><a class="tocitem" href>Bulk Operations</a><ul class="internal"><li><a class="tocitem" href="#Performance-Comparison"><span>Performance Comparison</span></a></li><li><a class="tocitem" href="#Bulk-Insert"><span>Bulk Insert</span></a></li><li><a class="tocitem" href="#Ultra-Fast-Bulk-Inserts-(PostgreSQL-COPY)"><span>Ultra-Fast Bulk Inserts (PostgreSQL COPY)</span></a></li><li><a class="tocitem" href="#Bulk-Update"><span>Bulk Update</span></a></li></ul></li><li><a class="tocitem" href="../transaction/">Transactions</a></li></ul></li><li><a class="tocitem" href="../../read/">Reading</a></li><li><a class="tocitem" href="../../import_django/">Import from Django</a></li><li><a class="tocitem" href="../../custom_joins/">Custom Joins</a></li><li><a class="tocitem" href="../../passwords/">Passwords</a></li><li><a class="tocitem" href="../../advisory_lock/">Advisory Locks</a></li><li><a class="tocitem" href="../../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Writing</a></li><li class="is-active"><a href>Bulk Operations</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Bulk Operations</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/write/bulk.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Bulk-Operations"><a class="docs-heading-anchor" href="#Bulk-Operations">Bulk Operations</a><a id="Bulk-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Operations" title="Permalink"></a></h1><p>Bulk operations are designed for high-performance data manipulation of large datasets. PormG provides three dedicated tools:</p><ul><li><strong><code>bulk_insert()</code></strong>: Standard SQL-based insertion with automatic chunking (suitable for DataFrames with 1-10k rows)</li><li><strong><code>bulk_copy()</code></strong>: PostgreSQL native <code>COPY</code> protocol for ultra-fast insertion (suitable for 10k+ rows on PostgreSQL)</li><li><strong><code>bulk_update()</code></strong>: Efficient multi-row updates from a DataFrame</li></ul><p>All bulk operations are <strong>async-aware</strong> and participate in transaction contexts automatically.</p><h2 id="Performance-Comparison"><a class="docs-heading-anchor" href="#Performance-Comparison">Performance Comparison</a><a id="Performance-Comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Comparison" title="Permalink"></a></h2><table><tr><th style="text-align: left">Operation</th><th style="text-align: left">Dataset Size</th><th style="text-align: left">Speed</th><th style="text-align: left">Ideal For</th><th style="text-align: left">Database</th></tr><tr><td style="text-align: left"><code>create()</code> loop</td><td style="text-align: left">&lt; 100 rows</td><td style="text-align: left">Slowest</td><td style="text-align: left">Individual interactive inserts</td><td style="text-align: left">All</td></tr><tr><td style="text-align: left"><code>bulk_insert()</code></td><td style="text-align: left">100 - 10k rows</td><td style="text-align: left">Fast</td><td style="text-align: left">CSV imports, batch operations</td><td style="text-align: left">All</td></tr><tr><td style="text-align: left"><code>bulk_copy()</code> ⭐</td><td style="text-align: left">10k+ rows</td><td style="text-align: left">Ultra-Fast</td><td style="text-align: left">Initial data loads, migrations</td><td style="text-align: left">PostgreSQL only</td></tr></table><p>⭐ <code>bulk_copy()</code> can be 10-100x faster than <code>bulk_insert()</code> for large datasets.</p><hr/><h2 id="Bulk-Insert"><a class="docs-heading-anchor" href="#Bulk-Insert">Bulk Insert</a><a id="Bulk-Insert-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Insert" title="Permalink"></a></h2><p>Use <code>bulk_insert()</code> to insert a <code>DataFrame</code> into the database. By default, it chunks data into batches of 1000 rows.</p><pre><code class="language-julia hljs">using CSV, DataFrames
+
+# Prepare data
+df = CSV.File(&quot;drivers.csv&quot;) |&gt; DataFrame
+
+# Bulk insert from DataFrame
+query = M.Driver.objects
+bulk_insert(query, df)
+
+# Adjust chunk size for tables with many columns
+bulk_insert(query, df, chunk_size=500)</code></pre><h3 id="Pre-processing-and-Error-Handling"><a class="docs-heading-anchor" href="#Pre-processing-and-Error-Handling">Pre-processing and Error Handling</a><a id="Pre-processing-and-Error-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Pre-processing-and-Error-Handling" title="Permalink"></a></h3><p>CSV data often contains strings like <code>\N</code> for null values. If these are passed to numeric columns, <code>bulk_insert</code> will throw an error. You must pre-process your <code>DataFrame</code> to use Julia&#39;s <code>missing</code>.</p><pre><code class="language-julia hljs"># Clean the DataFrame before insertion
+cols_to_clean = [:position, :milliseconds, :rank]
+
+for col in cols_to_clean
+    df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, df[!, col])
+end
+
+# Now the bulk insert will succeed
+bulk_insert(query, df)</code></pre><h3 id="Atomicity-and-Transactions"><a class="docs-heading-anchor" href="#Atomicity-and-Transactions">Atomicity and Transactions</a><a id="Atomicity-and-Transactions-1"></a><a class="docs-heading-anchor-permalink" href="#Atomicity-and-Transactions" title="Permalink"></a></h3><p>By default, <code>bulk_insert()</code> chunks data and processes each chunk in its own transaction. If any chunk fails, <strong>only that chunk is rolled back</strong>, not the entire operation.</p><p>To ensure all-or-nothing semantics (all rows inserted or none), wrap <code>bulk_insert()</code> in <code>run_in_transaction()</code>:</p><pre><code class="language-julia hljs">using PormG
+
+# All inserts succeed together, or all fail together
+PormG.run_in_transaction(&quot;db_2&quot;) do
+    bulk_insert(M.Driver.objects, df)
+end</code></pre><h3 id="Error-Handling-Examples"><a class="docs-heading-anchor" href="#Error-Handling-Examples">Error Handling Examples</a><a id="Error-Handling-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Error-Handling-Examples" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Detect duplicate key errors
+try
+    bulk_insert(M.Driver.objects, df)
+catch e
+    if contains(string(e), &quot;duplicate key&quot;)
+        @warn &quot;Some rows have duplicate values&quot; exception=e
+    else
+        rethrow(e)
+    end
+end
+
+# Pre-validate data before insertion
+using DataFrames
+
+df_validated = df[
+    (df.forename .!= &quot;&quot;) .&amp; 
+    (!ismissing.(df.dob)),
+    :
+]
+@info &quot;Validated $(nrow(df_validated)) of $(nrow(df)) rows&quot;
+bulk_insert(M.Driver.objects, df_validated)</code></pre><h3 id="Memory-Efficiency"><a class="docs-heading-anchor" href="#Memory-Efficiency">Memory Efficiency</a><a id="Memory-Efficiency-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Efficiency" title="Permalink"></a></h3><p>For very large CSV files, avoid loading the entire file into memory:</p><pre><code class="language-julia hljs">using CSV, DataFrames
+
+# Process CSV in chunks
+reader = CSV.Reader(&quot;massive_drivers.csv&quot;; ntasks=4)
+for chunk in Iterators.partition(reader, 5000)
+    df_chunk = DataFrame(chunk)
+    # Pre-process if needed
+    bulk_insert(M.Driver.objects, df_chunk)
+end</code></pre><hr/><h2 id="Ultra-Fast-Bulk-Inserts-(PostgreSQL-COPY)"><a class="docs-heading-anchor" href="#Ultra-Fast-Bulk-Inserts-(PostgreSQL-COPY)">Ultra-Fast Bulk Inserts (PostgreSQL COPY)</a><a id="Ultra-Fast-Bulk-Inserts-(PostgreSQL-COPY)-1"></a><a class="docs-heading-anchor-permalink" href="#Ultra-Fast-Bulk-Inserts-(PostgreSQL-COPY)" title="Permalink"></a></h2><p>For truly massive datasets, PormG provides <code>bulk_copy()</code>, which uses PostgreSQL&#39;s native <code>COPY FROM STDIN</code> protocol. This is <strong>10-100x faster</strong> than standard SQL inserts.</p><h3 id="Why-Use-bulk_copy?"><a class="docs-heading-anchor" href="#Why-Use-bulk_copy?">Why Use bulk_copy?</a><a id="Why-Use-bulk_copy?-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Use-bulk_copy?" title="Permalink"></a></h3><ul><li><strong>Raw Speed</strong>: Bypasses the SQL statement parser.</li><li><strong>Memory Efficient</strong>: Streams data to the database.</li><li><strong>Safe by Design</strong>: Inherently immune to SQL injection.</li></ul><h3 id="Basic-Usage"><a class="docs-heading-anchor" href="#Basic-Usage">Basic Usage</a><a id="Basic-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Fast bulk insert via COPY protocol
+query = M.Driver.objects
+bulk_copy(query, df)</code></pre><h3 id="Advanced:-Column-Mapping"><a class="docs-heading-anchor" href="#Advanced:-Column-Mapping">Advanced: Column Mapping</a><a id="Advanced:-Column-Mapping-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced:-Column-Mapping" title="Permalink"></a></h3><p>If your <code>DataFrame</code> column names differ from the database schema, use the <code>columns</code> parameter:</p><pre><code class="language-julia hljs"># Map DataFrame columns to model fields
+bulk_copy(query, df_raw, columns = [
+    &quot;first_name&quot; =&gt; &quot;forename&quot;,
+    &quot;last_name&quot; =&gt; &quot;surname&quot;,
+    &quot;country&quot; =&gt; &quot;nationality&quot;
+])</code></pre><h3 id="Sequence-Management"><a class="docs-heading-anchor" href="#Sequence-Management">Sequence Management</a><a id="Sequence-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Sequence-Management" title="Permalink"></a></h3><p>After a <code>bulk_copy</code>, PormG automatically updates PostgreSQL <code>SERIAL</code>/<code>IDENTITY</code> sequences so that subsequent calls to <code>create()</code> do not result in primary key collisions.</p><pre><code class="language-julia hljs"># Bulk insert 10,000 drivers
+bulk_copy(M.Driver.objects, df_large)
+
+# The ID sequence is automatically synchronized
+# Create a new driver—the ID is guaranteed to not collide
+new_driver = M.Driver.objects.create(
+    &quot;forename&quot; =&gt; &quot;Oscar&quot;,
+    &quot;surname&quot; =&gt; &quot;Piastri&quot;,
+    &quot;nationality&quot; =&gt; &quot;Australian&quot;,
+    &quot;driverref&quot; =&gt; &quot;piastri&quot;,
+    &quot;dob&quot; =&gt; Date(2001, 1, 25)
+)
+# new_driver[:driverid] will be the next available ID after the bulk copy</code></pre><h3 id="Real-World-Example:-Loading-F1-Season-Data"><a class="docs-heading-anchor" href="#Real-World-Example:-Loading-F1-Season-Data">Real-World Example: Loading F1 Season Data</a><a id="Real-World-Example:-Loading-F1-Season-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Real-World-Example:-Loading-F1-Season-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">using CSV, DataFrames
+import PormG.models as M
+
+# Load initial reference data
+circuits_df = CSV.File(&quot;f1/circuits.csv&quot;) |&gt; DataFrame
+M.Circuit.objects |&gt; do_exists &amp;&amp; delete(M.Circuit.objects, allow_delete_all=true)
+bulk_copy(M.Circuit.objects, circuits_df)
+
+# Load drivers
+drivers_df = CSV.File(&quot;f1/drivers.csv&quot;) |&gt; DataFrame
+for col in [:number]
+    drivers_df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, drivers_df[!, col])
+end
+M.Driver.objects |&gt; do_exists &amp;&amp; delete(M.Driver.objects, allow_delete_all=true)
+bulk_copy(M.Driver.objects, drivers_df)
+
+# Load races with pre-processing
+races_df = CSV.File(&quot;f1/races.csv&quot;) |&gt; DataFrame
+rename!(races_df, lowercase.(names(races_df)))
+for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time]
+    races_df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, races_df[!, col])
+end
+M.Race.objects |&gt; do_exists &amp;&amp; delete(M.Race.objects, allow_delete_all=true)
+bulk_copy(M.Race.objects, races_df)
+
+# Load results (the largest table)
+results_df = CSV.File(&quot;f1/results.csv&quot;) |&gt; DataFrame
+rename!(results_df, lowercase.(names(results_df)))
+for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
+    results_df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, results_df[!, col])
+end
+M.Result.objects |&gt; do_exists &amp;&amp; delete(M.Result.objects, allow_delete_all=true)
+bulk_copy(M.Result.objects, results_df, chunk_size=10000)
+
+# Verify all data loaded
+@info &quot;Data loaded&quot; \
+    circuits=M.Circuit.objects |&gt; do_count \
+    drivers=M.Driver.objects |&gt; do_count \
+    races=M.Race.objects |&gt; do_count \
+    results=M.Result.objects |&gt; do_count</code></pre><hr/><h2 id="Bulk-Update"><a class="docs-heading-anchor" href="#Bulk-Update">Bulk Update</a><a id="Bulk-Update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update" title="Permalink"></a></h2><p><code>bulk_update()</code> allows you to update multiple records from a <code>DataFrame</code>. It typically uses a temporary table or a <code>values</code> join to update the database in a single transaction.</p><h3 id="Basic-Usage-2"><a class="docs-heading-anchor" href="#Basic-Usage-2">Basic Usage</a><a class="docs-heading-anchor-permalink" href="#Basic-Usage-2" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get existing data
+query = M.Result.objects
+df = query |&gt; DataFrame
+
+# Modify data in the DataFrame
+for row in eachrow(df)
+    row.points = row.points + 1
+end
+
+# Bulk update specifying which columns to update and which to use as filters (keys)
+bulk_update(query, df, columns=[&quot;points&quot;], filters=[&quot;resultid&quot;])</code></pre><h3 id="Use-Cases"><a class="docs-heading-anchor" href="#Use-Cases">Use Cases</a><a id="Use-Cases-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Cases" title="Permalink"></a></h3><p>Bulk updates are ideal for:</p><ul><li><strong>Award/penalty application</strong>: Adjust points across multiple race results</li><li><strong>Batch corrections</strong>: Fix systematic data issues (e.g., unit conversions)</li><li><strong>Bulk status changes</strong>: Update fields across many related records</li><li><strong>Data migrations</strong>: Transform existing data in place</li></ul><h3 id="Example:-Adjust-Points-After-Manual-Review"><a class="docs-heading-anchor" href="#Example:-Adjust-Points-After-Manual-Review">Example: Adjust Points After Manual Review</a><a id="Example:-Adjust-Points-After-Manual-Review-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-Adjust-Points-After-Manual-Review" title="Permalink"></a></h3><pre><code class="language-julia hljs">query = M.Result.objects
+df = query.filter(&quot;raceid__year&quot; =&gt; 2024) |&gt; DataFrame
+
+# Apply manual adjustments
+for row in eachrow(df)
+    # Award bonus points for fastest lap
+    if row.fastestlapspeed &gt; 350.0
+        row.points = row.points + 1
+    end
+    
+    # Penalize for incidents
+    if row.statusid == 137  # Collision
+        row.points = max(0, row.points - 2)
+    end
+end
+
+# Bulk update all adjustments in one transaction
+PormG.run_in_transaction(&quot;db_2&quot;) do
+    bulk_update(query, df, columns=[&quot;points&quot;], filters=[&quot;resultid&quot;])
+end</code></pre><h3 id="Custom-Filters"><a class="docs-heading-anchor" href="#Custom-Filters">Custom Filters</a><a id="Custom-Filters-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Filters" title="Permalink"></a></h3><p>You can pass static filters alongside the DataFrame mapping:</p><pre><code class="language-julia hljs">bulk_update(
+    query, df, 
+    columns=[&quot;milliseconds&quot;], 
+    filters=[&quot;resultid&quot;, &quot;statusid&quot; =&gt; 1],  # Only update where statusid == 1
+)</code></pre><h3 id="Limitations-and-Workarounds"><a class="docs-heading-anchor" href="#Limitations-and-Workarounds">Limitations &amp; Workarounds</a><a id="Limitations-and-Workarounds-1"></a><a class="docs-heading-anchor-permalink" href="#Limitations-and-Workarounds" title="Permalink"></a></h3><ul><li><strong>No Related Joins</strong>: <code>bulk_update</code> filters currently do not support double-underscore lookups (e.g., <code>statusid__status</code>).<ul><li><strong>Workaround</strong>: Filter the data in Julia before passing to <code>bulk_update</code>:</li></ul></li></ul><pre><code class="language-julia hljs">query = M.Result.objects
+df = query.filter(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;) |&gt; DataFrame
+
+# Modify data
+for row in eachrow(df)
+    row.points = row.points + 1
+end
+
+# Bulk update (filter already applied via DataFrame)
+bulk_update(query, df, columns=[&quot;points&quot;], filters=[&quot;resultid&quot;])</code></pre><h3 id="Performance-Characteristics"><a class="docs-heading-anchor" href="#Performance-Characteristics">Performance Characteristics</a><a id="Performance-Characteristics-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Characteristics" title="Permalink"></a></h3><ul><li><strong>Atomicity</strong>: All rows updated together or none.</li><li><strong>Speed</strong>: Much faster than individual <code>update()</code> calls (100-1000x for large datasets).</li><li><strong>Memory</strong>: Entire DataFrame must fit in memory; use chunking for very large datasets:</li></ul><pre><code class="language-julia hljs"># Process in chunks for huge datasets
+for chunk_df in Iterators.partition(eachrow(df), 10000)
+    chunk = DataFrame(chunk_df)
+    # Modify chunk
+    bulk_update(query, chunk, columns=[&quot;points&quot;], filters=[&quot;resultid&quot;])
+end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../delete/">« Deleting Records</a><a class="docs-footer-nextpage" href="../transaction/">Transactions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 15 February 2026 15:39">Sunday 15 February 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

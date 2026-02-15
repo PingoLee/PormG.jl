@@ -5,58 +5,83 @@ using SQLite, LibPQ
 import OrderedCollections: OrderedDict
 
 """
-  create_db_folder_and_yml(path::String)::Nothing
+  create_db_folder_and_yml(; path::String = DB_PATH, adapter::String = "PostgreSQL", database::String = "", host::String = "", username::String = "", password::String = "", port::Union{Int, String} = 5432, time_zone::String = "UTC")::Nothing
 
-Creates a folder named "db" at the given path (if it doesn't exist) and an empty ".yml" file inside it.
+Creates a folder named "db" at the given path (if it doesn't exist) and an empty ".yml" file inside it with the specified connection details.
 """
-function create_db_folder_and_yml(;path::String = DB_PATH)::Nothing
+function create_db_folder_and_yml(;
+    path::String = DB_PATH, 
+    adapter::String = "PostgreSQL", 
+    database::String = "",
+    host::String = "",
+    username::String = "",
+    password::String = "",
+    port::Union{Int, String} = 5432,
+    time_zone::String = "UTC"
+)::Nothing
     db_folder = joinpath(path)
     if !isdir(db_folder)
         mkpath(db_folder)
     end
     yml_file = joinpath(db_folder, "connection.yml")
-    if !isfile(yml_file)
-      open(yml_file, "w") do f
-        write(f, """
-    env: dev
+    
+    # We overwrite if we are specifically calling this with details, 
+    # but the fail-forward in Configuration.jl checks if it exists first.
+    open(yml_file, "w") do f
+        if lowercase(adapter) == "sqlite"
+            db_name = isempty(database) ? "database.sqlite" : database
+            write(f, """
+env: dev
 
-    dev:
-      adapter: PostgreSQL
-      database: 
-      host: 
-      username: 
-      password: 
-      port: 
-      config:
-        change_db: true
-        change_data: true
-        time_zone: 'America/Sao_Paulo'
+dev:
+  adapter: SQLite
+  database: $db_name
+  config:
+    change_db: true
+    change_data: true
+    time_zone: '$time_zone'
+""")
+        else
+            write(f, """
+env: dev
 
-    prod:
-      adapter: PostgreSQL
-      database: 
-      host: 
-      username: 
-      password: 
-      port: 
-      config:
-        change_db: true
-        change_data: true
-        time_zone: 'America/Sao_Paulo'
+dev:
+  adapter: $adapter
+  database: $database
+  host: $host
+  username: $username
+  password: $password
+  port: $port
+  config:
+    change_db: true
+    change_data: true
+    time_zone: '$time_zone'
 
-    test:
-      adapter: PostgreSQL
-      database: 
-      host: 
-      username: 
-      password: 
-      port: 
-      config:
-        change_db: true
-        change_data: true
-        time_zone: 'America/Sao_Paulo'
-    """)
-      end
+prod:
+  adapter: $adapter
+  database: $database
+  host: $host
+  username: $username
+  password: $password
+  port: $port
+  config:
+    change_db: true
+    change_data: true
+    time_zone: '$time_zone'
+
+test:
+  adapter: $adapter
+  database: $database
+  host: $host
+  username: $username
+  password: $password
+  port: $port
+  config:
+    change_db: true
+    change_data: true
+    time_zone: '$time_zone'
+""")
+        end
     end
     nothing
 end

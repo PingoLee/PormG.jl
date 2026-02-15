@@ -1,7 +1,7 @@
 db/*
 Manifest.toml
 *connection.yml
-test/pg/db_2/migrations/
+test/integration/db_2/migrations/
 todo.txt
 
 # --- Documentação (Gerada Automaticamente) ---
@@ -21,3 +21,7 @@ docs/site/
 *.jl.cov
 .jl..cov
 *.jl.mem
+
+
+test/integration/db_sl/migrations/*
+test/integration/db_sl/f1.sqlite

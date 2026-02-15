@@ -44,14 +44,16 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   ) 
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection = settings.connections
+
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
+
   django_prefix = settings.django_prefix === nothing ? false : true
 
   
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -227,13 +229,14 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   ) 
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection = settings.connections
   
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
+
   !(connection isa PormGPostgres) && throw(ArgumentError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_copy, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  !settings.change_data && throw(ArgumentError("Error in bulk_copy, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -427,7 +430,7 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
           throw(e)
         end
       end
-    elseif connection isa SQLite.DB
+    elseif connection isa PormGSQLite
       SQLite.execute(connection, sql)
     else
       throw("Unsupported connection type")
@@ -519,11 +522,12 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
 
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection = settings.connections
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
+  !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0

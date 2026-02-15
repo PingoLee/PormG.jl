@@ -44,8 +44,8 @@ applyTo: "**"
 
 - **PostgreSQL Development (Active Focus)**:
   - The active development is currently centered on the PostgreSQL implementation.
-  - Located in `test/pg/` using the **db_2** environment (`test/pg/db_2/connection.yml`).
-  - Run tests: `julia --project=. test/pg/test.jl` (sets `ENV["PORMG_ENV"] = "dev"`).
+  - Located in `test/integration/` using the **db_2** environment (`test/integration/db_2/connection.yml`).
+  - Run tests: `julia --project=. test/integration/test.jl` (sets `ENV["PORMG_ENV"] = "dev"`).
 
 - **SQLite Development**:
   - Isolated in `test/sqlite/`.

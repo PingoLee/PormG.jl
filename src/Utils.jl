@@ -1,6 +1,7 @@
 module Utils
 
-import PormG.Models
+import ..Models
+import ..get_settings
 
 """
     reload_module_contents!(existing_mod::Module, filepath::String)
@@ -35,6 +36,26 @@ function reload_module_contents!(existing_mod::Module, filepath::String)
         end
     end
     return false
+end
+
+# Revise hooks (overridden by PormGReviseExt if Revise is loaded)
+function _includet(mod, path)
+    if isdefined(Main, :Revise) && isdefined(Main.Revise, :includet)
+        try return Main.Revise.includet(mod, path) catch end
+    end
+    Base.include(mod, path)
+end
+
+function _add_revise_callback(path, mod_obj, dir)
+    if isdefined(Main, :Revise) && isdefined(Main.Revise, :add_callback)
+        Main.Revise.add_callback() do
+            try
+                Base.invokelatest(reload_module_contents!, mod_obj, path)
+                Base.invokelatest(PormG.Models.set_models, mod_obj, dir)
+            catch
+            end
+        end
+    end
 end
 
 """
@@ -74,62 +95,47 @@ macro import_models(path_expr, alias)
 
     # Capture references at macro expansion time to avoid hygiene issues
     calling_module = __module__
-    set_models_fn = Models.set_models
-    reload_module_contents! = Utils.reload_module_contents!
+    set_models_ref = GlobalRef(Models, :set_models)
+    reload_module_contents_fn = reload_module_contents!
+    includet_fn = _includet
+    add_cb_fn = _add_revise_callback
     alias_sym = alias isa Expr ? alias.args[1] : alias
+
+    # Construct the __init__ function expression separately
+    init_expr = quote
+        function __init__()
+            try
+                # Re-register models after precompilation or reload
+                Base.invokelatest($set_models_ref, @__MODULE__, @__DIR__)
+            catch
+            end
+        end
+    end
 
     return Expr(:toplevel,
         # 1. Include the file — the file itself defines `module alias ... end`
         #    which becomes a submodule of the calling module.
-        :(if isdefined(Main, :Revise)
-            try
-                Main.Revise.includet($calling_module, $abs_path)
-            catch
-                Base.include($calling_module, $abs_path)
-            end
-        else
-            Base.include($calling_module, $abs_path)
-        end),
+        #    We use a hook that uses Revise.includet if available.
+        :($includet_fn($calling_module, $abs_path)),
+
         # 2. Inject __init__() if not already present
         :(let mod = $(esc(alias))
             if !isdefined(mod, :__init__)
                 try
-                    Core.eval(mod, quote
-                        function __init__()
-                            try
-                                # Use fully qualified name to avoid dependency on macro scope
-                                Base.invokelatest(PormG.Models.set_models, @__MODULE__, @__DIR__)
-                            catch
-                            end
-                        end
-                    end)
+                    # Evaluate the init_expr inside the target module
+                    Core.eval(mod, $(QuoteNode(init_expr)))
                 catch e
                     @warn "PormG: Failed to inject __init__() for module $(string($(QuoteNode(alias))))" exception=e
                 end
             end
         end),
-        :(if isdefined(Main, :Revise)
-            try
-                # Register a callback triggered when Revise detects changes in this file.
-                # Revise cannot re-evaluate module definitions or global assignments,
-                # so we do it ourselves via reload_module_contents!.
-                let _abs = $abs_path, _dir = $dir_path,
-                    _set = $set_models_fn, _reload = $reload_module_contents!
-                    Main.Revise.add_callback([_abs]) do
-                        try
-                            existing = $(esc(alias))
-                            Base.invokelatest(_reload, existing, _abs)
-                            Base.invokelatest(_set, existing, _dir)
-                        catch e
-                            @warn "PormG: hot-reload failed" exception=e
-                        end
-                    end
-                end
-            catch
-            end
-        end),
-        # 3. Register the module with PormG (invokelatest for World Age safety)
-        :(Base.invokelatest($set_models_fn, $(esc(alias)), $dir_path))
+
+        # 3. Register a callback triggered when Revise detects changes in this file.
+        #    This is handled by a hook that works only if Revise is loaded.
+        :($add_cb_fn($abs_path, $(esc(alias)), $dir_path)),
+
+        # 4. Register the module with PormG (invokelatest for World Age safety)
+        :(Base.invokelatest($set_models_ref, $(esc(alias)), $dir_path))
     )
 end
 

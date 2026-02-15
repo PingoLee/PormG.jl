@@ -1,7 +1,7 @@
 
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
-  connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
+  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
   parameters::Union{Nothing, PormGPostgresParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
   show_query::Bool = false
@@ -12,11 +12,11 @@ function query(q::SQLObjectHandler;
   # Create a shared table alias counter for both CTEs and main query
   table_alias === nothing && (table_alias = SQLTbAlias())
   
+  settings, connection, conn_key = get_settings(q, connection=connection)
+
   # IMPORTANT: Create the shared parameters object BEFORE building CTEs
   # This ensures all CTEs and the main query use sequential parameter numbering
   if parameters === nothing
-    settings = config[q.object.model.connect_key]
-    connection === nothing && (connection = settings.connections)
     parameters = get_parameter(connection)
   end
 
@@ -84,8 +84,9 @@ show_query(q::SQLObjectHandler) = query(q; show_query=true)
 #
 
 function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Integer
-  settings = config[oq.object.model.connect_key]
-  connection = settings.connections
+  # Resolve settings
+  settings, connection, conn_key = get_settings(oq)
+  
   q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object  
   q.object.order = []# clear order_by
   q.object.values = [] # clear values
@@ -112,8 +113,9 @@ end
 
 function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)
   try
-    settings = config[oq.object.model.connect_key]
-    connection = settings.connections
+    # Resolve settings
+    settings, connection, conn_key = get_settings(oq)
+    
     q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
     q.object.order = [] # clear order_by
     q.object.values = [] # clear values
@@ -149,11 +151,13 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   end
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
-  model = objct.model
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
+  real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
   
   # colect name of the fields
   fields = model.field_names
@@ -164,18 +168,18 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   parameters = get_parameter(connection)
   
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
   
   # check if the fields are in objct.insert
   for field in fields
-    if !haskey(objct.insert, field)
+    if !haskey(real_obj.insert, field)
       # check if field allow null or if exist a default value
       if model.fields[field].default !== nothing
-        objct.insert[field] = model.fields[field].default
+        real_obj.insert[field] = model.fields[field].default
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
+        real_obj.insert[field] = model.fields[field].formater(now(), settings.time_zone)
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(today())
+        real_obj.insert[field] = model.fields[field].formater(today())
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else
@@ -233,14 +237,22 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
-  elseif connection isa SQLite.DB
-    # SQLite implementation with parameters
-    stmt = SQLite.Stmt(connection, sql)
-    for (i, param) in enumerate(parameters.parameters)
-      SQLite.bind!(stmt, i, param)
+  elseif connection isa PormGSQLite
+    # SQLite implementation with parameters and pooling fix
+    conn_handle = acquire_connection(settings)
+    try
+      stmt = SQLite.Stmt(conn_handle, sql)
+      for (i, param) in enumerate(parameters.parameters)
+        SQLite.bind!(stmt, i, param)
+      end
+      SQLite.execute(stmt)
+      
+      # TODO: Implement "RETURNING *" equivalent for SQLite if needed, 
+      # or use last_insert_rowid()
+      return Dict() 
+    finally
+      release_connection(settings, conn_handle)
     end
-    SQLite.execute(stmt)
-    # Similar return logic as before
   else
     throw("Unsupported connection type")
   end
@@ -324,7 +336,7 @@ end
 #     end
 #   end
 # end
-function _update_sequence(model::PormGModel, connection::SQLite.DB, pk_field::Vector{String})
+function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String})
   for field in pk_field
     max_id_query = "SELECT MAX($(field)) FROM $(string(model.name |> lowercase));"
     max_id_result = SQLite.Query(connection, max_id_query) |> DataFrame
@@ -423,16 +435,18 @@ function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vect
   return join(conditions, " AND ")
 end
 
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, show_query::Bool = false)
-  model = objct.model
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Bool = false)
+  real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections)
+
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
  
-  instruction = build(objct, table_alias=table_alias, connection=connection) 
+  instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 
   # Check if is allowed to update
-  !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
+  !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw("Error in update, the update must have a filter")
   
@@ -511,7 +525,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       FROM $(from_tables)
       WHERE $(all_conditions)
       """
-    elseif connection isa SQLite.DB
+    elseif connection isa PormGSQLite
       # SQLite: Use subquery or multiple table syntax
       # For SQLite, we need to use a different approach since it doesn't support UPDATE...FROM
       # We'll use UPDATE with WHERE EXISTS or IN subqueries
@@ -563,16 +577,22 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   # return nothing
 
+  # Execute with parameters
   try
-    # Execute with parameters
     if connection isa PormGPostgres
       fetch(settings, sql, parameters)
-    elseif connection isa SQLite.DB
-      stmt = SQLite.Stmt(connection, sql)
-      for (i, param) in enumerate(parameters.parameters)
-        SQLite.bind!(stmt, i, param)
+    elseif connection isa PormGSQLite
+      # Use acquire/release for manual execution if not using 'fetch'
+      conn_handle = acquire_connection(settings)
+      try
+        stmt = SQLite.Stmt(conn_handle, sql)
+        for (i, param) in enumerate(parameters.parameters)
+          SQLite.bind!(stmt, i, param)
+        end
+        SQLite.execute(stmt)
+      finally
+        release_connection(settings, conn_handle)
       end
-      SQLite.execute(stmt)
     else
       throw("Unsupported connection type")
     end
@@ -604,11 +624,8 @@ df = query |> list |> DataFrame
 ```
 """
 function query_list(objct::SQLObjectHandler)
-  if objct.object.model.connect_key === nothing
-    throw(ArgumentError("Error in quering data, the model \e[4m\e[31m$(objct.object.model.name)\e[0m not have a build correctly, please reload the app"))
-  end
-  settings = config[objct.object.model.connect_key]
-  connection = settings.connections
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
 
   sql = query(objct, connection=connection)
   @infiltrate false

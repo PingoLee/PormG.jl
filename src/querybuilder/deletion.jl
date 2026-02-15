@@ -49,16 +49,17 @@ total, dict = delete(query; allow_delete_all = true)
 """
 function delete(objct::SQLObjectHandler; 
     table_alias::Union{Nothing, SQLTableAlias} = nothing, 
-    connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, 
+    connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, 
     show_query::Bool = false,
     allow_delete_all::Bool = false)
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
     
   # check if is allowed to delete
-  !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to delete"))
+  !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$conn_key\e[0m not allowed to delete"))
 
   # don't allow to delete without filter
   !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")
@@ -350,7 +351,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
   end
 end
 
-function delete_objects(connection::Union{PormGPostgres, SQLite.DB}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
+function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection})
   @infiltrate false
   # Execute the actual deletion SQL

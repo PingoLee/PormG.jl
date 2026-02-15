@@ -20,7 +20,7 @@ You are an expert Julia developer assisting in the development of **PormG**, an 
 
 ### Database Adapters
 - **PostgreSQL (`src/Configuration.jl`):** Primary focus for async development. Uses `LibPQ.jl`.
-- **SQLite:** Future development. Uses `SQLite.jl`.
+- **SQLite:** Supported via `SQLite.jl`. Uses table recreation for complex schema changes (e.g., altering field nullability or types).
 
 ## 2. Coding Conventions & Syntax
 
@@ -43,11 +43,10 @@ You are an expert Julia developer assisting in the development of **PormG**, an 
 ## 3. Directory Structure & Environments
 
 - **`src/`:** Core source code (`Configuration.jl`, `QueryBuilder.jl`, etc.).
-- **`test/pg/`:** **ACTIVE DEVELOPMENT**. Contains PostgreSQL tests.
-  - **Environment:** Uses `db_2` (`test/pg/db_2/connection.yml`).
-  - **Execution:** `julia -t auto --project=. test/pg/test.jl`.
-- **`test/sqlite/`:** Future development.
-  - **Execution:** `julia --project=. test/sqlite/conect.jl`.
+- **`test/integration/`:** **Database Integration Tests**. Contains all tests requiring a live database (PostgreSQL/SQLite).
+  - These tests are **NOT** part of the unit tests in `test/runtests.jl`.
+  - **Environment:** Uses configurations in `test/integration/db_2/` etc.
+  - **Execution:** `julia -t auto --project=. test/integration/test.jl`.
 
 ## 3b. Model Loading & Hot-Reloading
 
@@ -96,6 +95,22 @@ PormG.@models_module DB "path" begin
 end
 ```
 
+## 3c. Database Migrations
+
+### State-Based Reconciliation
+PormG uses a **State-Based** migration engine. Instead of recording individual operations (like Django), it reconciles the **current state** of your Julia models against the **live database schema** via introspection.
+
+### Workflow
+1.  **Generate Plan:** `PormG.Migrations.makemigrations("path/to/db")` detects changes and creates a `pending_migrations.jl`.
+2.  **Apply Migrations:** `PormG.Migrations.migrate("path/to/db")` executes the SQL within a transaction and archives the migration to `applied_migrations/`.
+
+### Automated Environments (CI/CD)
+Use `interactive=false` to bypass rename confirmation prompts:
+```julia
+makemigrations("db_path", interactive=false)
+migrate("db_path", interactive=false)
+```
+
 ## 4. Developer Workflows & Testing
 
 ### Testing Rules (Pedagogical Focus)
@@ -107,7 +122,8 @@ end
 - **Debugging:** Use `show_query=true` in `bulk_insert`, `update`, or `delete` to print the generated SQL during debugging, but remove or comment it out for production tests.
 
 ### Command Reference
-- **Run PG Tests:** `julia --project=. test/pg/test.jl` (Sets `PORMG_ENV="dev"` automatically).
+- **Run Unit Tests:** `julia --project=. test/runtests.jl` (Does not require database).
+- **Run Integration Tests:** `julia -t auto --project=. test/integration/test.jl` (Requires live database).
 - **Refresh Config:** `julia --project=. -e 'using PormG; PormG.Configuration.load()'`
 - **Build Docs:** `julia --project=. docs/make.jl`
 
@@ -123,7 +139,7 @@ When writing documentation, docstrings, or providing usage examples, you must st
 
 ### Domain Context: Formula 1 Dataset
 - **Standard**: Do NOT use generic examples like `User`, `Post`, `Foo`, or `Bar`.
-- **Source**: All examples must be based on the Formula 1 World Championship dataset located in `test/pg/db_2/` and `test/pg/f1/`.
+- **Source**: All examples must be based on the Formula 1 World Championship dataset located in `test/integration/db_2/` and `test/integration/f1/`.
 - **Key Models**:
   - `M.Driver` (cols: `driverid`, `forename`, `surname`, `nationality`, `code`, `dob`...)
   - `M.Constructor` (cols: `constructorid`, `name`, `nationality`...)
@@ -173,7 +189,7 @@ df = query |> DataFrame
 1. **Scenario-Based**: Examples should represent real-world questions (e.g., "Find all Brazilian drivers who won a race in 1991").
 2. **Pipe Syntax**: Always use the `|>` operator and `object` helper.
 3. **Double-Underscore Joins**: Explicitly demonstrate PormG's join capability using `__`.
-4. **Look by example in the existing tests**: Refer to `test/pg/test.jl` or `test/pg/test_******.jl` for well-documented examples.
+4. **Look by example in the existing tests**: Refer to `test/integration/test.jl` or `test/integration/test_******.jl` for well-documented examples.
 
 ### Explaining the SQL
 

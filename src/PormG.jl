@@ -1,6 +1,5 @@
 module PormG
 
-using Revise
 using PrecompileTools
 using Infiltrator
 
@@ -61,6 +60,8 @@ import Inflector
 include("Configuration.jl")
 using .Configuration
 
+include("tools.jl")
+
 include("ConnectionPool.jl")
 using .ConnectionPool
 
@@ -86,6 +87,8 @@ export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first A
 export with_tx_context, in_transaction_context  # Transaction context helpers
 export make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS # Password utilities
 export validate_password, ValidationResult, PasswordValidator  # Password validation
+
+export setup
 
 include("Migrations.jl")
 using .Migrations

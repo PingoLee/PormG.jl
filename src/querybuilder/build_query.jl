@@ -151,8 +151,9 @@ function build(object::SQLObject;
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
   parameters::Union{Nothing, PormGPostgresParam} = nothing)
   ensure_model_transaction_scope(object.model)
-  settings = config[object.model.connect_key]
-  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools
+  
+  settings, connection, conn_key = get_settings(object, connection=connection)
+  
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))
   @infiltrate false

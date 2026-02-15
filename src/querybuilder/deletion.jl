@@ -54,11 +54,12 @@ function delete(objct::SQLObjectHandler;
     allow_delete_all::Bool = false)
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
     
   # check if is allowed to delete
-  !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to delete"))
+  !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$conn_key\e[0m not allowed to delete"))
 
   # don't allow to delete without filter
   !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")

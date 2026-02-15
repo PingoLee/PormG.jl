@@ -1,7 +1,7 @@
 module ConnectionPool
 
 import Logging
-import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
+import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, config, PormGModel
 import PormG.Infiltrator: @infiltrate
 
 import SQLite
@@ -14,7 +14,7 @@ export is_connection_alive, reconnect_db, is_connection_error
 export libpq_execute, libpq_execute_async
 
 # Import transaction context helpers from Configuration
-import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for
+import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 
@@ -68,7 +68,22 @@ function close_pool!(pool::PormGPostgres)
         try
           close(pool.connections[i])
         catch e
-          @warn "Error closing connection $i: $e"
+          @warn "Error closing PG connection $i: $e"
+        end
+      end
+      pool.available[i] = true
+    end
+  end
+end
+
+function close_pool!(pool::PormGSQLite)
+  Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] !== nothing
+        try
+          close(pool.connections[i])
+        catch e
+          @warn "Error closing SQLite connection $i: $e"
         end
       end
       pool.available[i] = true
@@ -98,7 +113,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
             pool.available[i] = false
             return new_conn
           catch e
-            @error "Failed to create connection $i: $e" connection_string=redact_secret(pool.connection_string)
+            @error "Failed to create PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
             continue
           end
@@ -114,7 +129,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
           push!(pool.available, false)
           return new_conn
         catch e
-          @error "Failed to expand pool: $e"
+          @error "Failed to expand PG pool: $e"
         end
       end
       
@@ -129,18 +144,80 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 5, max_r
     
     # No connection available, wait and retry
     retry_count += 1
-    @info "No available connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
+    @info "No available PG connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
     sleep(0.1)  # Wait 100ms before retrying
   end
   
   # If we've exhausted all retries
   if retry_count >= max_retries
-    @error "Exceeded maximum retry attempts ($max_retries) to acquire connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-    throw("No available connections in the pool after $max_retries attempts")
+    @error "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+    throw("No available PG connections in the pool after $max_retries attempts")
   else
-    @error "Timeout after $(timeout_seconds) seconds waiting for available connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-    throw("No available connections in the pool after $(timeout_seconds) seconds")
+    @error "Timeout after $(timeout_seconds) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+    throw("No available PG connections in the pool after $(timeout_seconds) seconds")
   end
+end
+
+function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 5, max_retries::Int = 20)
+  start_time = time()
+  retry_count = 0
+  
+  while retry_count < max_retries && (time() - start_time) < timeout_seconds
+    connection = Base.lock(pool.lock) do
+      # Look for an available connection
+      for i in 1:length(pool.connections)
+        if pool.available[i]
+          # Check if existing connection is still alive
+          if pool.connections[i] !== nothing && is_connection_alive(pool.connections[i])
+            pool.available[i] = false
+            return pool.connections[i]
+          end
+          
+          # Create new connection if slot is empty or dead
+          try
+            # SQLite connection string is just the file path
+            new_conn = SQLite.DB(pool.connection_string)
+            pool.connections[i] = new_conn
+            pool.available[i] = false
+            return new_conn
+          catch e
+            @error "Failed to create SQLite connection $i: $e" connection_string=pool.connection_string
+            pool.available[i] = true
+            continue
+          end
+        end
+      end
+      
+      # Expand pool logic
+      if length(pool.connections) < max_retries
+        try
+          new_conn = SQLite.DB(pool.connection_string)
+          push!(pool.connections, new_conn)
+          push!(pool.available, false)
+          return new_conn
+        catch e
+          @error "Failed to expand SQLite pool: $e"
+        end
+      end
+      
+      return nothing
+    end
+    
+    if connection !== nothing
+      return connection
+    end
+    
+    retry_count += 1
+    @info "No available SQLite connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
+    sleep(0.1)
+  end
+  
+  error_msg = retry_count >= max_retries ? 
+    "No available SQLite connections in the pool after $max_retries attempts" :
+    "Timeout after $(timeout_seconds) seconds waiting for available SQLite connection"
+    
+  @error error_msg pool_size=pool.pool_size connection_string=pool.connection_string
+  throw(error_msg)
 end
 
 function release_connection(pool::PormGPostgres, conn::LibPQ.Connection)
@@ -153,7 +230,21 @@ function release_connection(pool::PormGPostgres, conn::LibPQ.Connection)
     end
   end
   released !== nothing && return released
-  @warn "Connection not found in the pool - connection may have been replaced due to failure"
+  @warn "PG Connection not found in the pool - connection may have been replaced due to failure"
+  return false
+end
+
+function release_connection(pool::PormGSQLite, conn::SQLite.DB)
+  released = Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] === conn
+        pool.available[i] = true
+        return true
+      end
+    end
+  end
+  released !== nothing && return released
+  @warn "SQLite Connection not found in the pool"
   return false
 end
 
@@ -161,6 +252,16 @@ function is_connection_alive(conn::LibPQ.Connection)
   @infiltrate false
   try
     return LibPQ.status(conn) == LibPQ.libpq_c.CONNECTION_OK
+  catch
+    return false
+  end
+end
+
+function is_connection_alive(conn::SQLite.DB)
+  try
+    # Simple query to check if the database is accessible
+    SQLite.execute(conn, "SELECT 1")
+    return true
   catch
     return false
   end
@@ -175,7 +276,7 @@ function reconnect_db(pool::PormGPostgres, conn::LibPQ.Connection)
           reset = LibPQ.reset(conn)
           return reset
         catch e
-          @error "Failed to reset connection $i: $e"
+          @error "Failed to reset PG connection $i: $e"
         end
         # If reset fails, create a new connection
         try
@@ -183,13 +284,33 @@ function reconnect_db(pool::PormGPostgres, conn::LibPQ.Connection)
           pool.connections[i] = new_conn
           return pool.connections[i]
         catch e
-          @error "Failed to recreate connection $i: $e"
+          @error "Failed to recreate PG connection $i: $e"
         end
       end
     end
   end
   reconnect !== nothing && return reconnect
-  @error "Connection not found in the pool for reconnection"
+  @error "PG Connection not found in the pool for reconnection"
+  return nothing
+end
+
+function reconnect_db(pool::PormGSQLite, conn::SQLite.DB)
+  reconnect = Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] === conn
+        try
+          # For SQLite, we just create a new DB handle
+          new_conn = SQLite.DB(pool.connection_string)
+          pool.connections[i] = new_conn
+          return pool.connections[i]
+        catch e
+          @error "Failed to recreate SQLite connection $i: $e"
+        end
+      end
+    end
+  end
+  reconnect !== nothing && return reconnect
+  @error "SQLite Connection not found in the pool for reconnection"
   return nothing
 end
 
@@ -204,6 +325,13 @@ function is_connection_error(e, connection::PormGPostgres)
            occursin("connection not open", msg)
 end
 
+function is_connection_error(e, connection::PormGSQLite)
+    msg = lowercase(string(e))
+    return occursin("database is closed", msg) || 
+           occursin("database connection is closed", msg) ||
+           occursin("disk i/o error", msg)
+end
+
 #
 # Synchronous execution (legacy)
 #
@@ -214,6 +342,16 @@ function libpq_execute(conn::LibPQ.Connection, sql::String, params::Vector{Any})
   return LibPQ.execute(conn, sql, params) 
 end
 libpq_execute(conn::LibPQ.Connection, sql::String, params::PormGPostgresParam) = libpq_execute(conn, sql, params.parameters)
+
+function sqlite_execute(conn::SQLite.DB, sql::String, params::Nothing)
+  return SQLite.DBInterface.execute(conn, sql)
+end
+function sqlite_execute(conn::SQLite.DB, sql::String, params::Vector{Any})
+  return SQLite.DBInterface.execute(conn, sql, params)
+end
+function sqlite_execute(conn::SQLite.DB, sql::String, params::PormGSQLiteParam)
+  return SQLite.DBInterface.execute(conn, sql, params.parameters)
+end
 
 #
 # Async execution (yields to Julia scheduler)
@@ -227,42 +365,43 @@ end
 libpq_execute_async(conn::LibPQ.Connection, sql::String, params::PormGPostgresParam) = libpq_execute_async(conn, sql, params.parameters)
 
 """
+    sqlite_execute_async(conn::SQLite.DB, sql::String, params)
+
+Internal helper to execute a SQLite query on a separate thread using `Threads.@spawn`.
+This allows the main event loop to remain responsive while waiting for the database.
+"""
+function sqlite_execute_async(conn::SQLite.DB, sql::String, params)
+  return Threads.@spawn sqlite_execute(conn, sql, params)
+end
+
+"""
     FetchTask
 
 A wrapper around an async database query result that manages connection lifecycle.
 Use `await_result(task)` to get the result and properly release the connection.
 
 # Fields
-- `async_result::LibPQ.AsyncResult`: The underlying async result from LibPQ.async_execute
-- `pool::PormGPostgres`: The connection pool to release the connection to
-- `conn::LibPQ.Connection`: The connection being used for this query
+- `async_result::Union{LibPQ.AsyncResult, Task}`: The underlying async result (LibPQ.AsyncResult for PG, Task for SQLite)
+- `pool::Union{PormGPostgres, PormGSQLite}`: The connection pool to release the connection to
+- `conn::Union{LibPQ.Connection, SQLite.DB}`: The connection being used for this query
 - `completed::Bool`: Whether the async result has been awaited
-
-# Example
-```julia
-# Start async query (non-blocking)
-fetch_task = fetch_async(pool, "SELECT * FROM users")
-
-# Do other work while query runs...
-
-# Await result (blocks until complete, then releases connection)
-result = await_result(fetch_task)
-```
+- `result_cache::Union{Nothing, Any}`: Cached result for multiple `await_result` calls
+- `in_transaction::Bool`: Whether this task is part of a transaction (don't release connection)
 """
 mutable struct FetchTask
   async_result::Union{LibPQ.AsyncResult, Task}  # Accept both AsyncResult and Task
-  pool::PormGPostgres
-  conn::LibPQ.Connection
+  pool::Union{PormGPostgres, PormGSQLite}
+  conn::Union{LibPQ.Connection, SQLite.DB}
   completed::Bool
   result_cache::Union{Nothing, Any}
   in_transaction::Bool  # Whether this task is part of a transaction context
   
   # Constructor for transaction-aware fetch
-  FetchTask(async_result::Union{LibPQ.AsyncResult, Task}, pool::PormGPostgres, conn::LibPQ.Connection, in_transaction::Bool) = 
+  FetchTask(async_result::Union{LibPQ.AsyncResult, Task}, pool::Union{PormGPostgres, PormGSQLite}, conn::Union{LibPQ.Connection, SQLite.DB}, in_transaction::Bool) = 
     new(async_result, pool, conn, false, nothing, in_transaction)
   
   # Legacy constructor (defaults to not in transaction)
-  FetchTask(async_result::Union{LibPQ.AsyncResult, Task}, pool::PormGPostgres, conn::LibPQ.Connection) = 
+  FetchTask(async_result::Union{LibPQ.AsyncResult, Task}, pool::Union{PormGPostgres, PormGSQLite}, conn::Union{LibPQ.Connection, SQLite.DB}) = 
     new(async_result, pool, conn, false, nothing, false)
 end
 
@@ -324,9 +463,9 @@ users = await_result(task1)
 orders = await_result(task2)
 ```
 """
-function fetch_async(connection::PormGPostgres, sql::String; 
-  conn::Union{Nothing, LibPQ.Connection} = nothing, 
-  params::Union{Nothing, PormGPostgresParam} = nothing,
+function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String; 
+  conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
+  params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing,
   ignore_tx::Bool = false)
   
   # Check for transaction context first
@@ -337,7 +476,11 @@ function fetch_async(connection::PormGPostgres, sql::String;
     # Use transaction context connection - don't acquire a new one
     conn = tx_conn
     try
-      task = libpq_execute_async(conn, sql, params)
+      task = if connection isa PormGPostgres
+        libpq_execute_async(conn, sql, params)
+      else
+        sqlite_execute_async(conn, sql, params)
+      end
       # Return a special FetchTask that won't release the connection
       return FetchTask(task, connection, conn, true)  # true = in_transaction
     catch e
@@ -348,37 +491,32 @@ function fetch_async(connection::PormGPostgres, sql::String;
     # Normal path: acquire connection from pool
     conn === nothing && (conn = acquire_connection(connection))
     try
-      task = libpq_execute_async(conn, sql, params)
+      task = if connection isa PormGPostgres
+        libpq_execute_async(conn, sql, params)
+      else
+        sqlite_execute_async(conn, sql, params)
+      end
       return FetchTask(task, connection, conn, false)  # false = not in transaction
     catch e
-      # If async_execute fails immediately, release connection
+      # If EXEC fails immediately, release connection
       release_connection(connection, conn)
       throw(e)
     end
   end
 end
-fetch_async(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::SQLConn, sql::String, params::Union{PormGPostgresParam, PormGSQLiteParam}; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{PormGPostgresParam, PormGSQLiteParam}; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
-    fetch(connection::PormGPostgres, sql::String; params=nothing, ignore_tx=false) -> LibPQ.Result
+    fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String; params=nothing, ignore_tx=false) -> Tables.rowtable
 
 Execute a database query synchronously (blocking).
 Internally uses async execution but immediately awaits the result.
-
-This is the standard API for most use cases. For async/parallel queries,
-use `fetch_async()` instead.
-
-# Example
-```julia
-result = fetch(pool, "SELECT * FROM users WHERE id = \$1", params)
-df = DataFrame(result)
-```
 """
-function fetch(connection::PormGPostgres, sql::String; 
-  conn::Union{Nothing, LibPQ.Connection} = nothing, 
-  params::Union{Nothing, PormGPostgresParam} = nothing,
+function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String; 
+  conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
+  params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing,
   ignore_tx::Bool = false)
   @infiltrate false
   
@@ -404,9 +542,9 @@ function fetch(connection::PormGPostgres, sql::String;
     throw(e)
   end
 end
-fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::SQLConn, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::PormGPostgres, sql::String, params::PormGPostgresParam; conn::Union{Nothing, LibPQ.Connection} = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::SQLConn, sql::String, params::Union{PormGPostgresParam, PormGSQLiteParam}; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{PormGPostgresParam, PormGSQLiteParam}; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)
@@ -450,13 +588,17 @@ The connection is NOT released - caller must manage it for transaction continuat
 
 For transactions, you typically want to keep the connection for multiple queries.
 """
-function with_transaction_async(pool::PormGPostgres, sql::String; 
-  conn::Union{Nothing, LibPQ.Connection} = nothing, 
-  params::Union{Nothing, PormGPostgresParam} = nothing)
+function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::String; 
+  conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
+  params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing)
   
   conn === nothing && (conn = acquire_connection(pool))
   try
-    task = libpq_execute_async(conn, sql, params)
+    task = if pool isa PormGPostgres
+      libpq_execute_async(conn, sql, params)
+    else
+      sqlite_execute_async(conn, sql, params)
+    end
     # Don't wrap in FetchTask since we don't want auto-release
     return task, conn
   catch e
@@ -465,19 +607,23 @@ function with_transaction_async(pool::PormGPostgres, sql::String;
   end
 end
 
-function with_transaction(pool::PormGPostgres, sql::String; 
-  conn::Union{Nothing, LibPQ.Connection} = nothing, 
+function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String; 
+  conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
   release_conn::Bool = false, 
-  params::Union{Nothing, PormGPostgresParam} = nothing)
+  params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing)
   
   conn === nothing && (conn = acquire_connection(pool))
   try
     # Use async execution but await immediately
-    task = libpq_execute_async(conn, sql, params)
+    task = if pool isa PormGPostgres
+      libpq_execute_async(conn, sql, params)
+    else
+      sqlite_execute_async(conn, sql, params)
+    end
     result = Base.fetch(task)
     return result, conn
   catch e
-    @infiltrate   
+    # @infiltrate   
     @error "Failed to execute SQL transaction, rolling back: $e"
     throw(e)
   finally
@@ -486,8 +632,8 @@ function with_transaction(pool::PormGPostgres, sql::String;
     end
   end
 end
-with_transaction(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, release_conn::Bool = false, params::Union{Nothing, PormGPostgresParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
-with_transaction_async(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection} = nothing, params::Union{Nothing, PormGPostgresParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
+with_transaction(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, release_conn::Bool = false, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
+with_transaction_async(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, params::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
 
 """
     run_in_transaction(f::Function, pool::PormGPostgres) -> result
@@ -529,12 +675,16 @@ result = run_in_transaction(pool) do
 end
 ```
 """
-function run_in_transaction(f::Function, pool::PormGPostgres)
+function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite})
   conn = acquire_connection(pool)
   try
     # Begin transaction
-    task = libpq_execute_async(conn, "BEGIN;", nothing)
-    Base.fetch(task)
+    if pool isa PormGPostgres
+        task = libpq_execute_async(conn, "BEGIN;", nothing)
+        Base.fetch(task)
+    else
+        sqlite_execute(conn, "BEGIN TRANSACTION;", nothing)
+    end
     
     # Execute the function within transaction context
     result = with_tx_context(pool, conn) do
@@ -542,15 +692,23 @@ function run_in_transaction(f::Function, pool::PormGPostgres)
     end
     
     # Commit on success
-    task = libpq_execute_async(conn, "COMMIT;", nothing)
-    Base.fetch(task)
+    if pool isa PormGPostgres
+        task = libpq_execute_async(conn, "COMMIT;", nothing)
+        Base.fetch(task)
+    else
+        sqlite_execute(conn, "COMMIT;", nothing)
+    end
     
     return result
   catch e
     # Rollback on error
     try
-      task = libpq_execute_async(conn, "ROLLBACK;", nothing)
-      Base.fetch(task)
+      if pool isa PormGPostgres
+          task = libpq_execute_async(conn, "ROLLBACK;", nothing)
+          Base.fetch(task)
+      else
+          sqlite_execute(conn, "ROLLBACK;", nothing)
+      end
     catch rollback_error
       @error "Failed to rollback transaction: $rollback_error"
     end
@@ -561,8 +719,7 @@ function run_in_transaction(f::Function, pool::PormGPostgres)
 end
 
 function run_in_transaction(f::Function, db::String)
-  haskey(config, db) || throw("$(db) not found")
-  settings::SQLConn = config[db]
+  settings::SQLConn = get_settings(db)
   return run_in_transaction(f, settings.connections)
 end
 

@@ -3,7 +3,20 @@ if !isdefined(Main, :PormG)
 end
 
 @testset "AdvisoryLock: non-blocking exclusivity" begin
-  dbname = haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))
+  # Find a Postgres DB. Advisory locks are only supported in Postgres.
+  dbname = nothing
+  for k in ["db_2", "db", first(keys(PormG.config))]
+    if haskey(PormG.config, k) && PormG.config[k].db_config_settings["adapter"] == "PostgreSQL"
+      dbname = k
+      break
+    end
+  end
+  
+  if dbname === nothing
+    @warn "Skipping AdvisoryLock tests: No PostgreSQL connection found."
+    return
+  end
+  
   key = "test_advisory_lock_$(uuid4())"
   n = 5
   counter = Atomic{Int}(0)

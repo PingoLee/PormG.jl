@@ -1,50 +1,70 @@
 # Database Configuration in PormG
 
-PormG uses a simple YAML-based configuration system to manage connections to your PostgreSQL databases. Each database connection is defined in a `connection.yml` file inside a dedicated folder (e.g., `db`, `db_2`).
+PormG uses a flexible configuration system to manage connections to your PostgreSQL and SQLite databases. You can define connections statically via files or dynamically at runtime (perfect for multi-tenant applications).
 
-## How Configuration Works
+## Static Configuration (File-based)
 
 - By default, PormG looks for a folder named `db` containing a `connection.yml` file.
-- You can use any folder name (e.g., `db_2`) to manage multiple databases. Each folder should have its own `connection.yml` and models file.
+- You can use any folder name (e.g., `db_2`, `test/pg/f1`) to manage multiple separate databases. Each folder represents a unique connection key.
 
-## Creating a Configuration
+### Supported Adapters
+- **PostgreSQL**: Primary adapter using `LibPQ.jl`. Supports high-performance async operations.
+- **SQLite**: Fully supported with connection pooling and async-wrapping using `SQLite.jl`.
+
+### Creating a Configuration
 
 To set up a new database connection:
 
 1. **Create a Folder**
-   - Example: `db_2`
+   - Example: `db_tenant_a`
 2. **Run the Configuration Loader**
    - If the configuration file does not exist, PormG will create a template for you:
      ```julia
-     PormG.Configuration.load("db_2")
+     PormG.Configuration.load("db_tenant_a")
      ```
-   - If `db_2/connection.yml` does not exist, a template will be generated. Edit this file with your PostgreSQL connection details.
-3. **Edit the Configuration File**
-   - Open `db_2/connection.yml` and fill in your database host, port, user, password, and database name.
-4. **Create the Database**
-   - Make sure the database exists in PostgreSQL before loading the configuration.
-5. **Load the Configuration**
-   - Run the loader again to connect:
-     ```julia
-     PormG.Configuration.load("db_2")
-     ```
-   - If no error is triggered, the configuration was loaded successfully.
+3. **Edit the `connection.yml`**
+   - Fill in your details. For SQLite, point the `host` or `database` field to your `.db` file path.
 
-## Example: Configuration Script
+---
+
+## Dynamic Multi-Tenancy
+
+For applications that need to connect to databases on the fly (e.g., based on a user ID or subdomain), PormG provides a Dynamic Registration API.
+
+### Runtime Registration
+
+You can register a connection pool manually at any time:
 
 ```julia
-using Pkg
-Pkg.activate(".")
-using PormG
-PormG.Configuration.load("db_2")
+# PostgreSQL example
+PormG.register_connection("client_01", "postgres://user:pass@localhost/client_db")
+
+# SQLite example
+PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite")
 ```
 
-## Notes
-- You can manage as many databases as you want by using different folders and configuration files.
-- The folder will also contain your models and migration files for that database.
-- If you try to load a configuration that does not exist, PormG will help you by creating a template.
+### Lazy Connection Resolution (Recommended for Servers)
 
-## Preventing concurrent runs (PostgreSQL)
+Instead of managing connections manually, you can provide a **resolver function**. PormG will call this function automatically whenever a query tries to use an unknown database key.
+
+```julia
+PormG.Configuration.set_connection_resolver() do key
+    # Logic to fetch connection details from a master DB or vault
+    if startswith(key, "tenant_")
+        tenant_id = split(key, "_")[2]
+        url = "postgres://user:pass@server/db_$(tenant_id)"
+        return (url, "PostgreSQL", 5) # (url, adapter, pool_size)
+    end
+    return nothing # Key not found
+end
+
+# Now you can just use the key! PormG will load it lazily.
+results = M.Driver.objects.db("tenant_42").list()
+```
+
+---
+
+## Connection Pooling & Async-First Design
 - Use `with_advisory_lock(settings, "my_job_name") do ... end` to ensure long-running tasks (migrations, seeds, imports) do not run in parallel across processes.
 - Choose strategy: default `strategy = :poll` retries every `interval_ms`; use `strategy = :block` to let Postgres block with a `statement_timeout = timeout_ms` (avoids client-side polling).
 - Keys are hashed to a 64-bit bigint via MD5 to reduce collisions vs. `hashtext`.

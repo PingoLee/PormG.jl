@@ -21,3 +21,7 @@ docs/site/
 *.jl.cov
 .jl..cov
 *.jl.mem
+
+
+test/integration/db_sl/migrations/*
+test/integration/db_sl/f1.sqlite

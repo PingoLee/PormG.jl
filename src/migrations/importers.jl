@@ -75,7 +75,7 @@ function import_models_from_postgres(db::String;
   file::String="automatic_models.jl",
   config::Dict{String,SQLConn} = config)
   
-  settings = config[db]
+  settings = Configuration.get_settings(db)
   conn = settings.connections
   model_path = settings.db_def_folder
   
@@ -207,7 +207,7 @@ function import_models_from_django(
 
   settings::Union{Nothing, SQLConn} = nothing
   try
-    settings = config[db]
+    settings = Configuration.get_settings(db)
   catch e
     @error("The database $(db) does not exists in the config")
     return

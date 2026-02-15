@@ -10,7 +10,7 @@ import PormG: config
 import PormG: SQLType, SQLConn,  PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtrasnform, run_in_transaction
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, current_task
-import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for
+import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for, get_settings as get_configuration_settings
 import PormG.Infiltrator: @infiltrate
 
 #

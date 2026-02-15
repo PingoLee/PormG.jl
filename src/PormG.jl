@@ -1,6 +1,5 @@
 module PormG
 
-using Revise
 using PrecompileTools
 using Infiltrator
 

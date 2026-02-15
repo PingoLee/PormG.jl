@@ -95,7 +95,7 @@ function migrate(connection::PormGPostgres, settings::SQLConn; path::String = "d
     mv(joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl"), joinpath(path, "$(date)_migration.jl"))   
     cp(joinpath(settings.db_def_folder, "models.jl"), joinpath(path, "$(date)_old_models.jl")) # TODO: I need deal with custom model name
   catch e
-    @infiltrate
+    # @infiltrate
     @error("Error moving files: ", e)
   end
 
@@ -143,19 +143,24 @@ function migrate(connection::PormGSQLite, settings::SQLConn; path::String = "db/
 
   concatenate_execution = [fisrt_execution, second_execution, third_execution, last_execution]
 
-  SQLite.transaction(connection) do
-    try
-      for execution in concatenate_execution
-        for action in execution
-          println("Executing: $action")
-          PormGSQLiteInterface.execute(connection, action)
-        end
+  # Begin a transaction
+  result, conn = with_transaction(connection, "BEGIN;")
+
+  try
+    for execution in concatenate_execution
+      for action in execution
+        println("Executing: $action")
+        with_transaction(connection, action, conn=conn)
       end
-      @info("Migrations applied successfully.")
-    catch e
-      @error("Error applying migrations: ", e)
-      rethrow(e)
     end
+    # Commit the transaction
+    with_transaction(connection, "COMMIT;", conn=conn, release_conn = true)
+    @info("Migrations applied successfully.")
+  catch e
+    # Rollback the transaction in case of an error
+    with_transaction(connection, "ROLLBACK;", conn=conn, release_conn = true)
+    @error("Error applying migrations: ", e)
+    rethrow(e)
   end
 
   try

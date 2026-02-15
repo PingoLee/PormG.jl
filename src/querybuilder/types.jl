@@ -55,7 +55,7 @@ end
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{String, SQLTypeField} = sizehint!(Dict{String, SQLTypeField}(), 12)
   django::OptionalString = nothing
-  parameters::Union{Nothing, PormGPostgresParam} = nothing # parameters to be used in the query
+  parameters::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing # parameters to be used in the query
 end
 
 # Store information to decide the name from table alias in subquery
@@ -109,6 +109,7 @@ Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as
 
 mutable struct SQLObjectQuery <: SQLObject
   model::PormGModel
+  connect_key::OptionalString # Override for multi-tenant scenarios
   values::Vector{Union{SQLTypeText, SQLTypeField}}
   filter::Vector{FilterType} # filters to be used in the query
   insert::Dict{String, Any} # values to be used to create or insert
@@ -124,9 +125,9 @@ mutable struct SQLObjectQuery <: SQLObject
   custom_join::Dict{String, Any} 
   parameters::Union{Nothing, PormGPostgresParam}
 
-  SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
+  SQLObjectQuery(; model=nothing, connect_key = nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, ctes = Dict{String, CTEDict}(), custom_join = Dict{String, Any}(), parameters = nothing) = # Add ctes and custom_join to constructor
-    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
 end
 
 function Base.deepcopy(obj::SQLObjectHandler)
@@ -136,6 +137,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
   try
     return SQLObjectQuery(
       model = obj.model,  # PormGModel doesn't need deep copy (immutable reference)
+      connect_key = obj.connect_key,
       values = deepcopy(obj.values),
       filter = deepcopy(obj.filter),
       insert = deepcopy(obj.insert),

@@ -178,7 +178,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
             old_var = getfield(old_field, attr)
             if new_var != old_var                  
               attr == :to && Models._compare_field_foreign_key(field, old_field) && continue
-              attr in [:blank, :on_delete] && continue # TODO: on_delete does managede by application ?
+              attr in [:blank, :on_delete, :related_name, :verbose_name, :editable, :how, :formater] && continue 
               push!(colect_not_equal, attr)
             end
           end
@@ -479,7 +479,7 @@ function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String
 end
 
 function makemigrations(db::String; config::Dict{String,SQLConn} = config)
-settings = config[db]
+settings = Configuration.get_settings(db)
 path = joinpath(db, settings.model_file)
 isfile(path) || error("The file $(path) does not exists")
 makemigrations(settings.connections, settings, path=path)
@@ -492,6 +492,9 @@ for name in names(mod, all = true)
   if isdefined(mod, name)
     obj = getfield(mod, name)
     if isa(obj, PormGModel)
+      if obj.name == ""
+        obj.name = name |> string |> format_model_name
+      end
       models[name |> string |> lowercase |> Symbol] = Dict{Symbol, Union{Bool, PormGModel}}(:model => obj, :exist => false) # TODO: change model.name to lowercase in all project
     end
   end

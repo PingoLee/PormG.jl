@@ -1,10 +1,14 @@
 # PormG Documentation
 
-## Overview
+## Core Features
 
-PormG is a Julia ORM (Object-Relational Mapping) package inspired by Django ORM, designed to provide a familiar, expressive, and productive interface for database operations in Julia. It facilitates SQL operations, model management, and migrations with a focus on PostgreSQL databases.
-
-> **⚠️ Development Status:** PormG is currently in early development stage and is a personal hobby project. The package is not yet available for general use and features may change significantly. Contributions and feedback are welcome!
+-   **Expressive Query Builder**: Django-inspired syntax using `filter`, `exclude`, `values`, `order_by`, and `annotate`.
+-   **Model Management**: Define and manage database schemas with Julia structs and powerful field types.
+-   **Multi-Database & Multi-Tenancy**: Built-in support for switching databases at runtime with lazy connection resolution via `.db("tenant_id")`.
+-   **Async-First Execution**: Non-blocking database operations designed for high-concurrency web frameworks like Genie.jl.
+-   **Cross-Database Support**: High-performance PostgreSQL integration (LibPQ) and lightweight SQLite support with automatic connection pooling.
+-   **Migrations**: Automatic schema generation and evolution tool.
+-   **Advisory Locks**: Safe coordination of concurrent processes using database-level distributed locks.
 
 ## Installation
 

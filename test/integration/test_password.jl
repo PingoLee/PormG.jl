@@ -5,7 +5,7 @@ end
 # julia -t auto  --project=. test/pg/test_password.jl
 
 import PormG.Passwords: encode, matches, upgrade_encoding, PBKDF2PasswordEncoder, BCryptPasswordEncoder, 
-                         Argon2PasswordEncoder, DelegatingPasswordEncoder, SpringSecurityPBKDF2PasswordEncoder
+                         DelegatingPasswordEncoder, SpringSecurityPBKDF2PasswordEncoder
 
 # ============================================================================
 # Test 1: PBKDF2PasswordEncoder

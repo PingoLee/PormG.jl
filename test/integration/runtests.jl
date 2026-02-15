@@ -1,5 +1,5 @@
 # 1. Load the common environment
-# julia -t auto  --project=. test/pg/runtests.jl
+# julia -t auto  --project=. test/integration/runtests.jl
 include("common_setup.jl")
 
 @info "Starting PormG Test Suite (PostgreSQL)"

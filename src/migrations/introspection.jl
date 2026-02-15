@@ -11,7 +11,7 @@
 function get_database_schema(db::PormGSQLite)
   # Query the sqlite_master table to get the schema information
   schema_query = "SELECT type, name, sql FROM sqlite_master WHERE type='table' OR type='index';"
-  schema_info = PormGSQLiteInterface.execute(db, schema_query)
+  schema_info = fetch(db, schema_query)
 
   # Initialize a dictionary to hold the schema data
   schema_data = Dict{String, Any}()
@@ -40,7 +40,7 @@ Converts a SQL CREATE TABLE statement into a model definition in PormGModel.
 - `PormGModel`: The model definition.
 
 # Example"""
-function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_type_map)   
+function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_type_map)   
 
   # Extract table name
   table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
@@ -103,10 +103,10 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Any} = sqlite_typ
   return Models.Model(table_name, fields_dict)
 end
 
-function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{String, Any} = sqlite_type_map)
+function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{String, Symbol} = sqlite_type_map)
   # Use PRAGMA instead of Regex for more reliable introspection
-  cols = PormGSQLiteInterface.execute(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
-  fks = PormGSQLiteInterface.execute(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
+  cols = fetch(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
+  fks = fetch(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
   
   fields_dict = Dict{Symbol, Any}()
   fk_map = Dict{String, Any}()
@@ -152,7 +152,7 @@ end
 function convert_schema_to_models(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema, include_table::Union{Vector{String}, Nothing} = nothing)
   # Query the sqlite_master table to get the table names
   tables_query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
-  tables = PormGSQLiteInterface.execute(db, tables_query) |> DataFrame
+  tables = fetch(db, tables_query) |> DataFrame
   
   models_array::Vector{PormGModel} = []
   for row in eachrow(tables)

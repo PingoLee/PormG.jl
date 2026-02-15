@@ -102,6 +102,14 @@ function up_filter!(q::SQLObject, filter)
   return q
 end
 
+function up_db!(q::SQLObject, keys)
+  if isempty(keys) || length(keys) > 1 || !isa(keys[1], String)
+    throw(ArgumentError("db() expects exactly one String argument (the database key). Received: $(keys)"))
+  end
+  q.connect_key = keys[1]
+  return q
+end
+
 function distinct!(q::SQLObject, value::Bool) #::Union{Bool, Nothing}) 
   q.distinct = value
   return q
@@ -185,6 +193,8 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   # Allows: query.filter(...).order_by(...)
   if sym === :filter
     return ChainCaller(up_filter!, q)
+  elseif sym === :db
+    return ChainCaller(up_db!, q)
   elseif sym === :values
     return ChainCaller(up_values!, q)
   elseif sym === :order_by
@@ -211,6 +221,12 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return () -> do_count(q)
   elseif sym === :exists
     return () -> do_exists(q)
+  elseif sym === :list || sym === :all
+    return () -> list(q)
+  elseif sym === :list_json
+    return () -> list_json(q)
+  elseif sym === :delete
+    return (; kwargs...) -> delete(q; kwargs...)
       
   # === CATEGORY 3: Internal fields ===
   else

@@ -1,65 +1,69 @@
 # Query Examples and Search Operations
 
-This document provides comprehensive examples of how to perform various database operations using PormG.
+This document provides comprehensive examples of how to perform database operations. PormG supports both a functional "Pipe" style and a modern "Object-Oriented/Fluent" style.
+
+## Query Styles
+
+### 1. Fluent Interface (Dot Notation)
+The modern way to build and execute queries in PormG.
+
+```julia
+# Chain methods and end with a terminal execution call like .list(), .count(), or .exists()
+drivers = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname").list()
+
+# Switch database dynamically
+results = M.Result.objects.db("client_42").filter("points__gt" => 10).all()
+```
+
+### 2. Functional Interface (Pipe Syntax)
+Legacy compatible and useful for broadcasting or complex transformations.
+
+```julia
+query = M.Driver.objects |> filter("nationality" => "Brazilian")
+df = query |> DataFrame
+```
+
+---
 
 ## Basic Query Operations
 
 ### Simple Filtering and Data Retrieval
 
 ```julia
-# Basic filter by single field
-query = M.Status.objects;
-query.filter("status" => "Engine");
-df = query |> DataFrame
+# Filter and get results as a Vector of Dictionaries
+data = M.Status.objects.filter("status" => "Engine").list()
 
-1×2 DataFrame
- Row │ statusid  status  
-     │ Int64?    String? 
-─────┼───────────────────
-   1 │        5  Engine
+# Or as a DataFrame
+df = M.Status.objects.filter("status" => "Engine") |> DataFrame
 ```
 
-### Count Records
+### Count and Existence
 
 ```julia
 # Count records matching criteria
-query = M.Status.objects;
-query.filter("status" => "Engine");
+count = M.Status.objects.filter("status" => "Engine").count()
 
-julia> count = query |> do_count
-1
-```
-
-### Check if Records Exist
-
-```julia
 # Check if any records match the criteria
-query = M.Status.objects
-query.filter("status" => "Engine")
-exists = query |> do_exists
+exists = M.Status.objects.filter("status" => "Engine").exists()
 ```
 
 ### Selecting Specific Fields
 
 ```julia
-# Select specific fields from the query
-query = M.Status.objects
-query.filter("status" => "Engine")
-query.values("status")
-df = query |> DataFrame
-# Returns: statusid | status
+# Select specific fields
+results = M.Status.objects.values("status").list()
 ```
 
-### Show Query (don't execute)
+### Database Routing (Multi-tenancy)
+
+You can specify which database pool to use on a per-query basis. If the key is not recognized, PormG will attempt to load it lazily if a resolver is configured.
 
 ```julia
-# Show the generated SQL query
-query = M.Status.objects
-query.filter("status" => "Engine")
-sql = query |> show_query
-@info sql
-# Returns the SQL query string without executing it
+# Use the "staging" database pool
+q = M.Driver.objects.db("staging").filter("code" => "SEN")
 ```
+
+---
 
 ## Value Selection and Joins
 

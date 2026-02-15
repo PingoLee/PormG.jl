@@ -2,6 +2,24 @@
 # Process the query entries to build the SQLObjectQuery object
 #
 
+"""
+    get_settings(obj::Union{SQLObject, SQLObjectHandler}; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
+
+Resolves the database settings for a query. 
+Returns a tuple of `(settings::SQLConn, connection, conn_key::String)`.
+
+If a `connection` is provided, it is returned as is. 
+Otherwise, it returns the default connection from the resolved settings.
+"""
+function get_settings(obj::Union{SQLObject, SQLObjectHandler}; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
+  q = obj isa SQLObjectHandler ? obj.object : obj
+  conn_key = q.connect_key !== nothing ? q.connect_key : q.model.connect_key
+  settings = get_configuration_settings(conn_key)
+  
+  final_connection = connection === nothing ? settings.connections : connection
+  return settings, final_connection, conn_key
+end
+
 # I may not need this function initially, but it can be useful when processing queries
 # function _check_function(f::OperObject)
 function _check_function(f::Vector{N} where N <: SQLObject)

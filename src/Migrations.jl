@@ -16,6 +16,7 @@ using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
 import PormG.ConnectionPool: fetch, with_transaction
+import PormG.Configuration
 import PormG.Configuration: get_settings
 using Logging
 
@@ -24,7 +25,7 @@ import PormG.Infiltrator: @infiltrate
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique
-import PormG: PormGModel, PormGField, SQLConn, PormGPostgres
+import PormG: PormGModel, PormGField, SQLConn, PormGPostgres, PormGSQLite
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table
 import PormG: MODEL_PATH, SQLConn, DB_PATH
 

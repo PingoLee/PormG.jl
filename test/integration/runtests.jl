@@ -2,11 +2,9 @@
 # julia -t auto  --project=. test/integration/runtests.jl
 include("common_setup.jl")
 
-@info "Starting PormG Test Suite (PostgreSQL)"
-
 # 2. Include individual test files
 # Each file now focuses only on test logic, without setup
-@testset "Bateria de Testes PormG (PostgreSQL)" begin
+@testset "Bateria de Testes PormG ($(PORMG_DB_FOLDER))" begin
 
     # CRUD Básico
     @testset "Inserções e Schema"       begin include("test_database_setup.jl") end

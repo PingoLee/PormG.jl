@@ -9,6 +9,10 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [x] Support multiple dispatch for Dialect (Postgres vs SQLite separation).
   - [x] Consistent type mapping using `type_map`.
 
+- [ ] **Bulk Operation API Refactoring**
+  - **Context**: Currently, `bulk_update(filters=...)` handles both DataFrame column mapping and static SQL filters. While flexible, this leads to ambiguity and potential breaking changes if column names overlap with model fields.
+  - **Goal**: Introduce a clearer separation (e.g., `mapping` vs `filters` or explicitly typed objects) to improve type safety and readability without breaking legacy support.
+
 - [x] **Complete Migration Support**
   - [x] **Integration Tests**: Migration integration tests for SQLite (15/15 tests).
   - [ ] **Unit Tests**: Mocked tests for SQL generation in migrations.

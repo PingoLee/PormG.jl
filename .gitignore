@@ -24,4 +24,4 @@ docs/site/
 
 
 test/integration/db_sl/migrations/*
-test/integration/db_sl/f1.sqlite
+test/integration/db_sl/f1.sqlite*

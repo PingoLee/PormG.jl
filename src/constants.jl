@@ -182,7 +182,9 @@ const sqlite_date_format_map = Dict{String, String}(
   "YYYY-MM-DDTHH:MI:SS.SSS" => "%Y-%m-%dT%H:%M:%S.%f",
   "HH:MI:SS" => "%H:%M:%S",
   "HH:MI:SS.SSS" => "%H:%M:%S.%f",
-  "HH:MI" => "%H:%M"
+  "HH:MI" => "%H:%M",
+  "DD/MM/YYYY" => "%d/%m/%Y",
+  "DD-MM-YYYY" => "%d-%m-%Y"
 )
 
 

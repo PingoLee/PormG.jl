@@ -618,11 +618,14 @@ query.values(
     "driverid",
     "rounded_id" => "driverid__@round",
     "sqrt_val"   => "driverid__@sqrt",
-    "custom_pow" => Power("driverid", Value(2))
+    "custom_pow"   => Power("driverid", Value(2)),
+    "precise_round" => Round(Value(10.556), 2) # Returns 10.56
 )
 query.filter("driverid" => 1)
 df = query |> DataFrame
 ```
+
+> **Note on Rounding**: Different databases may handle floating-point rounding differently (e.g., "Round half to even" vs "Round half away from zero"). For cross-database consistency when testing, prefer values that don't sit exactly on the .5 boundary (e.g., use `10.556` for `10.56`).
 
 ### Logical and Conditional Functions
 

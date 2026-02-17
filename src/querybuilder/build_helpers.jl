@@ -503,7 +503,16 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", placeholders)     
   elseif v.operator in ["in", "not in"]
     if isa(placeholders, String)
-      return string(column, " ", v.operator == "in" ? "= ANY" : "<> ALL", "(", placeholders, ")")
+      # Se placeholders for uma única string (ex: "$1" ou "?")
+      if instruc.connection isa PormGPostgres
+        return string(column, " ", v.operator == "in" ? "= ANY" : "<> ALL", "(", placeholders, ")")
+      else
+        # Para SQLite e outros que não suportam ANY(array), precisamos que os placeholders
+        # tenham sido expandidos ou usar uma abordagem diferente.
+        # No PormG atual, se chegou aqui como String, é porque add_parameter! retornou um único "?"
+        # para o vetor inteiro.
+        return string(column, " ", v.operator, " (", placeholders, ")")
+      end
     elseif isa(placeholders, AbstractArray)
       return string(column, " ", v.operator, " (", join(placeholders, ", "), ")")
     else

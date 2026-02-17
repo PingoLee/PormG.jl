@@ -81,58 +81,56 @@ function delete(objct::SQLObjectHandler;
   # Build and sort the deletion graph
   process_collector!(collector)
 
-  @infiltrate false
-  if connection isa PormGPostgres
-    @infiltrate false
-    run_deletions = function(conn::Union{Nothing, LibPQ.Connection})
-      # Process fast deletes first (objects that can be deleted directly)
-      for (model, keys) in collector.fast_deletes
-        delete_objects(connection, model, keys, show_query, deleted_counter, conn)
-        # Remove from objects to prevent double deletion
-        delete!(collector.objects, model)
-      end
-
-      # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
-      for ((field, value), affected_models) in collector.field_updates
-        @infiltrate false
-        for (affected_model, keys) in affected_models
-          update_field(connection, affected_model, field, value, keys, show_query, conn)
-        end
-      end
-      
-      # Execute deletions in the sorted order
-      for model_to_delete in collector.sorted_models
-        @infiltrate false
-        _array = get(collector.objects, model_to_delete, [])        
-        if !isempty(_array)
-          @infiltrate false
-          delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
-        end
-      end
+  # Definition of run_deletions (backend agnostic)
+  run_deletions = function(conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
+    # Process fast deletes first (objects that can be deleted directly)
+    for (model, keys) in collector.fast_deletes
+      delete_objects(connection, model, keys, show_query, deleted_counter, conn)
+      # Remove from objects to prevent double deletion
+      delete!(collector.objects, model)
     end
 
-    tx_conn = transaction_connection_for(settings)
-    if show_query
-      run_deletions(nothing)
-    elseif tx_conn !== nothing
-      run_deletions(tx_conn)
-    else
-      _, conn = with_transaction(settings, "BEGIN;")
-      try
-        with_tx_context(settings.connections, conn) do
-          run_deletions(conn)
-        end
-        # Commit transaction
-        with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
-      catch e
-        # Rollback on error
-        with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
-        rethrow(e)
+    # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
+    for ((field, value), affected_models) in collector.field_updates
+      for (affected_model, keys) in affected_models
+        update_field(connection, affected_model, field, value, keys, show_query, conn)
       end
     end
+    
+    # Execute deletions in the sorted order
+    for model_to_delete in collector.sorted_models
+      _array = get(collector.objects, model_to_delete, [])        
+      if !isempty(_array)
+        delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+      end
+    end
+  end
+
+  tx_conn = transaction_connection_for(settings)
+  if show_query
+    run_deletions(nothing)
+  elseif tx_conn !== nothing
+    run_deletions(tx_conn)
   else
-    # Similar implementation for SQLite
-    # ...
+    # Start transaction (backend specific SQL)
+    begin_sql = if connection isa PormGPostgres
+        "BEGIN;"
+    else
+        # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks
+        "BEGIN IMMEDIATE TRANSACTION;"
+    end
+    _, conn = with_transaction(settings, begin_sql)
+    try
+      with_tx_context(settings.connections, conn) do
+        run_deletions(conn)
+      end
+      # Commit transaction
+      with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
+    catch e
+      # Rollback on error
+      with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
+      rethrow(e)
+    end
   end
 
   total_deleted = sum(values(deleted_counter))
@@ -352,7 +350,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
 end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection})
+   show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
   @infiltrate false
   # Execute the actual deletion SQL
   _where = String[]
@@ -396,7 +394,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::PormGPostgres, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool, conn::Union{Nothing, LibPQ.Connection})
+function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
   # Update field values using query object like CASCADE
   @infiltrate false
   pk_field = keys[:key]

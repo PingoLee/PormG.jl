@@ -18,7 +18,9 @@ end
         "avg_points"    => Avg("points")
     )
     q.filter("raceid" => 1) # Australian GP
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
+
+    q |> show_query  # For debugging
     
     @test df[1, :total_results] > 0
     @test df[1, :max_points] >= 10.0
@@ -41,12 +43,14 @@ end
         "replace_val"  => Replace("nationality", "British", "UK"),
         "coalesce_val" => Coalesce(Value(nothing), "forename", Value("N/A")),
         "nullif_val"   => NullIf("forename", Value("Lewis")),
-        "round_val"    => Round(Value(10.555), 2),
+        "round_val"    => Round(Value(10.556), 2),
+        "round_def"    => Round(Value(10.5)),
+        "abs_val"      => Abs(Value(-10.5)),
         "max_val"      => Greatest("driverid", Value(100), Value(50)),
         "min_val"      => Least("driverid", Value(10))
     )
     q.filter("driverid" => 1)
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :lower_name] == "lewis"
     @test df[1, :upper_name] == "HAMILTON"
@@ -58,6 +62,8 @@ end
     @test df[1, :coalesce_val] == "Lewis"
     @test df[1, :nullif_val] === missing || df[1, :nullif_val] === nothing
     @test df[1, :round_val] == 10.56
+    @test df[1, :round_def] == 11.0 # SQLite ROUND(10.5) is 11.0
+    @test df[1, :abs_val] == 10.5
     @test df[1, :max_val] == 100
     @test df[1, :min_val] == 1
 end
@@ -69,14 +75,14 @@ end
     
     # Test with Vector
     q1 = M.Driver.objects.filter("driverid__@range" => [1, 5]).order_by("driverid")
-    df1 = q1 |> list |> DataFrame
+    df1 = q1 |> DataFrame
     @test size(df1, 1) == 5
     @test df1[1, :driverid] == 1
     @test df1[5, :driverid] == 5
 
     # Test with Tuple
     q2 = M.Driver.objects.filter("driverid__@range" => (10, 15)).order_by("driverid")
-    df2 = q2 |> list |> DataFrame
+    df2 = q2 |> DataFrame
     @test size(df2, 1) == 6
     @test df2[1, :driverid] == 10
 end
@@ -91,7 +97,7 @@ end
         "min_val" => Least("driverid", Value(100), Value(50))
     )
     q.filter("driverid" => 1)
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     @test df[1, :max_val] == 100
     @test df[1, :min_val] == 1
 end
@@ -111,7 +117,7 @@ end
         "ln_val"    => Round(Ln(Value(2.71828)), 1)
     )
     q.filter("driverid" => 1)
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :floor_val] == 10.0
     @test df[1, :ceil_val] == 11.0
@@ -136,7 +142,7 @@ end
     )
     q.filter("driverid__@lte" => 15)
     q.order_by("driverid")
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :category] == "Top 5"
     @test df[6, :category] == "6-10"
@@ -158,7 +164,7 @@ end
         ])
     )
     q.filter("driverid" => 1)
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :full_info] == "Lewis Hamilton (1)"
 end
@@ -172,7 +178,7 @@ end
         "formatted_date" => To_char("dob", "DD/MM/YYYY")
     )
     q.filter("driverid" => 1)
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :extracted_year] == 1985
     @test df[1, :formatted_date] == "07/01/1985"
@@ -188,7 +194,7 @@ end
         "math_nest"  => Round(Sqrt(Abs(Value(-16.0))), 0)
     )
     q.filter("driverid" => 1)
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :nested_val] == "lewis"
     @test df[1, :math_nest] == 4.0
@@ -204,7 +210,7 @@ end
         "quad_func" => "dob__@quadrimester"
     )
     q.filter("surname" => "Hamilton")
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     # Hamilton born 1985-01-07 -> Q1, Quad 1
     @test df[1, :q_func] == "1985-Q1"
@@ -226,7 +232,7 @@ end
         "birth_day"   => "dob__@day"
     )
     q.filter("surname" => "Hamilton")
-    df = q |> list |> DataFrame
+    df = q |> DataFrame
     
     @test df[1, :birth_year] == 1985
     @test df[1, :birth_month] == 1
@@ -235,12 +241,12 @@ end
     # Test complex date modifiers (Quarter)
     q_complex = M.Driver.objects.values("driverid", "q" => "dob__@quarter")
     q_complex.filter("surname" => "Hamilton")
-    df_complex = q_complex |> list |> DataFrame
+    df_complex = q_complex |> DataFrame
     @test df_complex[1, :q] == "1985-Q1"
 
     # Test filter modifiers
     q2 = M.Driver.objects.filter("dob__@year" => 1985, "dob__@month" => 1)
-    df2 = q2 |> list |> DataFrame
+    df2 = q2 |> DataFrame
     @test any(x -> x.surname == "Hamilton", eachrow(df2))
 end
 
@@ -268,13 +274,12 @@ end
         # Note: In F1 dataset, races and drivers have a big gap, so 30 days is always true.
         # We just want to check if the SQL generates correctly and executes.
         
-        query = M.Result.objects
-        query.filter("raceid__@year" => 2024,
+        query = M.Result.objects.filter("raceid__@year" => 2024,
            Q(
                F("raceid__date") > F("driverid__dob") + 30,
                F("raceid__date") <= F("driverid__dob") + 10957 # Using large number to match some data
             )
-        )
+        );
         
         query.values(
             "raceid__year",
@@ -292,10 +297,10 @@ end
                     default=0
                 )
             )
-        )
+        );
         
-        query.order_by("-raceid__year", "driverid__surname")
-        query.limit(10)
+        query.order_by("-raceid__year", "driverid__surname");
+        query.limit(10);
         
         # # Test generation
         # sql = query |> show_query
@@ -305,6 +310,7 @@ end
         # @test contains(sql, "interval") # Our F logic uses interval for date arithmetic
         
         # Test execution
+        # query |> show_query  # For debugging
         df = query |> DataFrame
         @test size(df, 1) == 10
         @test "is_within_range" in names(df)
@@ -596,6 +602,81 @@ end
         @test size(df, 1) <= 5
         @test "points_gte_15" in names(df)
         @test all(df.points_gte_15 .>= 0)
+    end
+
+    @testset "Distinct Aggregates" begin
+        # Logic: Test the 'distinct' parameter in aggregate functions.
+        # Why: Ensures we can count unique values (e.g., how many unique constructors won).
+        q = M.Result.objects
+        q.values(
+            "total_wins" => Count("resultid"),
+            "unique_constructors" => Count("constructorid", distinct=true)
+        )
+        q.filter("positionorder" => 1) # Only winners
+        df = q |> DataFrame
+        
+        # In history, multiple winners exist, but fewer constructors than total races won
+        @test df[1, :total_wins] > df[1, :unique_constructors]
+        @test df[1, :unique_constructors] > 10 # More than 10 brands won in F1 history
+    end
+
+    @testset "Having Clause (Aggregate Filtering)" begin
+        # Logic: Test filtering results based on aggregated values.
+        # Why: Essential for queries like "Teams with more than 100 wins".
+        q = M.Result.objects
+        q.values(
+            "constructorid__name",
+            "win_count" => Count("resultid")
+        )
+        q.filter("positionorder" => 1)
+        # The filter on "win_count" should be automatically moved to HAVING because "win_count" 
+        # is an alias for an aggregate in the SELECT clause.
+        q.filter("win_count__@gt" => 100) 
+        
+        df = q |> DataFrame
+        
+        # Giants like Ferrari, McLaren, Williams, Mercedes, Red Bull should be here
+        @test size(df, 1) >= 5 
+        @test all(df.win_count .> 100)
+        @test "Ferrari" in df.constructorid__name
+    end
+
+    @testset "Advanced F-Expression Math" begin
+        # Logic: Test subtraction, multiplication, and division in F expressions.
+        # Why: These common arithmetic operations must be correctly translated to SQL.
+        q = M.Result.objects.values(
+            "resultid",
+            "points",
+            "grid",
+            "p_minus_one" => F("points") - 1,
+            "p_times_two" => F("points") * 2,
+            "p_div_two"   => F("points") / 2.0,
+            "composite"   => (F("points") + F("grid")) / 2
+        );
+        q.filter("points__@gt" => 20);
+        q.limit(5);
+        df = q |> DataFrame
+        
+        @test size(df, 1) == 5
+        @test df[1, :p_minus_one] == df[1, :points] - 1
+        @test df[1, :p_times_two] == df[1, :points] * 2
+        @test df[1, :p_div_two]   == df[1, :points] / 2.0
+        @test df[1, :composite]   == (df[1, :points] + df[1, :grid]) / 2
+    end
+
+    @testset "Variadic Greatest/Least" begin
+        # Logic: Test that Greatest/Least can handle more than 2-3 arguments.
+        # Why: Verified variadic support in the type system.
+        q = M.Driver.objects
+        q.values(
+            "max_of_many" => Greatest(Value(1), Value(5), Value(10), Value(2), Value(8)),
+            "min_of_many" => Least(Value(100), Value(50), Value(25), Value(75), Value(10))
+        )
+        q.filter("driverid" => 1)
+        df = q |> DataFrame
+        
+        @test df[1, :max_of_many] == 10
+        @test df[1, :min_of_many] == 10
     end
 end
 

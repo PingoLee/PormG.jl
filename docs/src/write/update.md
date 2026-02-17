@@ -53,6 +53,16 @@ SET "name" = $2, "date" = $3, "round" = $4
 WHERE "Tb"."raceid" = $1
 ```
 
+### Automatic Validation
+
+All updates pass through a centralized validation engine that enforces:
+- **Primary Key Protection**: You cannot update a Primary Key field.
+- **Max Length**: Strings are checked against the model's `max_length`.
+- **Numeric Precision**: `DecimalField` and `FloatField` are checked for `max_digits` and `decimal_places`.
+- **Nullability**: Attempts to set non-nullable fields to `nothing` or `missing` will throw an error.
+
+---
+
 ## Updates with Relationships
 
 PormG supports updating records based on filter criteria spanning related tables.

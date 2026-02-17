@@ -80,18 +80,18 @@ end
     query.filter("statusid__@in" => subquery);
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid");
     df = query |> DataFrame
-    @test query |> do_count == 2026
+    @test query.count() == 2026
 
     # added parameter in main query
     query.filter("driverid__@lte" => 7);
     # df = query |> DataFrame
-    @test query |> do_count == 40
+    @test query.count() == 40
 
     # added parameters in select
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid", "raceid__date__@quarter");
     query.order_by("raceid__date__quarter");
     df = query |> DataFrame
-    @test query |> do_count == 40
+    @test query.count() == 40
     @test query |> do_exists
 end
 
@@ -345,7 +345,12 @@ end
     david = df[df.forename .== "David", :]
     @test !isempty(david)
     @test !ismissing(david[1, :old_guard__dob])
-    @test david[1, :old_guard__dob] == Date(1971, 3, 27)
+    # Sqlite store dates as text, so we need to parse it back to Date for the assertion
+    if typeof(david[1, :old_guard__dob]) <: AbstractString
+        @test Date(david[1, :old_guard__dob]) == Date(1971, 3, 27)
+    else
+        @test david[1, :old_guard__dob] == Date(1971, 3, 27)
+    end
 
     # --- CENÁRIO 2: INNER JOIN ---
     # Lewis Hamilton deve desaparecer completamente do resultado

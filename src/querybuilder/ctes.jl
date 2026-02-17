@@ -194,7 +194,7 @@ Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
 # Returns
 - String containing the WITH clause SQL, or empty string if no CTEs
 """
-function build_cte_clause(ctes::Dict{String, CTEDict}, connection, parameters::Union{Nothing, PormGPostgresParam}, table_alias::Union{Nothing, SQLTableAlias})
+function build_cte_clause(ctes::Dict{String, CTEDict}, connection, parameters::Union{Nothing, AbstractPormGParam}, table_alias::Union{Nothing, SQLTableAlias})
   isempty(ctes) && return ""
   
   @infiltrate false

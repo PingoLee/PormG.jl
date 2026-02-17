@@ -250,6 +250,18 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   pool_size = haskey(settings.db_config_settings, "pool_size") ? 
               parse(Int, string(settings.db_config_settings["pool_size"])) : 3
 
+  sqlite_split_read_write = false
+  if haskey(settings.db_config_settings, "sqlite_split_read_write")
+    raw_value = settings.db_config_settings["sqlite_split_read_write"]
+    sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
+  elseif haskey(settings.db_config_settings, "options") && isa(settings.db_config_settings["options"], Dict)
+    options = settings.db_config_settings["options"]
+    if haskey(options, "sqlite_split_read_write")
+      raw_value = options["sqlite_split_read_write"]
+      sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
+    end
+  end
+
   if settings.db_config_settings["adapter"] == "SQLite"
     dbname =  if haskey(settings.db_config_settings, "host") && settings.db_config_settings["host"] !== nothing
       settings.db_config_settings["host"]
@@ -270,7 +282,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 
     @infiltrate false
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size)
+    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write)
 
   elseif settings.db_config_settings["adapter"] == "PostgreSQL"
     dns = String[]
@@ -338,7 +350,7 @@ end
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -363,7 +375,8 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   settings.db_config_settings = Dict{String, Any}(
     "adapter" => adapter,
     "url" => url,
-    "pool_size" => pool_size
+    "pool_size" => pool_size,
+    "sqlite_split_read_write" => sqlite_split_read_write
   )
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
@@ -371,7 +384,7 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   if adapter == "PostgreSQL"
     settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size)
   elseif adapter == "SQLite"
-    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size)
+    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write)
   else
     throw(ArgumentError("Unsupported adapter: $adapter"))
   end

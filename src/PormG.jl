@@ -12,8 +12,9 @@ abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
 abstract type PormGPostgres <: SQLConn end
 abstract type PormGSQLite <: SQLConn end
-abstract type PormGPostgresParam <: PormGPostgres end
-abstract type PormGSQLiteParam <: PormGSQLite end
+abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
+abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
+abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
 abstract type SQLObject <: PormGAbstractType end
 abstract type SQLObjectHandler <: SQLObject end
 abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias

@@ -8,8 +8,8 @@ PormG uses a flexible configuration system to manage connections to your Postgre
 - You can use any folder name (e.g., `db_2`, `test/integration/f1`) to manage multiple separate databases. Each folder represents a unique connection key.
 
 ### Supported Adapters
-- **PostgreSQL**: Primary adapter using `LibPQ.jl`. Supports high-performance async operations.
-- **SQLite**: Fully supported with connection pooling and async-wrapping using `SQLite.jl`.
+- **PostgreSQL**: Primary adapter using `LibPQ.jl`. Supports high-performance async operations and standard parameterized queries (`$1`, `$2`).
+- **SQLite**: Fully supported with connection pooling and async-wrapping using `SQLite.jl`. Uses a **Contextual Buckets Strategy** for positional parameters (`?`), enabling advanced features like complex joins, CTEs, and nested subqueries that were previously difficult on purely positional backends.
 
 ### Creating a Configuration
 

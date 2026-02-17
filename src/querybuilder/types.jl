@@ -55,7 +55,7 @@ end
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{String, SQLTypeField} = sizehint!(Dict{String, SQLTypeField}(), 12)
   django::OptionalString = nothing
-  parameters::Union{Nothing, PormGPostgresParam, PormGSQLiteParam} = nothing # parameters to be used in the query
+  parameters::Union{Nothing, AbstractPormGParam} = nothing # parameters to be used in the query
 end
 
 # Store information to decide the name from table alias in subquery
@@ -123,7 +123,7 @@ mutable struct SQLObjectQuery <: SQLObject
   distinct::Bool # Add distinct field
   ctes::Dict{String, CTEDict}
   custom_join::Dict{String, Any} 
-  parameters::Union{Nothing, PormGPostgresParam}
+  parameters::Union{Nothing, AbstractPormGParam}
 
   SQLObjectQuery(; model=nothing, connect_key = nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
         order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, ctes = Dict{String, CTEDict}(), custom_join = Dict{String, Any}(), parameters = nothing) = # Add ctes and custom_join to constructor
@@ -264,7 +264,7 @@ query.values("price", "discounted_price" => F("price") * 0.9)
 ```
 """
 @kwdef mutable struct FExpression <: SQLTypeF
-  field_name::String
+  field_name::Union{String, SQLTypeF}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   operand::Union{String, Integer, Float64, SQLTypeF, Nothing} = nothing
   function_name::String = "F"
@@ -303,47 +303,52 @@ end
 # Arithmetic operations for F expressions
 function Base.:+(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
-    field_name = f.field_name,
+    field_name = f.operation === nothing ? f.field_name : f,
     operation = "+",
     operand = operand,
     function_name = "F",
-    column = f.field_name
+    column = f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
   )
 end
 
 function Base.:-(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
-    field_name = f.field_name,
+    field_name = f.operation === nothing ? f.field_name : f,
     operation = "-",
     operand = operand,
     function_name = "F",
-    column = f.field_name
+    column = f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
   )
 end
 
 function Base.:*(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
-    field_name = f.field_name,
+    field_name = f.operation === nothing ? f.field_name : f,
     operation = "*",
     operand = operand,
     function_name = "F",
-    column = f.field_name
+    column = f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
   )
 end
 
 function Base.:/(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
   return FExpression(
-    field_name = f.field_name,
+    field_name = f.operation === nothing ? f.field_name : f,
     operation = "/",
     operand = operand,
     function_name = "F",
-    column = f.field_name
+    column = f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
   )
 end
 
 # Comparison operations for F expressions
 function Base.:(==)(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})  
   f.operation = "="
+  f.operand = operand
+  return f
+end
+function Base.:(!=)(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})  
+  f.operation = "!="
   f.operand = operand
   return f
 end

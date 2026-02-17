@@ -34,13 +34,23 @@ end
   @test instruc.parameters.parameters[1] == "%to-be-deleted%"
 
   # 3. Verify array binding for IN clauses
-  # Arrays should be stored as a single parameter (Postgres ANY) and preserved as an AbstractVector
+  # Postgres stores as a single parameter (Postgres ANY).
+  # SQLite expands to multiple positional parameters (?).
   query = M.Result.objects
   query.filter("positionorder__@in" => [1, 2])
   instruc = PormG.QueryBuilder.build(query.object)
-  @test length(instruc.parameters.parameters) == 1
-  @test isa(instruc.parameters.parameters[1], AbstractVector)
-  @test instruc.parameters.parameters[1] == [1, 2]
+  
+  if adapter_name == "PostgreSQL"
+    @test length(instruc.parameters.parameters) == 1
+    @test isa(instruc.parameters.parameters[1], AbstractVector)
+    @test instruc.parameters.parameters[1] == [1, 2]
+  else # SQLite, etc.
+    # In SQLite/MySQL, IN clause expands to (?, ?)
+    params = PormG.QueryBuilder.get_final_parameters(instruc.parameters)
+    @test length(params) >= 2
+    @test 1 in params
+    @test 2 in params
+  end
 
   # 4. Mixed types in same filter (integers, strings, dates, floats)
   query = M.Result.objects

@@ -42,7 +42,9 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     found_in_select = false
     v_field_copy = deepcopy(v.field)
     if haskey(instruc.cache, v_field_copy._as)
-      v_field_copy.field = instruc.cache[v_field_copy._as].field # TODO how can i recover the order of the field in select, maybe is better thar use the function in order by
+      # Use the alias name instead of the expression to avoid double parameterization
+      # most databases (PG, SQLite, MySQL) support aliases in ORDER BY
+      v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end     
@@ -98,7 +100,10 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         else
           _validation = IntegerField()
         end
+        # Switch to having context for positional parameters
+        set_context!(instruc, :having)
         push!(instruc.having, "$(field) $(v.operator) $(_validation.formater(v.values))")
+        set_context!(instruc, :where)
         continue
       end
       push!(instruc._where, _get_filter_query(v, instruc))
@@ -149,7 +154,7 @@ end
 function build(object::SQLObject; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing, 
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
-  parameters::Union{Nothing, PormGPostgresParam} = nothing)
+  parameters::Union{Nothing, AbstractPormGParam} = nothing)
   ensure_model_transaction_scope(object.model)
   
   settings, connection, conn_key = get_settings(object, connection=connection)
@@ -166,10 +171,18 @@ function build(object::SQLObject;
     parameters = parameters,
   )   
   
+  # Switch context for each SQL section so positional-parameter backends
+  # (SQLite) push values into the correct bucket.
+  set_context!(instruct, :select)
   get_select_query(object.values, instruct)
+
+  set_context!(instruct, :where)
   get_filter_query(object, instruct)
+
+  set_context!(instruct, :join)
   build_row_join_sql_text(instruct)
-  get_order_query(object, instruct)
+
+  get_order_query(object, instruct)  # ORDER BY has no parameters
 
   @infiltrate false
   

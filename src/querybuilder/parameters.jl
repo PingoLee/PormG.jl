@@ -1,4 +1,10 @@
-
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL Implementation – numbered parameters ($1, $2 …)
+#
+# Stores a single linear vector of values and a counter.
+# The `current_context` field exists for interface compatibility but is ignored
+# because PostgreSQL uses numbered placeholders whose order is irrelevant.
+# ─────────────────────────────────────────────────────────────────────────────
 mutable struct PgParameterizedQuery <: PormGPostgresParam
   sql::String
   parameters::Union{AbstractVector, Tuple}
@@ -8,20 +14,83 @@ mutable struct PgParameterizedQuery <: PormGPostgresParam
 end
 get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Implementation – Contextual Bucket Strategy
+#
+# SQLite uses purely positional parameters (?).  Because code execution order
+# (filters first, then joins) does not match final SQL string order (JOINs
+# appear before WHERE), we cannot simply append to a single vector.
+#
+# Instead we maintain one vector per SQL section ("bucket").  As the query
+# builder processes each section it calls `set_context!` to switch the active
+# bucket.  `add_parameter!` pushes into the *active* bucket and always returns
+# "?".  After all sections are built, `get_final_parameters` concatenates the
+# buckets in standard SQL clause order so that the positional `?` markers line
+# up with their values.
+# ─────────────────────────────────────────────────────────────────────────────
 mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
   sql::String
-  parameters::Union{AbstractVector, Tuple}
+  # Separate buckets for each SQL section
+  cte_params::Vector{Any}
+  select_params::Vector{Any}
+  update_params::Vector{Any}
+  join_params::Vector{Any}
+  where_params::Vector{Any}
+  having_params::Vector{Any}
+  # Active bucket selector
+  current_context::Symbol
+  # Legacy compatibility: total count across all buckets
   parameter_count::Int
-  
-  SQLiteParameterizedQuery(sql::String, parameters::Union{AbstractVector, Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
-end
-get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery("", Any[], 0)
 
+  function SQLiteParameterizedQuery(sql::String="", current_context::Symbol=:where)
+    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], current_context, 0)
+  end
+end
+get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bucket accessor helper – returns the vector for the current context
+# ─────────────────────────────────────────────────────────────────────────────
+function _current_bucket(sq::SQLiteParameterizedQuery)::Vector{Any}
+  ctx = sq.current_context
+  ctx === :cte     && return sq.cte_params
+  ctx === :select  && return sq.select_params
+  ctx === :update  && return sq.update_params
+  ctx === :join    && return sq.join_params
+  ctx === :where   && return sq.where_params
+  ctx === :having  && return sq.having_params
+  # Fallback – treat unknown contexts as :where so nothing silently breaks
+  return sq.where_params
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# set_context!  – switch the active bucket before processing each SQL section
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+    set_context!(params::AbstractPormGParam, context::Symbol)
+
+Switch the active parameter bucket for positional-parameter backends (SQLite).
+Valid contexts: `:cte`, `:select`, `:join`, `:where`, `:having`.
+
+For numbered-parameter backends (PostgreSQL) this is a no-op.
+"""
+set_context!(::PormGPostgresParam, ::Symbol) = nothing   # no-op for Postgres
+function set_context!(sq::PormGSQLiteParam, context::Symbol)
+  sq.current_context = context
+  return nothing
+end
+# Convenience: operate on the instruction object directly
+set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== nothing ? set_context!(instruc.parameters, context) : nothing
+
+# ─────────────────────────────────────────────────────────────────────────────
+# add_parameter!  – push a value and return the placeholder string
+# ─────────────────────────────────────────────────────────────────────────────
+
+# --- PostgreSQL (unchanged behaviour) ---
 function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false)
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
   push!(pq.parameters, value)
-  # push!(pq.parameters, "ANY(\$$(pq.parameter_count))")
   return "\$$(pq.parameter_count)"
 end
 function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false)::String
@@ -30,16 +99,82 @@ function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false)::
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)"  # PostgreSQL style
 end
+
+# --- SQLite – Contextual Bucket Strategy ---
 function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool = false)
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
-  sq.parameter_count += 1
-  push!(sq.parameters, value)
-  return "?$(sq.parameter_count)"
+  # Expand array into multiple positional parameters for SQLite
+  placeholders = join(fill("?", length(value)), ", ")
+  for v in value
+    sq.parameter_count += 1
+    push!(_current_bucket(sq), v)
+  end
+  return placeholders
 end
 function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool = false)::String
   contains && (value = string("%", value |> escape_like_pattern, "%"))  # Escape LIKE patterns if needed
   sq.parameter_count += 1
-  push!(sq.parameters, value)
-  return "?$(sq.parameter_count)"  # SQLite style
+  push!(_current_bucket(sq), value)
+  return "?"  # SQLite positional style
 end
+
+# --- SQLInstruction convenience (works for both backends) ---
 add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool = false) = add_parameter!(instruc.parameters, value; contains = contains)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# get_final_parameters – return the parameters in correct SQL clause order
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+    get_final_parameters(p::AbstractPormGParam) -> Vector{Any}
+
+Return all collected parameter values in the order expected by the final SQL string.
+
+- **PostgreSQL**: returns the single linear vector (order already matches `\$N` numbering).
+- **SQLite**: concatenates buckets in standard SQL clause order:
+  `cte → select → join → where → having`
+  so that each positional `?` aligns with its value.
+"""
+get_final_parameters(p::PormGPostgresParam)::Vector{Any} = p.parameters isa Vector{Any} ? p.parameters : collect(p.parameters)
+
+function get_final_parameters(p::PormGSQLiteParam)::Vector{Any}
+  return vcat(
+    p.cte_params, 
+    p.select_params, 
+    p.update_params, 
+    p.join_params, 
+    p.where_params, 
+    p.having_params
+  )
+end
+
+# Legacy compatibility: `.parameters` property access for SQLite
+# Many places in the codebase access `params.parameters` directly.
+# For SQLite with buckets, we provide this via `get_final_parameters`.
+# We define a custom `getproperty` so that `sq.parameters` returns the
+# concatenated vector in correct SQL order.
+function Base.getproperty(sq::SQLiteParameterizedQuery, name::Symbol)
+  if name === :parameters
+    return get_final_parameters(sq)
+  else
+    return getfield(sq, name)
+  end
+end
+
+function Base.hasproperty(::SQLiteParameterizedQuery, name::Symbol)
+  return name in (:sql, :cte_params, :select_params, :join_params, :where_params, :having_params, :current_context, :parameter_count, :parameters)
+end
+
+# Deep copy support – execution_bulk.jl relies on deepcopy(instruction.parameters)
+function Base.deepcopy_internal(sq::SQLiteParameterizedQuery, stackdict::IdDict)
+  haskey(stackdict, sq) && return stackdict[sq]::SQLiteParameterizedQuery
+  new_sq = SQLiteParameterizedQuery(sq.sql, sq.current_context)
+  # Copy each bucket
+  setfield!(new_sq, :cte_params, Base.deepcopy_internal(getfield(sq, :cte_params), stackdict))
+  setfield!(new_sq, :select_params, Base.deepcopy_internal(getfield(sq, :select_params), stackdict))
+  setfield!(new_sq, :join_params, Base.deepcopy_internal(getfield(sq, :join_params), stackdict))
+  setfield!(new_sq, :where_params, Base.deepcopy_internal(getfield(sq, :where_params), stackdict))
+  setfield!(new_sq, :having_params, Base.deepcopy_internal(getfield(sq, :having_params), stackdict))
+  setfield!(new_sq, :parameter_count, getfield(sq, :parameter_count))
+  stackdict[sq] = new_sq
+  return new_sq
+end

@@ -3,7 +3,7 @@ using Dates
 using SQLite
 using DataFrames
 using LibPQ
-import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres, PormGSQLite
+import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique
@@ -149,7 +149,12 @@ function CAST(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   return """($column)::$(format["type"])"""
 end
 function CAST(column::String, format::Dict{String, Any}, conn::PormGSQLite)
-  return "CAST($column AS $(sqlite_type_map_reverse[format["type"]]))"
+  target_type = uppercase(format["type"])
+  if haskey(sqlite_type_map_reverse, target_type)
+    return "CAST($column AS $(sqlite_type_map_reverse[target_type]))"
+  else
+    return "CAST($column AS $(target_type))"
+  end
 end
 function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::PormGPostgres)
   return "CONCAT($(join(column, ",\n")))"
@@ -163,6 +168,30 @@ function EXTRACT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   else
     return "EXTRACT($(format["part"]) FROM $(column))"  
   end
+end
+function EXTRACT(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+  part = format["part"]
+  strftime_format = if part == "YEAR"
+    "%Y"
+  elseif part == "MONTH"
+    "%m"
+  elseif part == "DAY"
+    "%d"
+  elseif part == "HOUR"
+    "%H"
+  elseif part == "MINUTE"
+    "%M"
+  elseif part == "SECOND"
+    "%S"
+  elseif part == "DOW"
+    "%w"
+  elseif part == "DOY"
+    "%j"
+  else
+    throw(ArgumentError("Unsupported extract part for SQLite: $part"))
+  end
+  
+  return "CAST(strftime('$(strftime_format)', $(column)) AS INTEGER)"
 end
 function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
@@ -181,6 +210,9 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgre
   end
 end
 function CASE(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+  return """CASE $(column) ELSE $(format["else"]) END"""
+end
+function CASE(column::String, format::Dict{String, Any}, conn::PormGSQLite)
   return """CASE $(column) ELSE $(format["else"]) END"""
 end
 function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
@@ -213,12 +245,20 @@ function COALESCE(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGSQ
   return "COALESCE($(join(columns, ", ")))"
 end
 
-function GREATEST(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function GREATEST(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
   return "GREATEST($(join(columns, ", ")))"
 end
 
-function LEAST(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function GREATEST(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
+  return "MAX($(join(columns, ", ")))"
+end
+
+function LEAST(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
   return "LEAST($(join(columns, ", ")))"
+end
+
+function LEAST(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
+  return "MIN($(join(columns, ", ")))"
 end
 
 function NULLIF(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
@@ -251,6 +291,15 @@ function ROUND(column::String, format::Dict{String, Any}, conn::PormGPostgres)
     return "ROUND(($(column))::numeric)"
   else
     return "ROUND(($(column))::numeric, $(precision))"
+  end
+end
+
+function ROUND(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+  precision = get(format, "precision", 0)
+  if precision == 0
+    return "ROUND($(column))"
+  else
+    return "ROUND($(column), $(precision))"
   end
 end
 
@@ -823,14 +872,65 @@ end
 function contains(conn::PormGPostgres, column::String, value::String)::String 
   return "$(column) LIKE $(value)"
 end
-function contains(conn::PormGPostgres, column::String, value)
+function contains(conn::PormGSQLite, column::String, value::String)::String 
+  return "$(column) LIKE $(value)"
+end
+function contains(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end
+
 function icontains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ILIKE $(value)"
 end
-function icontains(conn::PormGPostgres, column::String, value)
+function icontains(conn::PormGSQLite, column::String, value::String)::String 
+  return "LOWER($(column)) LIKE LOWER($(value))"
+end
+function icontains(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function startswith(conn::PormGPostgres, column::String, value::String)::String 
+  return "$(column) LIKE $(value)"
+end
+function startswith(conn::PormGSQLite, column::String, value::String)::String 
+  return "$(column) LIKE $(value)"
+end
+function startswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function istartswith(conn::PormGPostgres, column::String, value::String)::String 
+  return "$(column) ILIKE $(value)"
+end
+function istartswith(conn::PormGSQLite, column::String, value::String)::String 
+  return "LOWER($(column)) LIKE LOWER($(value))"
+end
+function istartswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function endswith(conn::PormGPostgres, column::String, value::String)::String 
+  return "$(column) LIKE $(value)"
+end
+function endswith(conn::PormGSQLite, column::String, value::String)::String 
+  return "$(column) LIKE $(value)"
+end
+function endswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function iendswith(conn::PormGPostgres, column::String, value::String)::String 
+  return "$(column) ILIKE $(value)"
+end
+function iendswith(conn::PormGSQLite, column::String, value::String)::String 
+  return "LOWER($(column)) LIKE LOWER($(value))"
+end
+function iendswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end

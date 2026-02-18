@@ -154,7 +154,8 @@ end
 function build(object::SQLObject; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing, 
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
-  parameters::Union{Nothing, AbstractPormGParam} = nothing)
+  parameters::Union{Nothing, AbstractPormGParam} = nothing,
+  set_contexts::Bool = true)
   ensure_model_transaction_scope(object.model)
   
   settings, connection, conn_key = get_settings(object, connection=connection)
@@ -173,13 +174,14 @@ function build(object::SQLObject;
   
   # Switch context for each SQL section so positional-parameter backends
   # (SQLite) push values into the correct bucket.
-  set_context!(instruct, :select)
+  # Subqueries skip this to inherit the parent's current bucket.
+  set_contexts && set_context!(instruct, :select)
   get_select_query(object.values, instruct)
 
-  set_context!(instruct, :where)
+  set_contexts && set_context!(instruct, :where)
   get_filter_query(object, instruct)
 
-  set_context!(instruct, :join)
+  set_contexts && set_context!(instruct, :join)
   build_row_join_sql_text(instruct)
 
   get_order_query(object, instruct)  # ORDER BY has no parameters

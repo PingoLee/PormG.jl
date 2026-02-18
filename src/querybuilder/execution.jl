@@ -152,6 +152,9 @@ function query(q::SQLObjectHandler;
   
   settings, connection, conn_key = get_settings(q, connection=connection)
 
+  # Track if this is a subquery
+  is_subquery = parameters !== nothing
+
   # IMPORTANT: Create the shared parameters object BEFORE building CTEs
   # This ensures all CTEs and the main query use sequential parameter numbering
   if parameters === nothing
@@ -164,17 +167,18 @@ function query(q::SQLObjectHandler;
 
   # Build WITH clause - passes the SAME parameters object
   # CTE context is set inside build_cte_clause
-  set_context!(parameters, :cte)
+  !is_subquery && set_context!(parameters, :cte)
   with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)  
 
   @infiltrate false
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+  # Subqueries skip context switching to inherit the parent's current bucket.
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=!is_subquery)
   
   # Restore the context for parent query if this was a subquery
-  if old_context !== nothing
+  if is_subquery && old_context !== nothing
     set_context!(parameters, old_context)
   end
   if cte !== nothing
@@ -290,8 +294,8 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
   if query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int})
     return query_result[1, 1]
   else
-    row = Tables.rowtable(query_result) |> first
-    return first(values(row))
+    row = Tables.rowtable(query_result) |> Base.first
+    return Base.first(values(row))
   end
 end
 
@@ -412,13 +416,13 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   if connection isa PormGPostgres
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+    return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
   elseif connection isa PormGSQLite
     # SQLite: use fetch() to properly acquire/release from pool
     # Use RETURNING * if supported (SQLite 3.35+)
     try
         result = fetch(settings, sql * " RETURNING *;", parameters)
-        return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+        return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
     catch e
         # Fallback for older SQLite versions
         fetch(settings, sql, parameters)

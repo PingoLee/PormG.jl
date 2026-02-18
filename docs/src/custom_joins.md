@@ -41,7 +41,7 @@ First, let's set up some test data. The `New_join_position` model has a `result`
 
 ```julia
 # Clear and populate test data
-delete(M.New_join_position.objects, allow_delete_all = true, show_query = false)
+delete(M.New_join_position.objects, allow_delete_all = true)
 
 query = M.New_join_position.objects
 query.create("result" => 1, "description" => "teste 1")

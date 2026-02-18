@@ -79,6 +79,31 @@ function set_context!(sq::PormGSQLiteParam, context::Symbol)
   sq.current_context = context
   return nothing
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _apply_like_wildcards  – add wildcards based on operator type
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+    _apply_like_wildcards(value::Any, operator::String)::Any
+
+Apply appropriate LIKE wildcards based on the operator:
+- contains/icontains: %value%
+- startswith: value%
+- endswith: %value
+- Other operators: no wildcards
+"""
+function _apply_like_wildcards(value::Any, operator::String)::Any
+  escaped = escape_like_pattern(string(value))
+  if operator in ["contains", "icontains"]
+    return string("%", escaped, "%")
+  elseif operator == "startswith"
+    return string(escaped, "%")
+  elseif operator == "endswith"
+    return string("%", escaped)
+  else
+    return value
+  end
+end
 # Convenience: operate on the instruction object directly
 set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== nothing ? set_context!(instruc.parameters, context) : nothing
 
@@ -87,21 +112,23 @@ set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== 
 # ─────────────────────────────────────────────────────────────────────────────
 
 # --- PostgreSQL (unchanged behaviour) ---
-function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false)
+function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false, operator::String = "")
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)"
 end
-function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false)::String
-  contains && (value = string("%", value |> escape_like_pattern, "%"))  # Escape LIKE patterns if needed
+function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false, operator::String = "")::String
+  if contains
+    value = _apply_like_wildcards(value, operator)
+  end
   pq.parameter_count += 1
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)"  # PostgreSQL style
 end
 
 # --- SQLite – Contextual Bucket Strategy ---
-function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool = false)
+function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool = false, operator::String = "")
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   # Expand array into multiple positional parameters for SQLite
   placeholders = join(fill("?", length(value)), ", ")
@@ -111,15 +138,17 @@ function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bo
   end
   return placeholders
 end
-function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool = false)::String
-  contains && (value = string("%", value |> escape_like_pattern, "%"))  # Escape LIKE patterns if needed
+function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool = false, operator::String = "")::String
+  if contains
+    value = _apply_like_wildcards(value, operator)
+  end
   sq.parameter_count += 1
   push!(_current_bucket(sq), value)
   return "?"  # SQLite positional style
 end
 
 # --- SQLInstruction convenience (works for both backends) ---
-add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool = false) = add_parameter!(instruc.parameters, value; contains = contains)
+add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool = false, operator::String = "") = add_parameter!(instruc.parameters, value; contains = contains, operator = operator)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # get_final_parameters – return the parameters in correct SQL clause order

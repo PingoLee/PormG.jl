@@ -209,6 +209,11 @@ function build_cte_clause(ctes::Dict{String, CTEDict}, connection, parameters::U
     
     cte_query = cte_fields["query"]
     
+    # IMPORTANT: Set context to :cte for positional parameters (SQLite/MySQL)
+    # This ensures parameters inside the CTE land in the correct bucket
+    # and appear before main query parameters in the final SQL order.
+    set_context!(parameters, :cte)
+
     # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
     cte_sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields)
 

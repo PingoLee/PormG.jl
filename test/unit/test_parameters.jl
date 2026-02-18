@@ -187,4 +187,3 @@ end
     @test final == ["col1_val", "join_val", "filter_val"]
 end
 
-

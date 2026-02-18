@@ -165,10 +165,10 @@ PormG.config["default"] = MockSettings
     @test res_params isa Vector
     @test res_params == ["German"]
     
-    # Mode: true (should behave like :dict)
-    res_true = q |> list(show_query=true)
-    @test res_true isa Dict
-    @test haskey(res_true, :sql_text)
+    # Mode: :inspection (should behave like :dict)
+    res_inspection = q |> list(show_query=:inspection)
+    @test res_inspection isa Dict
+    @test haskey(res_inspection, :sql_text)
   end
   
   # ===== Section 8: Terminal Methods with show_query =====

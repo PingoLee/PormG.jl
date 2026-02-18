@@ -33,12 +33,12 @@ total, dict = delete(query)
 # Show the SQL query without executing it
 query = M.Just_a_test_deletion |> object
 query.filter("test_result__constructorid__name" => "Williams")
-total, dict = delete(query, show_query = true)
+total, dict = delete(query, show_query = :sql)
 
 # Delete related tables (cascading delete)
 query = M.Result |> object
 query.filter("resultid" => 1)
-total, dict = delete(query, show_query = false)
+total, dict = delete(query)
 
 # Delete all objects from a model (use with caution)
 query = M.Just_a_test_deletion |> object

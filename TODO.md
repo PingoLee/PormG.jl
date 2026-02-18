@@ -31,11 +31,11 @@ This document tracks missing features and planned improvements for PormG.jl, wit
     4. **Context Control**: `set_context!(params, context::Symbol)` to direct parameters to the correct bucket.
     5. **Finalization**: `get_final_parameters` returns `vcat` of buckets in standard SQL order.
     - [x] **show_query**: Update to support new parameter structure and ensure correct SQL string generation for each dialect. Finishing the concept of Symbol-based `show_query` modes for flexible inspection.
-    - [x] **Testing & Alignment Verification**:
-      - [x] **Positional Cross-Check**: Create tests that count the number of `?` in each SQL block (SELECT, JOIN, WHERE) and compare them against the length of the corresponding parameter bucket.
-      - [x] **Execution Order Stress Test**: Specifically test queries where JOINs are calculated dynamically based on filters to ensure parameter positions don't drift.
-      - [x] **Subquery Isolation**: Verify that nested subqueries correctly restore the parent's `current_context` after execution.
-      - [x] **Unit Tests**: Implement these using `inspect_query` and mocked connections in `test/unit/test_parameters.jl`.
+    - [ ] **Testing & Alignment Verification**:
+      - [ ] **Positional Cross-Check**: Create tests that count the number of `?` in each SQL block (SELECT, JOIN, WHERE) and compare them against the length of the corresponding parameter bucket.
+      - [ ] **Execution Order Stress Test**: Specifically test queries where JOINs are calculated dynamically based on filters to ensure parameter positions don't drift.
+      - [ ] **Subquery Isolation**: Verify that nested subqueries correctly restore the parent's `current_context` after execution.
+      - [ ] **Unit Tests**: Implement these using `inspect_query` and mocked connections in `test/unit/test_parameters.jl`.
 
 - [ ] **Modern Testing & CI**
   - [x] Create root `test/runtests.jl` for unified test entry.
@@ -102,6 +102,14 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Add a "PostgreSQL Power User" guide.
 - [ ] **Thread Safety**: Audit connection pool for concurrent `Async` safety.
 
+- [ ] **Think in this aproach** With new aproach:
+   # Main query joining CTE
+    q = M.Result.objects.with("r91" => races_91).filter(
+        "raceid" => F("r91__raceid"),
+        "positionorder" => 1
+    )
+
+- [ ] **Check name of operators**: `__@ne` or `__@neq`?
 
 ## Future Considerations
 - [ ] **Advanced Migration Architecture (Future)**

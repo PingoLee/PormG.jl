@@ -87,7 +87,7 @@ end
   # We check the functional correctness (DB updated) which proves binding was applied.
   query = M.Just_a_test_deletion.objects
   # Ensure a clean state for the test
-  query |> do_exists && delete(query; allow_delete_all=true)
+  query.exists() && delete(query; allow_delete_all=true)
   query.create("id" => 500, "name" => "original", "test_result" => 10)
 
   # Update two columns using a filter; this exercises both WHERE and SET bindings
@@ -162,8 +162,8 @@ end
   # Test 2: DELETE with show_query=:sql returns SQL string
   delete_queries = delete(M.Circuit.objects, allow_delete_all=true, show_query=:sql)
   # Verify the circuit table still exists after show_query (no actual deletion)
-  @test M.Circuit.objects |> do_exists
-  @test delete_queries isa String || delete_queries isa Vector{String}
+  @test M.Circuit.objects.exists()
+  @test delete_queries isa String || delete_queries isa Vector{Any}
 
   # Test 3: BULK_INSERT with show_query=:sql does not crash and returns SQL
   query = M.Constructor.objects

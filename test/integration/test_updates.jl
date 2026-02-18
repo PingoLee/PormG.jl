@@ -36,13 +36,13 @@ end
   for (index, row) in enumerate(eachrow(df))
       row.name = "test_bulk_update"
   end
-  bulk_update(query, df, columns=["name"], filters=["id", "test_result" => 1], show_query=false)
+  bulk_update(query, df, columns=["name"], filters=["id", "test_result" => 1], show_query=:execute)
   query = M.Just_a_test_deletion.objects
   query.filter("name" => "test_bulk_update")
   @test query.count() == 1
 
   # Removing the static filter restores the ability to update every row again
-  bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
+  bulk_update(query, df, columns=["name"], filters=["id"], show_query=:execute)
   query = M.Just_a_test_deletion.objects
   query.filter("name" => "test_bulk_update")
   @test query.count() == 3
@@ -69,7 +69,7 @@ end
   query.update("points" => F("points") - 1)
   df = query |> DataFrame
   @test df[1, :points] == 10.0
-  # query.update("points" => 10, show_query=true)
+  # query.update("points" => 10, show_query=:sql)
 
 end
 

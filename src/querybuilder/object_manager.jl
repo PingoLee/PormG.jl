@@ -62,7 +62,7 @@ end
 
 function up_update!(q::SQLObject, values; kwargs...)
   # check if kwargs is not empty and check if kwargs just contains show_query
-  show_query = false
+  show_query = :execute
   if !isempty(kwargs)
     for (k, v) in kwargs
       if k == :show_query
@@ -209,6 +209,7 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return ChainCaller(distinct!, q)
   elseif sym === :copy
     return () -> deepcopy(q)
+
       
   # === CATEGORY 2: Terminal methods (return result) ===
   # End the chain. E.g.: query.create(...) returns a Dict.

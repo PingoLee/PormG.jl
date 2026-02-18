@@ -439,7 +439,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.function_name])(v.values))
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
-    if !(v.operator in ["in", "not in"])
+    if !(v.operator in ["IN", "NOT IN"])
       @infiltrate 
       throw("Error in values, $(v.column.field) in filter is not a object")
     end
@@ -478,21 +478,25 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif haskey(instruc.object.model.fields, v.column.field)
       placeholders = nothing
       try
-        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains = v.operator in ["contains", "icontains"])
+        # Determine if this is a LIKE-based operator and which wildcard pattern to use
+        is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
+        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains = is_like_op, operator = v.operator)
       catch e
         @infiltrate false
         if contains(string(e), "The date") && contains(string(e), "is invalid")          
           throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
-        @infiltrate
+        @infiltrate false
         rethrow(e)
       end      
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @infiltrate false
-      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains = v.operator in ["contains", "icontains"])
+      is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
+      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains = is_like_op, operator = v.operator)
     elseif isa(v.column, SQLTypeField)
       @infiltrate false
-      placeholders = add_parameter!(instruc, v.values, contains = v.operator in ["contains", "icontains"])
+      is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
+      placeholders = add_parameter!(instruc, v.values, contains = is_like_op, operator = v.operator)
     else
       @infiltrate false
       throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
@@ -501,7 +505,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   
   if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
     return string(column, " ", v.operator, " ", placeholders)     
-  elseif v.operator in ["in", "not in"]
+  elseif v.operator in ["IN", "NOT IN"]
     if isa(placeholders, String)
       # Se placeholders for uma única string (ex: "$1" ou "?")
       if instruc.connection isa PormGPostgres
@@ -518,7 +522,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     else
       throw("Error in operator: $(v.operator), the value must be a String or a Vector of Strings")
     end
-  elseif v.operator in ["contains", "icontains"]
+  elseif v.operator in ["contains", "icontains", "startswith", "endswith"]
     @infiltrate false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else

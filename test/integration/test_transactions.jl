@@ -10,7 +10,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
 @testset "Transactions and Context Propagation" begin
   # cleanup
   @info "Running initial cleanup"
-  delete(M.Just_a_test_deletion.objects, allow_delete_all = true, show_query = false)
+  delete(M.Just_a_test_deletion.objects, allow_delete_all = true, show_query = :execute)
   @info "Cleanup finished"
 
   @testset "with_transaction block" begin

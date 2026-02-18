@@ -6,7 +6,7 @@ end
 
 
 @testset "Testing cjoin with simple join" begin
-  delete(M.New_join_position.objects, allow_delete_all = true, show_query = false)
+  delete(M.New_join_position.objects, allow_delete_all = true, show_query = :execute)
   query = M.New_join_position.objects;
   query.create("result" => 1, "description" => "teste 1")
   query.create("result" => 2, "description" => "teste 2")

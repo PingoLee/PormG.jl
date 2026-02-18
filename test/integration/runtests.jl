@@ -21,6 +21,7 @@ include("common_setup.jl")
 
     # Internos e Segurança
     @testset "Internals & Security"     begin include("test_internals.jl") end
+    @testset "SQLite Alignment"         begin include("test_alignment_sqlite.jl") end
     @testset "Test Password"            begin include("test_password.jl") end
     @testset "Test Password i18n"       begin include("test_password_i18n.jl") end
 

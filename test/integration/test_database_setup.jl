@@ -67,7 +67,7 @@ end
   end
 
   # Clear all tables
-  delete(M.Circuit.objects, allow_delete_all = true, show_query = false)
+  delete(M.Circuit.objects, allow_delete_all = true)
   delete(M.Status.objects, allow_delete_all = true)
   delete(M.Driver.objects, allow_delete_all = true)
   delete(M.Constructor.objects, allow_delete_all = true)

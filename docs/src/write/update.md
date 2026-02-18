@@ -37,12 +37,12 @@ query.update(
     "round" => 1
 )
 
-# Use show_query=true to see the generated SQL
-query.update(
+# Use show_query=:sql to see the generated SQL
+sql = query.update(
     "name" => "Australian Grand Prix",
     "date" => Date(2024, 3, 24),
     "round" => 1,
-    show_query=true
+    show_query=:sql
 )
 ```
 

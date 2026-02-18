@@ -27,7 +27,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
   
   if mode === :params
     return params_list
-  elseif mode === :dict
+  elseif mode === :dict || mode === :inspection
     # Rich metadata format used by inspect_query() or advanced debugging
     dialect = connection isa PormGPostgres ? :postgresql : :sqlite
     bucketing = connection isa PormGPostgres ? :numbered : :positional
@@ -55,7 +55,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
         :parameter_buckets => bucket_breakdown
     )
   else
-    throw(ArgumentError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :params, :none"))
+    throw(ArgumentError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :inspection, :params, :none"))
   end
 end
 
@@ -121,14 +121,14 @@ function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPost
   
   # 2. Delegate to appropriate dry-run
   if operation === :select
-      return query(q, show_query=:dict, connection=conn)
+      return query(q, show_query=:inspection, connection=conn)
   elseif operation === :insert
-      return insert(q.object, show_query=:dict, connection=conn)
+      return insert(q.object, show_query=:inspection, connection=conn)
   elseif operation === :update
-      return update(q.object, show_query=:dict, connection=conn)
+      return update(q.object, show_query=:inspection, connection=conn)
   elseif operation === :delete
-      res = delete(q, show_query=:dict, connection=conn)
-      # delete returns (count, results) when executing, but when show_query=:dict
+      res = delete(q, show_query=:inspection, connection=conn)
+      # delete returns (count, results) when executing, but when using inspection
       # it returns (results) or [(results)]. We want just the inspection dict.
       return res isa Tuple ? res[2] : (res isa Vector ? res[1] : res)
   else
@@ -186,40 +186,73 @@ function query(q::SQLObjectHandler;
   safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)  
   
-  respota = """$(with_clause)SELECT
-      $(q.object.distinct ? "DISTINCT" : "") $(_query_select(instruction.select ))
-    FROM $safe_table_name as $safe_alias
-    $(join(instruction.join, "\n"))
-    """
+  io = IOBuffer()
+  print(io, with_clause)
+  print(io, "SELECT\n    ")
+  if q.object.distinct
+    print(io, "DISTINCT ")
+  end
+  print(io, _query_select(instruction.select))
+  print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
+  
+  for j in instruction.join
+    print(io, j, "\n")
+  end
+
   if !isempty(instruction._where)
-    respota *= "WHERE " * join(instruction._where, " AND \n   ") * "\n"
+    print(io, "WHERE ")
+    for (i, w) in enumerate(instruction._where)
+      i > 1 && print(io, " AND \n   ")
+      print(io, w)
+    end
+    print(io, "\n")
   end
-  if instruction.agregate && size(instruction.group, 1) > 0
-    respota *= "GROUP BY $(join(instruction.group, ", ")) \n"
+  
+  if instruction.agregate && !isempty(instruction.group)
+    print(io, "GROUP BY ")
+    for (i, g) in enumerate(instruction.group)
+      i > 1 && print(io, ", ")
+      print(io, g)
+    end
+    print(io, " \n")
   end
+  
   if !isempty(instruction.having)
-    respota *= "HAVING " * join(instruction.having, " AND \n   ") * "\n"
+    print(io, "HAVING ")
+    for (i, h) in enumerate(instruction.having)
+      i > 1 && print(io, " AND \n   ")
+      print(io, h)
+    end
+    print(io, "\n")
   end
+  
   if !isempty(instruction.order)
-    respota *= "ORDER BY " * join(instruction.order, ", \n  ") * "\n"
+    print(io, "ORDER BY ")
+    for (i, o) in enumerate(instruction.order)
+      i > 1 && print(io, ", \n  ")
+      print(io, o)
+    end
+    print(io, "\n")
   end
+  
   if q.object.limit !== 0
-    respota *= "LIMIT $(q.object.limit) \n"
+    print(io, "LIMIT ", q.object.limit, " \n")
   end
+  
   if q.object.offset !== 0
-    respota *= "OFFSET $(q.object.offset) \n"
+    print(io, "OFFSET ", q.object.offset, " \n")
   end
+  
+  resposta = String(take!(io))
   
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
   
   if show_query !== :execute
-    return _show_query_result(respota, instruction.parameters, show_query; 
-                            connection=instruction.connection, 
-                            model_name=q.object.model.name, 
-                            operation=:select)
+    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select; 
+                            parameters=instruction.parameters)
   end
-  return respota
+  return resposta
 end
 show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)
 
@@ -371,10 +404,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   """
 
   if show_query !== :execute
-    return _show_query_result(sql, parameters, show_query; 
-                            connection=connection, 
-                            model_name=model.name, 
-                            operation=:insert)
+    return _show_query_result(show_query, sql, connection, model.name, :insert; 
+                            parameters=parameters)
   end
 
   # Execute safely
@@ -696,10 +727,8 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
 
   if show_query !== :execute
-    return _show_query_result(sql, parameters, show_query; 
-                            connection=connection, 
-                            model_name=model.name, 
-                            operation=:update)
+    return _show_query_result(show_query, sql, connection, model.name, :update; 
+                            parameters=parameters)
   end
 
   # @infiltrate

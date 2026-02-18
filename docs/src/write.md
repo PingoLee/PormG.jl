@@ -375,19 +375,17 @@ query.update(
 )
 
 # If you want to see the query (without executing it)
-query.update(
+sql = query.update(
     "name" => "Australian Grand Prix",
     "date" => Date(2024, 3, 24),
     "round" => 1,
-    show_query=true
+    show_query=:sql
 )
 ```
 
-The return value of the `update()` when show_query is true is:
+The return value of the `update()` when show_query is `:sql` is:
 ```julia
-┌ Info: UPDATE "race" AS "Tb"
-│ SET "name" = $2, "date" = $3, "round" = $4
-└ WHERE "Tb"."raceid" = $1
+"UPDATE \"race\" AS \"Tb\" SET \"name\" = $2, \"date\" = $3, \"round\" = $4 WHERE \"Tb\".\"raceid\" = $1"
 ```
 
 ### Updates with Relationships
@@ -399,15 +397,12 @@ query.filter("driverid__nationality" => "British", "resultid" => 1);
 query.update("points" => F("points") + 10)
 
 # if you want to see the query (without executing it)
-query.update("points" => F("points") + 10, show_query=true)
+sql = query.update("points" => F("points") + 10, show_query=:sql)
 
 # Update with complex JOINs
 query = M.Result.objects;
 query.filter("raceid__circuitid__name__@icontains" => "Monaco", "resultid" => 7654);
-query.update("points" => 11)
-
-
-query.update("points" => 10, show_query=true)
+query.update("points" => 11, show_query=:sql)
 ```
 
 ---
@@ -431,24 +426,18 @@ If you had created records with test_result values of 10, 11, and 12, the above 
 
 ```julia
 # Delete with multiple conditions (AND want just see the query without executing it)
+# Note: delete() returns a Vector{String} when there are multiple cascading queries
 query = M.Just_a_test_deletion.objects;
 query.filter("test_result__@in" => [11, 12], "test_result2__@isnull" => true)
-delete(query, show_query=true)
+delete_queries = delete(query, show_query=:sql)
 ```
 
-The return value of the above code is:
+The return value of the above code when using `show_query=:sql` is a String (or Vector of Strings if cascading):
 ```julia
-┌ Info: DELETE FROM just_a_test_deletion WHERE "id" IN (SELECT
-│    "Tb"."id" as id
-│ FROM "just_a_test_deletion" as "Tb"
-│ 
-│ WHERE "Tb"."test_result" = ANY($1) AND
-│    "Tb"."test_result2" IS NULL
-└ )
-(2, Dict{String, Integer}("just_a_test_deletion" => 2))
+"DELETE FROM just_a_test_deletion WHERE \"id\" IN (SELECT \"Tb\".\"id\" as id FROM \"just_a_test_deletion\" as \"Tb\" ...)"
 ```
 
-However, if you execute the above code, remove the `show_query` parameter, it will delete the records with test_result values of 11 and 12, and the return value will be:
+However, if you execute the above code without the `show_query` parameter, it will delete the records and return the counts:
 ```julia
 (2, Dict{String, Integer}("just_a_test_deletion" => 2))
 ```
@@ -639,17 +628,11 @@ df = query |> DataFrame
 query.update("positiontext" => F("raceid__circuitid__country"))
 
 # Yeah, I know, nothing this make any sense, but it's just an example
-query.update("grid" => F("driverid__number"), show_query=true)
-┌ Info: UPDATE "result" AS "Tb"
-│ SET "grid" = "Tb_1"."number"
-│ FROM "driver" AS "Tb_1"
-└ WHERE "Tb"."driverid" = "Tb_1"."driverid" AND "Tb"."resultid" = $1
+sql = query.update("grid" => F("driverid__number"), show_query=:sql)
+# Returns: "UPDATE \"result\" AS \"Tb\" SET \"grid\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb\".\"resultid\" = $1"
 
-query.update("positiontext" => F("raceid__circuitid__country"), show_query=true)
-┌ Info: UPDATE "result" AS "Tb"
-│ SET "positiontext" = "Tb_2"."country"
-│ FROM "race" AS "Tb_1", "circuit" AS "Tb_2"
-└ WHERE "Tb"."raceid" = "Tb_1"."raceid" AND "Tb_1"."circuitid" = "Tb_2"."circuitid" AND "Tb"."resultid" = $1
+sql = query.update("positiontext" => F("raceid__circuitid__country"), show_query=:sql)
+# Returns: "UPDATE \"result\" AS \"Tb\" SET \"positiontext\" = \"Tb_2\".\"country\" FROM \"race\" AS \"Tb_1\", \"circuit\" AS \"Tb_2\" WHERE \"Tb\".\"raceid\" = \"Tb_1\".\"raceid\" AND \"Tb_1\".\"circuitid\" = \"Tb_2\".\"circuitid\" AND \"Tb\".\"resultid\" = $1"
 ```
 
 ---

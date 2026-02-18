@@ -119,11 +119,16 @@ migrate("db_path", interactive=false)
   - Explain the **logic** (what are we testing?).
   - Explain the **expected SQL** (what should the generator produce?).
   - Explain the **Why** (why is this behavior important?).
-- **Debugging:** Use `show_query=true` in `bulk_insert`, `update`, or `delete` to print the generated SQL during debugging, but remove or comment it out for production tests.
+- **Debugging & Inspection:** 
+  - Use `show_query=:sql` in `bulk_insert`, `update`, or `delete` to retrieve the generated SQL string during debugging.
+  - Use `inspect_query(q)` to get comprehensive metadata (Dialect, Parameters, Buckets, Operation Type).
+  - Use `show_query=:none` for benchmarking the builder without execution or return overhead.
+  - Avoid leaving debugging prints in production tests.
 
 ### Command Reference
 - **Run Unit Tests:** `julia --project=. test/runtests.jl` (Does not require database).
 - **Run Integration Tests:** `julia -t auto --project=. test/integration/test.jl` (Requires live database).
+- **Inspect Query Metadata:** `q |> inspect_query() |> x -> println(x[:sql_text])`
 - **Refresh Config:** `julia --project=. -e 'using PormG; PormG.Configuration.load()'`
 - **Build Docs:** `julia --project=. docs/make.jl`
 

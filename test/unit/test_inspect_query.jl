@@ -318,9 +318,9 @@ PormG.config["default"] = MockSettings
     
     # Valid modes should work (using show_query to avoid actual DB execution with MockPostgres)
     @test (q |> PormG.QueryBuilder.list(show_query=:dict)) isa Dict
-    # @test (q |> PormG.QueryBuilder.list(show_query=:sql_text)) isa String # REMOVED
     @test (q |> PormG.QueryBuilder.list(show_query=:params)) isa Vector
-    @test (q |> PormG.QueryBuilder.list(show_query=true)) isa String # NOW RETURNS STRING
+    @test (q |> PormG.QueryBuilder.list(show_query=:sql)) isa String
+    @test (q |> PormG.QueryBuilder.list(show_query=:none)) === nothing
     
     # Invalid mode should throw
     @test_throws ArgumentError (q |> PormG.QueryBuilder.list(show_query=:invalid))

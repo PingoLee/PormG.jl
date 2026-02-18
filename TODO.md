@@ -30,6 +30,8 @@ This document tracks missing features and planned improvements for PormG.jl, wit
     3. **Positional (MySQL/SQLite)**: `PormGPositionalParam <: AbstractPormGParam` with distinct buckets for `cte_params`, `select_params`, `join_params`, `where_params`, `having_params`.
     4. **Context Control**: `set_context!(params, context::Symbol)` to direct parameters to the correct bucket.
     5. **Finalization**: `get_final_parameters` returns `vcat` of buckets in standard SQL order.
+    - [ ] **show_query**: Update to support new parameter structure and ensure correct SQL string generation for each dialect. Finishing the concept of Symbol-based `show_query` modes for flexible inspection.
+    - [ ] **Testing**: Unit tests for parameter generation and finalization across different query structures and dialects using mocked connections and inspection_query.
 
 - [ ] **Modern Testing & CI**
   - [x] Create root `test/runtests.jl` for unified test entry.
@@ -46,6 +48,12 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 - [ ] **Full Transaction Control**
   - [ ] **Savepoints**: Support for nested transactions/atomic blocks.
   - [ ] **Row-Level Locking**: `select_for_update()` with `SKIP LOCKED` and `OF` support.
+
+- [ ] **Query Inspection & Developer Tooling**
+  - [ ] **Intent Detection**: Improve the `:operation` heuristic in `inspect_query` to distinguish between `:select` and `:delete` without explicit overrides.
+  - [ ] **SQL Formatting**: Add a `:pretty` mode to `show_query` to return formatted/indented SQL for better readability in logs.
+  - [ ] **Explain Support**: Add an `explain_query()` API to return the database's `EXPLAIN (ANALYZE, BUFFERS)` output directly as metadata.
+
 
 
 ## 🐘 PostgreSQL Specific Enhancements

@@ -447,7 +447,7 @@ mutable struct Settings <: SQLConn
   django_prefix::Union{Nothing, String}
 
   Settings(;
-      app_env             = ENV["PORMG_ENV"],           
+      app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
       db_def_folder       = DB_PATH,
       model_file          = MODEL_FILE,
       db_config_settings  = Dict{String,Any}(),

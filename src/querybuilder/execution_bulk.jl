@@ -232,7 +232,7 @@ Inserts multiple rows into the database in bulk from a DataFrame.
 function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
     columns = nothing, 
     chunk_size::Integer = 1000,
-    show_query::Bool = false,
+    show_query::Symbol = :execute,
     copy::Bool = true
   ) 
   model = objct.object.model
@@ -261,6 +261,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert)
 
   # Build a list of row value strings by applying each model field formatter.
+  results = []
   insert_loop = () -> begin
     rows = String[]
     count::Integer = 0
@@ -288,7 +289,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       count += 1
       if count == chunk_size || index == total
         # @infiltrate
-        _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
+        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
+        push!(results, res)
         count = 0
         rows = String[]
         parameters = get_parameter(connection)
@@ -298,16 +300,22 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     end
   end
 
-  if show_query || transaction_connection_for(settings) !== nothing
+  if show_query !== :execute || transaction_connection_for(settings) !== nothing
     insert_loop()
   else
     run_in_transaction(insert_loop, settings)
+  end
+
+  if show_query !== :execute
+    return length(results) == 1 ? results[1] : results
   end
 
   return nothing
   
 end
 bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_insert(model |> object, df; kwargs...)
+bulk_insert(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_insert(objct, df; kwargs...)
+bulk_insert(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_insert(objct, df; kwargs...)
 
 """
     bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; kwargs...)
@@ -329,7 +337,7 @@ bulk_copy(M.Driver, df)
 """
 function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
     columns = nothing, 
-    show_query::Bool = false,
+    show_query::Symbol = :execute,
     copy::Bool = true
   ) 
   model = objct.object.model
@@ -362,8 +370,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Construct the COPY command (using CSV format for safety)
   sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE)"
   
-  if show_query
-    @info "SQL Query (COPY)" query=sql task_id=string(current_task())
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, Symbol("bulk_copy"))
   end
 
   # Process in chunks
@@ -417,7 +425,7 @@ end
 function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite}, 
   fields::Vector{String}, rows::Vector{String}, 
   pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
-  django_prefix::Bool, show_query::Bool, parameters:: AbstractPormGParam)
+  django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam)
 
   # Security: Quote table name and field names
   safe_table_name = safe_table_identifier(string(model.name), connection)
@@ -430,9 +438,8 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   """
 
   # Execute the query or just show it
-  if show_query
-    params_list = (parameters === nothing) ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :insert, parameters=parameters)
   else
     # Execute the query for the given connection type.
     if connection isa PormGPostgres
@@ -484,7 +491,7 @@ bulk_update(objct, df, columns=["security_id", "name", "dof"], filters=["securit
 function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
     columns=nothing, 
     filters=nothing, 
-    show_query::Bool=false, 
+    show_query::Symbol=:execute, 
     chunk_size::Integer=1000,
     copy::Bool=true)
 
@@ -495,11 +502,13 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
   
 end
 bulk_update(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_update(model |> object, df; kwargs...)
+bulk_update(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_update(objct, df; kwargs...)
+bulk_update(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_update(objct, df; kwargs...)
 
 function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},
   filters::Vector{Union{String, Pair{String, <:Any}}},
-  show_query::Bool,
+  show_query::Symbol,
   chunk_size::Integer=1000,
   copy::Bool=true)
 
@@ -614,6 +623,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   parameters_initial =  deepcopy(instruction.parameters)
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
+  results = []
   update_loop = () -> begin
     count::Integer = 0
     total::Integer = size(df, 1)
@@ -640,7 +650,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == chunk_size || index == total      
-        _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
+        res = _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
+        push!(results, res)
         count = 0
         rows = String[]
         instruction.parameters = deepcopy(parameters_initial) # reset parameters to initial state
@@ -651,10 +662,14 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   end
 
   has_active_tx = transaction_connection_for(settings) !== nothing
-  if show_query || !(connection isa PormGPostgres) || has_active_tx
+  if show_query !== :execute || !(connection isa PormGPostgres) || has_active_tx
     update_loop()
   else
     run_in_transaction(update_loop, settings)
+  end
+
+  if show_query !== :execute
+    return length(results) == 1 ? results[1] : results
   end
 
   return nothing
@@ -668,7 +683,7 @@ function _bulk_update(model::PormGModel,
   rows::Vector{String}, 
   safe_set_clause::String, 
   dinanic_filters::Vector{String}, 
-  show_query::Bool,
+  show_query::Symbol,
   instruction::Union{SQLInstruction, Nothing})
 
   @infiltrate false
@@ -723,9 +738,8 @@ function _bulk_update(model::PormGModel,
     """
   end
 
-  if show_query 
-    params_list = instruction !== nothing && instruction.parameters !== nothing && hasproperty(instruction.parameters, :parameters) ? instruction.parameters.parameters : []
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :update, parameters=instruction.parameters)
   else 
     # Execute the query for the given connection type.
     fetch(connection, sql, instruction.parameters)

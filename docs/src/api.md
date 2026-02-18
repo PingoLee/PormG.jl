@@ -11,8 +11,29 @@ The `PormG` module provides a set of abstractions and functions for working with
 - **Usage**: `query = M.Model_name.objects;`
 
 ### `show_query`
-- **Description**: Displays the SQL query that will be executed.
-- **Usage**: `show_query(...)`
+- **Description**: Integrated switch in all query execution methods to toggle between execution and inspection.
+- **Modes**: 
+  - `false` (default) - Executes the query and returns results
+  - `true` - Returns SQL **string** only (Minimal overhead for benchmarking)
+  - `:dict` - Returns full metadata dictionary (sql, parameters, dialect, model, operation, etc.)
+  - `:params` - Returns parameters array only
+  - `:none` - Returns `nothing` (Zero-overhead mode for benchmarking the builder itself)
+- **Usage**: 
+  ```julia
+  query = M.Driver.objects.filter("nationality" => "British")
+  # Benchmark the builder without execution or return overhead
+  @time query.list(show_query=:none) 
+  ```
+
+### `inspect_query`
+- **Description**: Dedicated API for comprehensive query inspection without executing. Returns rich metadata including SQL, parameters, dialect, and bucketing information.
+- **Returns**: A `Dict` with full metadata (sql, parameters, dialect, model, operation, bucketing, etc.)
+- **Usage**: 
+  ```julia
+  query = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname")
+  inspection = query |> inspect_query()
+  println(inspection[:operation]) # Access rich metadata
+  ```
 
 ### `list`
 - **Description**: Lists records from the database.

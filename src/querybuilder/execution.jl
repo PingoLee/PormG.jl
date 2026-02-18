@@ -1,10 +1,148 @@
 
+function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, PormGPostgres, PormGSQLite}, model::Union{PormGModel, String}, operation::Symbol;
+                          parameters::Union{Nothing, AbstractPormGParam} = nothing)
+  
+  if mode === :none
+    return nothing # Zero-allocation mode for benchmarking the builder
+  elseif mode === :sql
+    return sql # Simplicity: just the SQL string (fast benchmarking)
+  elseif mode === :execute
+    # Safety check: this function shouldn't be called with :execute,
+    # but we return SQL just in case to avoid a crash.
+    return sql
+  end
+
+  # Resolve model name
+  model_name = model isa PormGModel ? model.name : String(model)
+
+  # For formats requiring parameters, prepare the list
+  params_list = if parameters === nothing
+    []
+  elseif hasproperty(parameters, :parameters)
+    parameters.parameters
+  else
+    # Fallback for AbstractPormGParam if it doesn't have .parameters field
+    []
+  end
+  
+  if mode === :params
+    return params_list
+  elseif mode === :dict
+    # Rich metadata format used by inspect_query() or advanced debugging
+    dialect = connection isa PormGPostgres ? :postgresql : :sqlite
+    bucketing = connection isa PormGPostgres ? :numbered : :positional
+    
+    bucket_breakdown = Dict{Symbol, Vector{Any}}()
+    if parameters isa PormGSQLiteParam
+       bucket_breakdown = Dict(
+        :cte => parameters.cte_params,
+        :select => parameters.select_params,
+        :update => parameters.update_params,
+        :join => parameters.join_params,
+        :where => parameters.where_params,
+        :having => parameters.having_params
+      )
+    end
+
+    return Dict(
+        :sql_text => sql, 
+        :parameters => params_list,
+        :dialect => dialect,
+        :model => model_name,
+        :operation => operation,
+        :bucketing => bucketing,
+        :parameter_count => length(params_list),
+        :parameter_buckets => bucket_breakdown
+    )
+  else
+    throw(ArgumentError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :params, :none"))
+  end
+end
+
+"""
+    inspect_query(q::SQLObjectHandler) -> Dict
+
+Comprehensive query inspection API that provides full metadata about a query without executing it.
+Returns a rich dictionary with SQL, parameters, dialect information, and structural metadata.
+
+This is the explicit API for query inspection - use this when you want to examine a query's structure
+and generated SQL without ambiguity.
+
+# Arguments
+- `q::SQLObjectHandler`: The query object to inspect
+- `operation::Union{Nothing, Symbol} = nothing`: Optional operation override (:select, :insert, :update, :delete).
+  If not provided, the operation is detected automatically based on the query structure.
+
+# Returns
+- `Dict`: A dictionary containing:
+  - `:sql_text` (String): The generated SQL query
+  - `:parameters` (Vector): The parameterized values in bucket order
+  - `:dialect` (Symbol): The database dialect (`:postgresql` or `:sqlite`)
+  - `:model` (String): The model/table name
+  - `:operation` (Symbol): The query operation type (`:select`, `:insert`, `:update`, `:delete`)
+  - `:bucketing` (Symbol): The parameter bucketing strategy (`:numbered` for PostgreSQL, `:positional` for SQLite)
+  - `:parameter_count` (Int): Number of parameters
+  - `:parameter_buckets` (Dict): Breakdown of parameters by bucket (for positional strategies)
+
+# Example
+```julia
+q = M.Driver.objects
+q.filter("nationality" => "British")
+q.order_by("surname")
+
+inspection = q |> inspect_query()
+# Dict with:
+# :sql_text => "SELECT ... WHERE drivers.nationality = \$1 ORDER BY ..."
+# :parameters => ["British"]
+# :dialect => :postgresql
+# :model => "drivers"
+# :operation => :select
+# :bucketing => :numbered
+```
+"""
+function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, operation::Union{Nothing, Symbol} = nothing)
+  # Force builder to run without execution
+  # We reuse the internal query building logic
+  settings, conn, conn_key = get_settings(q, connection=connection)
+  
+  # 1. Operation detection heuristic
+  if operation === nothing
+    if !isempty(q.object.insert)
+      # If it has data in the 'insert' field, it's either an INSERT or an UPDATE.
+      # UPDATE typically has filters (WHERE), INSERT typically does not.
+      operation = isempty(q.object.filter) ? :insert : :update
+    else
+      # Default to :select (safe, most common)
+      # Note: :delete is ambiguous with :select if only filters are present,
+      # so it must be explicitly requested via inspect_query(operation=:delete)
+      operation = :select
+    end
+  end
+  
+  # 2. Delegate to appropriate dry-run
+  if operation === :select
+      return query(q, show_query=:dict, connection=conn)
+  elseif operation === :insert
+      return insert(q.object, show_query=:dict, connection=conn)
+  elseif operation === :update
+      return update(q.object, show_query=:dict, connection=conn)
+  elseif operation === :delete
+      res = delete(q, show_query=:dict, connection=conn)
+      # delete returns (count, results) when executing, but when show_query=:dict
+      # it returns (results) or [(results)]. We want just the inspection dict.
+      return res isa Tuple ? res[2] : (res isa Vector ? res[1] : res)
+  else
+      throw(ArgumentError("Unsupported or unknown operation for inspection: $operation"))
+  end
+end
+inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
+
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
   parameters::Union{Nothing, AbstractPormGParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
-  show_query::Bool = false
+  show_query::Symbol = :execute
   )
 
   @infiltrate false
@@ -75,21 +213,15 @@ function query(q::SQLObjectHandler;
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
   
-  # println(instruction.parameters)
-    # $(instruction.agregate && size(instruction.group, 1) > 0 ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
-    # $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
-    # $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
-    # $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
-    # """
-  # @info respota  
-  if show_query
-    params_list = instruction.parameters.parameters
-    @info "SQL Query" query=respota params=params_list |> string task_id=string(current_task())
-    return nothing
+  if show_query !== :execute
+    return _show_query_result(respota, instruction.parameters, show_query; 
+                            connection=instruction.connection, 
+                            model_name=q.object.model.name, 
+                            operation=:select)
   end
   return respota
 end
-show_query(q::SQLObjectHandler) = query(q; show_query=true)
+show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)
 
 # ---
 # Count or check if exists
@@ -170,8 +302,8 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   end
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
-  real_obj = objct isa SQLObjectHandler ? objct.object : objct
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
+real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
   ensure_model_transaction_scope(model)
   
@@ -238,7 +370,12 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   )
   """
 
-  # @info sql
+  if show_query !== :execute
+    return _show_query_result(sql, parameters, show_query; 
+                            connection=connection, 
+                            model_name=model.name, 
+                            operation=:insert)
+  end
 
   # Execute safely
   if connection isa PormGPostgres
@@ -472,7 +609,7 @@ function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vect
   return _get_join_condition_list(row_join, connection)
 end
 
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Bool = false)
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
   ensure_model_transaction_scope(model)
@@ -558,10 +695,11 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     """
   end
 
-  if show_query
-    params_list = (parameters === nothing) ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
-    return sql
+  if show_query !== :execute
+    return _show_query_result(sql, parameters, show_query; 
+                            connection=connection, 
+                            model_name=model.name, 
+                            operation=:update)
   end
 
   # @infiltrate
@@ -605,11 +743,14 @@ query.order_by("-laps")
 df = query |> list |> DataFrame
 ```
 """
-function query_list(objct::SQLObjectHandler)
+function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
 
-  sql = query(objct, connection=connection)
+  sql = query(objct, connection=connection, show_query=show_query)
+  if show_query !== :execute
+     return sql
+  end
   return fetch(settings, sql, objct.object.parameters) 
 end
 
@@ -656,10 +797,14 @@ records = query |> list  # Returns array of dictionaries
 # Example output: [Dict(:driverid__forename => "Lewis", :constructorid__name => "Mercedes", :laps => 58), ...]
 ```
 """
-function list(objct::SQLObjectHandler)
-  result = query_list(objct)
+function list(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  result = query_list(objct, show_query=show_query)
+  if show_query !== :execute
+    return result
+  end
   return Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
 end
+list(; kwargs...) = (objct) -> list(objct; kwargs...)
 
 """
 Fetches a list of records from the database and returns them as a JSON string.
@@ -681,9 +826,23 @@ json_data = query |> list_json  # Returns JSON string
 # Example output: "[{\"driverid__forename\":\"Lewis\",\"constructorid__name\":\"Mercedes\",\"laps\":58}]"
 ```
 """
-function list_json(objct::SQLObjectHandler)
-  records = list(objct)
+function list_json(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  records = list(objct, show_query=show_query)
+  if show_query !== :execute
+    return records
+  end
   # Convert Symbol keys to String keys for JSON serialization
   string_key_records = [Dict(String(k) => v for (k, v) in pairs(record)) for record in records]
   return JSON.json(string_key_records)
 end
+list_json(; kwargs...) = (objct) -> list_json(objct; kwargs...)
+
+function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  objct.limit(1)
+  res = list(objct, show_query=show_query)
+  if show_query !== :execute
+    return res
+  end
+  return isempty(res) ? nothing : res[1]
+end
+first(; kwargs...) = (objct) -> first(objct; kwargs...)

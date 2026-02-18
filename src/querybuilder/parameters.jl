@@ -161,7 +161,7 @@ function Base.getproperty(sq::SQLiteParameterizedQuery, name::Symbol)
 end
 
 function Base.hasproperty(::SQLiteParameterizedQuery, name::Symbol)
-  return name in (:sql, :cte_params, :select_params, :join_params, :where_params, :having_params, :current_context, :parameter_count, :parameters)
+  return name in (:sql, :cte_params, :select_params, :update_params, :join_params, :where_params, :having_params, :current_context, :parameter_count, :parameters)
 end
 
 # Deep copy support – execution_bulk.jl relies on deepcopy(instruction.parameters)
@@ -171,6 +171,7 @@ function Base.deepcopy_internal(sq::SQLiteParameterizedQuery, stackdict::IdDict)
   # Copy each bucket
   setfield!(new_sq, :cte_params, Base.deepcopy_internal(getfield(sq, :cte_params), stackdict))
   setfield!(new_sq, :select_params, Base.deepcopy_internal(getfield(sq, :select_params), stackdict))
+  setfield!(new_sq, :update_params, Base.deepcopy_internal(getfield(sq, :update_params), stackdict))
   setfield!(new_sq, :join_params, Base.deepcopy_internal(getfield(sq, :join_params), stackdict))
   setfield!(new_sq, :where_params, Base.deepcopy_internal(getfield(sq, :where_params), stackdict))
   setfield!(new_sq, :having_params, Base.deepcopy_internal(getfield(sq, :having_params), stackdict))

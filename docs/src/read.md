@@ -311,7 +311,8 @@ df = query |> DataFrame
    1 │      2  missing   09:00:00  missing      missing     Malaysian Grand Prix  missing        2  missing   missing     2009  2009-04-05  http://en.wikipedia.org/wiki/200…  missing   missing             2  missing   missing 
 
 # How you can see, each filter adds to the WHERE clause
-@info query |> show_query
+inspection = query |> inspect_query()
+println(inspection[:sql_text])  # Print the generated SQL
 
 # Using functions in VALUES (SELECT clause)  
 query.values("date__@year", "date__@month")  # Select year and month components
@@ -466,25 +467,28 @@ df = query |> DataFrame
   38 │ Finished          Suzuka Circuit                 Ayrton              McLaren                       3         2         1
   39 │ Finished          Suzuka Circuit                 Ayrton              Team Lotus                    1         7         7
 
-@info query |> show_query
-┌ Info: SELECT
-│    "Tb_1"."status" as statusid__status, 
-│   "Tb_3"."name" as raceid__circuitid__name, 
-│   "Tb_4"."forename" as driverid__forename, 
-│   "Tb_5"."name" as constructorid__name, 
-│   COUNT("Tb"."grid") as count_grid, 
-│   MAX("Tb"."grid") as max_grid, 
-│   MIN("Tb"."grid") as min_grid
-│ FROM "result" as "Tb"
-│  INNER JOIN "status" AS "Tb_1" ON "Tb"."statusid" = "Tb_1"."statusid" 
-│  INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid" 
-│  INNER JOIN "circuit" AS "Tb_3" ON "Tb_2"."circuitid" = "Tb_3"."circuitid" 
-│  INNER JOIN "driver" AS "Tb_4" ON "Tb"."driverid" = "Tb_4"."driverid" 
-│  INNER JOIN "constructor" AS "Tb_5" ON "Tb"."constructorid" = "Tb_5"."constructorid" 
-│ WHERE "Tb_1"."status" = $1 AND 
-│    "Tb_4"."forename" = $2
-│ GROUP BY 1, 2, 3, 4 
-└ ORDER BY "Tb_3"."name" ASC
+# Inspect the generated SQL
+inspection = query |> inspect_query()
+puts(inspection[:sql_text])
+# Output:
+# SELECT
+#    "Tb_1"."status" as statusid__status,
+#   "Tb_3"."name" as raceid__circuitid__name,
+#   "Tb_4"."forename" as driverid__forename,
+#   "Tb_5"."name" as constructorid__name,
+#   COUNT("Tb"."grid") as count_grid,
+#   MAX("Tb"."grid") as max_grid,
+#   MIN("Tb"."grid") as min_grid
+# FROM "result" as "Tb"
+#  INNER JOIN "status" AS "Tb_1" ON "Tb"."statusid" = "Tb_1"."statusid"
+#  INNER JOIN "race" AS "Tb_2" ON "Tb"."raceid" = "Tb_2"."raceid"
+#  INNER JOIN "circuit" AS "Tb_3" ON "Tb_2"."circuitid" = "Tb_3"."circuitid"
+#  INNER JOIN "driver" AS "Tb_4" ON "Tb"."driverid" = "Tb_4"."driverid"
+#  INNER JOIN "constructor" AS "Tb_5" ON "Tb"."constructorid" = "Tb_5"."constructorid"
+# WHERE "Tb_1"."status" = $1 AND
+#    "Tb_4"."forename" = $2
+# GROUP BY 1, 2, 3, 4
+# ORDER BY "Tb_3"."name" ASC
 ```
 
 ### Having Clauses
@@ -510,21 +514,24 @@ df = query |> DataFrame
  4022 │ Red Bull Ring                   Jean-Pierre             Renault                          1
  4023 │ Miami International Autodrome   Daniel                  RB F1 Team                       1
 
-@info query |> show_query 
-┌ Info: SELECT
-│    "Tb_2"."name" as raceid__circuitid__name, 
-│   "Tb_3"."forename" as driverid__forename, 
-│   "Tb_4"."name" as constructorid__name, 
-│   COUNT("Tb"."grid") as count_grid
-│ FROM "result" as "Tb"
-│  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid" 
-│  INNER JOIN "circuit" AS "Tb_2" ON "Tb_1"."circuitid" = "Tb_2"."circuitid" 
-│  INNER JOIN "driver" AS "Tb_3" ON "Tb"."driverid" = "Tb_3"."driverid" 
-│  INNER JOIN "constructor" AS "Tb_4" ON "Tb"."constructorid" = "Tb_4"."constructorid" 
-│  INNER JOIN "status" AS "Tb_5" ON "Tb"."statusid" = "Tb_5"."statusid" 
-│ WHERE "Tb_5"."status" = $1
-│ GROUP BY 1, 2, 3 
-└ HAVING COUNT("Tb"."grid") <= 3
+# Inspect the generated SQL with HAVING clause
+inspection = query |> inspect_query()
+puts(inspection[:sql_text])
+# Output:
+# SELECT
+#    "Tb_2"."name" as raceid__circuitid__name,
+#   "Tb_3"."forename" as driverid__forename,
+#   "Tb_4"."name" as constructorid__name,
+#   COUNT("Tb"."grid") as count_grid
+# FROM "result" as "Tb"
+#  INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+#  INNER JOIN "circuit" AS "Tb_2" ON "Tb_1"."circuitid" = "Tb_2"."circuitid"
+#  INNER JOIN "driver" AS "Tb_3" ON "Tb"."driverid" = "Tb_3"."driverid"
+#  INNER JOIN "constructor" AS "Tb_4" ON "Tb"."constructorid" = "Tb_4"."constructorid"
+#  INNER JOIN "status" AS "Tb_5" ON "Tb"."statusid" = "Tb_5"."statusid"
+# WHERE "Tb_5"."status" = $1
+# GROUP BY 1, 2, 3
+# HAVING COUNT("Tb"."grid") <= 3
 
 ```
 
@@ -709,21 +716,24 @@ df = query |> DataFrame
  2025 │    26761         5  Engine                12       859
  2026 │    26763         5  Engine                20       861
 
- @info query |> show_query
-┌ Info: SELECT
-│    "Tb"."resultid" as resultid, 
-│   "Tb"."statusid" as statusid, 
-│   "Tb_1"."status" as statusid__status, 
-│   "Tb"."grid" as grid, 
-│   "Tb"."driverid" as driverid
-│ FROM "result" as "Tb"
-│  INNER JOIN "status" AS "Tb_1" ON "Tb"."statusid" = "Tb_1"."statusid" 
-│ WHERE "Tb"."statusid" in (SELECT
-│           "R1"."statusid" as statusid
-│       FROM "status" as "R1"
-│ 
-│       WHERE "R1"."status" = $1
-└ )
+ # Inspect the generated SQL with subquery
+inspection = query |> inspect_query()
+puts(inspection[:sql_text])
+# Output:
+# SELECT
+#    "Tb"."resultid" as resultid,
+#   "Tb"."statusid" as statusid,
+#   "Tb_1"."status" as statusid__status,
+#   "Tb"."grid" as grid,
+#   "Tb"."driverid" as driverid
+# FROM "result" as "Tb"
+#  INNER JOIN "status" AS "Tb_1" ON "Tb"."statusid" = "Tb_1"."statusid"
+# WHERE "Tb"."statusid" in (SELECT
+#           "R1"."statusid" as statusid
+#       FROM "status" as "R1"
+#
+#       WHERE "R1"."status" = $1
+# )
 ```
 
 ### Complex Subquery with Additional Filters
@@ -1058,17 +1068,20 @@ df = query |> DataFrame
   83 │ Mika                     0.0           0.0           0.0
   84 │ Mika                     0.0           0.0           0.0
 
-@info query |> show_query
-┌ Info: SELECT
-│    "Tb_1"."forename" as driverid__forename, 
-│   "Tb"."points" as points, 
-│   ("Tb"."points" * $1) as bonus_points, 
-│   ("Tb"."points" + ("Tb"."points" * $2)) as total_points
-│ FROM "result" as "Tb"
-│  INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid" 
-│  INNER JOIN "status" AS "Tb_2" ON "Tb"."statusid" = "Tb_2"."statusid" 
-│ WHERE "Tb_2"."status" = $3 AND 
-└    "Tb_1"."forename" = $4
+# Inspect the generated SQL with expressions
+inspection = query |> inspect_query()
+puts(inspection[:sql_text])
+# Output:
+# SELECT
+#    "Tb_1"."forename" as driverid__forename,
+#   "Tb"."points" as points,
+#   ("Tb"."points" * $1) as bonus_points,
+#   ("Tb"."points" + ("Tb"."points" * $2)) as total_points
+# FROM "result" as "Tb"
+#  INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+#  INNER JOIN "status" AS "Tb_2" ON "Tb"."statusid" = "Tb_2"."statusid"
+# WHERE "Tb_2"."status" = $3 AND
+#    "Tb_1"."forename" = $4
 ```
 
 
@@ -1412,19 +1425,71 @@ query.order_by("grid", "-laps")  # grid ascending, laps descending
 df = query |> DataFrame
 ```
 
-### Query Debugging
+### Query Inspection and Debugging
+
+PormG provides two ways to inspect queries without executing them: the **dedicated `inspect_query()` API** for rich metadata, and the **integrated `show_query` switch** for quick debugging and benchmarking.
+
+#### Method 1: Dedicated Inspection API
+
+Use `inspect_query()` for comprehensive query metadata including SQL, parameters, dialect information, and bucketing details. This is best for programmatic analysis or tools.
 
 ```julia
-# Show generated SQL
 query = M.Result.objects
 query.filter("statusid__status" => "Finished")
-sql_string = query |> show_query
-println(sql_string)
 
-# Show query in bulk operations
-bulk_insert(query, df, show_query=true)
-bulk_update(query, df, columns=["name"], filters=["id"], show_query=true)
+# Get full query metadata
+inspection = query |> inspect_query()
+
+# Returns a Dict with rich metadata (:dialect, :model, :bucketing, etc.)
+puts inspection[:sql_text]    # Print just the SQL
 ```
+
+#### Method 2: Integrated `show_query` Switch
+
+Terminal methods like `.list()`, `.bulk_insert()`, etc., support a `show_query` parameter. This is ideal for quickly toggling between execution and inspection during development or benchmarking.
+
+```julia
+query = M.Result.objects.filter("statusid__status" => "Finished")
+
+# false (default) -> Executes the query and returns results
+results = query.list(show_query=false)
+
+# true -> Returns just the SQL string (Minimal overhead for benchmarking builder)
+sql_only = query.list(show_query=true)
+
+# :dict -> Returns a full metadata dictionary (sql, parameters, dialect, model, etc.)
+metadata = query.list(show_query=:dict)
+
+# :params -> Returns just the parameters array
+parameters = query.list(show_query=:params)
+
+# :none -> Returns nothing (Zero-allocation mode purely to test builder performance)
+query.list(show_query=:none)
+```
+
+#### Query Inspection with Bulk Operations
+
+You can also inspect the SQL generated by bulk operations:
+
+```julia
+# Inspect bulk_insert without executing (returns SQL string)
+sql = bulk_insert(df_data, show_query=true)
+
+# Inspect bulk_update with full metadata
+metadata = bulk_update(df_updates, columns=["name"], filters=["id"], show_query=:dict)
+```
+
+#### API Comparison
+
+| Feature | `show_query` Switch | `inspect_query()` API |
+|---------|---------------------|----------------------|
+| **Placement** | Argument in terminal methods | Standalone function / Pipe |
+| **Primary Use** | Benchmarking (fast), quick debug | Programmatic analysis, tools |
+| **`true` Mode** | Returns SQL **string** | N/A |
+| **`:dict` Mode** | Returns full metadata | Standard return format |
+| **`:none` Mode** | Builder run with zero-return | N/A |
+| **Scope** | Works for SELECT, INSERT, UPDATE, DELETE | Primarily for SELECT (list) |
+
 
 ## Summary of @ Syntax Rules
 

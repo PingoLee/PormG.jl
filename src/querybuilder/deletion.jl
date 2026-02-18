@@ -50,7 +50,7 @@ total, dict = delete(query; allow_delete_all = true)
 function delete(objct::SQLObjectHandler; 
     table_alias::Union{Nothing, SQLTableAlias} = nothing, 
     connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, 
-    show_query::Bool = false,
+    show_query::Symbol = :execute,
     allow_delete_all::Bool = false)
   model = objct.object.model
   ensure_model_transaction_scope(model)
@@ -64,8 +64,8 @@ function delete(objct::SQLObjectHandler;
   # don't allow to delete without filter
   !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")
   
-  # If no objects to delete, return early
-  if objct |> !do_exists
+  # If no objects to delete, return early (unless we're just inspecting the query)
+  if show_query === :execute && objct |> !do_exists
     return 0, Dict{String, Integer}()
   end
 
@@ -82,10 +82,12 @@ function delete(objct::SQLObjectHandler;
   process_collector!(collector)
 
   # Definition of run_deletions (backend agnostic)
+  results = []
   run_deletions = function(conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
     # Process fast deletes first (objects that can be deleted directly)
     for (model, keys) in collector.fast_deletes
-      delete_objects(connection, model, keys, show_query, deleted_counter, conn)
+      res = delete_objects(connection, model, keys, show_query, deleted_counter, conn)
+      push!(results, res)
       # Remove from objects to prevent double deletion
       delete!(collector.objects, model)
     end
@@ -93,7 +95,8 @@ function delete(objct::SQLObjectHandler;
     # Process field updates (for SET_NULL, SET_DEFAULT, etc.)
     for ((field, value), affected_models) in collector.field_updates
       for (affected_model, keys) in affected_models
-        update_field(connection, affected_model, field, value, keys, show_query, conn)
+        res = update_field(connection, affected_model, field, value, keys, show_query, conn)
+        push!(results, res)
       end
     end
     
@@ -101,13 +104,14 @@ function delete(objct::SQLObjectHandler;
     for model_to_delete in collector.sorted_models
       _array = get(collector.objects, model_to_delete, [])        
       if !isempty(_array)
-        delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+        res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+        push!(results, res)
       end
     end
   end
 
   tx_conn = transaction_connection_for(settings)
-  if show_query
+  if show_query !== :execute
     run_deletions(nothing)
   elseif tx_conn !== nothing
     run_deletions(tx_conn)
@@ -133,6 +137,10 @@ function delete(objct::SQLObjectHandler;
     end
   end
 
+  if show_query !== :execute
+    return length(results) == 1 ? results[1] : results
+  end
+
   total_deleted = sum(values(deleted_counter))
   if total_deleted == 0
     @warn("Warning in delete, no objects were deleted")  
@@ -140,6 +148,7 @@ function delete(objct::SQLObjectHandler;
   
   return total_deleted, deleted_counter
 end
+delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 
 function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjectHandler, model::PormGModel)
   # Extract IDs from objects - handle NamedTuples or Dict structures
@@ -350,7 +359,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
 end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Bool, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
+   show_query::Symbol, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
   @infiltrate false
   # Execute the actual deletion SQL
   _where = String[]
@@ -362,7 +371,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   end
   sql::String = ""
   if size(keys, 1) == 1
-    deleted_counter[model.name] = keys[1][:objct] |> do_count
+    deleted_counter[model.name] = show_query === :execute ? (keys[1][:objct] |> do_count) : 0
     sql = "DELETE FROM $(model.name |> lowercase) WHERE $(join(_where, " OR "))"
   else
     # TODO : this code has not been tested, I need to check if it works    
@@ -376,7 +385,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
       push!(or_object, "$(pk_field)__@in" => key[:objct])
     end
     _query.filter(or_object)
-    deleted_counter[model.name] = _query |> do_count
+    deleted_counter[model.name] = show_query === false ? (_query |> do_count) : 0
     _query.values(pk_field) # Ensure the query is built
     @infiltrate false
     sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
@@ -384,17 +393,15 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
 
   sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
       
-  if show_query
-    params_list = parameters === nothing ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
-    return deleted_counter  # Return count of deleted objects
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)
   end
   @infiltrate false
   result, conn = with_transaction(connection, sql, conn=conn, params=parameters)
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Bool, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
+function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Symbol, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
   # Update field values using query object like CASCADE
   @infiltrate false
   pk_field = keys[:key]
@@ -402,10 +409,8 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
   sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
-  if show_query
-    params_list = parameters === nothing ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
-    return
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end
   # LibPQ.execute(connection, sql)
   with_transaction(connection, sql, conn=conn, params=parameters)

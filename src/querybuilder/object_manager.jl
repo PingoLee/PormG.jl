@@ -51,13 +51,13 @@ function up_values!(q::SQLObject, values)
   return q
 end
   
-function up_create!(q::SQLObject, values)
+function up_create!(q::SQLObject, values; kwargs...)
   q.insert = Dict()
   for (k,v) in values   
     q.insert[k] = v 
   end  
 
-  return insert(q)
+  return insert(q; kwargs...)
 end
 
 function up_update!(q::SQLObject, values; kwargs...)
@@ -222,9 +222,11 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :exists
     return () -> do_exists(q)
   elseif sym === :list || sym === :all
-    return () -> list(q)
+    return (; kwargs...) -> list(q; kwargs...)
   elseif sym === :list_json
-    return () -> list_json(q)
+    return (; kwargs...) -> list_json(q; kwargs...)
+  elseif sym === :inspect_query || sym === :inspect
+    return (; kwargs...) -> inspect_query(q; kwargs...)
   elseif sym === :delete
     return (; kwargs...) -> delete(q; kwargs...)
       

@@ -112,6 +112,9 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 - [ ] **Check name of operators**: `__@ne` or `__@neq`?
 
 ## Future Considerations
+- [ ] **Parameterize LIMIT/OFFSET (Future)**
+  - **Context**: Currently, `LIMIT` and `OFFSET` are rendered as literal integers in the SQL string. This is safe (Julia enforces `Int` types), but parameterizing them would enable prepared statement caching across different page sizes and improve consistency with the bucket strategy.
+  - **Task**: Add a `:limit` bucket to `PormGPositionalParam`, render `LIMIT ?` / `OFFSET ?`, and append values at the tail of `get_final_parameters` (after `:having`).
 - [ ] **Advanced Migration Architecture (Future)**
   - [ ] **Migration History Table**: Create `pormg_migrations` table in DB to track applied migrations (stop relying only on filesystem).
   - [ ] **State-based Rollback**: Implement `rollback()` to automatically restore schema from `old_models.jl` history.

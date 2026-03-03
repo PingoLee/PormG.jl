@@ -34,6 +34,7 @@ The `PormG` module provides a set of abstractions and functions for working with
   inspection = query |> inspect_query()
   println(inspection[:operation]) # Automatically detects :select
   ```
+- **Note on parameter buckets:** `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string and do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
 
 ### `list`
 - **Description**: Lists records from the database.

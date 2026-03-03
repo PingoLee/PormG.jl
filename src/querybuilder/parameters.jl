@@ -7,10 +7,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 mutable struct PgParameterizedQuery <: PormGPostgresParam
   sql::String
-  parameters::Union{AbstractVector, Tuple}
+  parameters::Union{AbstractVector,Tuple}
   parameter_count::Int
 
-  PgParameterizedQuery(sql::String, parameters::Union{AbstractVector, Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
+  PgParameterizedQuery(sql::String, parameters::Union{AbstractVector,Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
 end
 get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
 
@@ -39,11 +39,9 @@ mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
   having_params::Vector{Any}
   # Active bucket selector
   current_context::Symbol
-  # Legacy compatibility: total count across all buckets
-  parameter_count::Int
 
   function SQLiteParameterizedQuery(sql::String="", current_context::Symbol=:where)
-    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], current_context, 0)
+    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], current_context)
   end
 end
 get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
@@ -53,13 +51,14 @@ get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
 # ─────────────────────────────────────────────────────────────────────────────
 function _current_bucket(sq::SQLiteParameterizedQuery)::Vector{Any}
   ctx = sq.current_context
-  ctx === :cte     && return sq.cte_params
-  ctx === :select  && return sq.select_params
-  ctx === :update  && return sq.update_params
-  ctx === :join    && return sq.join_params
-  ctx === :where   && return sq.where_params
-  ctx === :having  && return sq.having_params
-  # Fallback – treat unknown contexts as :where so nothing silently breaks
+  ctx === :cte && return sq.cte_params
+  ctx === :select && return sq.select_params
+  ctx === :update && return sq.update_params
+  ctx === :join && return sq.join_params
+  ctx === :where && return sq.where_params
+  ctx === :having && return sq.having_params
+  # Fallback – warn about unknown context and route to :where so nothing silently breaks
+  @warn "Unknown parameter context $(repr(ctx)), falling back to :where" ctx
   return sq.where_params
 end
 
@@ -70,7 +69,7 @@ end
     set_context!(params::AbstractPormGParam, context::Symbol)
 
 Switch the active parameter bucket for positional-parameter backends (SQLite).
-Valid contexts: `:cte`, `:select`, `:join`, `:where`, `:having`.
+Valid contexts: `:cte`, `:select`, `:update`, `:join`, `:where`, `:having`.
 
 For numbered-parameter backends (PostgreSQL) this is a no-op.
 """
@@ -112,13 +111,13 @@ set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== 
 # ─────────────────────────────────────────────────────────────────────────────
 
 # --- PostgreSQL (unchanged behaviour) ---
-function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool = false, operator::String = "")
+function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool=false, operator::String="")
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)"
 end
-function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false, operator::String = "")::String
+function add_parameter!(pq::PormGPostgresParam, value; contains::Bool=false, operator::String="")::String
   if contains
     value = _apply_like_wildcards(value, operator)
   end
@@ -128,27 +127,25 @@ function add_parameter!(pq::PormGPostgresParam, value; contains::Bool = false, o
 end
 
 # --- SQLite – Contextual Bucket Strategy ---
-function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool = false, operator::String = "")
+function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool=false, operator::String="")
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   # Expand array into multiple positional parameters for SQLite
   placeholders = join(fill("?", length(value)), ", ")
   for v in value
-    sq.parameter_count += 1
     push!(_current_bucket(sq), v)
   end
   return placeholders
 end
-function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool = false, operator::String = "")::String
+function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool=false, operator::String="")::String
   if contains
     value = _apply_like_wildcards(value, operator)
   end
-  sq.parameter_count += 1
   push!(_current_bucket(sq), value)
   return "?"  # SQLite positional style
 end
 
 # --- SQLInstruction convenience (works for both backends) ---
-add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool = false, operator::String = "") = add_parameter!(instruc.parameters, value; contains = contains, operator = operator)
+add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="") = add_parameter!(instruc.parameters, value; contains=contains, operator=operator)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # get_final_parameters – return the parameters in correct SQL clause order
@@ -167,11 +164,11 @@ get_final_parameters(p::PormGPostgresParam)::Vector{Any} = p.parameters isa Vect
 
 function get_final_parameters(p::PormGSQLiteParam)::Vector{Any}
   return vcat(
-    p.cte_params, 
-    p.select_params, 
-    p.update_params, 
-    p.join_params, 
-    p.where_params, 
+    p.cte_params,
+    p.select_params,
+    p.update_params,
+    p.join_params,
+    p.where_params,
     p.having_params
   )
 end
@@ -184,6 +181,11 @@ end
 function Base.getproperty(sq::SQLiteParameterizedQuery, name::Symbol)
   if name === :parameters
     return get_final_parameters(sq)
+  elseif name === :parameter_count
+    # Computed property: sum of all bucket lengths (no drift risk)
+    return length(getfield(sq, :cte_params)) + length(getfield(sq, :select_params)) +
+           length(getfield(sq, :update_params)) + length(getfield(sq, :join_params)) +
+           length(getfield(sq, :where_params)) + length(getfield(sq, :having_params))
   else
     return getfield(sq, name)
   end
@@ -204,7 +206,7 @@ function Base.deepcopy_internal(sq::SQLiteParameterizedQuery, stackdict::IdDict)
   setfield!(new_sq, :join_params, Base.deepcopy_internal(getfield(sq, :join_params), stackdict))
   setfield!(new_sq, :where_params, Base.deepcopy_internal(getfield(sq, :where_params), stackdict))
   setfield!(new_sq, :having_params, Base.deepcopy_internal(getfield(sq, :having_params), stackdict))
-  setfield!(new_sq, :parameter_count, getfield(sq, :parameter_count))
+  # parameter_count is now computed from bucket lengths — no need to copy
   stackdict[sq] = new_sq
   return new_sq
 end

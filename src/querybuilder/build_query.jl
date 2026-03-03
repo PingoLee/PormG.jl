@@ -10,13 +10,28 @@
   - `object::SQLObject`: The object containing the values to be selected.
   - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
 """
-function get_select_query(values::Vector{Union{SQLTypeText, SQLTypeField}}, instruc::SQLInstruction)
+function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
-    if isa(v_copy.field, SQLTypeFunction) 
+
+    # SQLText (from Value(x)) is a literal value, not a column reference.
+    # Handle it separately: parameterize via _get_select_query(::SQLText) 
+    # and use custom_as as the alias.
+    if isa(v_copy, SQLTypeText)
+      resolved = _get_select_query(v_copy, instruc)
+      # Wrap into an SQLField for consistent SELECT rendering
+      alias = v_copy.custom_as !== nothing ? v_copy.custom_as : v_copy._as
+      instruc.select[i] = SQLField(resolved, alias)
+      if alias !== nothing
+        instruc.cache[alias] = instruc.select[i]
+      end
+      continue
+    end
+
+    if isa(v_copy.field, SQLTypeFunction)
       if v_copy.field.agregate == false
         push!(instruc.group, i |> string)
-      else 
+      else
         instruc.agregate = true
       end
     else
@@ -33,12 +48,12 @@ function get_select_query(values::Vector{Union{SQLTypeText, SQLTypeField}}, inst
         throw(ArgumentError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
       instruc.cache[v_copy._as] = instruc.select[i]
-    end    
+    end
   end
 end
 
 function get_order_query(object::SQLObject, instruc::SQLInstruction)
-  for v in object.order 
+  for v in object.order
     found_in_select = false
     v_field_copy = deepcopy(v.field)
     if haskey(instruc.cache, v_field_copy._as)
@@ -47,9 +62,9 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
-    end     
+    end
     push!(instruc.order, string(v_field_copy.field, " ", v.orientation))
-    instruc.cache[v_field_copy._as] = v_field_copy   
+    instruc.cache[v_field_copy._as] = v_field_copy
 
     # check if the field is in the select
     for value in object.values
@@ -65,8 +80,8 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       push!(instruc.group, v_field_copy.field)
     end
 
-  end  
-  return nothing  
+  end
+  return nothing
 end
 
 """
@@ -81,7 +96,7 @@ end
   - `object::SQLObject`: The object containing the filter to be selected.
   - `instruc::SQLInstruction`: The SQLInstruction object to which the WHERE query will be added.
 """
-function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing 
+function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
   @infiltrate false
   for v in object.filter
@@ -102,76 +117,75 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         end
         # Switch to having context for positional parameters
         set_context!(instruc, :having)
-        push!(instruc.having, "$(field) $(v.operator) $(_validation.formater(v.values))")
+        placeholder = add_parameter!(instruc, _validation.formater(v.values))
+        push!(instruc.having, "$(field) $(v.operator) $(placeholder)")
         set_context!(instruc, :where)
         continue
       end
       push!(instruc._where, _get_filter_query(v, instruc))
-    elseif isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeF})
+    elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
       push!(instruc._where, _get_filter_query(v, instruc))
-    else      
+    else
       throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper")
     end
-  end  
+  end
   return nothing
 end
 
 function build_row_join_sql_text(instruc::SQLInstruction)
   @infiltrate false
   for value in instruc.row_join
+    # Switch to :join context before processing any filters or table markers inside this join
+    set_context!(instruc, :join)
     b_quoted = safe_table_identifier(value["b"], instruc.connection)
     alias_b_quoted = quote_identifier(value["alias_b"], instruc.connection)
     alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
     key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
     key_b_quoted = quote_identifier(value["key_b"], instruc.connection)
-    
+
     # Build base ON clause
     on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
-    
-    # Add additional ON conditions if present (from cjoin or CustomJoin)
+
+    # Add additional ON conditions if present (from cjoin)
     if haskey(value, "on_conditions") && value["on_conditions"] !== nothing
-      on_conditions = value["on_conditions"]::Vector{FilterType}      
+      on_conditions = value["on_conditions"]::Vector{FilterType}
       original_alias = instruc.alias
-      
+
       for condition in on_conditions
-        condition_sql = _get_filter_query(condition, instruc)        
+        condition_sql = _get_filter_query(condition, instruc)
         condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
-        
-        if haskey(value, "b")
-          table_b_name = value["b"]        
-        end
-        
+
         on_clause *= " AND $condition_sql"
       end
-      
+
       instruc.alias = original_alias
     end
-    
+
     push!(instruc.join, """ $(value["how"]) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
   end
 end
 
-function build(object::SQLObject; 
-  table_alias::Union{Nothing, SQLTableAlias} = nothing, 
-  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
-  parameters::Union{Nothing, AbstractPormGParam} = nothing,
-  set_contexts::Bool = true)
+function build(object::SQLObject;
+  table_alias::Union{Nothing,SQLTableAlias}=nothing,
+  connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing,
+  parameters::Union{Nothing,AbstractPormGParam}=nothing,
+  set_contexts::Bool=true)
   ensure_model_transaction_scope(object.model)
-  
+
   settings, connection, conn_key = get_settings(object, connection=connection)
-  
+
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))
   @infiltrate false
-  instruct = InstrucObject(text = "", 
-    object = object,
-    table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
-    alias = get_alias(table_alias),
-    connection = connection,
-    django = settings.django_prefix === nothing ? nothing : settings.django_prefix * "_", # TODO, remover
-    parameters = parameters,
-  )   
-  
+  instruct = InstrucObject(text="",
+    object=object,
+    table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
+    alias=get_alias(table_alias),
+    connection=connection,
+    django=settings.django_prefix === nothing ? nothing : settings.django_prefix * "_", # TODO, remover
+    parameters=parameters,
+  )
+
   # Switch context for each SQL section so positional-parameter backends
   # (SQLite) push values into the correct bucket.
   # Subqueries skip this to inherit the parent's current bucket.
@@ -181,12 +195,21 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :where)
   get_filter_query(object, instruct)
 
+  # Materialize explicit custom joins that weren't discovered by traversal.
+  # This ensures cjoin filters are applied even in UPDATE/DELETE without explicit field paths.
+  # We check against instruct.row_path to avoid redundant materialization (forcing them twice).
+  for c_j in object.custom_join
+    if c_j |> Base.first ∉ instruct.row_path
+      array = split(c_j |> Base.first, "__")
+      push!(array, (c_j|>Base.last)["field"].pk_field)
+      _build_row_join(array, instruct)
+    end
+  end
+
   set_contexts && set_context!(instruct, :join)
   build_row_join_sql_text(instruct)
 
-  get_order_query(object, instruct)  # ORDER BY has no parameters
+  get_order_query(object, instruct)  # ORDER BY has no parameters  
 
-  @infiltrate false
-  
   return instruct
 end

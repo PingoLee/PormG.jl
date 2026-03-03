@@ -18,8 +18,9 @@ The `cjoin()` function allows you to add custom conditions to JOIN clauses at qu
 ## Key Features
 
 - **Runtime flexibility** - Add join conditions when building queries
-- **ON clause conditions** - More efficient than WHERE clause filtering
-- **Full Q/Qor/OP support** - Use the same filter syntax as .filter()
+- **ON clause conditions** - More efficient than WHERE clause filtering (parameters go to ON, not WHERE)
+- **Full Q/Qor/OP support** - Use the same filter syntax as .filter() with automatic field normalization
+- **Automatic field prefixing** - Plain field names in join filters are automatically prefixed with the join path
 - **F expressions** - Field-to-field comparisons in joins
 - **Multi-tenant support** - Perfect for tenant isolation at join level
 - **Nested joins** - Apply conditions to any level of join
@@ -118,6 +119,49 @@ df = query |> DataFrame
 
 Only "teste 1" is returned because the INNER JOIN excludes non-matching rows.
 
+### Join with Q/Qor Filters (AND/OR Logic)
+
+Use `Q()` for AND logic and `Qor()` for OR logic in join conditions. Plain field names are automatically prefixed with the join path:
+
+```julia
+# Plain fields are auto-prefixed: "statusid__status" and nested fields work too
+query = M.New_join_position.objects
+cjoin(query, "result" => "Result", filters=[
+  Q("statusid__status" => "Finished", Qor("positionorder" => 1, "positionorder" => 2))
+])
+query.values("result__statusid__status", "description")
+
+df = query |> DataFrame
+```
+
+### Join with Driver Model (Q/Qor Example)
+
+Here's a complete example joining Result to Driver with complex filter logic:
+
+```julia
+query = M.Result.objects
+
+# Add custom join with recursive Q/Qor filters
+# Plain field names ("nationality", "forename") are automatically prefixed
+cjoin(query, "driverid" => "Driver", filters=[
+  Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))
+])
+
+# This also adds a regular filter to WHERE clause
+query.filter("points" => 10)
+query.values("driverid__surname", "points")
+
+df = query |> DataFrame
+
+# Generated SQL (simplified):
+# SELECT ... FROM result AS Tb
+#   LEFT JOIN driver AS Tb_1 ON Tb.driverid = Tb_1.driverid 
+#                           AND (Tb_1.nationality = ? AND (Tb_1.forename = ? OR Tb_1.forename = ?))
+# WHERE Tb.points = ?
+```
+
+Notice that the cjoin filter parameters (`"Brazilian", "Ayrton", "Nelson"`) appear in the ON clause, while the regular filter parameter (`10` for points) appears in the WHERE clause.
+
 ## Understanding cjoin Behavior
 
 ### When cjoin is Applied
@@ -183,16 +227,38 @@ cjoin(query, "customer_id" => "Customer",
 query.values("customer_id__name", "amount")
 ```
 
-### 3. Conditional Joins
+### 3. Conditional Joins with Complex Logic
 
-Join only when certain conditions are met:
+Join only when certain conditions are met using Q/Qor:
 
 ```julia
 query = M.Result.objects
 cjoin(query, "driverid" => "Driver",
-      filters=["nationality" => "British"],
+      filters=[Q("nationality" => "British", Qor("code" => "HAM", "code" => "BUT"))],
       join_type="INNER")
-query.values("driverid__forename", "points")
+query.values("driverid__forename", "driverid__surname", "points")
+```
+
+This creates: `ON ... AND (driver.nationality = ? AND (driver.code = ? OR driver.code = ?))`
+
+### 4. Driver Filtering (Real-World Example)
+
+Find results for drivers of a specific nationality with specific names:
+
+```julia
+query = M.Result.objects
+
+# Add both a custom join condition and a regular filter
+cjoin(query, "driverid" => "Driver", filters=[
+  Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))
+])
+
+query.filter("points__@gt" => 0)  # Regular WHERE clause filter
+query.values("driverid__forename", "driverid__surname", "points")
+
+df = query |> DataFrame
+
+# Result: Only Brazilian drivers named Ayrton or Nelson with points > 0
 ```
 
 ## API Reference
@@ -207,8 +273,112 @@ cjoin(query, main_join; filters=[], field=nothing, join_type="LEFT")
 |----------|------|-------------|
 | `query` | `SQLObjectHandler` | The query object to add the join to |
 | `main_join` | `Pair{String, String}` | Field name => Target model name (e.g., `"result" => "Result"`) |
-| `filters` | `Vector` | Optional conditions for the ON clause |
+| `filters` | `Vector` | Optional conditions for the ON clause. Supports `Pair`, `Q()`, `Qor()`, OP, or F expressions. Plain field names in filters are automatically prefixed with the join path. |
 | `field` | `PormGField` | Optional custom field definition |
 | `join_type` | `String` | Join type: `"LEFT"`, `"INNER"`, `"RIGHT"`, `"FULL"` (default: `"LEFT"`) |
+
+### Filter Types in cjoin
+
+- **Pair filters**: `"field" => value` - Plain field names are automatically prefixed (e.g., `"nationality"` → `"driverid__nationality"`)
+- **Q filters**: `Q("field1" => val1, "field2" => val2)` - AND logic; plain field names are prefixed recursively
+- **Qor filters**: `Qor("field1" => val1, "field2" => val2)` - OR logic; plain field names are prefixed recursively
+- **OP filters**: Complex operator-based filters with the same prefixing behavior
+- **F expressions**: Field-to-field comparisons (e.g., `F("field1") == F("field2")`)
+
+## Important Notes
+
+### Parameter Placement
+
+When using `cjoin` with filters:
+- **Join filter parameters** (from `filters=`) are placed in the **ON clause** of the JOIN
+- **Regular filter parameters** (from `.filter()`) are placed in the **WHERE clause**
+
+This is important for query efficiency and correctness:
+
+```julia
+query = M.Result.objects
+
+# This parameter goes to WHERE clause
+query.filter("points" => 10)
+
+# These parameters go to ON clause (join condition)
+cjoin(query, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+
+# Result SQL:
+# ... ON driver.driverid = result.driverid AND driver.nationality = ?
+# WHERE result.points = ?
+```
+
+### Field Name Normalization
+
+When you provide plain field names in `cjoin` filters, they are automatically prefixed with the join field to resolve them against the joined model:
+
+```julia
+# "nationality" is automatically prefixed to "driverid__nationality"
+cjoin(query, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+
+# This works with Q and Qor too:
+cjoin(query, "driverid" => "Driver", filters=[
+  Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))
+])
+
+# All three fields (nationality, forename, forename) are auto-prefixed
+```
+
+### ForeignKey Target Validation
+
+When a join field already has a defined `ForeignKey` on the model, `cjoin()` validates that the target model matches:
+
+```julia
+# This works: Result.driverid FK points to Driver
+query = M.Result.objects
+cjoin(query, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+query.values("driverid__surname")
+
+# This raises an error: driverid points to Driver, not Constructor
+query = M.Result.objects
+cjoin(query, "driverid" => "Constructor", filters=["name" => "Ferrari"])  
+# ArgumentError: Field 'driverid' is already a ForeignKey pointing to 'Driver', 
+# but cjoin attempted to join with 'Constructor'...
+```
+
+**Why this validation exists:** If a ForeignKey target is mismatched, field prefixing would resolve against the wrong model, silently breaking your filters. By enforcing target model matching, `cjoin()` ensures ON-condition filters always apply to the correct joined model.
+
+### Auto-Discovery Warning (No Explicit FK Link)
+
+If the source field in `main_join` is **not** a ForeignKey field and you do not pass `field=...`, `cjoin()` auto-discovers the target model primary key and logs a **warning by default** to ensure you are joining intentionally.
+
+Example:
+
+```julia
+# "result" is an IntegerField, not a ForeignKey
+query = M.New_join_position.objects
+cjoin(query, "result" => "Result")
+
+# cjoin warns and auto-links:
+# main.result -> Result.resultid   (or the model PK)
+```
+
+#### If your intended link is not the target model PK
+
+Pass an explicit field mapping:
+
+```julia
+cjoin(query, "result" => "Result",
+  field=Models.ForeignKey("Result", pk_field="your_target_field"))
+```
+
+This keeps behavior explicit and avoids accidental joins to the wrong target column.
+
+#### If you intentionally want auto-discovery without the warning
+
+You can suppress the warning using the `warn` parameter:
+
+```julia
+# Suppress the auto-discovery warning
+cjoin(query, "result" => "Result", warn=false)
+```
+
+This is useful when you're confident about the join link and don't want the informational message in production logs.
 
 ### Other features are in development and will be documented soon.

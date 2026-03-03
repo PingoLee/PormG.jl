@@ -16,7 +16,7 @@ using Infiltrator: @infiltrate
 import PormG: with_transaction, Models, Dialect
 import PormG.Configuration: with_tx_context, get_tx_connection
 import PormG.ConnectionPool: fetch_async, await_result
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With, Value, Round
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
 import PormG.QueryBuilder: cjoin
 
@@ -39,11 +39,11 @@ import .models as M
 
 
 # Identificar o adapter carregado para o log
-adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ? 
-               PormG.config[PORMG_DB_FOLDER].db_config_settings["adapter"] : 
+adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
+               PormG.config[PORMG_DB_FOLDER].db_config_settings["adapter"] :
                "Unknown"
 
-@info "🚀 Starting PormG integration tests" folder=PORMG_DB_FOLDER adapter=adapter_name
+@info "🚀 Starting PormG integration tests" folder = PORMG_DB_FOLDER adapter = adapter_name
 
 # If you have custom test macros, define or include them here
 # include("utils/custom_macros.jl")
@@ -54,4 +54,5 @@ adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
 # julia -t auto --project=. -i test/integration/common_setup.jl
 # julia -t auto --project=. test/integration/test_database_setup.jl
 # julia -t auto --project=. test/integration/runtests.jl
+# julia --project=. test/integration/test_alignment_sqlite.jl
 # include("test_bulk_copy.jl")

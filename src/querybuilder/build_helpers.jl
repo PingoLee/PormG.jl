@@ -11,18 +11,18 @@ Returns a tuple of `(settings::SQLConn, connection, conn_key::String)`.
 If a `connection` is provided, it is returned as is. 
 Otherwise, it returns the default connection from the resolved settings.
 """
-function get_settings(obj::Union{SQLObject, SQLObjectHandler}; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
+function get_settings(obj::Union{SQLObject,SQLObjectHandler}; connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing)
   q = obj isa SQLObjectHandler ? obj.object : obj
   conn_key = q.connect_key !== nothing ? q.connect_key : q.model.connect_key
   settings = get_configuration_settings(conn_key)
-  
+
   final_connection = connection === nothing ? settings.connections : connection
   return settings, final_connection, conn_key
 end
 
 # I may not need this function initially, but it can be useful when processing queries
 # function _check_function(f::OperObject)
-function _check_function(f::Vector{N} where N <: SQLObject)
+function _check_function(f::Vector{N} where N<:SQLObject)
   r_v::Vector{SQLObject} = []
   for v in f
     if isa(v, SQLTypeOper)
@@ -39,21 +39,21 @@ function _check_function(f::FObject)
 end
 function _check_function(f::Vector{FObject})
   for i in 1:size(f, 1)
-    f[i] = _check_function(f[i])  
-  end  
+    f[i] = _check_function(f[i])
+  end
   return f
 end
 function _check_function(f::SQLTypeOper)
   f.column = _check_function(f.column)
   return f
 end
-function _check_function(f::Union{SQLText, SQLField})
+function _check_function(f::Union{SQLText,SQLField})
   return f
 end
-function _check_function(f::Vector{T}) where T <: Union{SQLType, Any}
+function _check_function(f::Vector{T}) where T<:Union{SQLType,Any}
   for i in 1:length(f)
-    f[i] = _check_function(f[i])   
-  end  
+    f[i] = _check_function(f[i])
+  end
   return f
 end
 function _check_function(f::QorObject)
@@ -68,12 +68,12 @@ function _check_function(f::QObject)
   end
   return f
 end
-function _check_function(x::Vector{String})  
+function _check_function(x::Vector{String})
   if length(x) == 1
     return x[1]
-  else    
+  else
     if haskey(PormGtrasnform, x[end])
-      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])  
+      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])
       return _check_function(resp)
     else
       joined_keys_with_prefix_func = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), ", ")
@@ -86,7 +86,7 @@ function _check_function(x::Vector{String})
         throw(ArgumentError("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid;\n please use a valid function:\n  - $(joined_keys_with_prefix_func)\e[0m\nor a valid operator:\n  - $(joined_keys_with_prefix_oper)\e[0m"))
       end
     end
-  end    
+  end
 end
 _check_function(x::String) = _check_function(String.(split(x, "__@")))
 function _check_function(x::FExpression)
@@ -105,112 +105,119 @@ end
   - `OperObject`: An OperObject with the corresponding operator and values.
 
 """
-function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: Union{String, Number, Bool, Dates.TimeType}
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{String,Number,Bool,Dates.TimeType}
   if haskey(PormGsuffix, x.first[end])
-    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
-  else    
-    return OperObject(operator = "=", values = x.second, column = SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
-  end  
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
+  end
 end
-function _get_pair_to_oper(x::Pair{String, T}) where T <: Union{String, Number, Bool, Dates.Date, Dates.DateTime, Dates.TimeType}
+function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{String,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String, Vector{T}}) where T <: Union{Missing, String, Number, Bool, Dates.TimeType}
+function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
-end  
+end
 # Store SQLObject, to use __@in operator
-function _get_pair_to_oper(x::Pair{Vector{String}, T}) where T <: SQLObjectHandler
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
   if x.first[end] in ["in", "nin"]
     # @infiltrate
-    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String}, Vector{T}}) where T <: Union{Missing, String, Number, Bool, Dates.TimeType}
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
+  if haskey(PormGsuffix, x.first[end])
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  end
+end
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType}
   if x.first[end] in ["in", "nin"]
     @infiltrate false
-    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   elseif x.first[end] == "range"
     if length(x.second) != 2
       throw(ArgumentError("Error in filter, 'range' operator requires exactly 2 values, got $(length(x.second))"))
     end
-    return OperObject(operator = PormGsuffix[x.first[end]], values = x.second, column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in, nin and range'\e[0m is allowed with a vector of values"))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String}, Tuple{T, T}}) where T
+function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
   if x.first[end] == "range"
-    return OperObject(operator = PormGsuffix[x.first[end]], values = [x.second[1], x.second[2]], column = SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'range'\e[0m is allowed with a tuple of values"))
+    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'range'\e[0m is allowed with a tuple of values"))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String}, Date})
+function _get_pair_to_oper(x::Pair{Vector{String},Date})
   _get_pair_to_oper(x.first => x.second |> string)
 end
 
-  
 
-function _check_filter(x::Pair)  
+
+function _check_filter(x::Pair)
   if isa(x.first, String)
-    check = String.(split(x.first, "__@"))  
+    check = String.(split(x.first, "__@"))
     try
       # @infiltrate
       return _get_pair_to_oper(check => x.second)
     catch e
       @infiltrate false
-      @error "Error in filter processing '$(x.first)'" exception=(e, catch_backtrace())
+      @error "Error in filter processing '$(x.first)'" exception = (e, catch_backtrace())
       rethrow(e)
     end
-  else    
+  else
     throw("Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.first))")
   end
 end
 
 # does this obsolet?
-function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[]) 
+function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[])
   array = copy(array)
-  for i in 1: size(array, 1) 
+  for i in 1:size(array, 1)
     for (k, value) in PormGsuffix
       if endswith(array[i], k)
-        array[i] = array[i][1:end-length(k)]          
+        array[i] = array[i][1:end-length(k)]
       end
     end
     for (k, value) in PormGtrasnform
-      if endswith(array[i], k)          
-        array[i] = array[i][1:end-length(k)]               
+      if endswith(array[i], k)
+        array[i] = array[i][1:end-length(k)]
       end
     end
   end
-  
+
   # how join to Vector
   append!(array_store, array)
   unique!(array_store)
-  return array_store  
+  return array_store
 end
 
-function _get_join_query(x::Tuple{Pair{String, Integer}, Vararg{Pair{String, Integer}}}; array_store::Vector{String} = String[])
+function _get_join_query(x::Tuple{Pair{String,Integer},Vararg{Pair{String,Integer}}}; array_store::Vector{String}=String[])
   array = String[]
-  for (k,v) in x
+  for (k, v) in x
     push!(array, k)
   end
-  _get_join_query(array, array_store=array_store)  
+  _get_join_query(array, array_store=array_store)
 end
-function _get_join_query(x::Tuple{String, Vararg{String}}; array_store::Vector{String} = String[])
+function _get_join_query(x::Tuple{String,Vararg{String}}; array_store::Vector{String}=String[])
   array = String[]
   for v in x
     push!(array, v)
   end
-  _get_join_query(array, array_store=array_store)  
+  _get_join_query(array, array_store=array_store)
 end
-function _get_join_query(x::Dict{String,Union{Integer, String}}; array_store::Vector{String} = String[])
+function _get_join_query(x::Dict{String,Union{Integer,String}}; array_store::Vector{String}=String[])
   array = String[]
-  for (k,v) in x
+  for (k, v) in x
     push!(array, k)
   end
-  _get_join_query(array, array_store=array_store)  
+  _get_join_query(array, array_store=array_store)
 end
 
 function _get_alias_name(df::DataFrames.DataFrame, alias::String)
@@ -224,7 +231,7 @@ function _get_alias_name(df::DataFrames.DataFrame, alias::String)
     count += 1
   end
 end
-function _get_alias_name(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, alias::String)
+function _get_alias_name(row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}}, alias::String)
   array = vcat([r["alias_a"] for r in row_join], [r["alias_b"] for r in row_join])
   count = 1
   while true
@@ -237,8 +244,8 @@ function _get_alias_name(row_join::Vector{Dict{String, Union{String, Vector{Filt
 end
 
 function _insert_join(
-  row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, 
-  row::Dict{String, Union{String, Vector{FilterType}}}, 
+  row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}},
+  row::Dict{String,Union{String,Vector{FilterType}}},
   row_path::Vector{String}, join_path::String)
   @infiltrate false
   if size(row_join, 1) == 0
@@ -256,16 +263,16 @@ function _insert_join(
       if size(check, 1) > 1
         throw("Error in join")
       end
-      return check[1]["alias_b"]  
+      return check[1]["alias_b"]
     end
   end
 end
 
 function _check_if_field_is_a_operator(field::String)
-  common_operators = ["exact", "iexact", "contains", "icontains", "in", "gt", "gte", "lt", "lte", 
-                     "startswith", "istartswith", "endswith", "iendswith", "range", "date", 
-                     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
-                     "hour", "minute", "second", "isnull", "regex", "iregex"]
+  common_operators = ["exact", "iexact", "contains", "icontains", "in", "gt", "gte", "lt", "lte",
+    "startswith", "istartswith", "endswith", "iendswith", "range", "date",
+    "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
+    "hour", "minute", "second", "isnull", "regex", "iregex"]
   if field in common_operators
     throw(ArgumentError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
   end
@@ -281,11 +288,11 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
     throw(ArgumentError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
-  
+
   # Quote the field name to prevent SQL injection
   return quote_identifier(field, instruct.connection)
 end
-_solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct) 
+_solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct)
 _solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction) = _solve_field(field, _module, Symbol(model_name), instruct)
 _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
 
@@ -294,12 +301,12 @@ _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::S
 # outher functions
 function _df_to_dic(df::DataFrames.DataFrame, column::String, filter::String)
   column = Symbol(column)
-  loc = DataFrames.subset(df, DataFrames.AsTable([column]) => ( @. x -> x[column] == filtro) )
+  loc = DataFrames.subset(df, DataFrames.AsTable([column]) => (@. x -> x[column] == filtro))
   if size(loc, 1) == 0
     throw("Error in _df_to_dic, $(filter) not found in $(column)")
   elseif size(loc, 1) > 1
     throw("Error in _df_to_dic, $(filter) found more than one time in $(column)")
-  else 
+  else
     return loc[1, :]
   end
 end
@@ -309,18 +316,23 @@ end
 #
 
 # select
-function _get_select_query(v::SQLText, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  return Dialect.VALUE(v.field, instruc.connection)
+function _get_select_query(v::SQLText, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  # Parameterize Value(x) instead of rendering as raw SQL literal.
+  # NULL must stay literal (can't parameterize NULL in SQL).
+  if v.field === nothing
+    return "NULL"
+  end
+  return add_parameter!(instruc, v.field)
 end
-function _get_select_query(v::Vector{T}, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing) where T
+function _get_select_query(v::Vector{T}, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) where T
   resp = []
   for item in v
     push!(resp, _get_select_query(item, instruc, _as=_as))
   end
   return resp
 end
-function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  parts = split(v, "__")  
+function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  parts = split(v, "__")
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
@@ -331,28 +343,57 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
   end
 end
-function _get_select_query(v::SQLField, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
+function _get_select_query(v::SQLField, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _get_select_query(v.field, instruc, _as=_as)
   # return v.field
 end
-function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
+function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # use logic to when funtion
   return _get_filter_query(v, instruc)
 end
-function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
-  # Resolve kwargs that might be SQLObject or SQLType
-  resolved_kwargs = Dict{String, Any}()
+function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  # Parameterize scalar kwargs instead of rendering them as SQL literals.
+  # IMPORTANT: these must be parameterized AFTER the column is resolved, because the SQL text order
+  # places condition params first positionally (e.g., WHEN cond THEN ? ... ELSE ? END).
+  #
+  # Parameterizable kwargs by function:
+  #   CASE/WHEN  → "then", "else"      (output values)
+  #   ROUND      → "precision"         (decimal places)
+  parameterize_keys = if v.function_name in ["CASE", "WHEN"]
+    Set(["then", "else"])
+  elseif v.function_name == "ROUND"
+    Set(["precision"])
+  else
+    Set{String}()
+  end
+
+  # Phase 1: Resolve non-parameterizable kwargs (output_field, distinct, etc.)
+  resolved_kwargs = Dict{String,Any}()
+  deferred_kwargs = Dict{String,Any}()  # kwargs to parameterize after column
   for (k, val) in v.kwargs
-    if isa(val, Union{SQLObject, SQLType})
+    if isa(val, Union{SQLObject,SQLType})
       resolved_kwargs[k] = _get_select_query(val, instruc)
+    elseif k in parameterize_keys && val isa Union{Number,AbstractString} && !(val isa Missing) && val != "NULL"
+      deferred_kwargs[k] = val  # defer until after column is resolved
     else
       resolved_kwargs[k] = val
     end
   end
 
-  return getfield(Dialect, Symbol(v.function_name))(_get_select_query(v.column, instruc, _as=_as), resolved_kwargs, instruc.connection)
+  # Phase 2: Resolve column (conditions) — this adds condition params in SQL text order
+  resolved_column = _get_select_query(v.column, instruc, _as=_as)
+
+  # Phase 3: Now parameterize deferred kwargs (they appear AFTER conditions in SQL)
+  # Order matters for positional backends: then → else → precision
+  for key in ["then", "else", "precision"]
+    if haskey(deferred_kwargs, key)
+      resolved_kwargs[key] = add_parameter!(instruc, deferred_kwargs[key])
+    end
+  end
+
+  return getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
 end
-function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
+function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
   for v in q.or
     push!(resp, _get_select_query(v, instruc, _as=_as))
@@ -360,14 +401,14 @@ function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{No
   return "(" * join(resp, " OR ") * ")"
 end
 
-function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
+function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
   for v in q.filters
     push!(resp, _get_select_query(v, instruc, _as=_as))
   end
   return "(" * join(resp, " AND ") * ")"
 end
-function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing, String} = nothing)
+function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _set_update_query(q, instruc)
 end
 
@@ -376,17 +417,17 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
   v_str = String.(v)
   # column is the first part
   text = _get_filter_query(v_str[1], instruc)
-  
+
   # Apply functions in sequence
   for i in 2:length(v_str)
     func_key = v_str[i]
     if haskey(PormGtrasnform, func_key)
-        func_name = Symbol(PormGtrasnform[func_key])
-        # Note: Dialect functions usually take (column, format_dict, connection)
-        # We need to construct the format_dict if needed, but for date parts it's simple
-        text = getfield(Dialect, func_name)(text, Dict{String, Any}(), instruc.connection)
+      func_name = Symbol(PormGtrasnform[func_key])
+      # Note: Dialect functions usually take (column, format_dict, connection)
+      # We need to construct the format_dict if needed, but for date parts it's simple
+      text = getfield(Dialect, func_name)(text, Dict{String,Any}(), instruc.connection)
     else
-        throw(ArgumentError("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
+      throw(ArgumentError("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
     end
   end
   return text
@@ -399,8 +440,8 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
     return _build_row_join(parts, instruc, as=false)
   else
     quoted_alias = quote_identifier(instruc.alias, instruc.connection)
-    return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))  
-  end  
+    return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
+  end
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc) # Does this have any coletaral efect?
@@ -410,12 +451,14 @@ end
 # end
 function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # check if SQLTypeField exists in cache
-  if haskey(instruc.cache, v._as)
+  if v._as !== nothing && haskey(instruc.cache, v._as)
     return instruc.cache[v._as].field
   else
     v_copy = deepcopy(v)
     v_copy.field = _get_select_query(v_copy.field, instruc)
-    instruc.cache[v_copy._as] = v_copy
+    if v_copy._as !== nothing
+      instruc.cache[v_copy._as] = v_copy
+    end
     return v_copy.field
   end
 end
@@ -429,7 +472,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formater !== nothing
     @infiltrate false
-    placeholders = add_parameter!(instruc, v.column.field.formater(v.values)) 
+    placeholders = add_parameter!(instruc, v.column.field.formater(v.values))
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.field.function_name])(v.values))
     # value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
@@ -440,17 +483,17 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
-      @infiltrate 
+      @infiltrate
       throw("Error in values, $(v.column.field) in filter is not a object")
     end
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
-  else   
+  else
     @infiltrate false
     if isa(v.column, SQLTypeField)
       @infiltrate false
       _get_select_query(v.column, instruc, _as=v.column._as) # TODO, how do this i where before do operates
-    else 
+    else
       @infiltrate false
     end
     if v.operator in ["ISNULL"]
@@ -464,47 +507,47 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
           field_name = v.column.field
         end
       end
-      
+
       if field_name != "" && haskey(instruc.object.model.fields, field_name)
-         formater = instruc.object.model.fields[field_name].formater
-         p1 = add_parameter!(instruc, formater(v.values[1]))
-         p2 = add_parameter!(instruc, formater(v.values[2]))
-         return string(column_sql, " BETWEEN ", p1, " AND ", p2)
+        formater = instruc.object.model.fields[field_name].formater
+        p1 = add_parameter!(instruc, formater(v.values[1]))
+        p2 = add_parameter!(instruc, formater(v.values[2]))
+        return string(column_sql, " BETWEEN ", p1, " AND ", p2)
       else
-         p1 = add_parameter!(instruc, v.values[1])
-         p2 = add_parameter!(instruc, v.values[2])
-         return string(column_sql, " BETWEEN ", p1, " AND ", p2)
+        p1 = add_parameter!(instruc, v.values[1])
+        p2 = add_parameter!(instruc, v.values[2])
+        return string(column_sql, " BETWEEN ", p1, " AND ", p2)
       end
     elseif haskey(instruc.object.model.fields, v.column.field)
       placeholders = nothing
       try
         # Determine if this is a LIKE-based operator and which wildcard pattern to use
         is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
-        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains = is_like_op, operator = v.operator)
+        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains=is_like_op, operator=v.operator)
       catch e
         @infiltrate false
-        if contains(string(e), "The date") && contains(string(e), "is invalid")          
+        if contains(string(e), "The date") && contains(string(e), "is invalid")
           throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
         @infiltrate false
         rethrow(e)
-      end      
+      end
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @infiltrate false
       is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
-      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains = is_like_op, operator = v.operator)
+      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @infiltrate false
       is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
-      placeholders = add_parameter!(instruc, v.values, contains = is_like_op, operator = v.operator)
+      placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @infiltrate false
       throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
     end
   end
-  
-  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]   
-    return string(column, " ", v.operator, " ", placeholders)     
+
+  if v.operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
+    return string(column, " ", v.operator, " ", placeholders)
   elseif v.operator in ["IN", "NOT IN"]
     if isa(placeholders, String)
       # Se placeholders for uma única string (ex: "$1" ou "?")

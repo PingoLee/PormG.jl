@@ -1392,24 +1392,24 @@ parsed_data = JSON.parse(json_string)
 ### Pagination
 
 ```julia
-using PormG.QueryBuilder: page
-
 # Basic pagination
 query = M.Result.objects;
 query.filter("statusid__status" => "Finished");
 query.values("resultid", "driverid__forename", "constructorid__name");
 
 # Page with limit and offset
-df = page(query, limit=20, offset=10) |> DataFrame
-
-# Alternative syntax
-df = page(query, 20, 10) |> DataFrame
+df = query.limit(20).offset(10) |> DataFrame
+# or 
+df = query.page(20, 10) |> DataFrame
 
 # Just limit
-df = page(query, 20) |> DataFrame
-# or
-df = page(query, limit=20) |> DataFrame
+df = query.limit(20) |> DataFrame
 ```
+
+> [!NOTE]
+> **Parameter handling:** `LIMIT` and `OFFSET` values are rendered as literal integers
+> in the SQL string, not as positional parameters (`?` or `$N`). This is by design —
+> these values are always safe integers provided by the application, not user input.
 
 ### Ordering
 

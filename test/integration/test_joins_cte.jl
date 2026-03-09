@@ -25,25 +25,28 @@ end
 
 @testset "Testing cjoin with custom filter" begin
   query = M.New_join_position.objects;
-  cjoin(query, "result" => "Result", filters=[
-      "description" => "teste 1"]);
+    @test_throws ArgumentError begin
+        cjoin(query, "result" => "Result", filters=[
+                "description" => "teste 1"])
+    end
 
-  # @info query |> show_query
-  df = query |> DataFrame
-
-  # cjoin is not applied because none of the filters match; the explicitly provided join is used
-  @test size(df, 1) == 3
-  @test df |> names |> length == 3
+    query = M.New_join_position.objects;
+        @test_throws ArgumentError begin
+                cjoin(query, "result" => "Result", filters=[
+                                "result__description" => "teste 1"])
+        end
 
 
   query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
-      "description" => "teste 1"]);
+            "resultid" => 1]);
 
   query.values("result__statusid__status", "description", "result")
 
   # @info query |> show_query
   df = query |> DataFrame
+
+  insp = query |> inspect_query
 
   @test size(df, 1) == 3
   @test "result__statusid__status" in  df |> names 
@@ -52,7 +55,34 @@ end
 
   query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
-      "description" => "teste 1"],
+      "result__resultid" => 1]);
+
+  query.values("result__statusid__status", "description", "result")
+
+  df = query |> DataFrame
+
+  @test size(df, 1) == 3
+  @test df[df.description .== "teste 1", :result__statusid__status][1] == "Finished"
+  @test df[df.description .== "teste 2", :result__statusid__status][1] === missing
+
+  query = M.New_join_position.objects;
+  cjoin(query, "result" => "Result", filters=[
+      "resultid" => 1]);
+  query.filter("description" => "teste 1")
+  query.values("result__statusid__status", "description", "result")
+
+  resp = query |> inspect_query
+  df = query |> DataFrame
+
+  @test size(df, 1) == 1
+  @test df[1, :description] == "teste 1"
+  @test df[1, :result__statusid__status] == "Finished"
+  @test occursin("\"Tb_1\".\"resultid\" =", resp[:sql_text])
+  @test occursin("WHERE \"Tb\".\"description\" =", resp[:sql_text])
+
+  query = M.New_join_position.objects;
+  cjoin(query, "result" => "Result", filters=[
+      "resultid" => 1],
       join_type="INNER");
 
   query.values("result__statusid__status", "description", "result");
@@ -90,6 +120,7 @@ end
     # added parameters in select
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid", "raceid__date__@quarter");
     query.order_by("raceid__date__quarter");
+    text = query |> inspect_query
     df = query |> DataFrame
     @test query.count() == 40
     @test query |> do_exists

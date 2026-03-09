@@ -316,13 +316,41 @@ end
 #
 
 # select
+function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
+  instruc.connection isa PormGPostgres || return nothing
+  fallback !== nothing && return fallback
+  value isa AbstractString && return "text"
+  value isa Bool && return "boolean"
+  value isa Integer && return "bigint"
+  value isa AbstractFloat && return "double precision"
+  value isa Dates.Date && return "date"
+  value isa Dates.DateTime && return "timestamp"
+  value isa Dates.Time && return "time"
+  return nothing
+end
+
+function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwargs::Dict{String,Any}, instruc::SQLInstruction)
+  value = v.kwargs[key]
+
+  if key == "precision"
+    return _infer_parameter_sql_type(value, instruc; fallback="integer")
+  end
+
+  output_field = get(resolved_kwargs, "output_field", nothing)
+  if output_field isa AbstractString && !isempty(output_field)
+    return _infer_parameter_sql_type(value, instruc; fallback=output_field)
+  end
+
+  return _infer_parameter_sql_type(value, instruc)
+end
+
 function _get_select_query(v::SQLText, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # Parameterize Value(x) instead of rendering as raw SQL literal.
   # NULL must stay literal (can't parameterize NULL in SQL).
   if v.field === nothing
     return "NULL"
   end
-  return add_parameter!(instruc, v.field)
+  return add_parameter!(instruc, v.field; sql_type=_infer_parameter_sql_type(v.field, instruc))
 end
 function _get_select_query(v::Vector{T}, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) where T
   resp = []
@@ -387,7 +415,7 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
   # Order matters for positional backends: then → else → precision
   for key in ["then", "else", "precision"]
     if haskey(deferred_kwargs, key)
-      resolved_kwargs[key] = add_parameter!(instruc, deferred_kwargs[key])
+      resolved_kwargs[key] = add_parameter!(instruc, deferred_kwargs[key]; sql_type=_deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc))
     end
   end
 

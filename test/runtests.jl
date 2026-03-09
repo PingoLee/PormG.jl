@@ -12,6 +12,7 @@ end
     @time @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
     @time @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @time @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
+    @time @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     # include("unit/test_migration_planner.jl")
 end
 

@@ -18,9 +18,9 @@ The `cjoin()` function allows you to add custom conditions to JOIN clauses at qu
 ## Key Features
 
 - **Runtime flexibility** - Add join conditions when building queries
-- **ON clause conditions** - More efficient than WHERE clause filtering (parameters go to ON, not WHERE)
-- **Full Q/Qor/OP support** - Use the same filter syntax as .filter() with automatic field normalization
-- **Automatic field prefixing** - Plain field names in join filters are automatically prefixed with the join path
+- **ON clause conditions** - Restrict the joined table during the JOIN itself
+- **Full Q/Qor/OP support** - Use the same filter syntax as .filter() for conditions that belong to the joined model
+- **Automatic field prefixing** - Plain joined-model field names in join filters are automatically prefixed with the join path
 - **F expressions** - Field-to-field comparisons in joins
 - **Multi-tenant support** - Perfect for tenant isolation at join level
 - **Nested joins** - Apply conditions to any level of join
@@ -75,11 +75,11 @@ The `cjoin` creates a LEFT JOIN from `new_join_position.result` to `Result.resul
 
 ### Join with Filter Conditions (LEFT JOIN)
 
-Add conditions to the ON clause. When a row doesn't match the condition, the joined fields will be `missing`:
+Add conditions to the ON clause using fields from the joined model. When a row doesn't match the ON condition, the joined fields will be `missing`:
 
 ```julia
 query = M.New_join_position.objects
-cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
+cjoin(query, "result" => "Result", filters=["resultid" => 1])
 query.values("result__statusid__status", "description", "result")
 
 df = query |> DataFrame
@@ -94,7 +94,7 @@ df = query |> DataFrame
 #    3 | missing                     teste 3           3
 ```
 
-Notice that only "teste 1" has the status because the filter is applied in the ON clause, not WHERE. This returns all 3 rows but only "teste 1" matches the join condition.
+Notice that only the row whose joined `Result.resultid` is `1` has the status because the filter is applied in the ON clause, not WHERE. This returns all 3 rows, but only one row matches the join condition.
 
 ### Join with Filter Conditions (INNER JOIN)
 
@@ -103,7 +103,7 @@ Use `join_type="INNER"` to only return rows that match the join condition:
 ```julia
 query = M.New_join_position.objects
 cjoin(query, "result" => "Result", 
-      filters=["description" => "teste 1"],
+  filters=["resultid" => 1],
       join_type="INNER")
 query.values("result__statusid__status", "description", "result")
 
@@ -117,7 +117,7 @@ df = query |> DataFrame
 #    1 | Finished                  teste 1           1
 ```
 
-Only "teste 1" is returned because the INNER JOIN excludes non-matching rows.
+Only the row joined to `Result.resultid = 1` is returned because the INNER JOIN excludes non-matching rows.
 
 ### Join with Q/Qor Filters (AND/OR Logic)
 
@@ -164,6 +164,28 @@ Notice that the cjoin filter parameters (`"Brazilian", "Ayrton", "Nelson"`) appe
 
 ## Understanding cjoin Behavior
 
+### Contract of `cjoin(filters=...)`
+
+`cjoin` exists to modify the JOIN itself. Its `filters` are ON-clause predicates and should target fields on the joined model.
+
+Use `cjoin(..., filters=...)` when you want SQL like:
+
+```sql
+LEFT JOIN driver ON result.driverid = driver.driverid AND driver.nationality = ?
+```
+
+Use `.filter(...)` when you want to filter the main query rows in `WHERE`:
+
+```sql
+WHERE result.points > ?
+```
+
+This distinction matters:
+
+- `cjoin(filters=...)` is for joined-model predicates that belong in `ON`
+- `.filter(...)` is for base-query predicates that belong in `WHERE`
+- Passing base-table fields to `cjoin(filters=...)` is not a good API contract and should be treated as unsupported usage
+
 ### When cjoin is Applied
 
 The `cjoin` configuration is only applied when you access fields through the join path:
@@ -171,14 +193,23 @@ The `cjoin` configuration is only applied when you access fields through the joi
 ```julia
 # cjoin is NOT applied - no join path used in values()
 query = M.New_join_position.objects
-cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
+cjoin(query, "result" => "Result", filters=["resultid" => 1])
 df = query |> DataFrame  # Returns all 3 rows with default columns
 
 # cjoin IS applied - accessing result__* fields
 query = M.New_join_position.objects
-cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
+cjoin(query, "result" => "Result", filters=["resultid" => 1])
 query.values("result__statusid__status", "description", "result")
 df = query |> DataFrame  # Join is created with ON conditions
+```
+
+If you need to filter the base table at the same time, do it explicitly with `.filter(...)`:
+
+```julia
+query = M.New_join_position.objects
+cjoin(query, "result" => "Result", filters=["resultid" => 1])
+query.filter("description" => "teste 1")
+query.values("result__statusid__status", "description", "result")
 ```
 
 ### Generated SQL
@@ -187,7 +218,7 @@ You can inspect the generated SQL using `show_query`:
 
 ```julia
 query = M.New_join_position.objects
-cjoin(query, "result" => "Result", filters=["description" => "teste 1"])
+cjoin(query, "result" => "Result", filters=["resultid" => 1])
 query.values("result__statusid__status", "description", "result")
 
 @info query |> show_query
@@ -199,7 +230,7 @@ query.values("result__statusid__status", "description", "result")
 #    "Tb"."result" as result
 # FROM "new_join_position" as "Tb"
 #  LEFT JOIN "result" AS "Tb_1" ON "Tb"."result" = "Tb_1"."resultid" 
-#                                  AND "Tb"."description" = $1
+#                                  AND "Tb_1"."resultid" = $1
 #  LEFT JOIN "status" AS "Tb_2" ON "Tb_1"."statusid" = "Tb_2"."statusid"
 ```
 
@@ -290,7 +321,7 @@ cjoin(query, main_join; filters=[], field=nothing, join_type="LEFT")
 ### Parameter Placement
 
 When using `cjoin` with filters:
-- **Join filter parameters** (from `filters=`) are placed in the **ON clause** of the JOIN
+- **Join filter parameters** (from `filters=`) are placed in the **ON clause** of the JOIN and should reference joined-model fields
 - **Regular filter parameters** (from `.filter()`) are placed in the **WHERE clause**
 
 This is important for query efficiency and correctness:
@@ -323,6 +354,14 @@ cjoin(query, "driverid" => "Driver", filters=[
 ])
 
 # All three fields (nationality, forename, forename) are auto-prefixed
+```
+
+If a field belongs to the base model instead, keep it in `.filter(...)` rather than `cjoin(...)`:
+
+```julia
+query = M.New_join_position.objects
+cjoin(query, "result" => "Result", filters=["resultid" => 1])
+query.filter("description" => "teste 1")
 ```
 
 ### ForeignKey Target Validation

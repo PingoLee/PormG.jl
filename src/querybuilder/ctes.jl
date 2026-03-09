@@ -40,18 +40,36 @@ With(o::SQLObjectHandler, name::String, query::SQLObjectHandler;
 
 
 
-# Helper to recursively prefix fields in join filters (cjoin filters)
-# If a filter key is a plain field of the joined model, we prefix it with the join path.
+# Helper to recursively prefix and validate fields in cjoin filters.
+# cjoin filters are ON-clause predicates, so they must target the joined model.
+function _normalize_cjoin_filter_key(key::String, prefix::String, foreign_model::Union{PormGModel,Nothing})
+  foreign_model === nothing && return key
+
+  if startswith(key, prefix * "__")
+    suffix = key[length(prefix) + 3:end]
+    isempty(suffix) && throw(ArgumentError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. Provide a field on the joined model after the join path prefix."))
+
+    base_field = String(split(suffix, "__")[1])
+    if base_field in foreign_model.field_names || haskey(foreign_model.related_objects, base_field)
+      return key
+    end
+
+    throw(ArgumentError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. The joined model '$(foreign_model.name)' does not contain the field or related path '$(base_field)'."))
+  end
+
+  base_field = String(split(key, "__")[1])
+  if base_field in foreign_model.field_names || haskey(foreign_model.related_objects, base_field)
+    return string(prefix, "__", key)
+  end
+
+  throw(ArgumentError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. cjoin filters modify the JOIN ON clause and must target fields on the joined model '$(foreign_model.name)'. Use a joined-model field like '$(prefix)__field' (or just 'field' for auto-prefixing), and keep base-query filters in .filter(...)."))
+end
+
 function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGModel,Nothing})
   if filter isa Pair
     key = filter.first
-    if key isa String && foreign_model !== nothing
-      if !startswith(key, prefix * "__")
-        base_field = String(split(key, "__")[1])
-        if base_field in foreign_model.field_names
-          return string(prefix, "__", key) => filter.second
-        end
-      end
+    if key isa String
+      return _normalize_cjoin_filter_key(key, prefix, foreign_model) => filter.second
     end
     return filter
   elseif filter isa QObject
@@ -59,19 +77,49 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
   elseif filter isa QorObject
     return QorObject(or=[_prefix_join_filter(f, prefix, foreign_model) for f in filter.or])
   elseif filter isa OperObject
-    # If column is a simple SQLField with string name
-    if filter.column isa SQLField && filter.column.field isa String && foreign_model !== nothing
-      key = filter.column.field
-      if !startswith(key, prefix * "__")
-        base_field = String(split(key, "__")[1])
-        if base_field in foreign_model.field_names
-          new_oper = deepcopy(filter)
-          new_oper.column = SQLField(string(prefix, "__", key))
-          return new_oper
-        end
-      end
+    new_oper = deepcopy(filter)
+
+    if new_oper.column isa SQLField && new_oper.column.field isa String
+      new_oper.column = SQLField(
+        _normalize_cjoin_filter_key(new_oper.column.field, prefix, foreign_model),
+        new_oper.column._as,
+        new_oper.column.custom_as
+      )
+    elseif new_oper.column isa String
+      new_oper.column = _normalize_cjoin_filter_key(new_oper.column, prefix, foreign_model)
     end
-    return filter
+
+    if new_oper.values isa FExpression
+      new_oper.values = _prefix_join_filter(new_oper.values, prefix, foreign_model)
+    end
+
+    return new_oper
+  elseif filter isa FExpression
+    new_filter = deepcopy(filter)
+
+    if new_filter.field_name isa String
+      new_filter.field_name = _normalize_cjoin_filter_key(new_filter.field_name, prefix, foreign_model)
+    elseif new_filter.field_name isa FExpression
+      new_filter.field_name = _prefix_join_filter(new_filter.field_name, prefix, foreign_model)
+    end
+
+    if new_filter.column isa String
+      new_filter.column = _normalize_cjoin_filter_key(new_filter.column, prefix, foreign_model)
+    elseif new_filter.column isa Vector{String}
+      new_filter.column = [_normalize_cjoin_filter_key(v, prefix, foreign_model) for v in new_filter.column]
+    elseif new_filter.column isa SQLField && new_filter.column.field isa String
+      new_filter.column = SQLField(
+        _normalize_cjoin_filter_key(new_filter.column.field, prefix, foreign_model),
+        new_filter.column._as,
+        new_filter.column.custom_as
+      )
+    end
+
+    if new_filter.operand isa FExpression
+      new_filter.operand = _prefix_join_filter(new_filter.operand, prefix, foreign_model)
+    end
+
+    return new_filter
   else
     return filter
   end

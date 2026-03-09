@@ -14,6 +14,15 @@ mutable struct PgParameterizedQuery <: PormGPostgresParam
 end
 get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
 
+function _postgres_parameter_cast(::Nothing)
+  return ""
+end
+
+function _postgres_parameter_cast(sql_type::AbstractString)
+  isempty(sql_type) && return ""
+  return "::$(sql_type)"
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite Implementation – Contextual Bucket Strategy
 #
@@ -111,23 +120,23 @@ set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== 
 # ─────────────────────────────────────────────────────────────────────────────
 
 # --- PostgreSQL (unchanged behaviour) ---
-function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool=false, operator::String="")
+function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
   push!(pq.parameters, value)
-  return "\$$(pq.parameter_count)"
+  return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
 end
-function add_parameter!(pq::PormGPostgresParam, value; contains::Bool=false, operator::String="")::String
+function add_parameter!(pq::PormGPostgresParam, value; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   if contains
     value = _apply_like_wildcards(value, operator)
   end
   pq.parameter_count += 1
   push!(pq.parameters, value)
-  return "\$$(pq.parameter_count)"  # PostgreSQL style
+  return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"  # PostgreSQL style
 end
 
 # --- SQLite – Contextual Bucket Strategy ---
-function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool=false, operator::String="")
+function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
   contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
   # Expand array into multiple positional parameters for SQLite
   placeholders = join(fill("?", length(value)), ", ")
@@ -136,7 +145,7 @@ function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bo
   end
   return placeholders
 end
-function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool=false, operator::String="")::String
+function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   if contains
     value = _apply_like_wildcards(value, operator)
   end
@@ -145,7 +154,7 @@ function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool=false, opera
 end
 
 # --- SQLInstruction convenience (works for both backends) ---
-add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="") = add_parameter!(instruc.parameters, value; contains=contains, operator=operator)
+add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) = add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # get_final_parameters – return the parameters in correct SQL clause order

@@ -34,7 +34,9 @@ end
     
     got_error = false
     try
-      bulk_insert(query, df_bad)
+      Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        bulk_insert(query, df_bad)
+      end
     catch e
       got_error = true  # bulk_insert now rethrows the underlying DB error (e.g., duplicate key)
     end
@@ -56,7 +58,9 @@ end
     query = M.Status.objects;
     got_error = false
     try
-      bulk_insert(query, df_multi, chunk_size=2)
+      Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        bulk_insert(query, df_multi, chunk_size=2)
+      end
     catch e
       got_error = true  # async task failure is unwrapped, so catch sees the real constraint error
     end

@@ -321,7 +321,7 @@ end
 
     # 3. Filters on the Main Query
     # Filter constructors that are not 'Ferrari' (Global Query Param 3)
-    main_query.filter("name__@neq" => "Ferrari")
+    main_query.filter("name__@ne" => "Ferrari")
     
     # Select data mixing main table and CTE
     main_query.values(

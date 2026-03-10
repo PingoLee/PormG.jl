@@ -40,12 +40,17 @@ Adhere strictly to the following guidelines:
 - **Filter Syntax:** - Use `String` keys for field names.
   - Use double underscore `__` for joins/lookups.
   - Use `__@operator` for modifiers.
-  - *Correct:* `query.filter("statusid__status" => "Finished", "resultid__@gt" => 10)`
-  - *Incorrect:* `query.filter(statusid__status="Finished")` (Do not use keyword arguments for dynamic fields).
-- **F-Expressions:** Use `F("fieldname")` for database-side column references in updates or comparisons.
-
-### Data Types
-- **DataFrames:** The primary output format for analytical queries is `DataFrame`.
+  - Use `Qor` for OR logic (bitwise `|` and `&` are not supported for query composition).
+  - *Correct*: `query.filter("statusid__status" => "Finished", "resultid__@gt" => 10)`
+  - *Correct (OR)*: `query.filter(Qor("constructorid" => 1, "constructorid" => 9))`
+  - *Incorrect*: `query.filter(statusid__status="Finished")` (Do not use keyword arguments for dynamic fields).
+- **F-Expressions**: Use `F("fieldname")` for database-side column references in updates, arithmetic projections, or field-to-field / field-to-expression filters.
+  - *Correct (Scalar filter)*: `query.filter("points__@gt" => 20)`
+  - *Correct (Field comparison)*: `query.filter(F("points") > F("grid"))`
+  - *Correct (Derived comparison)*: `query.filter(F("raceid__date") <= F("driverid__dob") + 30)`
+  - *Correct (Column as value)*: `query.filter("points__@gt" => F("grid"))`
+  - *Avoid*: `query.filter(F("points") > 20)` when the standard `"field__@operator" => value` form expresses the same scalar predicate more clearly.
+- **DataFrames**: The primary output format for analytical queries is `DataFrame`.
 - **Dicts:** `list` returns `Vector{Dict{Symbol, Any}}`.
 - **Parameters:** Always use parameterized queries to prevent SQL Injection. Never interpolate strings directly into SQL commands.
 

@@ -61,7 +61,7 @@ PormG.config["default"] = MockSettings
 
     # Test: Not equal operator
     q3 = RaceModel.objects
-    q3.filter("year__@neq" => 2021)
+    q3.filter("year__@ne" => 2021)
     res3 = q3 |> list(show_query=:dict)
 
     @test res3[:parameters] == [2021]
@@ -230,7 +230,7 @@ PormG.config["default"] = MockSettings
     @test res[:parameters] == ["Dutch"]
   end
 
-  # ===== Section 11: Complex Filter Combinations =====
+  # ===== Section 11: Filter Combinations =====
   @testset "Filter Combinations" begin
     # Test: Q object with multiple conditions
     q = DriverModel.objects

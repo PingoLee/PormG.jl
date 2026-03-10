@@ -60,7 +60,15 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] **SQL Formatting**: Add a `:pretty` mode to `show_query` to return formatted/indented SQL for better readability in logs.
   - [ ] **Explain Support**: Add an `explain_query()` API to return the database's `EXPLAIN (ANALYZE, BUFFERS)` output directly as metadata.
 
+- [ ] **Revise API before publication from app**
+  - [ ] **Revise the function names**: `list()`, `bulk_insert()`, `bulk_update()`, `delete()`, `do_count()`, and `do_exists()` for consistency and clarity.
+  - [ ] **Check alingnment with Julia conventions**: Ensure that the API follows Julia's naming conventions and best practices for function design.
+  - [ ] **Revome exportation form functions covered by functors**: If we have functors for certain operations, we might want to remove the corresponding functions exportation from the API to avoid confusion and encourage the use of functors.
 
+- [ ] **Turn CTEs allow to be called by functor like filters**: 
+  - [ ] **With**: improve function
+  - [ ] **cjoin**: improve function
+  - [ ] **Contract**: throw an explicit ArgumentError when join_field is nothing
 
 ## 🐘 PostgreSQL Specific Enhancements
 
@@ -109,7 +117,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
         "positionorder" => 1
     )
 
-- [ ] **Check name of operators**: `__@ne` or `__@neq`?
+- [ ] **Check name of operators**: `__@ne` or `__@ne`?
 
 ## Future Considerations
 - [ ] **Parameterize LIMIT/OFFSET (Future)**

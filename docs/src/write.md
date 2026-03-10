@@ -637,4 +637,4 @@ sql = query.update("positiontext" => F("raceid__circuitid__country"), show_query
 
 ---
 
-This comprehensive guide covers all data writing operations in PormG. For more details on querying data, see the [read.md](read.md) documentation. For field definitions and validation, refer to [fields.md](fields.md).
+This comprehensive guide covers all data writing operations in PormG. For more details on querying data, see the [Reading overview](read/index.md). For field definitions and validation, refer to [fields.md](fields.md).

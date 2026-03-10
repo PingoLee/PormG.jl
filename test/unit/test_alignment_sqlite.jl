@@ -384,10 +384,10 @@ end
     @test count(==('?'), insp[:sql_text]) == 2
 end
 
-@testset "Alignment Verification - Negative Operators (@neq)" begin
-    # Test @neq (not equal) operator
+@testset "Alignment Verification - Negative Operators (@ne)" begin
+    # Test @ne (not equal) operator
     q = M.Result.objects.filter(
-        "driverid__surname__@neq" => "Hamilton"
+        "driverid__surname__@ne" => "Hamilton"
     )
 
     insp = q |> inspect_query

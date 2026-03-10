@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `PormG` module provides a set of abstractions and functions for working with SQL databases in Julia. It includes various types for SQL operations, models, and migrations, along with utilities for querying and manipulating data.
+The `PormG` module provides a set of abstractions and functions for working with SQL databases in Julia. It includes various types for SQL operations, models, and migrations, along with utilities for querying and manipulating data. Detailed documentation for reading operations can be found in the [Reading Overview](read/index.md).
 
 ## Exported Functions
 

@@ -72,11 +72,11 @@ function _check_function(x::Vector{String})
   if length(x) == 1
     return x[1]
   else
-    if haskey(PormGtrasnform, x[end])
-      resp = getfield(@__MODULE__, Symbol(PormGtrasnform[x[end]]))(x[1:end-1])
+    if haskey(PormGtransform, x[end])
+      resp = getfield(@__MODULE__, Symbol(PormGtransform[x[end]]))(x[1:end-1])
       return _check_function(resp)
     else
-      joined_keys_with_prefix_func = join(map(key -> " \e[32m@" * key, keys(PormGtrasnform) |> collect), ", ")
+      joined_keys_with_prefix_func = join(map(key -> " \e[32m@" * key, keys(PormGtransform) |> collect), ", ")
       joined_keys_with_prefix_oper = join(map(key -> " \e[33m@" * key, keys(PormGsuffix) |> collect), ", ")
       if haskey(PormGsuffix, x[end])
         yes = "you can use \"column__@\e[32m$(x[end])\e[0m\""
@@ -185,7 +185,7 @@ function _get_join_query(array::Vector{String}; array_store::Vector{String}=Stri
         array[i] = array[i][1:end-length(k)]
       end
     end
-    for (k, value) in PormGtrasnform
+    for (k, value) in PormGtransform
       if endswith(array[i], k)
         array[i] = array[i][1:end-length(k)]
       end
@@ -399,10 +399,16 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
   resolved_kwargs = Dict{String,Any}()
   deferred_kwargs = Dict{String,Any}()  # kwargs to parameterize after column
   for (k, val) in v.kwargs
-    if isa(val, Union{SQLObject,SQLType})
+    # For CASE/WHEN, THEN/ELSE must always be resolved after condition SQL so positional
+    # placeholders follow SQL text order (important for SQLite/MySQL style backends).
+    if k in parameterize_keys
+      if val isa Missing || val == "NULL"
+        resolved_kwargs[k] = val
+      else
+        deferred_kwargs[k] = val
+      end
+    elseif isa(val, Union{SQLObject,SQLType})
       resolved_kwargs[k] = _get_select_query(val, instruc)
-    elseif k in parameterize_keys && val isa Union{Number,AbstractString} && !(val isa Missing) && val != "NULL"
-      deferred_kwargs[k] = val  # defer until after column is resolved
     else
       resolved_kwargs[k] = val
     end
@@ -415,7 +421,12 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
   # Order matters for positional backends: then → else → precision
   for key in ["then", "else", "precision"]
     if haskey(deferred_kwargs, key)
-      resolved_kwargs[key] = add_parameter!(instruc, deferred_kwargs[key]; sql_type=_deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc))
+      deferred_val = deferred_kwargs[key]
+      if isa(deferred_val, Union{SQLObject,SQLType})
+        resolved_kwargs[key] = _get_select_query(deferred_val, instruc)
+      else
+        resolved_kwargs[key] = add_parameter!(instruc, deferred_val; sql_type=_deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc))
+      end
     end
   end
 
@@ -449,8 +460,8 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
   # Apply functions in sequence
   for i in 2:length(v_str)
     func_key = v_str[i]
-    if haskey(PormGtrasnform, func_key)
-      func_name = Symbol(PormGtrasnform[func_key])
+    if haskey(PormGtransform, func_key)
+      func_name = Symbol(PormGtransform[func_key])
       # Note: Dialect functions usually take (column, format_dict, connection)
       # We need to construct the format_dict if needed, but for date parts it's simple
       text = getfield(Dialect, func_name)(text, Dict{String,Any}(), instruc.connection)
@@ -580,7 +591,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     if isa(placeholders, String)
       # Se placeholders for uma única string (ex: "$1" ou "?")
       if instruc.connection isa PormGPostgres
-        return string(column, " ", v.operator == "in" ? "= ANY" : "<> ALL", "(", placeholders, ")")
+        return string(column, " ", v.operator == "IN" ? "= ANY" : "<> ALL", "(", placeholders, ")")
       else
         # Para SQLite e outros que não suportam ANY(array), precisamos que os placeholders
         # tenham sido expandidos ou usar uma abordagem diferente.

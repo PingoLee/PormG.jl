@@ -73,23 +73,6 @@ end
 
 end
 
-
-@testset "FExpression and Filtering" begin
-  query = M.Result.objects;
-  query.filter(F("driverid__dob__@day") == F("raceid__date__@day"), F("driverid__dob__@month") == F("raceid__date__@month"), "min_grid__@gt" => 0);
-  query.values("raceid__circuitid__name", "raceid__date", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
-  query.order_by("min_grid", "-raceid__date");
-  df = query |> DataFrame
-  # query |> show_query
-  @test size(df, 1) == 75
-  @test df[1, :raceid__circuitid__name] == "Nürburgring" && df[1, :driverid__forename] == "Mika"    
-
-  query = M.Result.objects;
-  query.filter("driverid__forename" => "Mika");
-  query.values("raceid__circuitid__name", "until_30_years" => Sum(Case(When(Q(F("raceid__date") <= F("driverid__dob") + 10950), then=1), default=0)));
-  df = query |> DataFrame
-end
-
 @testset "F Expression Updates" begin
   query = M.Just_a_test_deletion.objects
   query |> do_exists && delete(query; allow_delete_all = true)

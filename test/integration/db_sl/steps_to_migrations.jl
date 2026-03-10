@@ -16,6 +16,19 @@ using PormG.Migrations
 # We point to the folder containing connection.yml
 DB_KEY = "test/integration/db_sl"
 
+# If connection.yml does not exist yet, create it configured for SQLite.
+# This is where you choose adapter/database for this debug workflow.
+conn_yml = joinpath(DB_KEY, "connection.yml")
+if !isfile(conn_yml)
+    @info "Creating SQLite connection file at $conn_yml..."
+    PormG.Generator.create_db_folder_and_yml(
+        path=DB_KEY,
+        adapter="SQLite",
+        database="f1.sqlite",
+        time_zone="America/Sao_Paulo"
+    )
+end
+
 @info "Loading configuration from $DB_KEY..."
 PormG.Configuration.load(DB_KEY)
 

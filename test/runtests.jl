@@ -1,5 +1,6 @@
 using Test
 using PormG
+using Infiltrator
 
 # Ensure environment is set for unit tests
 if !haskey(ENV, "PORMG_ENV")
@@ -8,11 +9,12 @@ end
 
 @testset "PormG Unit Tests" begin
     # Unit tests that don't require a live database
-    @time @testset "Contextual Buckets (SQLite)" include("unit/test_parameters.jl")
-    @time @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
-    @time @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
-    @time @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
-    @time @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
+    @testset "Contextual Buckets (SQLite)" include("unit/test_parameters.jl")
+    @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
+    @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
+    @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
+    @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     # include("unit/test_migration_planner.jl")
 end
 

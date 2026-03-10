@@ -264,9 +264,9 @@ query.values("price", "discounted_price" => F("price") * 0.9)
 ```
 """
 @kwdef mutable struct FExpression <: SQLTypeF
-  field_name::Union{String,SQLTypeF}
+  field_name::Union{String,SQLTypeF,SQLTypeFunction}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  operand::Union{String,Integer,Float64,SQLTypeF,Nothing} = nothing
+  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   agregate::Bool = false
@@ -301,43 +301,52 @@ function Base.deepcopy(f::FExpression)
 end
 
 # Arithmetic operations for F expressions
-function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpression})
+# Aggregate propagation helper: result is aggregate if any operand is aggregate
+_is_agg(f::FExpression) = f.agregate
+_is_agg(f::SQLTypeFunction) = f.agregate
+_is_agg(::Any) = false
+
+function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="+",
     operand=operand,
     function_name="F",
-    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
-function Base.:-(f::FExpression, operand::Union{Integer,Float64,String,FExpression})
+function Base.:-(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="-",
     operand=operand,
     function_name="F",
-    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
-function Base.:*(f::FExpression, operand::Union{Integer,Float64,String,FExpression})
+function Base.:*(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="*",
     operand=operand,
     function_name="F",
-    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
-function Base.:/(f::FExpression, operand::Union{Integer,Float64,String,FExpression})
+function Base.:/(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
     operation="/",
     operand=operand,
     function_name="F",
-    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : ""
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
@@ -398,7 +407,8 @@ function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
     operation="+",
     operand=operand,
     function_name="F",
-    column=f.field_name
+    column=f.field_name,
+    agregate=f.agregate
   )
 end
 
@@ -408,7 +418,8 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
     operation="*",
     operand=operand,
     function_name="F",
-    column=f.field_name
+    column=f.field_name,
+    agregate=f.agregate
   )
 end
 
@@ -433,6 +444,30 @@ function Base.deepcopy(f::FObject)
     _as=f._as,
     kwargs=deepcopy(f.kwargs)
   )
+end
+
+# Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
+# Enable expressions like Sum("points") / Count("resultid")
+function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+function Base.:*(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+function Base.:/(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+
+# Commutative: scalar op FObject
+function Base.:+(operand::Union{Integer,Float64}, f::FObject)
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate)
+end
+
+function Base.:*(operand::Union{Integer,Float64}, f::FObject)
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate)
 end
 
 

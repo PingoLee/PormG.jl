@@ -517,9 +517,7 @@ function format_number_sql(value::Union{Missing, Nothing})
     return missing
 end
 function format_number_sql(value::Union{Float16, Float32, Float64})
-  # Use @sprintf to avoid scientific notation and ensure full precision
-  # return string("'", @sprintf("%.17g", value), "'")
-  return @sprintf("%.17g", value)
+  return Float64(value)
 end
 function format_number_sql(value::AbstractString)
   # try integer first

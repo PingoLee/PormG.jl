@@ -143,6 +143,12 @@ end
     q.filter("driverid__@lte" => 15)
     q.order_by("driverid")
     df = q |> DataFrame
+
+    insp = q |> inspect_query
+    # @info insp[:sql_text]
+    if insp[:dialect] == :sqlite
+        @test insp[:parameters] == Any[5, "Top 5", 6, 10, "6-10", "Other", 15]
+    end
     
     @test df[1, :category] == "Top 5"
     @test df[6, :category] == "6-10"
@@ -369,7 +375,8 @@ end
         query.order_by("-podiums")
         query.limit(5)
 
-        query |> show_query  # For debugging
+        insp = query |> inspect_query
+        @info insp[:sql_text]
         
         df = query |> DataFrame
         @test size(df, 1) == 5
@@ -677,6 +684,130 @@ end
         
         @test df[1, :max_of_many] == 10
         @test df[1, :min_of_many] == 10
+    end
+end
+
+@testset "PormGsuffix Operator Integration Tests" begin
+    # Logic: Iterate through all operators defined in PormGsuffix and execute them against the database.
+    # Why: End-to-end validation that each operator generates correct SQL and returns expected results.
+    # Disclaimer: These are integration tests using the F1 dataset; results depend on the data.
+
+    @testset "Comparison Operators (gt, gte, lt, lte, ne)" begin
+        # Test: driverid > 100 (gt)
+        q_gt = M.Driver.objects.filter("driverid__@gt" => 100).values("driverid").distinct().order_by("driverid")
+        df_gt = q_gt |> DataFrame
+        @test all(df_gt.driverid .> 100)
+        @test size(df_gt, 1) == 761
+
+        # Test: driverid >= 100 (gte)
+        q_gte = M.Driver.objects.filter("driverid__@gte" => 100).values("driverid").distinct().order_by("driverid")
+        df_gte = q_gte |> DataFrame
+        @test all(df_gte.driverid .>= 100)
+        @test size(df_gte, 1) == 762
+
+        # Test: driverid < 50 (lt)
+        q_lt = M.Driver.objects.filter("driverid__@lt" => 50).values("driverid").distinct().order_by("driverid")
+        df_lt = q_lt |> DataFrame
+        @test all(df_lt.driverid .< 50)
+
+        # Test: driverid <= 50 (lte)
+        q_lte = M.Driver.objects.filter("driverid__@lte" => 50).values("driverid").distinct().order_by("driverid")
+        df_lte = q_lte |> DataFrame
+        @test all(df_lte.driverid .<= 50)
+        @test size(df_lte, 1) == 50
+
+        # Test: driverid != 1 (ne)
+        q_ne = M.Driver.objects.filter("driverid__@ne" => 1).values("driverid").distinct().order_by("driverid")
+        df_ne = q_ne |> DataFrame
+        @test all(df_ne.driverid .!= 1)
+    end
+
+    @testset "Range Operator (range / BETWEEN)" begin
+        # Test: driverid BETWEEN 50 AND 100
+        q_range = M.Driver.objects.filter("driverid__@range" => [50, 100]).order_by("driverid").values("driverid")
+        df_range = q_range |> DataFrame
+        @test all(df_range.driverid .>= 50 .&& df_range.driverid .<= 100)
+        @test size(df_range, 1) == 51
+    end
+
+    @testset "IN and NOT IN Operators (in, nin)" begin
+        # Test: driverid IN (1, 2, 3)  (in)
+        lucky_ids = [1, 2, 3]
+        q_in = M.Driver.objects.filter("driverid__@in" => lucky_ids).order_by("driverid").values("driverid")
+        df_in = q_in |> DataFrame
+        @test size(df_in, 1) == 3
+        @test df_in[1, :driverid] == 1
+        @test df_in[2, :driverid] == 2
+        @test df_in[3, :driverid] == 3
+
+        # Test: driverid NOT IN (1, 2, 3)  (nin)
+        q_nin = M.Driver.objects.filter("driverid__@nin" => lucky_ids).order_by("driverid").values("driverid")
+        df_nin = q_nin |> DataFrame
+        @test all(df_nin.driverid .∉ Ref(lucky_ids))
+        @test size(df_nin, 1) > 0
+    end
+
+    @testset "String Match Operators (contains, icontains, startswith, endswith)" begin
+        # Test: surname LIKE '%ilton%' (contains)
+        q_contains = M.Driver.objects.filter("surname__@contains" => "ilton").values("surname")
+        df_contains = q_contains |> DataFrame
+        @test all(occursin.("ilton", df_contains.surname))
+
+        # Test: surname ILIKE '%HAM%' (case-insensitive contains)
+        q_icontains = M.Driver.objects.filter("surname__@icontains" => "HAM").values("surname")
+        df_icontains = q_icontains |> DataFrame
+        @test all(occursin.("HAM", uppercase.(df_icontains.surname)))
+
+        # Test: nationality LIKE 'British%' (startswith)
+        q_startswith = M.Driver.objects.filter("nationality__@startswith" => "British").values("nationality")
+        df_startswith = q_startswith |> DataFrame
+        if size(df_startswith, 1) > 0
+            @test all(startswith.(df_startswith.nationality, "British"))
+        end
+
+        # Test: code LIKE '%AM' (endswith)
+        q_endswith = M.Driver.objects.filter("code__@endswith" => "AM").values("code")
+        df_endswith = q_endswith |> DataFrame
+        @test all(endswith.(df_endswith.code, "AM"))
+    end
+
+    @testset "NULL Check Operator (isnull)" begin
+        # Test: code IS NOT NULL  (isnull => false)
+        q_not_null = M.Driver.objects.filter("code__@isnull" => false).values("code")
+        df_not_null = q_not_null |> DataFrame
+        @test all(.!(ismissing.(df_not_null.code)) .& (df_not_null.code .!= ""))
+
+        # Test: code IS NULL  (isnull => true)
+        q_null = M.Driver.objects.filter("code__@isnull" => true)
+        df_null = q_null |> DataFrame
+        # Some drivers may not have a code; if the query returns results, verify they're null
+        if size(df_null, 1) > 0
+            # At least some should be missing or empty
+            @test any(ismissing.(df_null.code))
+        end
+    end
+
+    @testset "Exact Equality (default operator without suffix)" begin
+        # Test: driverid = 1  (implicit = operator)
+        q_exact = M.Driver.objects.filter("driverid" => 1).values("driverid", "forename")
+        df_exact = q_exact |> DataFrame
+        @test size(df_exact, 1) == 1
+        @test df_exact[1, :driverid] == 1
+        @test df_exact[1, :forename] == "Lewis"
+    end
+
+    @testset "Combined operator filtering (multiple filters)" begin
+        # Test: Multiple operators in a single query
+        q_multi = M.Driver.objects.filter(
+            "driverid__@gt" => 10,
+            "driverid__@lte" => 50,
+            "nationality__@icontains" => "British"
+        ).values("driverid", "nationality").order_by("driverid")
+        df_multi = q_multi |> DataFrame
+        @test all(df_multi.driverid .> 10 .&& df_multi.driverid .<= 50)
+        if size(df_multi, 1) > 0
+            @test all(contains.(uppercase.(df_multi.nationality), "BRITISH"))
+        end
     end
 end
 

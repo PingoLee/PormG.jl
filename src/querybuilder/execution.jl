@@ -567,6 +567,8 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
     # @infiltrate
     right_side = if isa(v.operand, FExpression)
       _set_update_query(v.operand, instruc)
+    elseif isa(v.operand, SQLTypeFunction)
+      _get_select_query(v.operand, instruc)
     elseif isa(v.operand, String)
       # Check if it's a field reference
       if contains(v.operand, "__") || v.operand in instruc.object.model.field_names

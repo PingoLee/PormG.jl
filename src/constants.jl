@@ -31,13 +31,12 @@ const reserved_words = [
   "where", "in", "isa", "throw", "true", "false", "nothing", "missing", "id"
 ]
 
-const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
+const PormGsuffix = Dict{String,Union{Int64, String}}(
   "gte" => ">=",
   "gt" => ">",
   "lte" => "<=",
   "lt" => "<",
   "ne" => "!=",
-  "neq" => "!=",
   "isnull" => "ISNULL",
   "in" => "IN",
   "nin" => "NOT IN",
@@ -48,7 +47,7 @@ const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
   "range" => "BETWEEN",
 )
 
-const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
+const PormGtransform = Dict{String,Union{Int64, String}}(
   "date" => "DATE",
   "month" => "MONTH",
   "year" => "YEAR",

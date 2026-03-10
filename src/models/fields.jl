@@ -1414,7 +1414,7 @@ function DateField(; kwargs...)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   auto_now = get(kwargs, :auto_now, false)
-  auto_now_add = get(kwargs, :auto_now_add, false)
+  auto_now_add = get(kwargs, :auto_now_add, false)  
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
@@ -1475,6 +1475,12 @@ A field for storing date and time values with timezone information.
 - `editable::Bool`: If `true`, field can be edited in forms. Default: `false`
 - `auto_now::Bool`: If `true`, automatically updates to current datetime on every save. Default: `false`
 - `auto_now_add::Bool`: If `true`, automatically sets to current datetime when record is created. Default: `false`
+- `type::String`: The database column type. Can be either `"TIMESTAMPTZ"` (default) or `"TIMESTAMP"`. Default: `"TIMESTAMPTZ"`
+
+# Important Note: TIMESTAMPTZ vs TIMESTAMP
+By default, `DateTimeField` uses `TIMESTAMPTZ`. 
+- **TIMESTAMPTZ** (Recommended): Stores values in UTC internally and converts them to your session's timezone upon retrieval. This ensures consistency across different geographical regions.
+- **TIMESTAMP**: Stores the exact date and time provided without any timezone conversion.
 
 # Examples
 ```julia
@@ -1498,7 +1504,7 @@ deadline = DateTimeField(null=true, blank=true)```
 function DateTimeField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :auto_now, :auto_now_add
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :auto_now, :auto_now_add, :type
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1516,6 +1522,8 @@ function DateTimeField(; kwargs...)
   editable = get(kwargs, :editable, false)
   auto_now = get(kwargs, :auto_now, false)
   auto_now_add = get(kwargs, :auto_now_add, false)
+  #TIMESTAMPTZ
+  type = get(kwargs, :type, "TIMESTAMPTZ") |> uppercase
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
@@ -1529,6 +1537,10 @@ function DateTimeField(; kwargs...)
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
+  !(type isa String) && throw(ArgumentError("The 'type' must be a String"))
+  if type != "TIMESTAMPTZ" && type != "TIMESTAMP"
+    throw(ArgumentError("The 'type' must be either 'TIMESTAMPTZ' or 'TIMESTAMP'"))
+  end
   # Return the field instance
   return sDateTimeField(
     verbose_name,
@@ -1541,7 +1553,7 @@ function DateTimeField(; kwargs...)
     editable,
     auto_now,
     auto_now_add,
-    "TIMESTAMPTZ",
+    type,
     format_timezone_sql
   )  
 end

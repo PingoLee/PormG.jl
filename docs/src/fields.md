@@ -516,6 +516,11 @@ Invoice = Models.Model(
 
 **Use Cases**: Timestamps, logs, audit trails, precise timing.
 
+#### TIMESTAMPTZ vs TIMESTAMP
+By default, `DateTimeField` uses `TIMESTAMPTZ`. 
+- **TIMESTAMPTZ** (Recommended): Stores values in UTC internally and converts them to your session's timezone upon retrieval. This ensures consistency across different geographical regions.
+- **TIMESTAMP**: Stores the exact date and time provided without any timezone conversion. You can switch to this by passing `type="TIMESTAMP"`.
+
 ```julia
 # Audit and logging
 AuditLog = Models.Model(

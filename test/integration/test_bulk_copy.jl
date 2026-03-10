@@ -2,13 +2,19 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+# bulk_copy is a PostgreSQL-only feature (COPY protocol)
+if adapter_name == "SQLite"
+    @info "Skipping bulk_copy tests for SQLite (not supported)"
+    return true
+else
+
 @testset "PostgreSQL COPY Protocol (bulk_copy)" begin
     # Use the auxiliary model for destructive tests
     query = M.Just_a_test_deletion.objects
     
     # 1. Clean up
     query |> do_exists && delete(query; allow_delete_all = true)
-    @test query |> do_count == 0
+    @test query.count() == 0
 
     # 2. Create a DataFrame for bulk copy
     data = [
@@ -24,7 +30,7 @@ end
     bulk_copy(query, df)
 
     # 4. Verify results
-    @test query |> do_count == 5
+    @test query.count() == 5
     
     # Check specific values
     results = query.order_by("test_result") |> DataFrame
@@ -40,8 +46,8 @@ end
         raw_val = [10, 20]
     )
     bulk_copy(query, df_mapped, columns = ["raw_name" => "name", "raw_val" => "test_result"])
-    @test query |> do_count == 2
-    @test query.filter("name" => "Mapped 1") |> do_count == 1
+    @test query.count() == 2
+    @test query.filter("name" => "Mapped 1").count() == 1
 
     # 6. Test with automated sequence update
     # Fetch current IDs to see where we are
@@ -65,7 +71,7 @@ end
     catch
         # Ignore errors if table doesn't exist yet
     end
-    @test (query |> do_count) == 0
+    @test (query.count()) == 0
 
     # Test vectors: strings that would exploit SQL injection if not properly escaped
     injection_vectors = [
@@ -85,7 +91,7 @@ end
     bulk_copy(query, df_injection)
 
     # Verify: 1) All rows inserted successfully (table still exists)
-    count_after_insert = query |> do_count
+    count_after_insert = query.count()
     @test count_after_insert == 9
 
     # Verify: 2) Data round-trips correctly without SQL execution
@@ -98,7 +104,7 @@ end
 
     # Verify: 3) Attempt to filter by one of the suspicious strings succeeds
     suspicious_name = "'; DROP TABLE just_a_test_deletion; --"
-    found = query.filter("name" => suspicious_name) |> do_count
+    found = query.filter("name" => suspicious_name).count()
     @test found == 1
 
     # Verify: 4) Original table structure is intact (no actual DROP was executed)
@@ -108,3 +114,5 @@ end
 
   
 end
+
+end # End of if adapter_name != "SQLite"

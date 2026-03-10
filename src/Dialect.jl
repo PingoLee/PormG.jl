@@ -3,7 +3,7 @@ using Dates
 using SQLite
 using DataFrames
 using LibPQ
-import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres, PormGSQLite
+import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique
@@ -13,50 +13,50 @@ import PormG.Infiltrator: @infiltrate
 
 
 # Date Part Wrappers
-function YEAR(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
-    return EXTRACT(column, Dict{String, Any}("part" => "YEAR"), conn)
+function YEAR(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return EXTRACT(column, Dict{String,Any}("part" => "YEAR"), conn)
 end
-function MONTH(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
-    return EXTRACT(column, Dict{String, Any}("part" => "MONTH"), conn)
+function MONTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return EXTRACT(column, Dict{String,Any}("part" => "MONTH"), conn)
 end
-function DAY(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
-    return EXTRACT(column, Dict{String, Any}("part" => "DAY"), conn)
+function DAY(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return EXTRACT(column, Dict{String,Any}("part" => "DAY"), conn)
 end
-function DATE(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
-    return CAST(column, Dict{String, Any}("type" => "date"), conn)
+function DATE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return CAST(column, Dict{String,Any}("type" => "date"), conn)
 end
-function Y_M(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
-    return EXTRACT_DATE(column, Dict{String, Any}("format" => "YYYY-MM"), conn)
+function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+  return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)
 end
-function QUARTER(column::String, format::Dict{String, Any}, conn::PormGPostgres)
-    return "EXTRACT(QUARTER FROM $(column))"
+function QUARTER(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  return "EXTRACT(QUARTER FROM $(column))"
 end
-function QUARTER(column::String, format::Dict{String, Any}, conn::PormGSQLite)
-    return "((strftime('%m', $(column)) - 1) / 3) + 1"
+function QUARTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  return "((strftime('%m', $(column)) - 1) / 3) + 1"
 end
-function QUADRIMESTER(column::String, format::Dict{String, Any}, conn::PormGPostgres)
-    return "CEIL(EXTRACT(MONTH FROM $(column)) / 4.0)"
+function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  return "CEIL(EXTRACT(MONTH FROM $(column)) / 4.0)"
 end
-function QUADRIMESTER(column::String, format::Dict{String, Any}, conn::PormGSQLite)
-    return "((strftime('%m', $(column)) - 1) / 4) + 1"
+function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  return "((strftime('%m', $(column)) - 1) / 4) + 1"
 end
 
 
 # PostgreSQL
-function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   format_str = format["format"]
   locale = get(format, "locale", "")
   nlsparam = get(format, "nlsparam", "")
   return "to_char($(column), '$(format_str)') $(locale) $(nlsparam)"
 end
 # SQLite
-function EXTRACT_DATE(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   format_str = format["format"]
   locale = get(format, "locale", "")
   return "strftime('$(sqlite_date_format_map[format_str])', $(column)) $(locale)"
 end
 
-function SUM(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function SUM(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   if get(format, "distinct", false)
     return "SUM(DISTINCT $(column))"
   else
@@ -64,7 +64,7 @@ function SUM(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   end
 end
 
-function SUM(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function SUM(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   if get(format, "distinct", false)
     return "SUM(DISTINCT $(column))"
   else
@@ -72,7 +72,7 @@ function SUM(column::String, format::Dict{String, Any}, conn::PormGSQLite)
   end
 end
 
-function AVG(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function AVG(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   if get(format, "distinct", false)
     return "AVG(DISTINCT $(column))"
   else
@@ -80,7 +80,7 @@ function AVG(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   end
 end
 
-function AVG(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function AVG(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   if get(format, "distinct", false)
     return "AVG(DISTINCT $(column))"
   else
@@ -88,7 +88,7 @@ function AVG(column::String, format::Dict{String, Any}, conn::PormGSQLite)
   end
 end
 
-function COUNT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function COUNT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   if get(format, "distinct", false)
     return "COUNT(DISTINCT $(column))"
   else
@@ -96,7 +96,7 @@ function COUNT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
   end
 end
 
-function COUNT(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function COUNT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   if get(format, "distinct", false)
     return "COUNT(DISTINCT $(column))"
   else
@@ -104,19 +104,19 @@ function COUNT(column::String, format::Dict{String, Any}, conn::PormGSQLite)
   end
 end
 
-function MAX(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function MAX(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "MAX($(column))"
 end
 
-function MAX(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function MAX(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MAX($(column))"
 end
 
-function MIN(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function MIN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "MIN($(column))"
 end
 
-function MIN(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MIN($(column))"
 end
 
@@ -145,26 +145,55 @@ end
 function VALUE(value::String, conn::PormGSQLite)
   return "'$(value)'"
 end
-function CAST(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function CAST(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return """($column)::$(format["type"])"""
 end
-function CAST(column::String, format::Dict{String, Any}, conn::PormGSQLite)
-  return "CAST($column AS $(sqlite_type_map_reverse[format["type"]]))"
-end
-function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::PormGPostgres)
-  return "CONCAT($(join(column, ",\n")))"
-end
-function CONCAT(column::Array{Any, 1}, format::Dict{String, Any}, conn::PormGSQLite)
-  return "($(join(column, " ||\n")))"
-end
-function EXTRACT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
-  if haskey(format, "format")
-    return "EXTRACT($(format["part"]) FROM $(column))$(format["format"])"  
+function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  target_type = uppercase(format["type"])
+  if haskey(sqlite_type_map_reverse, target_type)
+    return "CAST($column AS $(sqlite_type_map_reverse[target_type]))"
   else
-    return "EXTRACT($(format["part"]) FROM $(column))"  
+    return "CAST($column AS $(target_type))"
   end
 end
-function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
+function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGPostgres)
+  return "CONCAT($(join(column, ",\n")))"
+end
+function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLite)
+  return "($(join(column, " ||\n")))"
+end
+function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  if haskey(format, "format")
+    return "EXTRACT($(format["part"]) FROM $(column))$(format["format"])"
+  else
+    return "EXTRACT($(format["part"]) FROM $(column))"
+  end
+end
+function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  part = format["part"]
+  strftime_format = if part == "YEAR"
+    "%Y"
+  elseif part == "MONTH"
+    "%m"
+  elseif part == "DAY"
+    "%d"
+  elseif part == "HOUR"
+    "%H"
+  elseif part == "MINUTE"
+    "%M"
+  elseif part == "SECOND"
+    "%S"
+  elseif part == "DOW"
+    "%w"
+  elseif part == "DOY"
+    "%j"
+  else
+    throw(ArgumentError("Unsupported extract part for SQLite: $part"))
+  end
+
+  return "CAST(strftime('$(strftime_format)', $(column)) AS INTEGER)"
+end
+function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""
     return """(CASE
@@ -172,7 +201,7 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgre
     ELSE $(format["else"])
     END)::$(output_field)
     """
-  else 
+  else
     return """CASE
     $(join(column, "\n"))
     ELSE $(format["else"])
@@ -180,28 +209,31 @@ function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgre
     """
   end
 end
-function CASE(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function CASE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return """CASE $(column) ELSE $(format["else"]) END"""
 end
-function CASE(column::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
+function CASE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  return """CASE $(column) ELSE $(format["else"]) END"""
+end
+function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   resp::String = """CASE
     $(join(column, "\n"))
     ELSE $(format["else"])
     END
     """
-  output_field = get(format, "output_field", nothing)  
+  output_field = get(format, "output_field", nothing)
   if !isnothing(output_field) && output_field != ""
-    return CAST(resp, Dict{String, Any}("type" => output_field), conn)    
-  else 
+    return CAST(resp, Dict{String,Any}("type" => output_field), conn)
+  else
     return resp
   end
 end
 
-function WHEN(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres,PormGSQLite})
+function WHEN(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "WHEN $(column) THEN $(format["then"])" |> string
 end
 
-function COALESCE(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
+function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   sql = "COALESCE($(join(columns, ", ")))"
   if get(format, "output_field", nothing) !== nothing
     return "($sql)::$(format["output_field"])"
@@ -209,117 +241,135 @@ function COALESCE(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPo
   return sql
 end
 
-function COALESCE(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
+function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "COALESCE($(join(columns, ", ")))"
 end
 
-function GREATEST(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   return "GREATEST($(join(columns, ", ")))"
 end
 
-function LEAST(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+  return "MAX($(join(columns, ", ")))"
+end
+
+function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   return "LEAST($(join(columns, ", ")))"
 end
 
-function NULLIF(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+  return "MIN($(join(columns, ", ")))"
+end
+
+function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "NULLIF($(columns[1]), $(columns[2]))"
 end
 
-function LOWER(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function LOWER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "LOWER($(column))"
 end
 
-function UPPER(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function UPPER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "UPPER($(column))"
 end
 
-function LENGTH(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function LENGTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "LENGTH($(column))"
 end
 
-function ABS(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function ABS(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "ABS(($(column))::numeric)"
 end
-function ABS(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "ABS($(column))"
 end
 
-function ROUND(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function ROUND(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   precision = get(format, "precision", 0)
-  # println("DEBUG: Postgres ROUND precision=$precision type=$(typeof(precision))")
-  if precision == 0
-    return "ROUND(($(column))::numeric)"
-  else
+  # When parameterized, precision is a "?" placeholder string — always include it.
+  # When it's the default (0), omit the precision argument.
+  if precision isa AbstractString || precision != 0
     return "ROUND(($(column))::numeric, $(precision))"
+  else
+    return "ROUND(($(column))::numeric)"
   end
 end
 
-function REPLACE(columns::Vector{Any}, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function ROUND(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  precision = get(format, "precision", 0)
+  if precision isa AbstractString || precision != 0
+    return "ROUND($(column), $(precision))"
+  else
+    return "ROUND($(column))"
+  end
+end
+
+function REPLACE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "REPLACE($(columns[1]), $(columns[2]), $(columns[3]))"
 end
 
-function TRIM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function TRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "TRIM($(column))"
 end
 
-function LTRIM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function LTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "LTRIM($(column))"
 end
 
-function RTRIM(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "RTRIM($(column))"
 end
 
-function FLOOR(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function FLOOR(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "FLOOR(($(column))::numeric)"
 end
-function FLOOR(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "FLOOR($(column))"
 end
 
-function CEIL(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function CEIL(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "CEIL(($(column))::numeric)"
 end
-function CEIL(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function CEIL(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "CEIL($(column))"
 end
 
-function SQRT(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function SQRT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "SQRT(($(column))::numeric)"
 end
-function SQRT(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function SQRT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "SQRT($(column))"
 end
 
-function EXP(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function EXP(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "EXP(($(column))::numeric)"
 end
-function EXP(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function EXP(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "EXP($(column))"
 end
 
-function LN(column::String, format::Dict{String, Any}, conn::PormGPostgres)
+function LN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "LN(($(column))::numeric)"
 end
-function LN(column::String, format::Dict{String, Any}, conn::PormGSQLite)
+function LN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "LN($(column))"
 end
 
-function POWER(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
+function POWER(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   return "POWER(($(columns[1]))::numeric, ($(columns[2]))::numeric)"
 end
-function POWER(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
+function POWER(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "POWER($(columns[1]), $(columns[2]))"
 end
 
-function MOD(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGPostgres)
+function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   return "MOD(($(columns[1]))::numeric, ($(columns[2]))::numeric)"
 end
-function MOD(columns::Vector{Any}, format::Dict{String, Any}, conn::PormGSQLite)
+function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "MOD($(columns[1]), $(columns[2]))"
 end
 
-function F(column::String, format::Dict{String, Any}, conn::Union{PormGPostgres, PormGSQLite})
+function F(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   # For simple field references, just return the column name
   # The actual processing is handled in QueryBuilder._get_select_query
   return column
@@ -345,7 +395,7 @@ end
 # ---
 import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sForeignKey
 
-function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict{String, String} = postgres_type_map_reverse)::String
+function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict{String,String}=postgres_type_map_reverse)::String
   if field isa sIDField
     return type_map[field.type]
   elseif field isa sCharField
@@ -378,9 +428,9 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
   end
 end
 
-function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{String, String} = sqlite_type_map_reverse)::String
+function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{String,String}=sqlite_type_map_reverse)::String
   sql_type = get(type_map, field.type, field.type)
-  
+
   if field isa sIDField
     return sql_type # SQLite primary keys are usually INTEGER
   elseif field isa sCharField
@@ -411,7 +461,7 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
   end
 end
 
-function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any = nothing)::String
+function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any=nothing)::String
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
 
@@ -426,17 +476,17 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   field.unique && push!(constraints, "UNIQUE")
   # Nullability (default is NOT NULL if 'null' is false)
   if hasproperty(field, :null) && field.null
-      push!(constraints, "NULL")
+    push!(constraints, "NULL")
   else
-      push!(constraints, "NOT NULL")
+    push!(constraints, "NOT NULL")
   end
-  
+
   # Default value
   if field.default !== nothing || temporary_default !== nothing
-    default_value = field.default !== nothing ? field.default : temporary_default   
-    push!(constraints, "DEFAULT $default_value")  
+    default_value = field.default !== nothing ? field.default : temporary_default
+    push!(constraints, "DEFAULT $default_value")
   end
-  
+
   # Generated by default as identity
   if hasproperty(field, :generated) && getfield(field, :generated)
     if hasproperty(field, :generated_always) && getfield(field, :generated_always)
@@ -450,7 +500,7 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
 end
 
-function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite; temporary_default::Any = nothing)::String
+function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite; temporary_default::Any=nothing)::String
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
 
@@ -469,15 +519,15 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   field.unique && push!(constraints, "UNIQUE")
   # Nullability (default is NOT NULL if 'null' is false)
   if hasproperty(field, :null) && field.null
-      push!(constraints, "NULL")
+    push!(constraints, "NULL")
   else
-      push!(constraints, "NOT NULL")
+    push!(constraints, "NOT NULL")
   end
-  
+
   # Default value
   if field.default !== nothing || temporary_default !== nothing
-    default_value = field.default !== nothing ? field.default : temporary_default   
-    push!(constraints, "DEFAULT $default_value")  
+    default_value = field.default !== nothing ? field.default : temporary_default
+    push!(constraints, "DEFAULT $default_value")
   end
 
   # Combine everything into a single string: "col_name base_type constraints..."
@@ -490,29 +540,29 @@ end
 
 function create_table(conn::PormGPostgres, table_name::String, columns::Vector{String})
   return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
-    );""" 
+    );"""
 end
 
 function create_table(conn::PormGSQLite, table_name::String, columns::Vector{String})
   return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
-    );""" 
+    );"""
 end
 
 function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
-  for (field_name, field) in model.fields    
+  for (field_name, field) in model.fields
     push!(columns, field_to_column(field_name |> string, field, conn))
   end
-  
+
   return create_table(conn, model.name |> lowercase, columns)
 end
 
 function create_table(conn::PormGSQLite, model::PormGModel)
   columns::Vector{String} = []
-  for (field_name, field) in model.fields    
+  for (field_name, field) in model.fields
     push!(columns, field_to_column(field_name |> string, field, conn))
   end
-  
+
   # Add foreign key constraints for SQLite during CREATE TABLE
   for (field_name, field) in model.fields
     if field isa sForeignKey && field.db_constraint
@@ -521,7 +571,7 @@ function create_table(conn::PormGSQLite, model::PormGModel)
       push!(columns, "FOREIGN KEY (\"$field_name\") REFERENCES \"$(field.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
-  
+
   return create_table(conn, model.name |> lowercase, columns)
 end
 
@@ -533,14 +583,14 @@ function create_index(conn::PormGSQLite, index_name::String, table_name::String,
   return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
-function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol, String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
+function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol,String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)
   return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name) DEFERRABLE INITIALLY DEFERRED;"""
 end
 # function add_foreign_key(conn::PormGPostgres, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
 #   return add_foreign_key(model.name, model.name, constraint_name, field_name, ref_model.name, ref_field_name)
 # end
 
-function alter_field(conn::PormGPostgres, table_name::Union{Symbol, String}, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
+function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
   sql_statements = []
 
   # Alter column type
@@ -573,7 +623,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol, String}, fie
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" DROP NOT NULL;""")
     end
-  end 
+  end
 
   # Set unique if specified
   if :unique in colect_not_equal
@@ -592,9 +642,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol, String}, fie
     if new_field.default !== nothing
       default_value = new_field.default
       if isa(default_value, String)
-          default_value = "'$default_value'"
+        default_value = "'$default_value'"
       elseif isa(default_value, Bool)
-          default_value = default_value ? "TRUE" : "FALSE"
+        default_value = default_value ? "TRUE" : "FALSE"
       end
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" SET DEFAULT $default_value;""")
     else
@@ -625,7 +675,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol, String}, fie
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" DROP IDENTITY;""")
     end
-  end  
+  end
 
   # alert if any colect_not_equal are not checked
   XXX::Vector{Symbol} = [:type, :max_length, :max_digits, :decimal_places, :null, :unique, :default, :primary_key, :generated, :generated_always, :blank, :auto_now, :auto_now_add]
@@ -636,45 +686,45 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol, String}, fie
   return join(sql_statements, "\n")
 end
 
-function alter_field(conn::PormGSQLite, table_name::String, field_name::String, new_field::PormGField)  
+function alter_field(conn::PormGSQLite, table_name::String, field_name::String, new_field::PormGField)
   # SQLite does not support altering column types directly.
   # You need to recreate the table. Here's a simplified example.
   # Note: This is a complex operation and may require handling additional constraints.
-  
+
   # Define a unique identifier for the new table
   new_table_name = "$(table_name)_new"
-  
+
   # Retrieve existing columns excluding the one to be altered
   existing_columns = Dialect.get_columns(conn, table_name)  # You need to implement this function
   columns_sql = join([col == field_name ? field_to_column(field_name, new_field, conn) : "\"$col\"" for col in existing_columns], ", ")
-  
+
   # Begin transaction
   migration_sql = [
-      "BEGIN TRANSACTION;",
-      """CREATE TABLE "$new_table_name" ($columns_sql);""",
-      """INSERT INTO "$new_table_name" SELECT * FROM "$table_name";""",
-      """DROP TABLE "$table_name";""",
-      """ALTER TABLE "$new_table_name" RENAME TO "$table_name";""",
-      "COMMIT;"
+    "BEGIN TRANSACTION;",
+    """CREATE TABLE "$new_table_name" ($columns_sql);""",
+    """INSERT INTO "$new_table_name" SELECT * FROM "$table_name";""",
+    """DROP TABLE "$table_name";""",
+    """ALTER TABLE "$new_table_name" RENAME TO "$table_name";""",
+    "COMMIT;"
   ]
-  
-  return join(migration_sql, "\n")  
+
+  return join(migration_sql, "\n")
 
 end
 
-function add_field(conn::PormGPostgres, table_name::Union{String, Symbol}, field_name::String, field::PormGField; temporary_default::Any = nothing)
+function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
   return """ALTER TABLE "$table_name" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
 
-function add_field(conn::PormGSQLite, table_name::Union{String, Symbol}, field_name::String, field::PormGField; temporary_default::Any = nothing)
+function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
   return """ALTER TABLE "$table_name" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
 
-function drop_field(conn::PormGPostgres, table_name::Union{String, Symbol}, field_name::Union{String, Symbol})
+function drop_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
   return """ALTER TABLE "$table_name" DROP COLUMN "$field_name";"""
 end
 
-function drop_field(conn::PormGSQLite, table_name::Union{String, Symbol}, field_name::Union{String, Symbol})
+function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
   # Modern SQLite supports DROP COLUMN. If not, we'd need recreation.
   return """ALTER TABLE "$table_name" DROP COLUMN "$field_name";"""
 end
@@ -684,11 +734,11 @@ function get_columns(conn::PormGSQLite, table_name::String)
   return res.name
 end
 
-function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})
+function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
   return alter_field(conn, model.name |> lowercase, field_name, new_field, old_field, colect_not_equal)
 end
 
-function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol, String}, new_field::PormGField, old_field::Union{Nothing, PormGField}, colect_not_equal::Vector{Symbol})
+function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
   # SQLite implementation using table recreation
   table_name = model.name |> lowercase
   new_table_name = "$(table_name)_new"
@@ -727,44 +777,44 @@ DROP TABLE "$table_name";
 ALTER TABLE "$new_table_name" RENAME TO "$table_name";"""
 end
 
-function rename_field(conn::Union{PormGSQLite, PormGPostgres}, table_name::Union{String, Symbol}, old_field_name::Union{String, Symbol}, new_field_name::Union{String, Symbol})
+function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol}, new_field_name::Union{String,Symbol})
   return """ALTER TABLE "$table_name" RENAME COLUMN "$old_field_name" TO "$new_field_name";"""
 end
 
 function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
   return """ALTER TABLE "$table_name" DROP CONSTRAINT "$constraint_name";"""
 end
-  
+
 function drop_foreign_key(conn::PormGSQLite, table_name::String, constraint_name::String)
-      # SQLite does not support dropping foreign keys directly.
-      # Implement the workaround by recreating the table without the foreign key.
+  # SQLite does not support dropping foreign keys directly.
+  # Implement the workaround by recreating the table without the foreign key.
 
-      # Define a unique identifier for the new table
-      new_table_name = "$(table_name)_new"
+  # Define a unique identifier for the new table
+  new_table_name = "$(table_name)_new"
 
-      # Retrieve existing columns and constraints excluding the foreign key
-      # You need to implement Dialect.get_columns and Dialect.get_constraints excluding the specific foreign key
-      existing_columns = Dialect.get_columns(conn, table_name)  # Implement this function
-      existing_constraints = Dialect.get_constraints(conn, table_name)  # Implement this function
+  # Retrieve existing columns and constraints excluding the foreign key
+  # You need to implement Dialect.get_columns and Dialect.get_constraints excluding the specific foreign key
+  existing_columns = Dialect.get_columns(conn, table_name)  # Implement this function
+  existing_constraints = Dialect.get_constraints(conn, table_name)  # Implement this function
 
-      # Remove the specific foreign key constraint from constraints
-      filtered_constraints = [c for c in existing_constraints if c != constraint_name]
+  # Remove the specific foreign key constraint from constraints
+  filtered_constraints = [c for c in existing_constraints if c != constraint_name]
 
-      # Recreate the CREATE TABLE statement without the foreign key constraint
-      columns_sql = join([ "\"$col\"" for col in existing_columns ], ", ")
-      constraints_sql = isempty(filtered_constraints) ? "" : ", " * join(["FOREIGN KEY ($fk_col) REFERENCES $ref_table($ref_col)" for (fk_col, ref_table, ref_col) in filtered_constraints], ", ")
+  # Recreate the CREATE TABLE statement without the foreign key constraint
+  columns_sql = join(["\"$col\"" for col in existing_columns], ", ")
+  constraints_sql = isempty(filtered_constraints) ? "" : ", " * join(["FOREIGN KEY ($fk_col) REFERENCES $ref_table($ref_col)" for (fk_col, ref_table, ref_col) in filtered_constraints], ", ")
 
-      # Begin transaction
-      migration_sql = [
-          "BEGIN TRANSACTION;",
-          """CREATE TABLE "$new_table_name" ($columns_sql$constraints_sql);""",
-          """INSERT INTO "$new_table_name" SELECT * FROM "$table_name";""",
-          """DROP TABLE "$table_name";""",
-          """ALTER TABLE "$new_table_name" RENAME TO "$table_name";""",
-          "COMMIT;"
-      ]
+  # Begin transaction
+  migration_sql = [
+    "BEGIN TRANSACTION;",
+    """CREATE TABLE "$new_table_name" ($columns_sql$constraints_sql);""",
+    """INSERT INTO "$new_table_name" SELECT * FROM "$table_name";""",
+    """DROP TABLE "$table_name";""",
+    """ALTER TABLE "$new_table_name" RENAME TO "$table_name";""",
+    "COMMIT;"
+  ]
 
-      return join(migration_sql, "\n")  
+  return join(migration_sql, "\n")
 
 end
 
@@ -772,17 +822,17 @@ function drop_index(conn::PormGPostgres, index_name::String)
   return """DROP INDEX IF EXISTS "$index_name";"""
 end
 function drop_index(conn::PormGSQLite, index_name::String)
-  return """DROP INDEX IF EXISTS "$index_name";"""  
+  return """DROP INDEX IF EXISTS "$index_name";"""
 end
 
-function rename_table(conn::Union{PormGSQLite, PormGPostgres}, old_table_name::String, new_table_name::String)
-  return """ALTER TABLE "$old_table_name" RENAME TO "$new_table_name";"""  
+function rename_table(conn::Union{PormGSQLite,PormGPostgres}, old_table_name::String, new_table_name::String)
+  return """ALTER TABLE "$old_table_name" RENAME TO "$new_table_name";"""
 end
 
-function drop_table(conn::PormGPostgres, table_name::Union{String, Symbol})
+function drop_table(conn::PormGPostgres, table_name::Union{String,Symbol})
   return """DROP TABLE IF EXISTS "$table_name" CASCADE;"""
 end
-function drop_table(conn::PormGSQLite, table_name::Union{String, Symbol})
+function drop_table(conn::PormGSQLite, table_name::Union{String,Symbol})
   return """DROP TABLE IF EXISTS "$table_name";"""
 end
 
@@ -820,21 +870,72 @@ end
 # Function to deal with operators
 #
 
-function contains(conn::PormGPostgres, column::String, value::String)::String 
+function contains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) LIKE $(value)"
 end
-function contains(conn::PormGPostgres, column::String, value)
+function contains(conn::PormGSQLite, column::String, value::String)::String
+  return "$(column) LIKE $(value)"
+end
+function contains(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end
+
 function icontains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ILIKE $(value)"
 end
-function icontains(conn::PormGPostgres, column::String, value)
+function icontains(conn::PormGSQLite, column::String, value::String)::String
+  return "LOWER($(column)) LIKE LOWER($(value))"
+end
+function icontains(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
   return nothing
 end
-  
+
+function startswith(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) LIKE $(value)"
+end
+function startswith(conn::PormGSQLite, column::String, value::String)::String
+  return "$(column) LIKE $(value)"
+end
+function startswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function istartswith(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) ILIKE $(value)"
+end
+function istartswith(conn::PormGSQLite, column::String, value::String)::String
+  return "LOWER($(column)) LIKE LOWER($(value))"
+end
+function istartswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function endswith(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) LIKE $(value)"
+end
+function endswith(conn::PormGSQLite, column::String, value::String)::String
+  return "$(column) LIKE $(value)"
+end
+function endswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function iendswith(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) ILIKE $(value)"
+end
+function iendswith(conn::PormGSQLite, column::String, value::String)::String
+  return "LOWER($(column)) LIKE LOWER($(value))"
+end
+function iendswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
 
 
 

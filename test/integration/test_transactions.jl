@@ -4,21 +4,28 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-settings = PormG.config["db_2"]
+settings = PormG.config[PORMG_DB_FOLDER]
 
+@info "Starting Transactions testset"
 @testset "Transactions and Context Propagation" begin
   # cleanup
-  delete(M.Just_a_test_deletion.objects, allow_delete_all = true, show_query = false)
+  @info "Running initial cleanup"
+  delete(M.Just_a_test_deletion.objects, allow_delete_all = true, show_query = :execute)
+  @info "Cleanup finished"
 
   @testset "with_transaction block" begin
-    PormG.run_in_transaction("db_2") do
+    @info "Starting with_transaction block test"
+    PormG.run_in_transaction(PORMG_DB_FOLDER) do
+      @info "Inside run_in_transaction"
       q = M.Just_a_test_deletion.objects
       q.create("name" => "test1", "test_result" => 10)
       q.create("name" => "test2", "test_result" => 20)
+      @info "Created records"
     end
+    @info "Exited run_in_transaction"
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 2
+    @test q.count() == 2
     df = q |> DataFrame
     @test sort(df.name) == ["test1", "test2"]
 
@@ -28,7 +35,8 @@ settings = PormG.config["db_2"]
 
   @testset "Nested with_tx_context shares connection" begin
     # Start a manual transaction and get connection
-    result, conn = with_transaction(settings, "BEGIN;")
+    begin_sql = adapter_name == "PostgreSQL" ? "BEGIN;" : "BEGIN IMMEDIATE TRANSACTION;"
+    result, conn = with_transaction(settings, begin_sql)
     try
       with_tx_context(settings.connections, conn) do
         q = M.Just_a_test_deletion.objects
@@ -46,7 +54,7 @@ settings = PormG.config["db_2"]
     end
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 2
+    @test q.count() == 2
     df = q |> DataFrame
     @test sort(df.name) == ["n1", "n2"]
 
@@ -70,7 +78,7 @@ settings = PormG.config["db_2"]
     @test got_error
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 0
+    @test q.count() == 0
     df = q |> DataFrame
     @test nrow(df) == 0
   end
@@ -100,7 +108,7 @@ settings = PormG.config["db_2"]
     @test child_sees_tx[]
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 0
+    @test q.count() == 0
     df = q |> DataFrame
     @test nrow(df) == 0
 
@@ -112,18 +120,27 @@ settings = PormG.config["db_2"]
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
 
     child_saw_tx = Atomic{Bool}(false)
+    task_ran = Atomic{Bool}(false)
 
     # Task created outside a transaction - it captures the current (empty) ScopedValue
     t = Task(() -> begin
       # When this task runs it will see whatever ScopedValue was active at creation time
       child_saw_tx[] = get_tx_connection() !== nothing
-      # perform a small write to prove it runs
-      (M.Just_a_test_deletion.objects).create("name" => "pre-created", "test_result" => 1)
+      if adapter_name == "SQLite"
+        # SQLite transactions use BEGIN IMMEDIATE in run_in_transaction, which acquires
+        # the writer lock. A write from another connection can block/fail due to lock,
+        # so use a read-only operation here to validate context propagation semantics.
+        _ = M.Just_a_test_deletion.objects.count()
+      else
+        # On PostgreSQL, write to prove this task executes outside the parent transaction.
+        M.Just_a_test_deletion.objects.create("name" => "pre-created", "test_result" => 1)
+      end
+      task_ran[] = true
     end)
 
     # Schedule/execute the task *inside* a transaction
     try
-      PormG.run_in_transaction("db_2") do
+      PormG.run_in_transaction(PORMG_DB_FOLDER) do
         schedule(t)
         wait(t)
         throw(ErrorException("force rollback"))
@@ -134,10 +151,12 @@ settings = PormG.config["db_2"]
 
     # The task should NOT have inherited the transaction context because it was created outside
     @test child_saw_tx[] == false
+    @test task_ran[] == true
 
-    # The write performed by the task was executed outside the transaction, so it should be visible
+    # For PostgreSQL, the write is outside tx and remains visible after rollback.
+    # For SQLite, this test uses a read-only task to avoid lock contention by design.
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 1
+    @test q.count() == (adapter_name == "SQLite" ? 0 : 1)
 
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
   end
@@ -147,12 +166,12 @@ settings = PormG.config["db_2"]
     thread_count = 5
     @sync for i in 1:thread_count
       @async begin
-        (M.Just_a_test_deletion.objects).create("name" => "mt-$(i)", "test_result" => 100 + i)
+        M.Just_a_test_deletion.objects.create("name" => "mt-$(i)", "test_result" => 100 + i)
       end
     end
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == thread_count
+    @test q.count() == thread_count
     names = sort((q |> list) .|> x -> x[:name])
     @test names == sort(["mt-$(i)" for i in 1:thread_count])
 
@@ -165,12 +184,12 @@ settings = PormG.config["db_2"]
     PormG.run_in_transaction(settings) do
       @sync for i in 1:thread_count
         @async begin
-          (M.Just_a_test_deletion.objects).create("name" => "mt-tx-$(i)", "test_result" => 200 + i)
+          M.Just_a_test_deletion.objects.create("name" => "mt-tx-$(i)", "test_result" => 200 + i)
         end
       end
     end
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == thread_count
+    @test q.count() == thread_count
     names = sort((q |> list) .|> x -> x[:name])
     @test names == sort(["mt-tx-$(i)" for i in 1:thread_count])
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
@@ -184,11 +203,11 @@ settings = PormG.config["db_2"]
       PormG.run_in_transaction(settings) do
         @sync for i in 1:thread_count
           @async begin
-            (M.Just_a_test_deletion.objects).create("name" => "mt-tx-rb-$(i)", "test_result" => 300 + i)
+            M.Just_a_test_deletion.objects.create("name" => "mt-tx-rb-$(i)", "test_result" => 300 + i)
           end
         end
         q = M.Just_a_test_deletion.objects
-        @test q |> do_count == thread_count
+        @test q.count() == thread_count
         throw(ErrorException("force rollback"))
       end
     catch e
@@ -197,14 +216,18 @@ settings = PormG.config["db_2"]
     @test got_error
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 0
+    @test q.count() == 0
 
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
   end
 
   @testset "Multithreaded stress insert" begin
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
-    worker_count = min(Base.Threads.nthreads() > 0 ? Base.Threads.nthreads() : 4, 16)
+    
+    # Reduce worker count for SQLite to avoid excessive "database is locked" errors 
+    # under heavy concurrent writes which SQLite serializes.
+    worker_count = min(Base.Threads.nthreads() > 0 ? Base.Threads.nthreads() : 4, adapter_name == "SQLite" ? 4 : 16)
+    
     iterations_per_worker = 100
     inserted = Atomic{Int}(0)
     deleted = Atomic{Int}(0)
@@ -239,7 +262,7 @@ settings = PormG.config["db_2"]
     expected = inserted[] - deleted[]
     q = M.Just_a_test_deletion.objects
     # df = q |> DataFrame
-    @test q |> do_count == expected
+    @test q.count() == expected
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
   end
 
@@ -272,7 +295,7 @@ settings = PormG.config["db_2"]
     end
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == committed[]
+    @test q.count() == committed[]
     @test context_seen[] == worker_count
     @test committed[] + rolled_back[] == worker_count
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
@@ -300,7 +323,7 @@ settings = PormG.config["db_2"]
     end
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == worker_count
+    @test q.count() == worker_count
     @test fetch_success[] == worker_count
     delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
   end
@@ -319,6 +342,9 @@ settings = PormG.config["db_2"]
     q = M.Just_a_test_deletion.objects
     q.filter("name" => "test_update")
     df_u = q |> DataFrame
+    # Ensure column is typed to allow Integer (for SQLite parity)
+    # Using a more robust way to ensure the column accepts Int64 and Missing
+    df_u[!, :test_result2] = Vector{Union{Int64, Missing}}(df_u[:, :test_result2])
     df_u[1, :test_result2] = 457
 
 
@@ -342,7 +368,7 @@ settings = PormG.config["db_2"]
     end
 
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 6
+    @test q.count() == 6
     names = sort((q |> list) .|> x -> x[:name])
     @test names == vcat(sort(["bulk-$(i)" for i in 1:5]), ["test_update"])
     q = M.Just_a_test_deletion.objects
@@ -361,6 +387,8 @@ settings = PormG.config["db_2"]
     q = M.Just_a_test_deletion.objects
     df = q |> DataFrame
 
+    # Ensure column is typed to allow Integer (for SQLite parity)
+    df[!, :test_result2] = Vector{Union{Int64, Missing}}(df[:, :test_result2])
     df[1, :test_result2] = 999
 
     got_error = false
@@ -383,7 +411,7 @@ settings = PormG.config["db_2"]
 
     @test got_error
     q = M.Just_a_test_deletion.objects
-    @test q |> do_count == 1         # no rows persisted
+    @test q.count() == 1         # no rows persisted
     @test get_tx_connection() === nothing  # tx context cleared
     q = M.Just_a_test_deletion.objects
     df = q |> DataFrame

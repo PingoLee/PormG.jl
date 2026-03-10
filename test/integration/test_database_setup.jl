@@ -19,14 +19,14 @@ end
     # Should work because 'extra_col' is not in model fields and others are mapped by name
     bulk_insert(query, df_evolved)
     query.filter("statusid" => 999)
-    @test query |> do_count == 1
+    @test query.count() == 1
     query = M.Status.objects
     query.filter("statusid" => 1000)
-    @test query |> do_count == 1
+    @test query.count() == 1
     
     # 2. Error Recovery: Atomicity on failure
     query = M.Status.objects
-    initial_count = query |> do_count
+    initial_count = query.count()
     df_bad = DataFrame(
         statusid = [1001, 999, 1002], # 999 is a duplicate
         status = ["Good", "Bad (Duplicate)", "Good"]
@@ -34,7 +34,9 @@ end
     
     got_error = false
     try
-      bulk_insert(query, df_bad)
+      Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        bulk_insert(query, df_bad)
+      end
     catch e
       got_error = true  # bulk_insert now rethrows the underlying DB error (e.g., duplicate key)
     end
@@ -42,9 +44,9 @@ end
     @test got_error
     # Verify atomicity: 1001 and 1002 should NOT be there
     query = M.Status.objects
-    @test query |> do_count == initial_count
+    @test query.count() == initial_count
     query.filter("statusid" => 1001)
-    @test query |> do_count == 0
+    @test query.count() == 0
 
     # 3. Multi-chunk Error Recovery: Atomicity across chunks
     delete(M.Status.objects, allow_delete_all=true)
@@ -56,18 +58,20 @@ end
     query = M.Status.objects;
     got_error = false
     try
-      bulk_insert(query, df_multi, chunk_size=2)
+      Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        bulk_insert(query, df_multi, chunk_size=2)
+      end
     catch e
       got_error = true  # async task failure is unwrapped, so catch sees the real constraint error
     end
 
     @test got_error
     # Verify that even the first chunk (2001, 2002) was rolled back
-    @test query |> do_count == 0
+    @test query.count() == 0
   end
 
   # Clear all tables
-  delete(M.Circuit.objects, allow_delete_all = true, show_query = false)
+  delete(M.Circuit.objects, allow_delete_all = true)
   delete(M.Status.objects, allow_delete_all = true)
   delete(M.Driver.objects, allow_delete_all = true)
   delete(M.Constructor.objects, allow_delete_all = true)
@@ -80,7 +84,7 @@ end
     df = CSV.File(path_load) |> DataFrame
 
     query = M.Status.objects
-    initial_count = query |> do_count
+    initial_count = query.count()
     for row in eachrow(df)
       try
         dt = query.create("statusid" => row.statusId, "status" => row.status)
@@ -88,7 +92,7 @@ end
         @error "Error inserting status row" statusId=row.statusId error=e
       end
     end
-    @test query |> do_count == initial_count + nrow(df)
+    @test query.count() == initial_count + nrow(df)
 
   end
 
@@ -120,7 +124,7 @@ end
     catch e
         @error "Error in bulk_insert for Race after pre-processing" error=e
     end
-    @test query |> do_count > 0
+    @test query.count() > 0
 
     # Insert Drivers
     query = M.Driver.objects
@@ -129,7 +133,7 @@ end
         df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
     end
     bulk_insert(query, df)
-    @test query |> do_count == 861
+    @test query.count() == 861
 
     # Insert Constructors
     query = M.Constructor.objects
@@ -143,7 +147,7 @@ end
         df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
     end
     bulk_insert(query, df)
-    @test query |> do_count == 26759
+    @test query.count() == 26759
   end  
 
 end

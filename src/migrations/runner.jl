@@ -152,7 +152,8 @@ function migrate(connection::PormGSQLite, settings::SQLConn; path::String = "db/
   concatenate_execution = [fisrt_execution, second_execution, third_execution, last_execution]
 
   # Begin a transaction
-  result, conn = with_transaction(connection, "BEGIN;")
+  # Use BEGIN IMMEDIATE TRANSACTION for SQLite to prevent deadlocks
+  result, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
 
   try
     for execution in concatenate_execution

@@ -6,7 +6,7 @@ end
 
 
 @testset "Testing cjoin with simple join" begin
-  delete(M.New_join_position.objects, allow_delete_all = true, show_query = false)
+  delete(M.New_join_position.objects, allow_delete_all = true, show_query = :execute)
   query = M.New_join_position.objects;
   query.create("result" => 1, "description" => "teste 1")
   query.create("result" => 2, "description" => "teste 2")
@@ -25,25 +25,28 @@ end
 
 @testset "Testing cjoin with custom filter" begin
   query = M.New_join_position.objects;
-  cjoin(query, "result" => "Result", filters=[
-      "description" => "teste 1"]);
+    @test_throws ArgumentError begin
+        cjoin(query, "result" => "Result", filters=[
+                "description" => "teste 1"])
+    end
 
-  # @info query |> show_query
-  df = query |> DataFrame
-
-  # cjoin is not applied because none of the filters match; the explicitly provided join is used
-  @test size(df, 1) == 3
-  @test df |> names |> length == 3
+    query = M.New_join_position.objects;
+        @test_throws ArgumentError begin
+                cjoin(query, "result" => "Result", filters=[
+                                "result__description" => "teste 1"])
+        end
 
 
   query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
-      "description" => "teste 1"]);
+            "resultid" => 1]);
 
   query.values("result__statusid__status", "description", "result")
 
   # @info query |> show_query
   df = query |> DataFrame
+
+  insp = query |> inspect_query
 
   @test size(df, 1) == 3
   @test "result__statusid__status" in  df |> names 
@@ -52,7 +55,34 @@ end
 
   query = M.New_join_position.objects;
   cjoin(query, "result" => "Result", filters=[
-      "description" => "teste 1"],
+      "result__resultid" => 1]);
+
+  query.values("result__statusid__status", "description", "result")
+
+  df = query |> DataFrame
+
+  @test size(df, 1) == 3
+  @test df[df.description .== "teste 1", :result__statusid__status][1] == "Finished"
+  @test df[df.description .== "teste 2", :result__statusid__status][1] === missing
+
+  query = M.New_join_position.objects;
+  cjoin(query, "result" => "Result", filters=[
+      "resultid" => 1]);
+  query.filter("description" => "teste 1")
+  query.values("result__statusid__status", "description", "result")
+
+  resp = query |> inspect_query
+  df = query |> DataFrame
+
+  @test size(df, 1) == 1
+  @test df[1, :description] == "teste 1"
+  @test df[1, :result__statusid__status] == "Finished"
+  @test occursin("\"Tb_1\".\"resultid\" =", resp[:sql_text])
+  @test occursin("WHERE \"Tb\".\"description\" =", resp[:sql_text])
+
+  query = M.New_join_position.objects;
+  cjoin(query, "result" => "Result", filters=[
+      "resultid" => 1],
       join_type="INNER");
 
   query.values("result__statusid__status", "description", "result");
@@ -80,18 +110,19 @@ end
     query.filter("statusid__@in" => subquery);
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid");
     df = query |> DataFrame
-    @test query |> do_count == 2026
+    @test query.count() == 2026
 
     # added parameter in main query
     query.filter("driverid__@lte" => 7);
     # df = query |> DataFrame
-    @test query |> do_count == 40
+    @test query.count() == 40
 
     # added parameters in select
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid", "raceid__date__@quarter");
     query.order_by("raceid__date__quarter");
+    text = query |> inspect_query
     df = query |> DataFrame
-    @test query |> do_count == 40
+    @test query.count() == 40
     @test query |> do_exists
 end
 
@@ -290,7 +321,7 @@ end
 
     # 3. Filters on the Main Query
     # Filter constructors that are not 'Ferrari' (Global Query Param 3)
-    main_query.filter("name__@neq" => "Ferrari")
+    main_query.filter("name__@ne" => "Ferrari")
     
     # Select data mixing main table and CTE
     main_query.values(
@@ -345,7 +376,12 @@ end
     david = df[df.forename .== "David", :]
     @test !isempty(david)
     @test !ismissing(david[1, :old_guard__dob])
-    @test david[1, :old_guard__dob] == Date(1971, 3, 27)
+    # Sqlite store dates as text, so we need to parse it back to Date for the assertion
+    if typeof(david[1, :old_guard__dob]) <: AbstractString
+        @test Date(david[1, :old_guard__dob]) == Date(1971, 3, 27)
+    else
+        @test david[1, :old_guard__dob] == Date(1971, 3, 27)
+    end
 
     # --- CENÁRIO 2: INNER JOIN ---
     # Lewis Hamilton deve desaparecer completamente do resultado

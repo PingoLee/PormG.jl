@@ -12,8 +12,9 @@ abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
 abstract type PormGPostgres <: SQLConn end
 abstract type PormGSQLite <: SQLConn end
-abstract type PormGPostgresParam <: PormGPostgres end
-abstract type PormGSQLiteParam <: PormGSQLite end
+abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
+abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
+abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
 abstract type SQLObject <: PormGAbstractType end
 abstract type SQLObjectHandler <: SQLObject end
 abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias
@@ -79,9 +80,9 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, list, list_json, page, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
+import .QueryBuilder: object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, list, list_json, page, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 
-export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, list, list_json, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
+export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, list, list_json, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 export with_advisory_lock, try_advisory_lock, release_advisory_lock
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers

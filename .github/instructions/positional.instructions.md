@@ -1,43 +1,67 @@
-# Task: Refactor QueryBuilder Parameter Handling (Contextual Buckets Strategy)
+# Positional Parameter Buckets (Current Architecture)
 
-**Context:**
-I am working on `PormG.jl`, a Julia ORM inspired by Django. Currently, the query builder generates PostgreSQL parameters (numbered `$1`, `$2`...) sequentially using a global counter. I need to implement support for MySQL/MariaDB which uses purely positional parameters (`?`).
+## Purpose
+This file documents the **implemented** contextual-parameter strategy used by PormG for positional backends (SQLite/MySQL/MariaDB-style `?`) and defines testing boundaries to avoid duplicate coverage.
 
-**The Problem:**
-Code execution order does not always match SQL string order.
-- *Execution:* `Filter` (WHERE) is processed *before* `Join` logic to determine necessary joins.
-- *SQL Output:* `JOIN` clauses appear *before* `WHERE` clauses.
-For PostgreSQL (`$N`), this order doesn't matter. For MySQL (`?`), this breaks the query because the first parameter injected (from WHERE) would be placed in the JOIN slot in the final SQL.
+## Status
+The refactor is already implemented in `src/querybuilder/parameters.jl` with a dispatch-based design.
 
-**The Goal:**
-Refactor `src/querybuilder/parameters.jl` (and related files) to implement a **"Contextual Bucket"** strategy using Multiple Dispatch.
+## Parameter Types
+1. `AbstractPormGParam`
+- Base abstraction for all parameter collectors.
 
-**Requirements:**
+2. `PormGPostgresParam <: AbstractPormGParam`
+- Linear collector for PostgreSQL placeholders (`$1`, `$2`, ...).
+- `add_parameter!` increments count and appends to a single vector.
 
-1.  **Abstract Base Type:**
-    Define an abstract type `AbstractPormGParam`.
+3. `PormGPositionalParam <: AbstractPormGParam`
+- Bucketed collector for positional placeholders (`?`).
+- Buckets currently used:
+  - `:cte`
+  - `:select`
+  - `:update`
+  - `:join`
+  - `:where`
+  - `:having`
+- Uses `current_context::Symbol` plus `set_context!` to route values.
 
-2.  **PostgreSQL Implementation (Keep mostly as is):**
-    - Struct `PormGPostgresParam <: AbstractPormGParam`.
-    - Logic: Stores a single linear vector of values and a counter.
-    - `add_parameter!`: Pushes to vector, increments count, returns `"$N"`. Ignores context.
+## Final Parameter Order (Positional)
+Flattening must follow SQL-clause order:
+`cte -> select -> update -> join -> where -> having`
 
-3.  **MySQL/SQLite Implementation (The New Bucket Strategy):**
-    - Struct `PormGPositionalParam <: AbstractPormGParam`.
-    - **Fields:** distinct vectors for each SQL section: `cte_params`, `select_params`, `join_params`, `where_params`, `having_params`.
-    - **State:** A field `current_context::Symbol` (default to `:where` or similar).
-    - `add_parameter!`:
-        - Checks `current_context`.
-        - Pushes the value into the corresponding vector (e.g., if `:join`, push to `join_params`).
-        - Returns `"?"`.
-    - `set_context!(params, context::Symbol)`: Updates the `current_context`.
+`get_final_parameters(::PormGPositionalParam)` must preserve that order.
 
-4.  **Helper Functions:**
-    - `get_final_parameters(p::PormGPostgresParam)`: Returns the single vector.
-    - `get_final_parameters(p::PormGPositionalParam)`: Returns the concatenation of vectors in standard SQL order: `vcat(p.cte_params, p.select_params, p.join_params, p.where_params, p.having_params)`.
+## Query-Building Context Rules
+- Context changes are orchestrated in query-build modules (not in execution code).
+- HAVING alias promotion must switch context to `:having` before `add_parameter!`.
+- Join ON conditions from `cjoin` must run with `:join` context.
+- Subqueries/CTEs must inherit parent collector/context where required.
 
-5.  **Handling Subqueries & CTEs:**
-    - Subqueries must allow injecting parameters into the *parent's* current bucket. Since `add_parameter!` handles the push logic based on the parent's state, this should work automatically if the parent's parameter object is passed down.
+## Testing Boundaries (Important)
+1. Unit tests (`test/unit/test_alignment_sqlite.jl`)
+- Own parameter-bucket invariants and ordering checks.
+- Validate bucket isolation, flatten order, marker/parameter count alignment, and context transitions.
+- This is the canonical place for SQLite positional alignment assertions.
 
-**Implementation Plan:**
-Please rewrite/update `src/querybuilder/parameters.jl` with these structs and functions. Ensure the existing `PormGPostgresParam` logic remains compatible with the current codebase but fits this new abstract interface.
+2. Integration tests (`test/integration/*.jl`)
+- Focus on behavior and SQL semantics against real datasets.
+- HAVING integration should validate:
+  - aggregate-alias promotion semantics,
+  - result correctness,
+  - basic SQL clause presence/order when relevant.
+- Avoid duplicating full bucket-order matrix already covered in unit tests unless reproducing a known production regression.
+
+## Practical Guidance for New Tests
+- If the question is "Did the query return the right rows?" -> integration.
+- If the question is "Did parameters land in the exact right bucket/order?" -> unit.
+- If a bug spans both layers, add:
+  - one narrow integration regression test, and
+  - one deterministic unit alignment test.
+
+## Maintenance Notes
+- Keep this file synchronized with `src/querybuilder/parameters.jl` if buckets or ordering change.
+- Any new SQL section with parameters must be reflected in:
+  - bucket struct fields,
+  - `set_context!` usage,
+  - `get_final_parameters` order,
+  - unit alignment tests.

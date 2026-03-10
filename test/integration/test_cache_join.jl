@@ -37,8 +37,9 @@ end
         "driver_stats__nationality"
     )
 
-    # Show query for debugging if needed
-    # println(query |> show_query)
+    # # Show query for debugging if needed
+    # insp = query |> inspect_query
+    # @info insp[:sql_text]
 
     df = query |> DataFrame
 

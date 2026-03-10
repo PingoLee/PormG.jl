@@ -1,12 +1,20 @@
-# Bulk Operations
+## Bulk Operations
 
 Bulk operations are designed for high-performance data manipulation of large datasets. PormG provides three dedicated tools:
 
-- **`bulk_insert()`**: Standard SQL-based insertion with automatic chunking (suitable for DataFrames with 1-10k rows)
-- **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion (suitable for 10k+ rows on PostgreSQL)
-- **`bulk_update()`**: Efficient multi-row updates from a DataFrame
+- **`bulk_insert()`**: Standard SQL-based insertion with automatic chunking.
+- **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion.
+- **`bulk_update()`**: Efficient multi-row updates from a DataFrame using a mapping key.
 
-All bulk operations are **async-aware** and participate in transaction contexts automatically.
+### The Mapping Adaptor Strategy ⭐
+
+All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
+- **Non-Destructive**: Your original DataFrame is never modified (no column renaming).
+- **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
+- **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by name (case-insensitive).
+- **Centralized Validation**: Every row is automatically checked against the model's constraints (`max_length`, `nullability`, etc.) before reaching the database.
+
+---
 
 ## Performance Comparison
 
@@ -227,8 +235,24 @@ for row in eachrow(df)
     row.points = row.points + 1
 end
 
-# Bulk update specifying which columns to update and which to use as filters (keys)
-bulk_update(query, df, columns=["points"], filters=["resultid"])
+# Bulk update specifying columns to update and keys to use as identifiers
+# You can map DataFrame columns to model fields for both SET values and FILTERS
+bulk_update(query, df, 
+    columns=["points"],                      # Auto-matches 'points' in DF
+    filters=["resultid"]                    # Auto-matches 'resultid' in DF
+)
+
+# Using explicit mapping (Adaptor style)
+# This allows using a DataFrame with totally different column names
+custom_df = DataFrame(
+    "new_score" => [25, 18, 15],
+    "record_id" => [1, 2, 3]
+)
+
+bulk_update(query, custom_df,
+    columns=["new_score" => "points"],      # Map 'new_score' to table field 'points'
+    filters=["record_id" => "id"]           # Map 'record_id' to table field 'id'
+)
 ```
 
 ### Use Cases
@@ -264,19 +288,25 @@ PormG.run_in_transaction("db_2") do
 end
 ```
 
-### Custom Filters
+### Mixed Filters (Static and Dynamic)
 
-You can pass static filters alongside the DataFrame mapping:
+`bulk_update()` supports a powerful mix of **dynamic filters** (based on DataFrame values) and **static filters** (applying the same value to all rows).
+
+- **Dynamic**: `filters=["id"]` or `filters=["record_id" => "id"]`. PormG looks for the key in the DataFrame.
+- **Static**: `filters=["status" => "active"]`. If the key is **not** in the DataFrame but exists in the model, PormG treats it as a static filter for the query.
 
 ```julia
-bulk_update(
-    query, df, 
-    columns=["milliseconds"], 
-    filters=["resultid", "statusid" => 1],  # Only update where statusid == 1
+# Mixed filters example
+bulk_update(query, df,
+    columns=["new_points" => "points"],
+    filters=[
+        "record_id" => "id",      # Dynamic: Match DB 'id' with DF 'record_id'
+        "category_id" => 172100   # Static: Only update records where DB 'category_id' is 172100
+    ]
 )
 ```
 
-### Limitations & Workarounds
+### Atomicity and Transactions
 
 - **No Related Joins**: `bulk_update` filters currently do not support double-underscore lookups (e.g., `statusid__status`).
   - **Workaround**: Filter the data in Julia before passing to `bulk_update`:

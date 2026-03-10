@@ -34,13 +34,23 @@ end
   @test instruc.parameters.parameters[1] == "%to-be-deleted%"
 
   # 3. Verify array binding for IN clauses
-  # Arrays should be stored as a single parameter (Postgres ANY) and preserved as an AbstractVector
+  # Postgres stores as a single parameter (Postgres ANY).
+  # SQLite expands to multiple positional parameters (?).
   query = M.Result.objects
   query.filter("positionorder__@in" => [1, 2])
   instruc = PormG.QueryBuilder.build(query.object)
-  @test length(instruc.parameters.parameters) == 1
-  @test isa(instruc.parameters.parameters[1], AbstractVector)
-  @test instruc.parameters.parameters[1] == [1, 2]
+  
+  if adapter_name == "PostgreSQL"
+    @test length(instruc.parameters.parameters) == 1
+    @test isa(instruc.parameters.parameters[1], AbstractVector)
+    @test instruc.parameters.parameters[1] == [1, 2]
+  else # SQLite, etc.
+    # In SQLite/MySQL, IN clause expands to (?, ?)
+    params = PormG.QueryBuilder.get_final_parameters(instruc.parameters)
+    @test length(params) >= 2
+    @test 1 in params
+    @test 2 in params
+  end
 
   # 4. Mixed types in same filter (integers, strings, dates, floats)
   query = M.Result.objects
@@ -77,7 +87,7 @@ end
   # We check the functional correctness (DB updated) which proves binding was applied.
   query = M.Just_a_test_deletion.objects
   # Ensure a clean state for the test
-  query |> do_exists && delete(query; allow_delete_all=true)
+  query.exists() && delete(query; allow_delete_all=true)
   query.create("id" => 500, "name" => "original", "test_result" => 10)
 
   # Update two columns using a filter; this exercises both WHERE and SET bindings
@@ -149,65 +159,34 @@ end
     end
   end
   
-  # Test 2: DELETE with show_query=true logs structured info
-  # We capture log messages using Julia's logging
-  delete_logs = []
-  logger = Base.CoreLogging.SimpleLogger(IOBuffer())
-  Base.CoreLogging.with_logger(logger) do
-    try
-      delete(M.Circuit.objects, allow_delete_all=true, show_query=true)
-      @test true
-    catch e
-        @error "Error during delete with show_query" error=e
-        @test false
-    end
-  end
-  # Verify the circuit table still exists after show_query=true (no actual deletion)
-  @test M.Circuit.objects |> do_exists
+  # Test 2: DELETE with show_query=:sql returns SQL string
+  delete_queries = delete(M.Circuit.objects, allow_delete_all=true, show_query=:sql)
+  # Verify the circuit table still exists after show_query (no actual deletion)
+  @test M.Circuit.objects.exists()
+  @test delete_queries isa String || delete_queries isa Vector{Any}
 
-  # Test 3: BULK_INSERT with show_query=true does not crash
+  # Test 3: BULK_INSERT with show_query=:sql does not crash and returns SQL
   query = M.Constructor.objects
-  bulk_insert_logs = []
-  logger = Base.CoreLogging.SimpleLogger(IOBuffer())
-  Base.CoreLogging.with_logger(logger) do
-    try
-      bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, show_query=true)
-      @test true
-    catch e
-      @error "Error during bulk_insert with show_query" error=e
-      @test false
-    end
-  end
+  sql_bulk = bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, show_query=:sql)
+  @test sql_bulk isa String || sql_bulk isa Vector{String}
 
-  # Test 4: UPDATE with show_query=true logs structured info
+  # Test 4: UPDATE with show_query=:sql returns SQL string
   query = M.Just_a_test_deletion.objects
   query.filter("id" => 1)
   
-  # Capture structured log output
-  update_log_captured = false
-  logger = Base.CoreLogging.SimpleLogger(IOBuffer(), Base.CoreLogging.Info)
-  Base.CoreLogging.with_logger(logger) do
-    try
-      sql = query.update("name" => "test_structured_logging", show_query=true)
-      # When show_query=true, update returns the SQL string
-      @test typeof(sql) == String
-      @test contains(sql, "UPDATE")
-      update_log_captured = true
-    catch e
-      @error "Error during update with show_query" error=e
-    end
-  end
-  @test update_log_captured
+  sql_update = query.update("name" => "test_structured_logging", show_query=:sql)
+  @test typeof(sql_update) == String
+  @test contains(sql_update, "UPDATE")
 
-  # Test 5: BULK_UPDATE with show_query=true does not crash
+  # Test 5: BULK_UPDATE with show_query=:sql does not crash and returns SQL
   query = M.Just_a_test_deletion.objects;
   df = query |> DataFrame
   for (index, row) in enumerate(eachrow(df))
     row.name = "test_bulk_update_$(index)"
   end
   try
-    bulk_update(query, df, columns=["name"], filters=["id"], show_query=false)
-    @test true
+    sql_bulk = bulk_update(query, df, columns=["name"], filters=["id"], show_query=:sql)
+    @test sql_bulk isa String || sql_bulk isa Vector{String}
   catch e
     @error "Error during bulk_update with show_query" error=e
     @test false

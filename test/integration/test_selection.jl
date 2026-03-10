@@ -37,7 +37,7 @@ end
   # Filter by status
   query = M.Status.objects;
   query.filter("status" => "Engine");
-  @test query |> do_count ==  1
+  @test query.count() ==  1
   df = query |> DataFrame
   @test "status" in names(df)
   @test length(names(df)) == 2  # statusid and status
@@ -47,7 +47,7 @@ end
   query.filter("statusid__status" => "Engine");
   query.values("resultid", "statusid", "statusid__status");
   df = query |> DataFrame;
-  @test query |> do_count == 2026
+  @test query.count() == 2026
   @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
 
   # Chained values
@@ -60,38 +60,35 @@ end
 @testset "Ordering and Aggregations" begin
     query = M.Result.objects;
     query.values("statusid__status", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "count_grid" => Count("grid"), "max_grid" => Max("grid"), "min_grid" => Min("grid"));
-    query.order_by("raceid__circuitid__name");
+    query.order_by("raceid__circuitid");
     query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton");
     df = query |> DataFrame
-    @test df[2, :count_grid] == 3
+    # query |> show_query
+    @test df[2, :count_grid] == 5
     @test df[2, :max_grid] == 3
-    @test df[2, :min_grid] == 2
+    @test df[2, :min_grid] == 1
+    @test df[4, :max_grid] == 13
+    @test df[4, :min_grid] == 13
     @test size(df, 1) == 39
-    @test df[1, :raceid__circuitid__name] == "Adelaide Street Circuit"
-    @test df[39, :raceid__circuitid__name] == "Suzuka Circuit"
+    @test df[1, :raceid__circuitid__name] == "Circuit de Barcelona-Catalunya"
+    @test df[39, :raceid__circuitid__name] == "Red Bull Ring"
 end
 
 
 @testset "Filtering" begin
     # Contains and icontains
-    query = M.Result.objects;
-    query.filter("raceid__circuitid__name__@contains" => "Monaco");
-    @test query |> do_count == 1664
-    query = M.Result.objects;
-    query.filter("raceid__circuitid__name__@contains" => "monaco");
-    @test query |> do_count == 0
-    query = M.Result.objects;
-    query.filter("raceid__circuitid__name__@icontains" => "monaco");
-    @test query |> do_count == 1664
-    query = M.Result.objects;
-    query.filter("raceid__circuitid__name__@in" => ["Monaco", "Monza"]);
-    @test query |> do_count == 0
-    query = M.Result.objects;
-    query.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "monaco"]);
-    @test query |> do_count == 1664
-    query = M.Result.objects;
-    query.filter("raceid__circuitid__name__@nin" => ["Circuit de Monaco", "monaco"]);
-    @test query |> do_count == 25095
+    query = M.Result.objects.filter("raceid__circuitid__name__@contains" => "Monaco");
+    @test query.count() == 1664
+    query = M.Result.objects.filter("raceid__circuitid__name__@contains" => "monaco");
+    @test query.count() == 0
+    query = M.Result.objects.filter("raceid__circuitid__name__@icontains" => "monaco");
+    @test query.count() == 1664
+    query = M.Result.objects.filter("raceid__circuitid__name__@in" => ["Monaco", "Monza"]);
+    @test query.count() == 0
+    query = M.Result.objects.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "monaco"]);
+    @test query.count() == 1664
+    query = M.Result.objects.filter("raceid__circuitid__name__@nin" => ["Circuit de Monaco", "monaco"]);
+    @test query.count() == 25095
 end
 
 
@@ -138,12 +135,12 @@ end
   query = M.Result.objects;
   query.filter("positionorder__@in" => [1, 2]);
   query.values("raceid__circuitid__name", "positionorder",  "driverid__forename", "constructorid__name");
-  @test query |> do_count == size(df, 1)
+  @test query.count() == size(df, 1)
 
   query = M.Result.objects;
   query.filter("positionorder__@nin" => df.positionorder |> unique);
   query.values("raceid__circuitid__name", "positionorder", "driverid__forename", "constructorid__name");
-  @test query |> do_count == 24497
+  @test query.count() == 24497
   df = query |> DataFrame
   @test filter(r -> r.positionorder == 1 || r.positionorder == 2, df) |> x -> nrow(x) == 0
 

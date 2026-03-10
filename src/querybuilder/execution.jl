@@ -1,10 +1,148 @@
 
+function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, PormGPostgres, PormGSQLite}, model::Union{PormGModel, String}, operation::Symbol;
+                          parameters::Union{Nothing, AbstractPormGParam} = nothing)
+  
+  if mode === :none
+    return nothing # Zero-allocation mode for benchmarking the builder
+  elseif mode === :sql
+    return sql # Simplicity: just the SQL string (fast benchmarking)
+  elseif mode === :execute
+    # Safety check: this function shouldn't be called with :execute,
+    # but we return SQL just in case to avoid a crash.
+    return sql
+  end
+
+  # Resolve model name
+  model_name = model isa PormGModel ? model.name : String(model)
+
+  # For formats requiring parameters, prepare the list
+  params_list = if parameters === nothing
+    []
+  elseif hasproperty(parameters, :parameters)
+    parameters.parameters
+  else
+    # Fallback for AbstractPormGParam if it doesn't have .parameters field
+    []
+  end
+  
+  if mode === :params
+    return params_list
+  elseif mode === :dict || mode === :inspection
+    # Rich metadata format used by inspect_query() or advanced debugging
+    dialect = connection isa PormGPostgres ? :postgresql : :sqlite
+    bucketing = connection isa PormGPostgres ? :numbered : :positional
+    
+    bucket_breakdown = Dict{Symbol, Vector{Any}}()
+    if parameters isa PormGSQLiteParam
+       bucket_breakdown = Dict(
+        :cte => parameters.cte_params,
+        :select => parameters.select_params,
+        :update => parameters.update_params,
+        :join => parameters.join_params,
+        :where => parameters.where_params,
+        :having => parameters.having_params
+      )
+    end
+
+    return Dict(
+        :sql_text => sql, 
+        :parameters => params_list,
+        :dialect => dialect,
+        :model => model_name,
+        :operation => operation,
+        :bucketing => bucketing,
+        :parameter_count => length(params_list),
+        :parameter_buckets => bucket_breakdown
+    )
+  else
+    throw(ArgumentError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :inspection, :params, :none"))
+  end
+end
+
+"""
+    inspect_query(q::SQLObjectHandler) -> Dict
+
+Comprehensive query inspection API that provides full metadata about a query without executing it.
+Returns a rich dictionary with SQL, parameters, dialect information, and structural metadata.
+
+This is the explicit API for query inspection - use this when you want to examine a query's structure
+and generated SQL without ambiguity.
+
+# Arguments
+- `q::SQLObjectHandler`: The query object to inspect
+- `operation::Union{Nothing, Symbol} = nothing`: Optional operation override (:select, :insert, :update, :delete).
+  If not provided, the operation is detected automatically based on the query structure.
+
+# Returns
+- `Dict`: A dictionary containing:
+  - `:sql_text` (String): The generated SQL query
+  - `:parameters` (Vector): The parameterized values in bucket order
+  - `:dialect` (Symbol): The database dialect (`:postgresql` or `:sqlite`)
+  - `:model` (String): The model/table name
+  - `:operation` (Symbol): The query operation type (`:select`, `:insert`, `:update`, `:delete`)
+  - `:bucketing` (Symbol): The parameter bucketing strategy (`:numbered` for PostgreSQL, `:positional` for SQLite)
+  - `:parameter_count` (Int): Number of parameters
+  - `:parameter_buckets` (Dict): Breakdown of parameters by bucket (for positional strategies)
+
+# Example
+```julia
+q = M.Driver.objects
+q.filter("nationality" => "British")
+q.order_by("surname")
+
+inspection = q |> inspect_query()
+# Dict with:
+# :sql_text => "SELECT ... WHERE drivers.nationality = \$1 ORDER BY ..."
+# :parameters => ["British"]
+# :dialect => :postgresql
+# :model => "drivers"
+# :operation => :select
+# :bucketing => :numbered
+```
+"""
+function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, operation::Union{Nothing, Symbol} = nothing)
+  # Force builder to run without execution
+  # We reuse the internal query building logic
+  settings, conn, conn_key = get_settings(q, connection=connection)
+  
+  # 1. Operation detection heuristic
+  if operation === nothing
+    if !isempty(q.object.insert)
+      # If it has data in the 'insert' field, it's either an INSERT or an UPDATE.
+      # UPDATE typically has filters (WHERE), INSERT typically does not.
+      operation = isempty(q.object.filter) ? :insert : :update
+    else
+      # Default to :select (safe, most common)
+      # Note: :delete is ambiguous with :select if only filters are present,
+      # so it must be explicitly requested via inspect_query(operation=:delete)
+      operation = :select
+    end
+  end
+  
+  # 2. Delegate to appropriate dry-run
+  if operation === :select
+      return query(q, show_query=:inspection, connection=conn)
+  elseif operation === :insert
+      return insert(q.object, show_query=:inspection, connection=conn)
+  elseif operation === :update
+      return update(q.object, show_query=:inspection, connection=conn)
+  elseif operation === :delete
+      res = delete(q, show_query=:inspection, connection=conn)
+      # delete returns (count, results) when executing, but when using inspection
+      # it returns (results) or [(results)]. We want just the inspection dict.
+      return res isa Tuple ? res[2] : (res isa Vector ? res[1] : res)
+  else
+      throw(ArgumentError("Unsupported or unknown operation for inspection: $operation"))
+  end
+end
+inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
+
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
-  connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing,
-  parameters::Union{Nothing, PormGPostgresParam} = nothing,
+  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
+  parameters::Union{Nothing, AbstractPormGParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
-  show_query::Bool = false
+  show_query::Symbol = :execute
   )
 
   @infiltrate false
@@ -12,21 +150,37 @@ function query(q::SQLObjectHandler;
   # Create a shared table alias counter for both CTEs and main query
   table_alias === nothing && (table_alias = SQLTbAlias())
   
+  settings, connection, conn_key = get_settings(q, connection=connection)
+
+  # Track if this is a subquery
+  is_subquery = parameters !== nothing
+
   # IMPORTANT: Create the shared parameters object BEFORE building CTEs
   # This ensures all CTEs and the main query use sequential parameter numbering
   if parameters === nothing
-    settings = config[q.object.model.connect_key]
-    connection === nothing && (connection = settings.connections)
     parameters = get_parameter(connection)
   end
 
+  # Save current context for backends that use positional buckets (SQLite)
+  # This is crucial for nested subqueries to avoid clobbering the parent's bucket.
+  old_context = parameters isa PormGSQLiteParam ? parameters.current_context : nothing
+
   # Build WITH clause - passes the SAME parameters object
+  # CTE context is set inside build_cte_clause
+  !is_subquery && set_context!(parameters, :cte)
   with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)  
 
   @infiltrate false
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+  # Context switching for select/where/join happens inside build()
+  # Subqueries skip context switching to inherit the parent's current bucket.
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=!is_subquery)
+  
+  # Restore the context for parent query if this was a subquery
+  if is_subquery && old_context !== nothing
+    set_context!(parameters, old_context)
+  end
   if cte !== nothing
     @infiltrate false
     _build_cte_custom_model(cte, instruction)
@@ -36,56 +190,84 @@ function query(q::SQLObjectHandler;
   safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)  
   
-  respota = """$(with_clause)SELECT
-      $(q.object.distinct ? "DISTINCT" : "") $(_query_select(instruction.select ))
-    FROM $safe_table_name as $safe_alias
-    $(join(instruction.join, "\n"))
-    """
+  io = IOBuffer()
+  print(io, with_clause)
+  print(io, "SELECT\n    ")
+  if q.object.distinct
+    print(io, "DISTINCT ")
+  end
+  print(io, _query_select(instruction.select))
+  print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
+  
+  for j in instruction.join
+    print(io, j, "\n")
+  end
+
   if !isempty(instruction._where)
-    respota *= "WHERE " * join(instruction._where, " AND \n   ") * "\n"
+    print(io, "WHERE ")
+    for (i, w) in enumerate(instruction._where)
+      i > 1 && print(io, " AND \n   ")
+      print(io, w)
+    end
+    print(io, "\n")
   end
-  if instruction.agregate && size(instruction.group, 1) > 0
-    respota *= "GROUP BY $(join(instruction.group, ", ")) \n"
+  
+  if instruction.agregate && !isempty(instruction.group)
+    print(io, "GROUP BY ")
+    for (i, g) in enumerate(instruction.group)
+      i > 1 && print(io, ", ")
+      print(io, g)
+    end
+    print(io, " \n")
   end
+  
   if !isempty(instruction.having)
-    respota *= "HAVING " * join(instruction.having, " AND \n   ") * "\n"
+    print(io, "HAVING ")
+    for (i, h) in enumerate(instruction.having)
+      i > 1 && print(io, " AND \n   ")
+      print(io, h)
+    end
+    print(io, "\n")
   end
+  
   if !isempty(instruction.order)
-    respota *= "ORDER BY " * join(instruction.order, ", \n  ") * "\n"
+    print(io, "ORDER BY ")
+    for (i, o) in enumerate(instruction.order)
+      i > 1 && print(io, ", \n  ")
+      print(io, o)
+    end
+    print(io, "\n")
   end
+  
   if q.object.limit !== 0
-    respota *= "LIMIT $(q.object.limit) \n"
+    print(io, "LIMIT ", q.object.limit, " \n")
   end
+  
   if q.object.offset !== 0
-    respota *= "OFFSET $(q.object.offset) \n"
+    print(io, "OFFSET ", q.object.offset, " \n")
   end
+  
+  resposta = String(take!(io))
   
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
   
-  # println(instruction.parameters)
-    # $(instruction.agregate && size(instruction.group, 1) > 0 ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
-    # $(instruction.order |> length > 0 ? "ORDER BY" : "") $(join(instruction.order, ", \n  "))
-    # $(q.object.limit !== 0 ? "LIMIT $(q.object.limit) \n" : "")
-    # $(q.object.offset !== 0 ? "OFFSET $(q.object.offset) \n" : "")
-    # """
-  # @info respota  
-  if show_query
-    params_list = instruction.parameters.parameters
-    @info "SQL Query" query=respota params=params_list |> string task_id=string(current_task())
-    return nothing
+  if show_query !== :execute
+    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select; 
+                            parameters=instruction.parameters)
   end
-  return respota
+  return resposta
 end
-show_query(q::SQLObjectHandler) = query(q; show_query=true)
+show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)
 
 # ---
 # Count or check if exists
 #
 
 function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Integer
-  settings = config[oq.object.model.connect_key]
-  connection = settings.connections
+  # Resolve settings
+  settings, connection, conn_key = get_settings(oq)
+  
   q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object  
   q.object.order = []# clear order_by
   q.object.values = [] # clear values
@@ -107,13 +289,21 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     """
   query_result = fetch(settings, resposta, instruction.parameters)
-  return query_result[1, 1]
+  # SQLite returns a Query iterator that doesn't support [row, col] indexing;
+  # convert to a rowtable first, then extract the scalar count value.
+  if query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int})
+    return query_result[1, 1]
+  else
+    row = Tables.rowtable(query_result) |> Base.first
+    return Base.first(values(row))
+  end
 end
 
 function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)
   try
-    settings = config[oq.object.model.connect_key]
-    connection = settings.connections
+    # Resolve settings
+    settings, connection, conn_key = get_settings(oq)
+    
     q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
     q.object.order = [] # clear order_by
     q.object.values = [] # clear values
@@ -149,11 +339,13 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   end
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing)
-  model = objct.model
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
+real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections) # TODO -- i need create a mode to handle with pools and create a function to this
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
   
   # colect name of the fields
   fields = model.field_names
@@ -162,20 +354,22 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   quoted_field_columns = []
   param_values = []
   parameters = get_parameter(connection)
+  # For INSERT, all params go into :select bucket (VALUES clause is the only positioned section)
+  set_context!(parameters, :select)
   
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
   
   # check if the fields are in objct.insert
   for field in fields
-    if !haskey(objct.insert, field)
+    if !haskey(real_obj.insert, field)
       # check if field allow null or if exist a default value
       if model.fields[field].default !== nothing
-        objct.insert[field] = model.fields[field].default
+        real_obj.insert[field] = model.fields[field].default
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
+        real_obj.insert[field] = model.fields[field].formater(now(), settings.time_zone)
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(today())
+        real_obj.insert[field] = model.fields[field].formater(today())
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else
@@ -187,24 +381,11 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   pk_exist::Bool = false
   pk_field::Vector{String} = []
   for field in keys(objct.insert)
-    # check if the insert has a field that not exist in the model
-    in(field, fields) || throw("""Error in insert, the field "$(field)" not found in $(model.name)""")
+    # Validation checks
+    validate_field_data(model, field, objct.insert[field], "insert"; allow_primary_key = true)
+
     # check if the field is a primary key
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
-    # check if the field has max_length and validate
-    hasfield(typeof(model.fields[field]), :max_length) && length(objct.insert[field]) > model.fields[field].max_length && error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(objct.create[field]))\e[0m""")
-    # check if the field has max_digits and validate
-    if hasfield(typeof(model.fields[field]), :max_digits)
-      value_str = string(objct.insert[field])
-      # @infiltrate
-      parts = split(value_str, ".")
-      integer_part = parts[1]
-      fractional_part = length(parts) > 1 ? parts[2] : ""
-      total_digits = length(replace(integer_part, "-" => "")) + (fractional_part == "" ? 0 : length(fractional_part))
-      if total_digits > model.fields[field].max_digits
-        error("""Error in insert, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
-      end
-    end
 
      # Add safely quoted field name to columns list
     push!(quoted_field_columns, quote_identifier(field, connection))
@@ -226,21 +407,28 @@ function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   )
   """
 
-  # @info sql
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model.name, :insert; 
+                            parameters=parameters)
+  end
 
   # Execute safely
   if connection isa PormGPostgres
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return Tables.rowtable(result) |> first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
-  elseif connection isa SQLite.DB
-    # SQLite implementation with parameters
-    stmt = SQLite.Stmt(connection, sql)
-    for (i, param) in enumerate(parameters.parameters)
-      SQLite.bind!(stmt, i, param)
+    return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+  elseif connection isa PormGSQLite
+    # SQLite: use fetch() to properly acquire/release from pool
+    # Use RETURNING * if supported (SQLite 3.35+)
+    try
+        result = fetch(settings, sql * " RETURNING *;", parameters)
+        return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+    catch e
+        # Fallback for older SQLite versions
+        fetch(settings, sql, parameters)
+        # Return the input data as a fallback (will lack auto-generated fields)
+        return Dict(Symbol(k) => v for (k, v) in pairs(real_obj.insert))
     end
-    SQLite.execute(stmt)
-    # Similar return logic as before
   else
     throw("Unsupported connection type")
   end
@@ -324,14 +512,18 @@ end
 #     end
 #   end
 # end
-function _update_sequence(model::PormGModel, connection::SQLite.DB, pk_field::Vector{String})
+function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::SQLConn)
   for field in pk_field
-    max_id_query = "SELECT MAX($(field)) FROM $(string(model.name |> lowercase));"
-    max_id_result = SQLite.Query(connection, max_id_query) |> DataFrame
-    max_id = max_id_result[1, 1]
-    if !isnothing(max_id)
-      update_sequence_sql = "UPDATE sqlite_sequence SET seq = $(max_id + 1) WHERE name = '$(string(model.name |> lowercase))';"
-      SQLite.execute(connection, update_sequence_sql)
+    max_id_query = "SELECT MAX($(field)) as m FROM $(string(model.name |> lowercase));"
+    # Execute query and convert to DataFrame to safely access the result
+    df = fetch(connection, max_id_query) |> DataFrames.DataFrame
+    
+    if size(df, 1) > 0
+      max_id = df[1, :m]
+      if !ismissing(max_id) && !isnothing(max_id)
+        update_sequence_sql = "UPDATE sqlite_sequence SET seq = $(max_id + 1) WHERE name = '$(string(model.name |> lowercase))';"
+        fetch(settings, update_sequence_sql)
+      end
     end
   end
 end
@@ -351,17 +543,32 @@ function _is_date_field(field_name::String, instruc::SQLInstruction)
   return false
 end
 
+function _set_update_query(v::SQLTypeFunction, instruc::SQLInstruction)
+  return _get_select_query(v, instruc)
+end
+
 function _set_update_query(v::FExpression, instruc::SQLInstruction)
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
-    return _get_filter_query(v.field_name, instruc)
+    if v.field_name isa String
+      return _get_filter_query(v.field_name, instruc)
+    else
+      # Recursive call for nested expressions
+      return _set_update_query(v.field_name, instruc)
+    end
   else
-    # Field with operation - handle date arithmetic properly
-    left_side = _set_update_query(FExpression(field_name = v.field_name, function_name = "F", column = v.field_name), instruc)    
+    # Field with operation - handle nesting and date arithmetic properly
+    left_side = if v.field_name isa String
+      _get_filter_query(v.field_name, instruc)
+    else
+      _set_update_query(v.field_name, instruc)
+    end
 
     # @infiltrate
     right_side = if isa(v.operand, FExpression)
       _set_update_query(v.operand, instruc)
+    elseif isa(v.operand, SQLTypeFunction)
+      _get_select_query(v.operand, instruc)
     elseif isa(v.operand, String)
       # Check if it's a field reference
       if contains(v.operand, "__") || v.operand in instruc.object.model.field_names
@@ -370,8 +577,8 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
         # SECURITY: Use parameterized query for literal values
         placeholder = add_parameter!(instruc.parameters, v.operand)
         # For string literals that might be used in date operations, add explicit casting
-        if v.operation in ["+", "-"] && _is_date_field(v.field_name, instruc)
-          "$placeholder::text"
+        if v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
+          instruc.connection isa PormGSQLite ? placeholder : "$placeholder::text"
         else
           placeholder
         end
@@ -379,9 +586,15 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
     elseif isa(v.operand, Integer)
       # SECURITY: Handle integer operands for date arithmetic
       placeholder = add_parameter!(instruc.parameters, v.operand)
-      if v.operation in ["+", "-"] && _is_date_field(v.field_name, instruc)
-        # Convert integer days to interval for date arithmetic
-        "($placeholder || ' days')::interval"
+      if v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
+        if instruc.connection isa PormGSQLite
+          # SQLite handles date arithmetic via functions, but for the infix expression
+          # we just return the placeholder and handle the wrapper in the final return
+          placeholder
+        else
+          # Convert integer days to interval for date arithmetic (PostgreSQL)
+          "($placeholder || ' days')::interval"
+        end
       else
         placeholder
       end
@@ -390,11 +603,16 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
       add_parameter!(instruc.parameters, v.operand)
     end
     
+    if instruc.connection isa PormGSQLite && v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
+      op_sign = v.operation == "+" ? "+" : "-"
+      return "date($(left_side), '$(op_sign)' || $(right_side) || ' days')"
+    end
+
     return "($(left_side) $(v.operation) $(right_side))"
   end
 end
 
-function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection)
+function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection::Union{PormGPostgres, PormGSQLite})
   tables = String[]
   for join_dict in row_join
     try
@@ -405,9 +623,10 @@ function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{F
       @error "Error building FROM tables for join: $join_dict" exception=(e, catch_backtrace())
     end
   end
-  return join(tables, ", ")
+  return join(unique(tables), ", ")
 end
-function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection)
+
+function _get_join_condition_list(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection)
   conditions = String[]
   for join_dict in row_join
     try
@@ -420,19 +639,25 @@ function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vect
       @error "Error building join condition for join: $join_dict" exception=(e, catch_backtrace())
     end
   end
-  return join(conditions, " AND ")
+  return conditions
 end
 
-function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, SQLite.DB} = nothing, show_query::Bool = false)
-  model = objct.model
+function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection::Union{PormGPostgres, PormGSQLite})
+  return _get_join_condition_list(row_join, connection)
+end
+
+function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
+  real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection === nothing && (connection = settings.connections)
+
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
  
-  instruction = build(objct, table_alias=table_alias, connection=connection) 
+  instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 
   # Check if is allowed to update
-  !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
+  !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw("Error in update, the update must have a filter")
   
@@ -451,34 +676,16 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
 
   # Handle F expressions in SET clause
+  # Switch context to :update for SET clause params (SET appears before WHERE/JOIN in SQL)
+  set_context!(parameters, :update)
   set_clause_parts = String[]
   for field in keys(objct.insert)    
-    # check if the create has a field that not exist in the model
-    in(field, fields) || throw("""Error in update, the field "$(field)" not found in $(model.name)""")
-    # check if field is a primary key and not allow to update
-    model.fields[field].primary_key && throw("Error in update, the field \e[4m\e[31m$(field)\e[0m is a primary key and not allow to update")
-    
-    # Max length validation
-    if hasfield(typeof(model.fields[field]), :max_length) && isa(objct.insert[field], AbstractString)
-      length(objct.insert[field]) > model.fields[field].max_length && 
-        throw("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_length of \e[4m\e[32m$(model.fields[field].max_length)\e[0m, but the value has \e[4m\e[31m$(length(objct.insert[field]))\e[0m""")
-    end
-    
-    # Max digits validation
-    if hasfield(typeof(model.fields[field]), :max_digits)
-      value_str = string(objct.insert[field])
-      if contains(value_str, ".")
-        integer_part, fractional_part = split(value_str, ".")
-        total_digits = length(replace(integer_part, "-" => "")) + length(fractional_part)
-        if total_digits > model.fields[field].max_digits
-          throw("""Error in update, the field \e[4m\e[31m$(field)\e[0m has a max_digits of \e[4m\e[32m$(model.fields[field].max_digits)\e[0m, but the value has \e[4m\e[31m$(total_digits)\e[0m""")
-        end
-      end
-    end
+    # Validation checks
+    validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
     
     quoted_field = quote_identifier(field, connection)
 
-    if isa(objct.insert[field], SQLTypeF)     
+    if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction)
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
@@ -498,47 +705,19 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   sql = ""
   
   if has_joins
-    if connection isa PormGPostgres
-      # PostgreSQL: UPDATE...FROM syntax
-      from_tables = _build_from_tables(instruction.row_join, connection)
+    if connection isa PormGPostgres || connection isa PormGSQLite
+      # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax
+      from_clause = _build_from_tables(instruction.row_join, connection)
       join_conditions = _build_join_conditions(instruction.row_join, connection)
-      all_conditions = isempty(instruction._where) ? join_conditions :
-          join([join_conditions, join(instruction._where, " AND ")], " AND ")
+      
+      # Merge structural joins and logical filters, then deduplicate
+      final_where = unique([join_conditions; instruction._where])
       
       sql = """
       UPDATE $(safe_table_name) AS $(safe_alias)
       SET $(set_clause)
-      FROM $(from_tables)
-      WHERE $(all_conditions)
-      """
-    elseif connection isa SQLite.DB
-      # SQLite: Use subquery or multiple table syntax
-      # For SQLite, we need to use a different approach since it doesn't support UPDATE...FROM
-      # We'll use UPDATE with WHERE EXISTS or IN subqueries
-      
-      # Build subquery for the joined tables
-      subquery_conditions = String[]
-      for join_dict in instruction.row_join
-        b_table = safe_table_identifier(join_dict["b"], connection)
-        alias_a = quote_identifier(instruction.alias, connection)
-        alias_b = quote_identifier(join_dict["alias_b"], connection)
-        key_a = quote_identifier(join_dict["key_a"], connection)
-        key_b = quote_identifier(join_dict["key_b"], connection)
-        
-        push!(subquery_conditions, """
-        EXISTS (
-          SELECT 1 FROM $(b_table) AS $(alias_b) 
-          WHERE $(alias_a).$(key_a) = $(alias_b).$(key_b)
-        )
-        """)
-      end
-      
-      all_conditions = vcat(subquery_conditions, instruction._where)
-      
-      sql = """
-      UPDATE $(safe_table_name) AS $(safe_alias)
-      SET $(set_clause)
-      WHERE $(join(all_conditions, " AND "))
+      FROM $(from_clause)
+      WHERE $(join(final_where, " AND "))
       """
     else
       @error "Error in update: Unsupported database type for JOIN operations" connection_type=typeof(connection)
@@ -553,26 +732,22 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     """
   end
 
-  if show_query
-    params_list = (parameters === nothing) ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
-    return sql
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model.name, :update; 
+                            parameters=parameters)
   end
 
   # @infiltrate
 
   # return nothing
 
+  # Execute with parameters
   try
-    # Execute with parameters
     if connection isa PormGPostgres
       fetch(settings, sql, parameters)
-    elseif connection isa SQLite.DB
-      stmt = SQLite.Stmt(connection, sql)
-      for (i, param) in enumerate(parameters.parameters)
-        SQLite.bind!(stmt, i, param)
-      end
-      SQLite.execute(stmt)
+    elseif connection isa PormGSQLite
+      # SQLite: use fetch() to properly acquire/release from pool
+      fetch(settings, sql, parameters)
     else
       throw("Unsupported connection type")
     end
@@ -603,15 +778,14 @@ query.order_by("-laps")
 df = query |> list |> DataFrame
 ```
 """
-function query_list(objct::SQLObjectHandler)
-  if objct.object.model.connect_key === nothing
-    throw(ArgumentError("Error in quering data, the model \e[4m\e[31m$(objct.object.model.name)\e[0m not have a build correctly, please reload the app"))
-  end
-  settings = config[objct.object.model.connect_key]
-  connection = settings.connections
+function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
 
-  sql = query(objct, connection=connection)
-  @infiltrate false
+  sql = query(objct, connection=connection, show_query=show_query)
+  if show_query !== :execute
+     return sql
+  end
   return fetch(settings, sql, objct.object.parameters) 
 end
 
@@ -658,10 +832,14 @@ records = query |> list  # Returns array of dictionaries
 # Example output: [Dict(:driverid__forename => "Lewis", :constructorid__name => "Mercedes", :laps => 58), ...]
 ```
 """
-function list(objct::SQLObjectHandler)
-  result = query_list(objct)
+function list(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  result = query_list(objct, show_query=show_query)
+  if show_query !== :execute
+    return result
+  end
   return Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
 end
+list(; kwargs...) = (objct) -> list(objct; kwargs...)
 
 """
 Fetches a list of records from the database and returns them as a JSON string.
@@ -683,9 +861,23 @@ json_data = query |> list_json  # Returns JSON string
 # Example output: "[{\"driverid__forename\":\"Lewis\",\"constructorid__name\":\"Mercedes\",\"laps\":58}]"
 ```
 """
-function list_json(objct::SQLObjectHandler)
-  records = list(objct)
+function list_json(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  records = list(objct, show_query=show_query)
+  if show_query !== :execute
+    return records
+  end
   # Convert Symbol keys to String keys for JSON serialization
   string_key_records = [Dict(String(k) => v for (k, v) in pairs(record)) for record in records]
   return JSON.json(string_key_records)
 end
+list_json(; kwargs...) = (objct) -> list_json(objct; kwargs...)
+
+function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  objct.limit(1)
+  res = list(objct, show_query=show_query)
+  if show_query !== :execute
+    return res
+  end
+  return isempty(res) ? nothing : res[1]
+end
+first(; kwargs...) = (objct) -> first(objct; kwargs...)

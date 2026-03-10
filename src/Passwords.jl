@@ -1036,8 +1036,9 @@ function make_password(raw_password::AbstractString;
     encoder = BCryptPasswordEncoder()
     return encode(encoder, raw_password)
   elseif algorithm in ("argon2id", "argon2i", "argon2")
-    encoder = Argon2PasswordEncoder()
-    return encode(encoder, raw_password)
+    # encoder = Argon2PasswordEncoder()
+    # return encode(encoder, raw_password)
+    throw(ArgumentError("Argon2 algorithm is currently disabled. Please use 'pbkdf2_sha256' or 'bcrypt'."))
   else
     throw(ArgumentError("Unknown algorithm: $algorithm"))
   end

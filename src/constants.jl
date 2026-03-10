@@ -31,21 +31,23 @@ const reserved_words = [
   "where", "in", "isa", "throw", "true", "false", "nothing", "missing", "id"
 ]
 
-const PormGsuffix = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
+const PormGsuffix = Dict{String,Union{Int64, String}}(
   "gte" => ">=",
   "gt" => ">",
   "lte" => "<=",
   "lt" => "<",
-  "neq" => "!=",
+  "ne" => "!=",
   "isnull" => "ISNULL",
-  "in" => "in",
-  "nin" => "not in",
+  "in" => "IN",
+  "nin" => "NOT IN",
   "contains" => "contains",
   "icontains" => "icontains",
+  "startswith" => "startswith",
+  "endswith" => "endswith",
   "range" => "BETWEEN",
 )
 
-const PormGtrasnform = Dict{String,Union{Int64, String}}( # TODO: REMOVE THIS
+const PormGtransform = Dict{String,Union{Int64, String}}(
   "date" => "DATE",
   "month" => "MONTH",
   "year" => "YEAR",
@@ -112,14 +114,17 @@ const postgres_type_map = Dict{String, Symbol}(
 const sqlite_type_map_reverse = Dict{String, String}(
   "VARCHAR" => "TEXT",
   "CHAR" => "TEXT",
+  "TEXT" => "TEXT",
   "INTEGER" => "INTEGER",
   "BIGINT" => "INTEGER",
   "FLOAT" => "REAL",
   "DECIMAL" => "DECIMAL",
   "DATETIME" => "DATETIME",
+  "TIMESTAMPTZ" => "DATETIME",
   "TIME" => "TIME",
   "DATE" => "DATE",
   "BLOB" => "BLOB",
+  "BOOLEAN" => "BOOLEAN"
 )
 
 const postgres_type_map_reverse = Dict{String, String}(
@@ -139,6 +144,7 @@ const postgres_type_map_reverse = Dict{String, String}(
   "TEXT" => "text",
   "BYTEA" => "bytea",
   "TIMESTAMPTZ" => "timestamptz",
+  "TIMESTAMP" => "timestamp",
   "DATE" => "date",
   "TIME" => "time",  
   "INTERVAL" => "interval",
@@ -178,7 +184,9 @@ const sqlite_date_format_map = Dict{String, String}(
   "YYYY-MM-DDTHH:MI:SS.SSS" => "%Y-%m-%dT%H:%M:%S.%f",
   "HH:MI:SS" => "%H:%M:%S",
   "HH:MI:SS.SSS" => "%H:%M:%S.%f",
-  "HH:MI" => "%H:%M"
+  "HH:MI" => "%H:%M",
+  "DD/MM/YYYY" => "%d/%m/%Y",
+  "DD-MM-YYYY" => "%d-%m-%Y"
 )
 
 

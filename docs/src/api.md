@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `PormG` module provides a set of abstractions and functions for working with SQL databases in Julia. It includes various types for SQL operations, models, and migrations, along with utilities for querying and manipulating data.
+The `PormG` module provides a set of abstractions and functions for working with SQL databases in Julia. It includes various types for SQL operations, models, and migrations, along with utilities for querying and manipulating data. Detailed documentation for reading operations can be found in the [Reading Overview](read/index.md).
 
 ## Exported Functions
 
@@ -11,8 +11,30 @@ The `PormG` module provides a set of abstractions and functions for working with
 - **Usage**: `query = M.Model_name.objects;`
 
 ### `show_query`
-- **Description**: Displays the SQL query that will be executed.
-- **Usage**: `show_query(...)`
+- **Description**: Integrated switch in all query execution methods to toggle between execution and inspection.
+- **Modes**: 
+  - `:execute` (default) - Executes the query and returns results
+  - `:sql` - Returns SQL **string** only (Minimal overhead for benchmarking)
+  - `:dict` - Returns full metadata dictionary (sql, parameters, dialect, model, operation, etc.)
+  - `:params` - Returns parameters array only
+  - `:none` - Returns `nothing` (Zero-overhead mode for benchmarking the builder itself)
+- **Usage**: 
+  ```julia
+  query = M.Driver.objects.filter("nationality" => "British")
+  # Benchmark the builder without execution or return overhead
+  @time query.list(show_query=:none) 
+  ```
+
+### `inspect_query`
+- **Description**: Dedicated API for comprehensive query inspection without executing. It returns rich metadata and features a **heuristic intent detector** that guesses the operation type (select, insert, update) based on the object state.
+- **Returns**: A `Dict` with full metadata (sql, parameters, dialect, model, operation, bucketing, etc.)
+- **Usage**: 
+  ```julia
+  query = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname")
+  inspection = query |> inspect_query()
+  println(inspection[:operation]) # Automatically detects :select
+  ```
+- **Note on parameter buckets:** `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string and do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
 
 ### `list`
 - **Description**: Lists records from the database.

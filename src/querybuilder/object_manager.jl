@@ -13,13 +13,13 @@ function _up_values(str::String)
   else
     @infiltrate false
     return SQLField(_check_function(check), join(check, "__"))
-  end     
+  end
 end
 
 function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []
-  for v in values 
+  for v in values
     isa(v, Symbol) && (v = String(v))
     if isa(v, SQLTypeText) || isa(v, SQLTypeField)
       push!(q.values, _check_function(v))
@@ -29,40 +29,44 @@ function up_values!(q::SQLObject, values)
       if !isa(v.first, String)
         throw("Invalid argument: $(v.first) (::$(typeof(v.first)))); please use a string as key in the pair (key => value)")
       end
-      if isa(v.second, Union{SQLTypeFunction, SQLTypeF})
+      if isa(v.second, Union{SQLTypeFunction,SQLTypeF})
         try
           push!(q.values, SQLField(_check_function(v.second), v.first))
         catch e
           @infiltrate false
-          @error "Error processing values pair: $e" exception=(e, catch_backtrace())
+          @error "Error processing values pair: $e" exception = (e, catch_backtrace())
         end
+      elseif isa(v.second, SQLTypeText)
+        # Support Value(x) as an aliased pair: "label" => Value("hello")
+        v.second.custom_as = v.first
+        push!(q.values, v.second)
       elseif isa(v.second, String)
         z = _up_values(v.second)
         z.custom_as = v.first
         push!(q.values, z)
       end
     elseif isa(v, String)
-      push!(q.values, _up_values(v))  
+      push!(q.values, _up_values(v))
     else
       throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (Mounth, Year, Day, Y_M ...)")
-    end    
-  end 
-  
+    end
+  end
+
   return q
 end
-  
-function up_create!(q::SQLObject, values)
-  q.insert = Dict()
-  for (k,v) in values   
-    q.insert[k] = v 
-  end  
 
-  return insert(q)
+function up_create!(q::SQLObject, values; kwargs...)
+  q.insert = Dict()
+  for (k, v) in values
+    q.insert[k] = v
+  end
+
+  return insert(q; kwargs...)
 end
 
 function up_update!(q::SQLObject, values; kwargs...)
   # check if kwargs is not empty and check if kwargs just contains show_query
-  show_query = false
+  show_query = :execute
   if !isempty(kwargs)
     for (k, v) in kwargs
       if k == :show_query
@@ -73,9 +77,9 @@ function up_update!(q::SQLObject, values; kwargs...)
     end
   end
   q.insert = Dict()
-  for (k,v) in values   
-    q.insert[k] = v 
-  end  
+  for (k, v) in values
+    q.insert[k] = v
+  end
 
   return update(q, show_query=show_query)
 end
@@ -89,8 +93,8 @@ end
 # Returns
 - The modified SQLObject with the new filters added.
 """
-function up_filter!(q::SQLObject, filter)  
-  for v in filter   
+function up_filter!(q::SQLObject, filter)
+  for v in filter
     if isa(v, FilterType)
       push!(q.filter, v) # TODO I need process the Qor and Q with _check_filter
     elseif isa(v, Pair)
@@ -99,6 +103,14 @@ function up_filter!(q::SQLObject, filter)
       error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
     end
   end
+  return q
+end
+
+function up_db!(q::SQLObject, keys)
+  if isempty(keys) || length(keys) > 1 || !isa(keys[1], String)
+    throw(ArgumentError("db() expects exactly one String argument (the database key). Received: $(keys)"))
+  end
+  q.connect_key = keys[1]
   return q
 end
 
@@ -123,25 +135,25 @@ function _query_select(array::Vector{SQLTypeField})
     return "*"
   else
     colect = []
-    for i in 1:size(array, 1)     
+    for i in 1:size(array, 1)
       if !isassigned(array, i, 1)
-        return join(colect,  ", \n  ")
+        return join(colect, ", \n  ")
       else
         @infiltrate false
-        if isa(array[i, 1], SQLField) && array[i, 1].custom_as !== nothing 
+        if isa(array[i, 1], SQLField) && array[i, 1].custom_as !== nothing
           push!(colect, "$(array[i, 1].field) as $(array[i, 1].custom_as)")
         else
           push!(colect, "$(array[i, 1].field) as $(array[i, 1]._as)")
         end
       end
     end
-  end   
+  end
 end
 
 
-function order_by!(q::SQLObject, values::NTuple{N, Union{String, SQLTypeOrder}} where N)
+function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} where N)
   q.order = [] # every call of order_by, reset the order
-  for v in values 
+  for v in values
     if isa(v, String)
       # check if v constains - in the first position
       v[1:1] == "-" ? (orientation = "DESC"; v = v[2:end]) : orientation = "ASC"
@@ -150,14 +162,14 @@ function order_by!(q::SQLObject, values::NTuple{N, Union{String, SQLTypeOrder}} 
         push!(q.order, SQLOrder(SQLField(v, v), orientation=orientation))
       elseif haskey(PormGsuffix, check[end])
         throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
-      else    
+      else
         push!(q.order, SQLOrder(SQLField(_check_function(check), join(check, "__")), orientation=orientation))
-      end     
+      end
     else
       push!(q.order, v)
-    end    
-  end   
-  return q  
+    end
+  end
+  return q
 end
 function order_by!(q::SQLObject, values)
   throw("Invalid argument: $(values) (::$(typeof(values))); please use a string or a SQLTypeOrder)")
@@ -169,15 +181,15 @@ end
 # The "Functor" for chainable methods
 # ---
 
-struct ChainCaller{F, T}
-    func::F
-    handler::T
+struct ChainCaller{F,T}
+  func::F
+  handler::T
 end
 
 # When called (e.g., query.filter(...)), it executes and returns the handler itself
 function (c::ChainCaller)(args...)
-    c.func(c.handler.object, args)
-    return c.handler
+  c.func(c.handler.object, args)
+  return c.handler
 end
 
 function Base.getproperty(q::ObjectHandler, sym::Symbol)
@@ -185,6 +197,8 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   # Allows: query.filter(...).order_by(...)
   if sym === :filter
     return ChainCaller(up_filter!, q)
+  elseif sym === :db
+    return ChainCaller(up_db!, q)
   elseif sym === :values
     return ChainCaller(up_values!, q)
   elseif sym === :order_by
@@ -199,20 +213,29 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return ChainCaller(distinct!, q)
   elseif sym === :copy
     return () -> deepcopy(q)
-      
-  # === CATEGORY 2: Terminal methods (return result) ===
-  # End the chain. E.g.: query.create(...) returns a Dict.
+
+
+    # === CATEGORY 2: Terminal methods (return result) ===
+    # End the chain. E.g.: query.create(...) returns a Dict.
   elseif sym === :create
-    # Returns a simple function that forwards to up_create!
-    return (args...) -> up_create!(q.object, args)
+    # Returns a function that forwards to up_create!
+    return (args...; kwargs...) -> up_create!(q.object, args; kwargs...)
   elseif sym === :update
     return (args...; kwargs...) -> up_update!(q.object, args; kwargs...)
   elseif sym === :count
     return () -> do_count(q)
   elseif sym === :exists
     return () -> do_exists(q)
-      
-  # === CATEGORY 3: Internal fields ===
+  elseif sym === :list || sym === :all
+    return (; kwargs...) -> list(q; kwargs...)
+  elseif sym === :list_json
+    return (; kwargs...) -> list_json(q; kwargs...)
+  elseif sym === :inspect_query || sym === :inspect
+    return (; kwargs...) -> inspect_query(q; kwargs...)
+  elseif sym === :delete
+    return (; kwargs...) -> delete(q; kwargs...)
+
+    # === CATEGORY 3: Internal fields ===
   else
     return getfield(q, sym)
   end
@@ -235,5 +258,5 @@ Apply filters to the query. Chainable method that returns the query object.
 
 Usage: `query.filter("field" => value)`
 
-See [Read documentation](read.md) for detailed filter syntax and examples.
+See [Read documentation](read/index.md) for detailed filter syntax and examples.
 """ ChainCaller(up_filter!, q)

@@ -11,9 +11,24 @@ import LibPQ
 using Base.ScopedValues: ScopedValue, with
 
 export env, Settings, connection, close_pool!, get_settings
-export with_tx_context
+export with_tx_context, register_connection, unregister_connection, set_connection_resolver
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
+
+# Dynamic connection resolver hook
+const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)
+
+"""
+    set_connection_resolver(f::Function)
+
+Register a callback function to lazily resolve unknown connection keys.
+The function `f` should accept a `key::String` and return:
+- `nothing` if the key cannot be resolved.
+- A `Tuple` of `(url, adapter, pool_size)` or a `Dict` with those keys.
+"""
+function set_connection_resolver(f::Function)
+  _CONNECTION_RESOLVER[] = f
+end
 
 """
     redact_secret(conn_str::String)
@@ -42,8 +57,8 @@ Used to ensure that nested fetch() calls within a transaction
 use the same database connection.
 """
 mutable struct TransactionContext
-  conn::Union{Nothing, LibPQ.Connection}
-  pool::Union{Nothing, PormGPostgres}
+  conn::Union{Nothing, LibPQ.Connection, SQLite.DB}
+  pool::Union{Nothing, PormGPostgres, PormGSQLite}
   depth::Int  # Track nested transaction contexts
   
   TransactionContext() = new(nothing, nothing, 0)
@@ -82,7 +97,7 @@ function in_transaction_context()
   return _tx_context[].depth > 0
 end
 
-function with_tx_context(f::Function, pool::PormGPostgres, conn::LibPQ.Connection)
+function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn::Union{LibPQ.Connection, SQLite.DB})
   old_ctx = _tx_context[]
   new_ctx = TransactionContext()
   new_ctx.conn = conn
@@ -94,7 +109,7 @@ function with_tx_context(f::Function, pool::PormGPostgres, conn::LibPQ.Connectio
   end
 end
 
-function connection_key_for_pool(pool::PormGPostgres)::Union{String, Nothing}
+function connection_key_for_pool(pool::Union{PormGPostgres, PormGSQLite})::Union{String, Nothing}
   for (key, settings) in config
     if settings.connections === pool
       return key
@@ -107,7 +122,7 @@ function ensure_model_transaction_scope(model::PormGModel)
   tx_pool = get_tx_pool()
   tx_pool === nothing && return
   model.connect_key === nothing && throw(ArgumentError("Model $(model.name) is not bound to a database connection key"))
-  settings = config[model.connect_key]
+  settings = get_settings(model.connect_key)
   if tx_pool === settings.connections
     return
   end
@@ -134,8 +149,7 @@ julia> Configuration.env()
 ```
 """
 function env(;path::String=DB_PATH)::String 
-  haskey(config, path) || throw("$(path) not found")
-  return config[path].app_env
+  return get_settings(path).app_env
 end
 env(x::String) = env(path=x)
 
@@ -179,13 +193,15 @@ function read_db_connection_data(path::String, settings::SQLConn) :: Dict{String
   if  haskey(db_conn_data, settings.app_env)
       if haskey(db_conn_data[settings.app_env], "config") && isa(db_conn_data[settings.app_env]["config"], Dict)
         for (k, v) in db_conn_data[settings.app_env]["config"]
-          # println(k, " => ", v)
-          if k == "log_level"
-            for dl in Dict("debug" => Logging.Debug, "error" => Logging.Error, "info" => Logging.Info, "warn" => Logging.Warn)
-              occursin(dl[1], v) && setfield!(settings, Symbol(k), dl[2])
+          # Safely apply settings that exist in the Settings struct
+          if hasfield(Settings, Symbol(k))
+            if k == "log_level"
+              for dl in Dict("debug" => Logging.Debug, "error" => Logging.Error, "info" => Logging.Info, "warn" => Logging.Warn)
+                occursin(dl[1], lowercase(string(v))) && setfield!(settings, Symbol(k), dl[2])
+              end
+            else
+              setfield!(settings, Symbol(k), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
             end
-          else
-            setfield!(settings, Symbol(k), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
           end
         end
       end
@@ -230,6 +246,22 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 
   settings.db_config_settings = read_db_connection_data(path, settings)
 
+  # Extract pool size from config (defaults to 3)
+  pool_size = haskey(settings.db_config_settings, "pool_size") ? 
+              parse(Int, string(settings.db_config_settings["pool_size"])) : 3
+
+  sqlite_split_read_write = false
+  if haskey(settings.db_config_settings, "sqlite_split_read_write")
+    raw_value = settings.db_config_settings["sqlite_split_read_write"]
+    sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
+  elseif haskey(settings.db_config_settings, "options") && isa(settings.db_config_settings["options"], Dict)
+    options = settings.db_config_settings["options"]
+    if haskey(options, "sqlite_split_read_write")
+      raw_value = options["sqlite_split_read_write"]
+      sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
+    end
+  end
+
   if settings.db_config_settings["adapter"] == "SQLite"
     dbname =  if haskey(settings.db_config_settings, "host") && settings.db_config_settings["host"] !== nothing
       settings.db_config_settings["host"]
@@ -239,40 +271,44 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
           nothing
         end
 
-    db = if dbname !== nothing
-      isempty(dirname(dbname)) || mkpath(dirname(dbname))
-      SQLite.DB(dbname)
+    db_path = if dbname !== nothing
+      # Ensure path is absolute if it's not relative to memory
+      full_path = isabspath(dbname) ? dbname : joinpath(path, dbname)
+      isempty(dirname(full_path)) || mkpath(dirname(full_path))
+      full_path
     else # in-memory
-      SQLite.DB()
+      ":memory:"
     end
 
-    settings.connections = db
+    @infiltrate false
+    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write)
 
   elseif settings.db_config_settings["adapter"] == "PostgreSQL"
     dns = String[]
 
-    for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding"]
-      # get!(settings.db_config_settings, key, get(ENV, "SEARCHLIGHT_$(uppercase(key))", nothing))
-      get!(settings.db_config_settings, key, nothing)
-      # println(key, " => ", settings.db_config_settings[key])
-      settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", settings.db_config_settings[key]))
+    # Check for direct URL/Connection String support
+    if haskey(settings.db_config_settings, "url") && settings.db_config_settings["url"] !== nothing
+      dns_str = settings.db_config_settings["url"]
+    else
+      # Standard parameters loop
+      for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey"]
+        get!(settings.db_config_settings, key, nothing)
+        settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", settings.db_config_settings[key]))
+      end
+
+      get!(settings.db_config_settings, "database", nothing)
+      settings.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", settings.db_config_settings["database"]))
+
+      get!(settings.db_config_settings, "username", nothing)
+      settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", settings.db_config_settings["username"]))
+      
+      dns_str = join(dns, " ")
     end
 
-    # @infiltrate
-
-    # get!(settings.db_config_settings, "database", get(ENV, "SEARCHLIGHT_DATABASE", nothing))
-    get!(settings.db_config_settings, "database", nothing)
-    settings.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", settings.db_config_settings["database"]))
-
-    # get!(settings.db_config_settings, "username", get(ENV, "SEARCHLIGHT_USERNAME", nothing))
-    get!(settings.db_config_settings, "username", nothing)
-    settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", settings.db_config_settings["username"]))
-
-    # settings.connections = LibPQ.Connection(join(dns, " "))
-    @infiltrate false
     # Use parent module reference to avoid circular dependency during module loading
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.PostgresConnectionPool(join(dns, " "))
+    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size)
 
   end
   return nothing
@@ -284,68 +320,113 @@ function connection(; key::String = "db")
 end
 
 function get_settings(key::String)
-  haskey(config, key) || throw("Settings for key '$(key)' not found")
+  if !haskey(config, key) && _CONNECTION_RESOLVER[] !== nothing
+    # Attempt lazy resolution
+    try
+      res = _CONNECTION_RESOLVER[](key)
+      if res !== nothing
+        if res isa Tuple
+          url, adapter, pool_size = res
+          register_connection(key, url; adapter=adapter, pool_size=pool_size)
+        elseif res isa Dict
+          url = get(res, "url", nothing)
+          adapter = get(res, "adapter", "PostgreSQL")
+          pool_size = get(res, "pool_size", 3)
+          url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size)
+        end
+      end
+    catch e
+      @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
+    end
+  end
+
+  haskey(config, key) || throw(ArgumentError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
   return config[key]  
 end
 
-function close_pool!(pool::PormGPostgres)
+"""
+    register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3)
+
+Register a new database connection pool dynamically using a connection URL.
+Useful for multi-tenant applications or connecting to dynamic data sources.
+"""
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false)
+  # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
+  if isdir(key)
+    throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
+  end
+
+  if haskey(config, key)
+    existing = config[key]
+    if existing.db_def_folder != "dynamic_connection"
+      throw(ArgumentError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(existing.db_def_folder)'."))
+    end
+    
+    @warn "Dynamic connection '$(key)' already exists. Closing old pool before re-registering."
+    close_pool!(key)
+  end
+
+  # Create a minimal Settings object
+  settings = Settings(
+    app_env = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : DEV,
+    db_def_folder = "dynamic_connection"
+  )
+  
+  settings.db_config_settings = Dict{String, Any}(
+    "adapter" => adapter,
+    "url" => url,
+    "pool_size" => pool_size,
+    "sqlite_split_read_write" => sqlite_split_read_write
+  )
+
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  
+  if adapter == "PostgreSQL"
+    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size)
+  elseif adapter == "SQLite"
+    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write)
+  else
+    throw(ArgumentError("Unsupported adapter: $adapter"))
+  end
+
+  config[key] = settings
+  return key
+end
+
+"""
+    unregister_connection(key::String)
+
+Close the connection pool and remove the configuration for the specified key.
+"""
+function unregister_connection(key::String)
+  if haskey(config, key)
+    close_pool!(key)
+    delete!(config, key)
+    return true
+  end
+  return false
+end
+
+"""
+    close_pool!(pool::Union{PormGPostgres, PormGSQLite})
+    close_pool!(db::String)
+
+Close all connections in the database pool.
+"""
+function close_pool!(pool::Union{PormGPostgres, PormGSQLite})
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   CP.close_pool!(pool)
 end
 
 function close_pool!(db::String)
-  haskey(config, db) || throw("$(db) not found")
-  settings::SQLConn = config[db]
-  if settings.connections isa PormGPostgres
+  settings::SQLConn = get_settings(db)
+  if settings.connections !== nothing
     close_pool!(settings.connections)
   end
 end
 
-function reconnect_to_db(settings::SQLConn)
-  # Check if the connection is closed
- 
-  # Reconnect to the database
-  db_settings_file = joinpath(settings.db_def_folder, PORMG_DB_CONFIG_FILE_NAME) 
-  db_conn_data::Dict =  YAML.load(open(db_settings_file))
-  db_conn_data = read_db_connection_data(settings.db_def_folder, settings)
-
-  if db_conn_data["adapter"] == "SQLite"
-    dbname =  if haskey(db_conn_data, "host") && db_conn_data["host"] !== nothing
-      db_conn_data["host"]
-        elseif haskey(db_conn_data, "database") && db_conn_data["database"] !== nothing
-          db_conn_data["database"]
-        else
-          nothing
-        end
-
-    db = if dbname !== nothing
-      isempty(dirname(dbname)) || mkpath(dirname(dbname))
-      SQLite.DB(dbname)
-    else # in-memory
-      SQLite.DB()
-    end
-
-    settings.connections = db
-
-  elseif db_conn_data["adapter"] == "PostgreSQL"
-    dns = String[]
-
-    for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding"]
-      get!(db_conn_data, key, nothing)
-      # println(key, " => ", db_conn_data[key])
-      db_conn_data[key] !== nothing && push!(dns, string("$key=", db_conn_data[key]))
-    end
-
-    get!(db_conn_data, "database", nothing)
-    db_conn_data["database"] !== nothing && push!(dns, string("dbname=", db_conn_data["database"]))
-
-    get!(db_conn_data, "username", nothing)
-    db_conn_data["username"] !== nothing && push!(dns, string("user=", db_conn_data["username"]))
-
-    settings.connections = LibPQ.Connection(join(dns, " "))
-  end
-  
-end
+# Reconnection is now handled automatically by the ConnectionPool via acquire_connection()
+# and reconnect_db() inside the fetch() cycle. Old direct handle logic removed.
 
 #
 # Settings struct
@@ -366,7 +447,7 @@ mutable struct Settings <: SQLConn
   django_prefix::Union{Nothing, String}
 
   Settings(;
-      app_env             = ENV["PORMG_ENV"],           
+      app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
       db_def_folder       = DB_PATH,
       model_file          = MODEL_FILE,
       db_config_settings  = Dict{String,Any}(),

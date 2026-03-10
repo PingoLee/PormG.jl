@@ -9,9 +9,35 @@ Migrations are version-controlled scripts that describe changes to your database
 - Apply incremental changes
 - Keep your database schema in sync with your Julia models
 
-## Main differences from Django
-PormG analyzes your PostgreSQL database, compares it to your Julia models directly, and generates a migration plan. This approach ensures your database and models stay in sync, but always review the plan for safety.
-If this approach works fine, the advantage is that you can directly see the differences between your models and the database schema, making it easier work with a large number of developers and changes.
+## How it Works: State-Based Reconciliation
+PormG follows a **State-Based** migration philosophy (similar to tools like Flyway or Atlas, rather than purely change-based like Django). 
+1. **Introspection**: PormG inspects your live database schema.
+2. **Comparison**: It compares the live schema against your in-memory Julia `Models`.
+3. **Diffing**: It calculates the "delta" required to move the database to the state defined in your code.
+4. **Generation**: It produces a standalone Julia script (`pending_migrations.jl`) containing the DDL commands.
+
+## Database-Specific Behavior
+
+### SQLite: Table Recreation
+SQLite has limited `ALTER TABLE` support (it cannot drop columns, change types, or modify nullability/unique constraints directly on existing tables). 
+
+To handle these types of changes, PormG automatically:
+- Creates a new temporary table with the desired schema.
+- Migrates existing data from the old table to the new one.
+- Re-creates indexes and foreign keys.
+- Drops the old table and renames the new one.
+
+This process is transparent to the user but may take longer on very large tables.
+
+## Automation & CI/CD
+
+In automated environments where user input is not possible, use the `interactive = false` flag:
+
+```julia
+# Bypasses rename confirmations and confirms migration application automatically
+makemigrations("my_db", interactive=false)
+migrate("my_db", interactive=false)
+```
 
 ## Migration Workflow
 
@@ -53,6 +79,30 @@ PormG.Migrations.makemigrations("db_2")
 PormG.Migrations.migrate("db_2")
 ```
 
+## Advanced Usage
+
+### Manual SQL Actions
+If you need to perform custom SQL actions (e.g., data migrations, creating views), you can add them to your `pending_migrations.jl` file using the `Migrations.MigrationAction` structure:
+
+```julia
+# Inside pending_migrations.jl
+push!(actions, Migrations.MigrationAction(
+    "Data Migration",
+    "UPDATE drivers SET nationality = 'Unknown' WHERE nationality IS NULL;"
+))
+```
+
+### Data Migrations
+For more complex logic, you can use the `with_transaction` block within a migration action or context:
+
+```julia
+# This is usually done manually after generating a plan
+PormG.with_transaction(PormG.Configuration.get_pool("db_2")) do conn
+    # Custom Julia logic or raw SQL
+    PormG.DB.execute(conn, "UPDATE ...")
+end
+```
+
 ## Best Practices
 - **Incremental Changes:** Make small, incremental changes to your models and run migrations frequently.
 - **Review Plans:** Always review pending migrations before applying.
@@ -60,4 +110,4 @@ PormG.Migrations.migrate("db_2")
 - **Backups:** Back up your database before applying migrations in production.
 
 ---
-For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/pg/` folder.
+For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/integration/` folder.

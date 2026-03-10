@@ -2,33 +2,33 @@
 # Type Aliases for Heavy Unions
 #
 """Filter components: Operator objects, Q (AND), Qor (OR), and F expressions."""
-const FilterType = Union{SQLTypeQ, SQLTypeQor, SQLTypeOper, SQLTypeF}
+const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF}
 
 """Field references in SQL: text, functions, or string names."""
-const FieldPart = Union{SQLTypeText, SQLTypeFunction, String, SQLTypeF}
+const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF}
 
 """Column references: fields, functions, strings, or vectors of operations."""
-const ColumnPart = Union{SQLTypeField, SQLTypeFunction, String, SQLTypeF, Vector{Union{String, SQLTypeF}}}
+const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,Vector{Union{String,SQLTypeF}}}
 
 """Optional strings (often used for aliases or configs)."""
-const OptionalString = Union{String, Nothing}
+const OptionalString = Union{String,Nothing}
 
 """Database connections."""
-const ConnType = Union{SQLite.DB, PormGPostgres, Nothing}
+const ConnType = Union{PormGSQLite,PormGPostgres,Nothing}
 
 """CTE configuration dictionary."""
-const CTEDict = Dict{String, Union{SQLObjectHandler, PormGModel, Pair, String, Nothing}}
+const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing}}
 
 """Join metadata dictionary."""
-const JoinDict = Dict{String, Union{String, Vector{FilterType}}}
+const JoinDict = Dict{String,Union{String,Vector{FilterType}}}
 
 #
 # SQLTypeArrays Objects
 #
 @kwdef mutable struct SQLArrays <: SQLTypeArrays # TODO -- check if I need to use this
   count::Integer = 1
-  array_string::Array{String, 2} = Array{String, 2}(undef, 20, 3)
-  array_int::Array{Integer, 2} = Array{Integer, 2}(undef, 20, 3)
+  array_string::Array{String,2} = Array{String,2}(undef, 20, 3)
+  array_int::Array{Integer,2} = Array{Integer,2}(undef, 20, 3)
 end
 
 #
@@ -39,7 +39,7 @@ end
   table_alias::SQLTableAlias
   alias::String
   object::SQLObject
-  select::Vector{SQLTypeField} = Array{SQLTypeField, 1}(undef, 60)
+  select::Vector{SQLTypeField} = Array{SQLTypeField,1}(undef, 60)
   join::Vector{String} = []  # values to be used in join query
   _where::Vector{String} = []  # values to be used in where query
   agregate::Bool = false
@@ -50,12 +50,12 @@ end
   row_join::Vector{JoinDict} = [] # array of dictionary to be used in join query
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
-  tab_field_cache::Dict{String, PormGField} = sizehint!(Dict{String, PormGField}(), 12) # cache to be used in join query
+  tab_field_cache::Dict{String,PormGField} = sizehint!(Dict{String,PormGField}(), 12) # cache to be used in join query
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
-  cache::Dict{String, SQLTypeField} = sizehint!(Dict{String, SQLTypeField}(), 12)
+  cache::Dict{String,SQLTypeField} = sizehint!(Dict{String,SQLTypeField}(), 12)
   django::OptionalString = nothing
-  parameters::Union{Nothing, PormGPostgresParam} = nothing # parameters to be used in the query
+  parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
 end
 
 # Store information to decide the name from table alias in subquery
@@ -78,7 +78,7 @@ mutable struct SQLText <: SQLTypeText
   _as::OptionalString
   custom_as::OptionalString
 end
-SQLText(field::Any; _as::OptionalString = nothing) = SQLText(field, _as, nothing)
+SQLText(field::Any; _as::OptionalString=nothing) = SQLText(field, _as, nothing)
 SQLText(field::Any, _as::OptionalString) = SQLText(field, _as, nothing)
 Base.deepcopy(x::SQLTypeText) = SQLText(x.field, x._as, x.custom_as)
 
@@ -89,18 +89,18 @@ mutable struct SQLField <: SQLTypeField
   _as::OptionalString
   custom_as::OptionalString
 end
-SQLField(field::FieldPart; _as::OptionalString = nothing) = SQLField(field, _as, nothing)
+SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing)
 SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing)
 Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as)
 
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
-  field::Union{SQLTypeField, String}
-  order::Union{Integer, Nothing}
+  field::Union{SQLTypeField,String}
+  order::Union{Integer,Nothing}
   orientation::String
   _as::OptionalString
 end
-SQLOrder(field::Union{SQLTypeField, String}; order::Union{Integer, Nothing} = nothing, orientation::String = "ASC", _as::OptionalString = nothing) = SQLOrder(field, order, orientation, _as)
+SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing) = SQLOrder(field, order, orientation, _as)
 Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as)
 
 #
@@ -109,50 +109,52 @@ Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as
 
 mutable struct SQLObjectQuery <: SQLObject
   model::PormGModel
-  values::Vector{Union{SQLTypeText, SQLTypeField}}
+  connect_key::OptionalString # Override for multi-tenant scenarios
+  values::Vector{Union{SQLTypeText,SQLTypeField}}
   filter::Vector{FilterType} # filters to be used in the query
-  insert::Dict{String, Any} # values to be used to create or insert
+  insert::Dict{String,Any} # values to be used to create or insert
   limit::Integer
   offset::Integer
   order::Vector{SQLTypeOrder}
   group::Vector{String}
   having::Vector{String}
   list_joins::Vector{String} # is ther a better way to do this?
-  row_join::Vector{Dict{String, Any}}  
+  row_join::Vector{Dict{String,Any}}
   distinct::Bool # Add distinct field
-  ctes::Dict{String, CTEDict}
-  custom_join::Dict{String, Any} 
-  parameters::Union{Nothing, PormGPostgresParam}
+  ctes::Dict{String,CTEDict}
+  custom_join::Dict{String,Any}
+  parameters::Union{Nothing,AbstractPormGParam}
 
-  SQLObjectQuery(; model=nothing, values = [],  filter = [], insert = Dict(), limit = 0, offset = 0,
-        order = [], group = [], having = [], list_joins = [], row_join = [], distinct = false, ctes = Dict{String, CTEDict}(), custom_join = Dict{String, Any}(), parameters = nothing) = # Add ctes and custom_join to constructor
-    new(model, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
+  SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=Dict(), limit=0, offset=0,
+    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, ctes=Dict{String,CTEDict}(), custom_join=Dict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
 end
 
 function Base.deepcopy(obj::SQLObjectHandler)
-  return ObjectHandler(object = deepcopy(obj.object))
+  return ObjectHandler(object=deepcopy(obj.object))
 end
 function Base.deepcopy(obj::SQLObjectQuery)
   try
     return SQLObjectQuery(
-      model = obj.model,  # PormGModel doesn't need deep copy (immutable reference)
-      values = deepcopy(obj.values),
-      filter = deepcopy(obj.filter),
-      insert = deepcopy(obj.insert),
-      limit = obj.limit,
-      offset = obj.offset,
-      order = deepcopy(obj.order),
-      group = deepcopy(obj.group),
-      having = deepcopy(obj.having),
-      list_joins = deepcopy(obj.list_joins),
-      row_join = deepcopy(obj.row_join),
-      distinct = obj.distinct,
-      ctes = deepcopy(obj.ctes),
-      custom_join = deepcopy(obj.custom_join)
+      model=obj.model,  # PormGModel doesn't need deep copy (immutable reference)
+      connect_key=obj.connect_key,
+      values=deepcopy(obj.values),
+      filter=deepcopy(obj.filter),
+      insert=deepcopy(obj.insert),
+      limit=obj.limit,
+      offset=obj.offset,
+      order=deepcopy(obj.order),
+      group=deepcopy(obj.group),
+      having=deepcopy(obj.having),
+      list_joins=deepcopy(obj.list_joins),
+      row_join=deepcopy(obj.row_join),
+      distinct=obj.distinct,
+      ctes=deepcopy(obj.ctes),
+      custom_join=copy(obj.custom_join)  # shallow copy: PormGField refs contain Model_Type → Module that deepcopy can't handle
     )
   catch e
     @infiltrate false
-    @error "Error in deepcopy for SQLObjectQuery: $e" exception=(e, catch_backtrace())
+    @error "Error in deepcopy for SQLObjectQuery: $e" exception = (e, catch_backtrace())
     rethrow(e)
   end
 end
@@ -162,9 +164,9 @@ end
 function Base.deepcopy(oper::SQLTypeOper)
   @infiltrate false
   return OperObject(
-    operator = oper.operator,
-    values = oper.values |> typeof <: SQLObjectHandler ? oper.values : deepcopy(oper.values),
-    column = deepcopy(oper.column)
+    operator=oper.operator,
+    values=oper.values |> typeof <: SQLObjectHandler ? oper.values : deepcopy(oper.values),
+    column=deepcopy(oper.column)
   )
 end
 
@@ -185,13 +187,13 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String, Number, Bool, SQLObjectHandler, SQLTypeF, Vector{T}} where T <: Union{Missing, String, Dates.TimeType, Number, Bool, SQLTypeF}
+  values::Union{String,Number,Bool,SQLObjectHandler,SQLTypeF,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Number,Bool,SQLTypeF}
   column::ColumnPart # Vector{String} is needed
 end
-OP(column::String, value) = OperObject(operator = "=", values = value, column = SQLField(column))
-OP(column::SQLTypeFunction, value) = OperObject(operator = "=", values = value, column = column)
-OP(column::String, operator::String, value) = OperObject(operator = operator, values = value, column = SQLField(column))
-OP(column::SQLTypeFunction, operator::String, value) = OperObject(operator = operator, values = value, column = column)
+OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
+OP(column::SQLTypeFunction, value) = OperObject(operator="=", values=value, column=column)
+OP(column::String, operator::String, value) = OperObject(operator=operator, values=value, column=SQLField(column))
+OP(column::SQLTypeFunction, operator::String, value) = OperObject(operator=operator, values=value, column=column)
 
 
 
@@ -199,14 +201,14 @@ OP(column::SQLTypeFunction, operator::String, value) = OperObject(operator = ope
   filters::Vector{FilterType} # filters to be used in the query
 end
 function Base.deepcopy(q::QObject)
-  return QObject(filters = deepcopy(q.filters))
+  return QObject(filters=deepcopy(q.filters))
 end
 
 @kwdef mutable struct QorObject <: SQLTypeQor
   or::Vector{FilterType} # filters to be used in the query
 end
 function Base.deepcopy(q::QorObject)
-  return QorObject(or = deepcopy(q.or))
+  return QorObject(or=deepcopy(q.or))
 end
 
 function Base.push!(q::SQLTypeQ, x...)
@@ -262,108 +264,122 @@ query.values("price", "discounted_price" => F("price") * 0.9)
 ```
 """
 @kwdef mutable struct FExpression <: SQLTypeF
-  field_name::String
+  field_name::Union{String,SQLTypeF,SQLTypeFunction}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  operand::Union{String, Integer, Float64, SQLTypeF, Nothing} = nothing
+  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Nothing} = nothing
   function_name::String = "F"
-  column::Union{String, SQLTypeField, Vector{String}} = ""
+  column::Union{String,SQLTypeField,Vector{String}} = ""
   agregate::Bool = false
   _as::OptionalString = nothing
-  kwargs::Dict{String, Any} = Dict{String, Any}()
+  kwargs::Dict{String,Any} = Dict{String,Any}()
 end
 
 # Constructor for F expressions
 function F(field_name::String)
   return FExpression(
-    field_name = field_name,
-    function_name = "F",
-    column = field_name
+    field_name=field_name,
+    function_name="F",
+    column=field_name
   )
 end
 function Base.deepcopy(f::FExpression)
   try
     return FExpression(
-      field_name = f.field_name,
-      operation = f.operation,
-      operand = deepcopy(f.operand),
-      function_name = f.function_name,
-      column = deepcopy(f.column),
-      agregate = f.agregate,
-      _as = f._as,
-      kwargs = deepcopy(f.kwargs)
+      field_name=f.field_name,
+      operation=f.operation,
+      operand=deepcopy(f.operand),
+      function_name=f.function_name,
+      column=deepcopy(f.column),
+      agregate=f.agregate,
+      _as=f._as,
+      kwargs=deepcopy(f.kwargs)
     )
   catch e
-    @error "Error in deepcopy for FExpression: $e" exception=(e, catch_backtrace())
+    @error "Error in deepcopy for FExpression: $e" exception = (e, catch_backtrace())
     rethrow(e)
   end
 end
 
 # Arithmetic operations for F expressions
-function Base.:+(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
+# Aggregate propagation helper: result is aggregate if any operand is aggregate
+_is_agg(f::FExpression) = f.agregate
+_is_agg(f::SQLTypeFunction) = f.agregate
+_is_agg(::Any) = false
+
+function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
-    field_name = f.field_name,
-    operation = "+",
-    operand = operand,
-    function_name = "F",
-    column = f.field_name
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="+",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
-function Base.:-(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
+function Base.:-(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
-    field_name = f.field_name,
-    operation = "-",
-    operand = operand,
-    function_name = "F",
-    column = f.field_name
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="-",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
-function Base.:*(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
+function Base.:*(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
-    field_name = f.field_name,
-    operation = "*",
-    operand = operand,
-    function_name = "F",
-    column = f.field_name
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="*",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
-function Base.:/(f::FExpression, operand::Union{Integer, Float64, String, FExpression})
+function Base.:/(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
   return FExpression(
-    field_name = f.field_name,
-    operation = "/",
-    operand = operand,
-    function_name = "F",
-    column = f.field_name
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="/",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate || _is_agg(operand)
   )
 end
 
 # Comparison operations for F expressions
-function Base.:(==)(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})  
+function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
   f.operation = "="
   f.operand = operand
   return f
 end
-function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
+  f.operation = "!="
+  f.operand = operand
+  return f
+end
+function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
   f.operation = ">"
   f.operand = operand
   return f
 end
 
-function Base.:<(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
   f.operation = "<"
   f.operand = operand
   return f
 end
 
-function Base.:>=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
   f.operation = ">="
   f.operand = operand
   return f
 end
 
-function Base.:<=(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
+function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
   f.operation = "<="
   f.operand = operand
   return f
@@ -385,23 +401,25 @@ end
 # end
 
 # Allow arithmetic operations with F expressions on the right side
-function Base.:+(operand::Union{Integer, Float64}, f::FExpression)
+function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
   return FExpression(
-    field_name = f.field_name,
-    operation = "+",
-    operand = operand,
-    function_name = "F",
-    column = f.field_name
+    field_name=f.field_name,
+    operation="+",
+    operand=operand,
+    function_name="F",
+    column=f.field_name,
+    agregate=f.agregate
   )
 end
 
-function Base.:*(operand::Union{Integer, Float64}, f::FExpression)
+function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
   return FExpression(
-    field_name = f.field_name,
-    operation = "*",
-    operand = operand,
-    function_name = "F",
-    column = f.field_name
+    field_name=f.field_name,
+    operation="*",
+    operand=operand,
+    function_name="F",
+    column=f.field_name,
+    agregate=f.agregate
   )
 end
 
@@ -411,21 +429,45 @@ end
 
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
-  column::Union{String, SQLTypeField, SQLTypeText, N, Vector{N}, Vector{T}, SQLTypeOper, SQLTypeQ, SQLTypeQor} where {N <: SQLTypeFunction, T}
+  column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor} where {N<:SQLTypeFunction,T}
   agregate::Bool = false
-  formater::Union{Nothing, Function} = nothing # function to format the value
+  formater::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing
-  kwargs::Dict{String, Any} = Dict{String, Any}()
+  kwargs::Dict{String,Any} = Dict{String,Any}()
 end
 function Base.deepcopy(f::FObject)
   return FObject(
-    function_name = f.function_name,
-    column = deepcopy(f.column),
-    agregate = f.agregate,
-    formater = f.formater,
-    _as = f._as,
-    kwargs = deepcopy(f.kwargs)
+    function_name=f.function_name,
+    column=deepcopy(f.column),
+    agregate=f.agregate,
+    formater=f.formater,
+    _as=f._as,
+    kwargs=deepcopy(f.kwargs)
   )
+end
+
+# Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
+# Enable expressions like Sum("points") / Count("resultid")
+function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+function Base.:*(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+function Base.:/(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+end
+
+# Commutative: scalar op FObject
+function Base.:+(operand::Union{Integer,Float64}, f::FObject)
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate)
+end
+
+function Base.:*(operand::Union{Integer,Float64}, f::FObject)
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate)
 end
 
 
@@ -434,7 +476,7 @@ end
 # Define a struct ObjectHandler that wraps a SQLObjectQuery
 # ---
 mutable struct ObjectHandler <: SQLObjectHandler
-  object::SQLObject 
+  object::SQLObject
 end
 ObjectHandler(; object::SQLObject) = ObjectHandler(object)
 
@@ -492,7 +534,7 @@ exists = M.User.objects.filter("id" => 1).exists()
 ```
 """
 function object(model::PormGModel)
-  return ObjectHandler(object = SQLObjectQuery(model = model))
+  return ObjectHandler(object=SQLObjectQuery(model=model))
 end
 
 
@@ -501,21 +543,21 @@ end
 mutable struct DeletionCollector{T}
   model::PormGModel  # The main model being deleted from
   settings::SQLConn  # Connection settings
-  connection::Union{PormGPostgres, SQLite.DB}  # Database connection
-  objects::Dict{PormGModel, Vector{Dict{Symbol, T}}}  # Models and their objects to delete
-  dependencies::Dict{PormGModel, Set{PormGModel}}  # Model dependencies
-  field_updates::Dict{Tuple{String, Any}, Dict{PormGModel, Dict{Symbol, T}}}  # Field updates for SET_NULL etc.
-  fast_deletes::Dict{PormGModel, Vector{Dict{Symbol, T}}}  # Objects that can be deleted directly
+  connection::Union{PormGPostgres,PormGSQLite}  # Database connection
+  objects::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Models and their objects to delete
+  dependencies::Dict{PormGModel,Set{PormGModel}}  # Model dependencies
+  field_updates::Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,T}}}  # Field updates for SET_NULL etc.
+  fast_deletes::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
-  
-  DeletionCollector(model, settings) = new{Union{String, SQLObjectHandler}}(
+
+  DeletionCollector(model, settings) = new{Union{String,SQLObjectHandler}}(
     model,
     settings,
     settings.connections,
-    Dict{PormGModel, Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}}(),
-    Dict{PormGModel, Set{PormGModel}}(),
-    Dict{Tuple{String, Any}, Dict{PormGModel, Dict{Symbol, String}}}(),
-    Dict{PormGModel, Dict{Symbol, String}}(),
+    Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
+    Dict{PormGModel,Set{PormGModel}}(),
+    Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,String}}}(),
+    Dict{PormGModel,Dict{Symbol,String}}(),
     Vector{PormGModel}()
   )
 end

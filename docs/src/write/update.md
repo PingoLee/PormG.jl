@@ -37,12 +37,12 @@ query.update(
     "round" => 1
 )
 
-# Use show_query=true to see the generated SQL
-query.update(
+# Use show_query=:sql to see the generated SQL
+sql = query.update(
     "name" => "Australian Grand Prix",
     "date" => Date(2024, 3, 24),
     "round" => 1,
-    show_query=true
+    show_query=:sql
 )
 ```
 
@@ -52,6 +52,16 @@ UPDATE "race" AS "Tb"
 SET "name" = $2, "date" = $3, "round" = $4
 WHERE "Tb"."raceid" = $1
 ```
+
+### Automatic Validation
+
+All updates pass through a centralized validation engine that enforces:
+- **Primary Key Protection**: You cannot update a Primary Key field.
+- **Max Length**: Strings are checked against the model's `max_length`.
+- **Numeric Precision**: `DecimalField` and `FloatField` are checked for `max_digits` and `decimal_places`.
+- **Nullability**: Attempts to set non-nullable fields to `nothing` or `missing` will throw an error.
+
+---
 
 ## Updates with Relationships
 

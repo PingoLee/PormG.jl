@@ -28,12 +28,12 @@ query.filter("test_result__@in" => [11, 12], "test_result2__@isnull" => true)
 delete(query)
 ```
 
-Using `show_query=true` reveals the underlying deletion logic:
+Using `show_query=:sql` reveals the underlying deletion logic without executing it (returns a String or Vector of Strings):
 ```julia
-delete(query, show_query=true)
-# Info: DELETE FROM just_a_test_deletion WHERE "id" IN (
-#    SELECT "Tb"."id" FROM "just_a_test_deletion" as "Tb" ...
-# )
+sql = delete(query, show_query=:sql)
+# Returns: "DELETE FROM just_a_test_deletion WHERE \"id\" IN (
+#    SELECT \"Tb\".\"id\" FROM \"just_a_test_deletion\" as \"Tb\" ...
+# )"
 ```
 
 ## Bulk Deletion

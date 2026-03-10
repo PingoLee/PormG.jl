@@ -160,7 +160,7 @@ function set_models(_module::Module, path::String)::Nothing
     connect_key = path
   end
   
-  settings::SQLConn = config[connect_key]
+  settings::SQLConn = Configuration.get_settings(connect_key)
 
   # set the original module in models and clear related objects for idempotency
   for model in models
@@ -316,7 +316,9 @@ function ensure_model_initialized(model::PormGModel)
 end
 
 function format_fild_name(name::String)::String
+  isempty(name) && return name
   name[1] == '_' && (name = name[2:end])   
+  isempty(name) && return name
   name = lowercase(name)
   if occursin(r"__|@|^_", name)
     throw(ArgumentError("The field name $name contains __ or @ or starts with _; this is not allowed"))
@@ -424,7 +426,7 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
     try
       fields = struct_name in [:ForeignKey, :OneToOneField] ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
     catch e
-      @infiltrate
+      # @infiltrate
     end
   end
   model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
@@ -515,9 +517,7 @@ function format_number_sql(value::Union{Missing, Nothing})
     return missing
 end
 function format_number_sql(value::Union{Float16, Float32, Float64})
-  # Use @sprintf to avoid scientific notation and ensure full precision
-  # return string("'", @sprintf("%.17g", value), "'")
-  return @sprintf("%.17g", value)
+  return Float64(value)
 end
 function format_number_sql(value::AbstractString)
   # try integer first

@@ -2,6 +2,199 @@
 # Execute bulk insert and update
 #
 
+# ---
+# Helpers for bulk operations
+#
+
+function _normalize_bulk_columns(columns)
+  _columns::Vector{Union{String, Pair{String, String}}} = []
+  if columns === nothing
+  elseif columns isa AbstractString
+    push!(_columns, columns)
+  elseif columns isa Pair{String, String}
+    push!(_columns, columns)
+  elseif columns isa Vector
+    for column in columns
+      if column isa AbstractString
+        push!(_columns, column)
+      elseif column isa Pair{String, String}
+        push!(_columns, column)
+      else
+        throw(ArgumentError("Invalid column specification: $column"))
+      end
+    end
+  else
+    throw(ArgumentError("Invalid columns argument: $columns"))
+  end
+  return _columns
+end
+
+function _normalize_bulk_filters(filters)
+  _filters::Vector{Union{String, Pair{String, <:Any}}} = []
+  if filters === nothing
+  elseif filters isa AbstractString
+    push!(_filters, filters)
+  elseif filters isa Pair{String, <:Any}
+    push!(_filters, filters)
+  elseif filters isa Vector
+    for f in filters
+      if f isa Union{String, Pair{String, <:Any}}
+        push!(_filters, f)
+      else
+        throw(ArgumentError("Invalid filter specification: $f"))
+      end
+    end
+  else
+    throw(ArgumentError("Invalid filters argument: $filters"))
+  end
+  return _filters
+end
+
+function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel, 
+                          normalized_columns::Vector, operation::Symbol)
+  fields = model.field_names
+  fields_df::Vector{String} = []
+  mapping = Dict{String, String}() # model_field => df_column
+  
+  # 1. Identify mappings and check required columns
+  if !isempty(normalized_columns)
+    for column in normalized_columns
+      if column isa Pair
+        # column.first is DF col, column.second is model field
+        if !(column.first in names(df))
+          @error("""Error in bulk_$operation, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
+        end
+        mapping[column.second] = column.first
+        push!(fields_df, column.second)
+      else
+        # If it's a string, try to find it in the DF
+        if column in names(df)
+          mapping[column] = column
+          push!(fields_df, column)
+        else
+          # Try case-insensitive matching if not found exactly
+          found = false
+          for col in names(df)
+            if col |> lowercase == column |> lowercase
+              mapping[column] = col
+              push!(fields_df, column)
+              found = true
+              break
+            end
+          end
+          # If still not found, it might be an auto-populated field we add later
+          if !found
+            push!(fields_df, column)
+          end
+        end
+      end
+    end
+  else
+    # Auto-detect based on DF column names matching model fields
+    for col_name in names(df)
+      fld_ = col_name |> lowercase
+      if fld_ in fields
+        mapping[fld_] = col_name
+        push!(fields_df, fld_)
+      end
+    end    
+  end
+
+  # 2. Defaults, auto-population and basic constraints
+  pk_exist = false
+  pk_field = String[]
+  
+  for field in fields
+    f_meta = model.fields[field]
+    
+    if in(field, fields_df)
+      if haskey(mapping, field)
+        # Field exists in mapping (and DF). Check if we should fill nulls with defaults.
+        col_name = mapping[field]
+        should_apply_default = false
+        if f_meta.default !== nothing
+          should_apply_default = true
+        elseif f_meta.type in ["TIMESTAMPTZ", "DATE"]
+          if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
+            should_apply_default = true
+          elseif operation == :update && f_meta.auto_now
+            should_apply_default = true
+          end
+        end
+
+        if should_apply_default
+          # Mutate the column to replace missing/nothing with default
+          # We only do this if it's already there or if we really need it
+          df[!, col_name] = map(x -> x |> ismissing || x |> isnothing ? f_meta.default : x, df[!, col_name])
+        end
+      else
+        # Field is in fields_df (requested) but not in mapping (missing in DF)
+        # Check if we can auto-populate it
+        should_auto_populate = false
+        if operation in [:insert, :copy] && f_meta.default !== nothing
+          should_auto_populate = true
+        elseif f_meta.type in ["TIMESTAMPTZ", "DATE"]
+          if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
+            should_auto_populate = true
+          elseif operation == :update && f_meta.auto_now
+            should_auto_populate = true
+          end
+        end
+
+        if should_auto_populate
+          # Add new column to DF and update mapping
+          # Use first mapped column as a length reference
+          ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
+          df[!, field] = map(x -> f_meta.default, df[!, ref_col])
+          mapping[field] = field
+        elseif f_meta.primary_key
+          # It's a PK, we'll collect it later
+        elseif !f_meta.null && operation in [:insert, :copy]
+          throw(ArgumentError("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m does not allow null and has no default value"))
+        end
+      end
+
+      if f_meta.primary_key
+        pk_exist = true
+        push!(pk_field, field)
+      end
+    else
+      # Field not in fields_df. See if we should auto-populate it anyway (e.g. updated_at)
+      should_auto_populate = false
+      if operation in [:insert, :copy] && f_meta.default !== nothing
+        # For inserts, we often want defaults if not specified
+        should_auto_populate = true
+      elseif f_meta.type in ["TIMESTAMPTZ", "DATE"]
+        if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
+          should_auto_populate = true
+        elseif operation == :update && f_meta.auto_now
+          should_auto_populate = true
+        end
+      end
+
+      if should_auto_populate
+        ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
+        df[!, field] = map(x -> f_meta.default, df[!, ref_col])
+        mapping[field] = field
+        push!(fields_df, field)
+      elseif f_meta.primary_key
+        push!(pk_field, field)
+      end
+    end
+  end
+  
+  # Final sanity check for fields_df existence in model
+  for field in fields_df
+    in(field, fields) || throw("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m")
+  end
+
+  # Return fields_df cleaned up (unique and existing in mapping)
+  final_fields = [f for f in fields_df if haskey(mapping, f)] |> unique
+
+  return mapping, final_fields, pk_exist, pk_field
+end
+
+
 """
 Inserts multiple rows into the database in bulk from a DataFrame.
 
@@ -39,19 +232,21 @@ Inserts multiple rows into the database in bulk from a DataFrame.
 function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
     columns = nothing, 
     chunk_size::Integer = 1000,
-    show_query::Bool = false,
+    show_query::Symbol = :execute,
     copy::Bool = true
   ) 
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection = settings.connections
+
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
+
   django_prefix = settings.django_prefix === nothing ? false : true
 
   
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -61,146 +256,66 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   df = copy ? deepcopy(df_o) : df_o 
 
-  # Process columns argument
-  _columns::Vector{Union{String, Pair{String, String}}} = []
-  if columns === nothing
-  elseif columns isa AbstractString
-    push!(_columns, columns)
-  elseif columns isa Pair{String, String}
-    push!(_columns, columns)
-  elseif columns isa Vector
-    for column in columns
-      if column isa AbstractString
-        push!(_columns, column)
-      elseif column isa Pair{String, String}
-        push!(_columns, column)
-      else
-        throw(ArgumentError("Invalid column specification: $column"))
-      end
-    end
-  else
-    throw(ArgumentError("Invalid columns argument: $columns"))
-  end
+  # Prepare columns and DataFrame using centralized helpers
+  _columns = _normalize_bulk_columns(columns)
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert)
 
-  # colect name of the fields
-  fields = model.field_names
-  fields_df::Vector{String} = []
-  if !isempty(_columns)   
-    if length(_columns) > 0
-      for column in _columns
-        if column isa Pair
-          if !(column.first in df |> names)
-            @error("""Error in bulk_insert, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
-          end
-          if column.second in df |> names
-            DataFrames.select!(df, DataFrames.Not(column.second |> Symbol))
-          end
-          DataFrames.rename!(df, column.first => column.second)
-          push!(fields_df, column.second)
-        else
-          push!(fields_df, column)
-        end
-      end
-    end
-  else
-    for field in names(df)
-      fld_ = field |> lowercase
-      if fld_ in fields
-        push!(fields_df, fld_)
-      end
-      if fld_ != field
-        DataFrames.rename!(df, field => fld_)
-      end
-    end    
-  end  
-
-  # check if missing fields in fields_df are not null or dont have a default value
-  pk_exist::Bool = false
-  pk_field::Vector{String} = []
-  @infiltrate false
-  for field in fields
-    if in(field, fields_df)
-      if model.fields[field].default !== nothing
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
-      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
-      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
-      elseif !model.fields[field].null
-        if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
-          throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
-        end
-      elseif model.fields[field].primary_key
-        pk_exist = true
-      end
-    else
-      if model.fields[field].default !== nothing
-        df[!, field] = map(x -> model.fields[field].default, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].primary_key
-        @infiltrate false
-        push!(pk_field, field)
-        continue
-      elseif !model.fields[field].null
-        throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
-      end
-    end   
-  end 
-
-  @infiltrate false
-  
-  # check if the fields_df are not in fields
-  for field in fields_df
-    in(field, fields) || throw("""Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
-  end
-   
   # Build a list of row value strings by applying each model field formatter.
+  results = []
   insert_loop = () -> begin
     rows = String[]
     count::Integer = 0
     total::Integer = size(df, 1)
     # Security: Create parameterized query
     parameters = get_parameter(connection)
+    # For INSERT, all params go into :select bucket (VALUES clause)
+    set_context!(parameters, :select)
     param_placeholders::Vector{String} = String[]
     for (index, row) in enumerate(eachrow(df))
       values = String[]
       try
-        param_placeholders = [add_parameter!(parameters, model.fields[field].formater(row[field])) for field in fields_df]
+        # Validation checks consistent with single insert()
+        for field in fields_df
+          validate_field_data(model, field, row[mapping[field]], "bulk_insert"; allow_primary_key = true)
+        end
+
+        param_placeholders = [add_parameter!(parameters, model.fields[field].formater(row[mapping[field]])) for field in fields_df]
         # param_placeholders = add_parameter!(parameters, values)
       catch e
-        @infiltrate false
-        _depuration_values_bulk_insert(fields_df, model, row, index, django_prefix)
+        _depuration_values_bulk_insert(fields_df, mapping, model, row, index, django_prefix)
         throw("Error in bulk_update, the row $(index) has a problem: $(e)")
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == chunk_size || index == total
         # @infiltrate
-        _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
+        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
+        push!(results, res)
         count = 0
         rows = String[]
         parameters = get_parameter(connection)
+        set_context!(parameters, :select)
         param_placeholders = String[]
       end
     end
   end
 
-  if show_query || !(connection isa PormGPostgres) || transaction_connection_for(settings) !== nothing
+  if show_query !== :execute || transaction_connection_for(settings) !== nothing
     insert_loop()
   else
     run_in_transaction(insert_loop, settings)
+  end
+
+  if show_query !== :execute
+    return length(results) == 1 ? results[1] : results
   end
 
   return nothing
   
 end
 bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_insert(model |> object, df; kwargs...)
+bulk_insert(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_insert(objct, df; kwargs...)
+bulk_insert(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_insert(objct, df; kwargs...)
 
 """
     bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; kwargs...)
@@ -222,18 +337,19 @@ bulk_copy(M.Driver, df)
 """
 function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
     columns = nothing, 
-    show_query::Bool = false,
+    show_query::Symbol = :execute,
     copy::Bool = true
   ) 
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection = settings.connections
   
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
+
   !(connection isa PormGPostgres) && throw(ArgumentError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_copy, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to insert"))
+  !settings.change_data && throw(ArgumentError("Error in bulk_copy, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -243,100 +359,9 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   df = copy ? deepcopy(df_o) : df_o 
 
-  # Process columns argument
-  _columns::Vector{Union{String, Pair{String, String}}} = []
-  if columns === nothing
-  elseif columns isa AbstractString
-    push!(_columns, columns)
-  elseif columns isa Pair{String, String}
-    push!(_columns, columns)
-  elseif columns isa Vector
-    for column in columns
-      if column isa AbstractString
-        push!(_columns, column)
-      elseif column isa Pair{String, String}
-        push!(_columns, column)
-      else
-        throw(ArgumentError("Invalid column specification: $column"))
-      end
-    end
-  else
-    throw(ArgumentError("Invalid columns argument: $columns"))
-  end
-
-  # colect name of the fields
-  fields = model.field_names
-  fields_df::Vector{String} = []
-  if !isempty(_columns)   
-    if length(_columns) > 0
-      for column in _columns
-        if column isa Pair
-          if !(column.first in df |> names)
-            @error("""Error in bulk_copy, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
-          end
-          if column.second in df |> names
-            DataFrames.select!(df, DataFrames.Not(column.second |> Symbol))
-          end
-          DataFrames.rename!(df, column.first => column.second)
-          push!(fields_df, column.second)
-        else
-          push!(fields_df, column)
-        end
-      end
-    end
-  else
-    for field in names(df)
-      fld_ = field |> lowercase
-      if fld_ in fields
-        push!(fields_df, fld_)
-      end
-      if fld_ != field
-        DataFrames.rename!(df, field => fld_)
-      end
-    end    
-  end  
-
-  # check if missing fields in fields_df are not null or dont have a default value
-  pk_exist::Bool = false
-  pk_field::Vector{String} = []
-  for field in fields
-    if in(field, fields_df)
-      if model.fields[field].default !== nothing
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
-      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
-      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, field])
-      elseif !model.fields[field].null
-        if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
-          throw(ArgumentError("Error in bulk_copy, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
-        end
-      elseif model.fields[field].primary_key
-        pk_exist = true
-      end
-    else
-      if model.fields[field].default !== nothing
-        df[!, field] = map(x -> model.fields[field].default, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        df[!, field] = map(x -> x |> ismissing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].primary_key
-        push!(pk_field, field)
-        continue
-      elseif !model.fields[field].null
-        throw(ArgumentError("Error in bulk_copy, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))      
-      end
-    end   
-  end 
-
-  # check if the fields_df are not in fields
-  for field in fields_df
-    in(field, fields) || throw("""Error in bulk_copy, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
-  end
+  # Prepare columns and DataFrame using centralized helpers
+  _columns = _normalize_bulk_columns(columns)
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy)
 
   # Security: Quote table name and field names
   safe_table_name = safe_table_identifier(string(model.name), connection)
@@ -345,8 +370,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Construct the COPY command (using CSV format for safety)
   sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE)"
   
-  if show_query
-    @info "SQL Query (COPY)" query=sql task_id=string(current_task())
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, Symbol("bulk_copy"))
   end
 
   # Process in chunks
@@ -356,7 +381,11 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   try
     for i in 1:chunk_size:total_rows
       end_idx = min(i + chunk_size - 1, total_rows)
-      df_chunk = df[i:end_idx, fields_df]
+      
+      # Select columns based on mapping and ensure they are in the correct order for the COPY command
+      df_chunk = df[i:end_idx, [mapping[f] for f in fields_df]]
+      # Rename columns in the chunk to match model field names (for CSV writer)
+      DataFrames.rename!(df_chunk, [mapping[f] => f for f in fields_df])
       
       # Use CSV to format the data safely as a block
       io = IOBuffer()
@@ -378,24 +407,25 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 end
 bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
 
-function _depuration_values_bulk_insert(fields::Vector{String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer, django_prefix::Bool)
+function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer, django_prefix::Bool)
   for field in fields
-    # Check if field exists in the row before trying to format it
-    if !(field in names(row))
-      return nothing
+    # Check if field exists in the mapping and row
+    col_name = get(mapping, field, field)
+    if !(col_name in names(row))
+      continue
     end
     try
-      model.fields[field].formater(row[field])
+      model.fields[field].formater(row[col_name])
     catch e
-      throw(ArgumentError("Error in bulk_insert, the field \e[4m\e[31m$(field)\e[0m in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[field])\e[0m"))
+      throw(ArgumentError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
     end
   end  
 end
 
-function _bulk_insert(model::PormGModel, connection::PormGPostgres, 
+function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite}, 
   fields::Vector{String}, rows::Vector{String}, 
   pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
-  django_prefix::Bool, show_query::Bool, parameters:: PormGPostgresParam)
+  django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam)
 
   # Security: Quote table name and field names
   safe_table_name = safe_table_identifier(string(model.name), connection)
@@ -408,16 +438,14 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
   """
 
   # Execute the query or just show it
-  if show_query
-    params_list = (parameters === nothing) ? [] : (hasproperty(parameters, :parameters) ? parameters.parameters : parameters)
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :insert, parameters=parameters)
   else
     # Execute the query for the given connection type.
     if connection isa PormGPostgres
       try
         fetch(settings, sql, parameters)
       catch e
-        @infiltrate false
         if occursin("duplicate key value violates unique constraint", e |> string)
           _update_sequence(model, connection, pk_field, settings, ignore_tx=true)
           throw("Error in bulk_insert, the row has a duplicate key value; try again")
@@ -427,8 +455,10 @@ function _bulk_insert(model::PormGModel, connection::PormGPostgres,
           throw(e)
         end
       end
-    elseif connection isa SQLite.DB
-      SQLite.execute(connection, sql)
+    elseif connection isa PormGSQLite
+      # Use fetch() to properly acquire/release a connection from the pool
+      # and pass the parameterized query with correct bucket ordering
+      fetch(settings, sql, parameters)
     else
       throw("Unsupported connection type")
     end
@@ -459,71 +489,37 @@ bulk_update(objct, df, columns=["security_id", "name", "dof"], filters=["securit
 ```
 """
 function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
-    columns=nothing, # what columns to update
-    filters=nothing, # what columns to do the filter
-    show_query::Bool=false, 
+    columns=nothing, 
+    filters=nothing, 
+    show_query::Symbol=:execute, 
     chunk_size::Integer=1000,
     copy::Bool=true)
 
-  _columns::Vector{Union{String, Pair{String, String}}} = []
-  _filters::Vector{Union{String, Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}}} = []
-  if columns === nothing
-  elseif columns isa AbstractString
-    push!(_columns, columns)
-  elseif columns isa Pair{String, String}
-    push!(_columns, columns)
-  elseif columns isa Vector
-    for column in columns
-      if column isa AbstractString
-        push!(_columns, column)
-      elseif column isa Pair{String, String}
-        push!(_columns, column)
-      else
-        throw("Error in bulk_update, the columns must be a String or a Pair{String, String}")
-      end
-    end
-  else
-    throw("Error in bulk_update, the columns must be a String or a Pair{String, String}")
-  end
-
-  if filters === nothing
-  elseif filters isa AbstractString
-    push!(_filters, filters)
-  elseif filter isa Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}
-    push!(_filters, filters)
-  elseif filters isa Vector
-    for filter in filters
-      if filter isa AbstractString
-        push!(_filters, filter)
-      elseif filter isa Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}
-        push!(_filters, filter)
-      else
-        throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, NumIntegerber, Bool, Date, DateTime}")
-      end
-    end
-  else
-    throw("Error in bulk_update, the filters must be a String or a Pair{String, T} where T<:Union{String, Integer, Bool, Date, DateTime}")
-  end
+  _columns = _normalize_bulk_columns(columns)
+  _filters = _normalize_bulk_filters(filters)
 
   _bulk_update(objct, df, _columns, _filters, show_query, chunk_size, copy)
   
 end
 bulk_update(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_update(model |> object, df; kwargs...)
+bulk_update(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_update(objct, df; kwargs...)
+bulk_update(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_update(objct, df; kwargs...)
 
 function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},
-  filters::Vector{Union{String, Pair{String, <:Union{String, Integer, Bool, Date, DateTime}}}},
-  show_query::Bool,
+  filters::Vector{Union{String, Pair{String, <:Any}}},
+  show_query::Symbol,
   chunk_size::Integer=1000,
   copy::Bool=true)
 
   model = objct.object.model
   ensure_model_transaction_scope(model)
-  settings = config[model.connect_key]
-  connection = settings.connections
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct)
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$(model.connect_key)\e[0m not allowed to update"))
+  !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -533,67 +529,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
 
   df = copy ? deepcopy(df_o) : df_o 
 
-  # colect name of the fields
-  fields = model.field_names
-  fields_df::Vector{String} = []
-  if !isempty(columns)   
-    if length(columns) > 0
-      for column in columns
-        if column isa Pair
-          if !(column.first in df |> names)
-            @error("""Error in bulk_update, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
-          end
-          if column.second in df |> names
-            DataFrames.select!(df, DataFrames.Not(column.second |> Symbol))
-          end
-          DataFrames.rename!(df, column.first => column.second)
-          push!(fields_df, column.second)
-        else
-          push!(fields_df, column)
-        end
-      end
-    end
-  else
-    for field in names(df)
-      fld_ = field |> lowercase
-      if fld_ in fields
-        push!(fields_df, fld_)
-      end
-      if fld_ != field
-        DataFrames.rename!(df, field => fld_)
-      end
-    end    
-  end  
-
-  # check if missing fields in fields_df are updated automatically
-  pk_exist::Bool = false
-  pk_field::Vector{String} = []
-  for field in fields
-    if in(field, fields_df)
-      if model.fields[field].default !== nothing
-        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, field])
-      elseif model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, field])
-      elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, field])
-      elseif !model.fields[field].null
-        if any(ismissing, df[!, field]) || any(isnothing, df[!, field])
-          throw(ArgumentError("Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not allow null but contains missing/nothing values"))
-        end
-      elseif model.fields[field].primary_key
-        pk_exist = true
-        push!(pk_field, field)
-      end
-    else
-      if model.fields[field].type == "TIMESTAMPTZ" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)
-      elseif model.fields[field].type == "DATE" && model.fields[field].auto_now
-        df[!, field] = map(x -> x |> ismissing || x |> isnothing ? model.fields[field].default : x, df[!, fields_df[1]])
-        push!(fields_df, field)     
-      end
-    end   
-  end  
+  # Prepare columns and DataFrame using centralized helpers
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update)
 
   # colect the filters
   pks = [field for field in keys(model.fields) if model.fields[field].primary_key]
@@ -601,15 +538,54 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   static_filters::Vector{Pair{String, Any}} = []
   if !isempty(filters)
     for filter in filters
-      if filter isa Pair
+      if filter isa Pair && filter.second isa String && filter.first in names(df) && filter.second in model.field_names
+        # Dynamic filter with mapping: df_col => table_field
+        push!(dinanic_filters, filter.second)
+        mapping[filter.second] = filter.first
+        push!(fields_df, filter.second)
+      elseif filter isa Pair
+        # Static filter: table_field => value
         push!(static_filters, filter)
       else
         push!(dinanic_filters, filter)
-        filter in fields_df || push!(fields_df, filter)
+        if !(filter in fields_df)
+          # Ensure filter column is mapped even if not in update 'columns'
+          if filter in names(df)
+            mapping[filter] = filter
+            push!(fields_df, filter)
+          else
+            # Try case-insensitive matching for filters too
+            found = false
+            for col in names(df)
+              if col |> lowercase == filter |> lowercase
+                mapping[filter] = col
+                push!(fields_df, filter)
+                found = true
+                break
+              end
+            end
+            found || throw(ArgumentError("Filter column '$(filter)' not found in DataFrame"))
+          end
+        end
       end
     end
   else
     dinanic_filters = pks    
+    # Ensure all PKs are in the mapping
+    for pk in pks
+        if !haskey(mapping, pk)
+            found = false
+            for col in names(df)
+                if col |> lowercase == pk |> lowercase
+                    mapping[pk] = col
+                    push!(fields_df, pk)
+                    found = true
+                    break
+                end
+            end
+            found || throw(ArgumentError("Primary key column '$(pk)' required for bulk_update not found in DataFrame"))
+        end
+    end
   end  
 
   objct.object.filter = [] # clear the filters
@@ -619,13 +595,6 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     end    
   end
   instruction = build(objct.object, connection=connection) 
-
-  @infiltrate false
-
-  # check if the fields_df are not in fields
-  for field in fields_df
-    in(field, fields) || @error("""Error in bulk_update, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m""")
-  end
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]
@@ -641,45 +610,66 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       quoted_field = quote_identifier(field, connection)
       quoted_source_field = quote_identifier(field, connection)
       field_type = model.fields[field].type |> lowercase
-      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field::$field_type")
+      if connection isa PormGPostgres
+        push!(safe_set_parts, "$quoted_field = source.$quoted_source_field::$field_type")
+      else
+        push!(safe_set_parts, "$quoted_field = source.$quoted_source_field")
+      end
     end
   end
   safe_set_clause = join(safe_set_parts, ", ")
 
-  @infiltrate false
   # Security: Create parameterized query
   parameters_initial =  deepcopy(instruction.parameters)
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
+  results = []
   update_loop = () -> begin
     count::Integer = 0
     total::Integer = size(df, 1)
     rows = String[]
+    # For bulk update VALUES, use :select context
+    set_context!(instruction.parameters, :select)
     param_placeholders::Vector{String} = String[]
     for (index, row) in enumerate(eachrow(df))
       try
-        param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[field])) for field in joined_columns]
+        # Validation checks consistent with single update()
+        for field in fields_df
+            # Skip fields used as filters or primary keys (they aren't being updated)
+            field in deny_fields && continue
+            
+            # Centralized validation using mapping
+            validate_field_data(model, field, row[mapping[field]], "bulk_update"; allow_primary_key = false)
+        end
+
+        param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[mapping[field]])) for field in joined_columns]
       catch e
-        _depuration_values_bulk_insert(fields_df, model, row, index, settings.django_prefix !== nothing)
-        throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+        _depuration_values_bulk_insert(fields_df, mapping, model, row, index, settings.django_prefix !== nothing)
+        rethrow(e)
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == chunk_size || index == total      
-        _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
+        res = _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
+        push!(results, res)
         count = 0
         rows = String[]
         instruction.parameters = deepcopy(parameters_initial) # reset parameters to initial state
+        set_context!(instruction.parameters, :select) # restore context for next chunk
         param_placeholders = String[]
       end
     end
   end
 
   has_active_tx = transaction_connection_for(settings) !== nothing
-  if show_query || !(connection isa PormGPostgres) || has_active_tx
+  if show_query !== :execute || !(connection isa PormGPostgres) || has_active_tx
     update_loop()
   else
     run_in_transaction(update_loop, settings)
+  end
+
+  if show_query !== :execute
+    return length(results) == 1 ? results[1] : results
   end
 
   return nothing
@@ -688,12 +678,12 @@ end
 
 function _bulk_update(model::PormGModel,
   settings::SQLConn,
-  connection::PormGPostgres, 
+  connection::Union{PormGPostgres, PormGSQLite}, 
   fields::Vector{String}, 
   rows::Vector{String}, 
   safe_set_clause::String, 
   dinanic_filters::Vector{String}, 
-  show_query::Bool,
+  show_query::Symbol,
   instruction::Union{SQLInstruction, Nothing})
 
   @infiltrate false
@@ -711,7 +701,11 @@ function _bulk_update(model::PormGModel,
     quoted_tb_field = quote_identifier(filter, connection)
     quoted_source_field = quote_identifier(filter, connection)
     field_type = model.fields[filter].type |> lowercase
-    push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field::$field_type")
+    if connection isa PormGPostgres
+      push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field::$field_type")
+    else
+      push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field")
+    end
   end
   # # Construct the bulk update SQL.
   # _where::Vector{String} = []
@@ -724,21 +718,30 @@ function _bulk_update(model::PormGModel,
     end
   end
 
-  sql = """
-  UPDATE $safe_table_name AS "Tb"
-  SET $(safe_set_clause)
-  FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(quoted_fields, ",")))
-  WHERE $(join(safe_where_conditions, " AND \n   "))
-  """
+  if connection isa PormGPostgres
+    sql = """
+    UPDATE $safe_table_name AS "Tb"
+    SET $(safe_set_clause)
+    FROM (VALUES $(join([join(split(row, ", "), ", ") for row in rows], ","))) AS source ($(join(quoted_fields, ",")))
+    WHERE $(join(safe_where_conditions, " AND \n   "))
+    """
+  else # SQLite
+    # SQLite 3.33+ supports UPDATE FROM. We use a CTE to define the source clearly.
+    sql = """
+    WITH source($(join(quoted_fields, ", "))) AS (
+      VALUES $(join(rows, ", "))
+    )
+    UPDATE $safe_table_name
+    SET $(safe_set_clause)
+    FROM source
+    WHERE $(join(replace.(safe_where_conditions, "\"Tb\"." => "$safe_table_name."), " AND "))
+    """
+  end
 
-  @infiltrate false
-
-  if show_query 
-    params_list = instruction !== nothing && instruction.parameters !== nothing && hasproperty(instruction.parameters, :parameters) ? instruction.parameters.parameters : []
-    @info "SQL Query" query=sql params=params_list |> string task_id=string(current_task())
+  if show_query !== :execute
+    return _show_query_result(show_query, sql, connection, model, :update, parameters=instruction.parameters)
   else 
     # Execute the query for the given connection type.
-    # @infiltrate false
     fetch(connection, sql, instruction.parameters)
   end  
 end

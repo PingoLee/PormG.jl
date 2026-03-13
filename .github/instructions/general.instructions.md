@@ -75,6 +75,12 @@ import .my_models as M
 # Now use: M.Driver, M.Result, etc.
 ```
 
+### Model Binding Convention
+- Keep **Julia model bindings capitalized**, even when the SQL table name is snake_case.
+- Correct: `Pit_stops = Models.Model(...)`, `Lap_times = Models.Model(...)`
+- Avoid lowercase module bindings such as `pit_stops = Models.Model(...)` because ORM reflection and relation/deletion helpers may derive related model symbols using `uppercasefirst(...)`.
+- The SQL table name should still remain lowercase/snake_case through the model definition itself and field serialization.
+
 ### What `@import_models` Does
 1. **Resolves paths** relative to the calling file (or absolute if provided)
 2. **Includes the module** via `Revise.includet` if available (for hot-reload)
@@ -114,15 +120,29 @@ end
 ### State-Based Reconciliation
 PormG uses a **State-Based** migration engine. Instead of recording individual operations (like Django), it reconciles the **current state** of your Julia models against the **live database schema** via introspection.
 
+### Current Migration Lifecycle
+- The migration runner now uses `pormg_migrations` as the **canonical runtime history table**.
+- `init_migrations()` is idempotent and should be considered safe bootstrap for new or existing environments.
+- `status()` and `dry_run()` are part of the normal migration review flow, not optional extras.
+- Destructive SQL (`DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, etc.) is blocked unless `destructive=true` is passed explicitly.
+- `migrate_to(version)` is **not** implemented for the current single `pending_migrations.jl` workflow; do not document or test it as if it were supported.
+
 ### Workflow
 1.  **Generate Plan:** `PormG.Migrations.makemigrations("path/to/db")` detects changes and creates a `pending_migrations.jl`.
-2.  **Apply Migrations:** `PormG.Migrations.migrate("path/to/db")` executes the SQL within a transaction and archives the migration to `applied_migrations/`.
+2.  **Review Plan:** `PormG.Migrations.dry_run("path/to/db")` to inspect ordered SQL, checksum, and destructive actions before apply.
+3.  **Inspect State:** `PormG.Migrations.status("path/to/db")` to understand applied, failed, pending, and drift signals.
+4.  **Apply Migrations:** `PormG.Migrations.migrate("path/to/db")` executes the SQL within a transaction, records history in `pormg_migrations`, and archives the migration to `applied_migrations/`.
 
 ### Automated Environments (CI/CD)
 Use `interactive=false` to bypass rename confirmation prompts:
 ```julia
 makemigrations("db_path", interactive=false)
 migrate("db_path", interactive=false)
+```
+
+If the plan contains destructive SQL, CI must opt in explicitly:
+```julia
+migrate("db_path", interactive=false, destructive=true)
 ```
 
 ## 4. Developer Workflows & Testing
@@ -133,6 +153,8 @@ migrate("db_path", interactive=false)
   - Explain the **logic** (what are we testing?).
   - Explain the **expected SQL** (what should the generator produce?).
   - Explain the **Why** (why is this behavior important?).
+- When importing Formula 1 fixture CSVs, prefer **fixture normalization in the test/import layer** instead of weakening the model type to fit inconsistent raw data.
+  - Example: `pit_stops.duration` remains a `FloatField`; if the CSV contains a time-like outlier such as `16:44.718`, normalize it from the authoritative `milliseconds` column before `bulk_insert`.
 - **Debugging & Inspection:** 
   - Use `show_query=:sql` in `bulk_insert`, `update`, or `delete` to retrieve the generated SQL string during debugging.
   - Use `inspect_query(q)` to get comprehensive metadata (Dialect, Parameters, Buckets, Operation Type).
@@ -158,20 +180,28 @@ When writing documentation, docstrings, or providing usage examples, you must st
 
 ### Domain Context: Formula 1 Dataset
 - **Standard**: Do NOT use generic examples like `User`, `Post`, `Foo`, or `Bar`.
-- **Source**: All examples must be based on the Formula 1 World Championship dataset located in `test/integration/db_2/` and `test/integration/f1/`.
+- **Source**: All examples must be based on the Formula 1 World Championship dataset located in `test/integration/db_sl/models.jl` (SQLite) and `test/integration/db_2/` (PostgreSQL).
 - **Key Models**:
-  - `M.Driver` (cols: `driverid`, `forename`, `surname`, `nationality`, `code`, `dob`...)
-  - `M.Constructor` (cols: `constructorid`, `name`, `nationality`...)
-  - `M.Race` (cols: `raceid`, `year`, `round`, `circuitid`, `date`...)
-  - `M.Circuit` (cols: `circuitid`, `name`, `location`, `country`...)
-  - `M.Result` (The central fact table linking Drivers, Constructors, and Races. cols: `positionorder`, `points`, `laps`...).
+  - `M.Driver` (cols: `driverid`, `driverref`, `number`, `code`, `forename`, `surname`, `dob`, `nationality`, `url`)
+  - `M.Constructor` (cols: `constructorid`, `constructorref`, `name`, `nationality`, `url`)
+  - `M.Circuit` (cols: `circuitid`, `circuitref`, `name`, `location`, `country`, `lat`, `lng`, `alt`, `url`)
+  - `M.Race` (cols: `raceid`, `year`, `round`, `circuitid`, `name`, `date`, `time`, `url`; nullable: `fp1_date/time`, `fp2_date/time`, `fp3_date/time`, `quali_date/time`, `sprint_date/time`)
+  - `M.Status` (cols: `statusid`, `status`)
+  - `M.Result` (central fact table — `resultid`, `raceid`, `driverid`, `constructorid`, `number`, `grid`, `position`, `positiontext`, `positionorder`, `points`, `laps`, `time`, `milliseconds`, `fastestlap`, `rank`, `fastestlaptime`, `fastestlapspeed`, `statusid`)
+  - `M.Driver_standings` (cols: `driverstandingsid`, `raceid`, `driverid`, `points`, `position`, `positiontext`, `wins`)
+  - `M.Constructor_results` (cols: `constructorresultsid`, `raceid`, `constructorid`, `points`, `status`)
+  - `M.Constructor_standings` (cols: `constructorstandingsid`, `raceid`, `constructorid`, `points`, `position`, `positiontext`, `wins`)
+  - `M.Qualifying` (cols: `qualifyingid`, `raceid`, `driverid`, `constructorid`, `number`, `position`, `q1`, `q2`, `q3`)
+  - `M.Sprint_results` (cols: `sprintid`, `raceid`, `driverid`, `constructorid`, `number`, `grid`, `position`, `positiontext`, `positionorder`, `points`, `laps`, `time`, `milliseconds`, `fastestlap`, `fastestlaptime`, `statusid`)
+  - `M.Lap_times` (**keyless** — no IDField; cols: `raceid`, `driverid`, `lap`, `position`, `time`, `milliseconds`)
+  - `M.Pit_stops` (**keyless** — no IDField; cols: `raceid`, `driverid`, `stop`, `lap`, `time`, `duration`, `milliseconds`)
 
 ### Auxiliary Models for Mechanics Testing
 While user-facing documentation must strictly use the F1 dataset, specific auxiliary models are permitted **exclusively** for testing internal ORM mechanics (e.g., destructive operations, transaction isolation, complex join edge-cases) to preserve the integrity of the main dataset.
 - **Allowed Auxiliary Models:**
-  - `M.Just_a_test_deletion`: For CRUD and deletion safety tests.
-  - `M.Just_a_nested_roll_back`: For testing transaction atomicity and savepoints.
-  - `M.New_join_position`: For testing specific join mechanics or definitions.
+  - `M.Just_a_test_deletion`: For CRUD and deletion safety tests. Has two nullable FKs to `Result` (`test_result`, `test_result2`).
+  - `M.Just_a_nested_roll_back`: For testing transaction atomicity and savepoints. Has a nullable FK to `Just_a_test_deletion`.
+  - `M.New_join_position`: For testing specific join mechanics or definitions. Cols: `id`, `description`, `result`, `boolean_field`.
 
 ### Reference Examples for Documentation
 

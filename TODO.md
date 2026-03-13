@@ -14,12 +14,25 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - **Goal**: Introduce a clearer separation (e.g., `mapping` vs `filters` or explicitly typed objects) to improve type safety and readability without breaking legacy support.
 
 - [x] **Complete Migration Support**
-  - [x] **Integration Tests**: Migration integration tests for SQLite (15/15 tests).
-  - [ ] **Unit Tests**: Mocked tests for SQL generation in migrations.
+  - [x] **Integration Tests**: Migration integration tests for SQLite (35/35 tests).
+  - [x] **Unit Tests**: Mocked tests for SQL generation in migrations.
   - [ ] **Rename Operations**: Better detection and handling of renamed models/fields.
-  - [ ] **Migration Locking**: Use `AdvisoryLock` to prevent concurrent migration runs during deployment.  
-  - [ ] **Destructive Guard**: Prevent `DROP` operations unless a `--force` or `destructive=true` flag is passed.
-  - [ ] **Data Migration Support**: Support manual SQL or Julia functions in `pending_migrations.jl` for complex transformations (e.g., splitting columns).  
+  - [ ] **Non-Interactive Renames**: Allow explicit rename hints or declarative rename operations so CI does not depend on prompts.
+  - [x] **Migration Bootstrap**: Add `init_migrations()` to create/bootstrap the `pormg_migrations` table for new and existing projects.
+  - [x] **Migration History Table**: Create `pormg_migrations` table in DB to track applied migrations instead of relying only on filesystem archives.
+  - [x] **Migration Status API**: Add `status()` to show pending/applied migrations, failed migrations, and the current schema state.
+  - [x] **Dry Run / Plan Review**: Add a no-write mode to inspect or validate the generated plan before applying it in CI or production.
+  - [ ] **Targeted Execution**: Support `migrate_to(version)` / `up(version)` instead of only applying the latest pending diff.
+  - [ ] **Rollback / Reversible Migrations**: Support `rollback()`, `down`, `last_down`, and rollback-to-version flows for operational recovery.
+  - [x] **Migration Integrity**: Record migration IDs and checksums so edited historical files can be detected.
+  - [x] **Recovery Operations**: Support repair flows such as `mark_applied`, `mark_failed`, or history reconciliation after manual intervention.
+  - [x] **Migration Locking**: Use `AdvisoryLock` to prevent concurrent migration runs during deployment.
+  - [ ] **Deployment Safety**: Define startup-safe locking and clear failure semantics for multi-instance deploys.
+  - [x] **Destructive Guard**: Prevent `DROP` operations unless a `--force` or `destructive=true` flag is passed.
+  - [ ] **Data Migration Support**: Support manual SQL or Julia functions in migrations for complex transformations (e.g., splitting columns).
+  - [x] **Docs/API Alignment**: Either implement the documented `MigrationAction` workflow or remove the unsupported docs claim.
+  - [x] **Environment Drift Detection**: Compare DB state against model state and applied migration history to surface out-of-band changes.
+  - [ ] **Schema Object Coverage**: Add first-class migration support for views, triggers, composite constraints/indexes, and other non-table schema objects.
 
 - [x] **Refactor QueryBuilder Parameter Handling (Contextual Buckets Strategy)**
   - **Context:** Currently, the query builder generates PostgreSQL parameters (`$1`, `$2`...) sequentially. MySQL/MariaDB and SQLite use positional parameters (`?`), which require a "Bucket" strategy because code execution order (e.g., Processing `WHERE` before `JOIN` to determine needs) doesn't match SQL string order.
@@ -48,6 +61,8 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] **Window Functions** (`OVER`, `RANK`, `ROW_NUMBER`).
   - [ ] **Conditional Expressions** (`Case`, `When`) improvements (ensure full PostgreSQL compliance).
   - [ ] **F-Expression** expansion (bitwise operations, complex transformations).
+    - [ ] **Date/Time Functions**: add support to `values("fim" => F("transferencia__data_envio__@date") + Day(30))`
+    - [ ] **Extend test coverage** for date/time functions to ensure cross-database compatibility and correct SQL generation.
 
 - [ ] **Full Transaction Control**
   - [ ] **Savepoints**: Support for nested transactions/atomic blocks.
@@ -90,6 +105,13 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 - [ ] **Performance Bulk Operations**
   - [x] **COPY command**: Implement high-speed bulk inserts using PostgreSQL's `COPY` protocol.
+  - [ ] **Dataframes Type Normalization**: Create integration tests for bulk operation type normalization in `execution_bulk.jl`.
+    - Validate edge cases for `bulk_insert`, `bulk_update`, and `bulk_copy`:
+      - Float to Integer coercion (e.g., `14.0` in `Vector{Float64}` to `Int64`).
+      - Mixed types in column (Strings that are numeric).
+      - Null/Missing handling in required vs optional fields.
+      - Foreign key violation reporting in bulk contexts.
+      - Duplicate key handling.
   - [ ] **Upsert (`ON CONFLICT`)**: Support for `update_or_create` using `INSERT ... ON CONFLICT DO UPDATE`.
 
 - [ ] **Full-Text Search (FTS)**
@@ -123,6 +145,4 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 - [ ] **Parameterize LIMIT/OFFSET (Future)**
   - **Context**: Currently, `LIMIT` and `OFFSET` are rendered as literal integers in the SQL string. This is safe (Julia enforces `Int` types), but parameterizing them would enable prepared statement caching across different page sizes and improve consistency with the bucket strategy.
   - **Task**: Add a `:limit` bucket to `PormGPositionalParam`, render `LIMIT ?` / `OFFSET ?`, and append values at the tail of `get_final_parameters` (after `:having`).
-- [ ] **Advanced Migration Architecture (Future)**
-  - [ ] **Migration History Table**: Create `pormg_migrations` table in DB to track applied migrations (stop relying only on filesystem).
-  - [ ] **State-based Rollback**: Implement `rollback()` to automatically restore schema from `old_models.jl` history.
+  

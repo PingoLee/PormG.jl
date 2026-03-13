@@ -29,10 +29,18 @@ applyTo: "**"
 
 # Models & query patterns
 - Define models with `Models.Model` and always call `Models.set_models(@__MODULE__, @__DIR__)` after the module so `related_objects`, `connect_key`, and the cache are populated (see [test/db/models/automatic_models.jl](../../test/db/models/automatic_models.jl) for how auto-generated modules look).
+- Keep **Julia model variable names capitalized** even for snake_case SQL tables. Example: prefer `Pit_stops = Models.Model(...)` and `Lap_times = Models.Model(...)`, while the SQL table names remain `pit_stops` / `lap_times`. Some ORM reflection and deletion paths derive related model symbols with `uppercasefirst(...)`, so lowercase bindings are fragile.
 - `Models.Model_to_str` is the serialization layer used by migrations and import helpers; it mirrors the kwargs you pass in `Model(...)` and should be updated whenever field structs gain new keyword arguments.
 - Query building happens through [src/QueryBuilder.jl](../../src/QueryBuilder.jl) (now distributed across 13 specialized modules); pipe a model into `object`, then call `filter`, `values`, `order_by`, `distinct`, and `update` on the returned `ObjectHandler`.
 - Type aliases in `querybuilder/types.jl` provide a unified semantic layer: use `FilterType` for filter objects, `CTEDict` for CTE metadata, `JoinDict` for join configurations, and `ConnType` for database connections.
-- `src/Migrations.jl` exposes `get_database_schema`, `convertSQLToModel`, `import_models_from_sql`, and a makemigrations-style diff engine you can call from scripts when schema drift appears.
+- `src/Migrations.jl` now exposes `init_migrations`, `status`, `dry_run`, `mark_applied`, `mark_failed`, and `remove_migration_record` in addition to the existing schema/import helpers.
+
+# Migration workflow conventions
+- Treat `pormg_migrations` as the runtime source of truth for applied/failed migration state.
+- The recommended operator flow is: `init_migrations()` → `status()` → `makemigrations()` → `dry_run()` → `migrate()`.
+- If `dry_run()` reports destructive statements, require an explicit `destructive=true` in code, tests, and docs.
+- Do not present `migrate_to(version)` as supported behavior yet; the current code intentionally errors because ordered multi-file migration queues are not implemented.
+- When testing manual fixture imports, normalize bad fixture values at import time instead of loosening model types if the domain type is still correct.
 
 # Developer workflows
 

@@ -141,6 +141,44 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
           # We only do this if it's already there or if we really need it
           df[!, col_name] = map(x -> x |> ismissing || x |> isnothing ? fill_value : x, df[!, col_name])
         end
+
+        # Normalize types for specific fields (e.g. IntegerField, BigInt, IDField)
+        if f_meta.type in ["INTEGER", "BIGINT"]
+          col_eltype = eltype(df[!, col_name])
+          if !(col_eltype <: Integer || col_eltype == Union{Int64, Missing} || col_eltype == Union{Int64, Nothing, Missing})
+            df[!, col_name] = map(x -> begin
+              if x |> ismissing || x |> isnothing
+                return x
+              elseif x isa AbstractString
+                return tryparse(Int64, x) # Let it stay as is if it fails, validate_field_data will catch it
+              elseif x isa Float64 || x isa Float32 || x isa Float16
+                if isinteger(x)
+                  return Int64(x)
+                else
+                  # If it is not an integer (e.g. 1.5), we shouldn't force it to integer
+                  return x
+                end
+              else
+                return x
+              end
+            end, df[!, col_name])
+          end
+        elseif f_meta.type == "DOUBLE PRECISION"
+          col_eltype = eltype(df[!, col_name])
+          if !(col_eltype <: AbstractFloat || col_eltype == Union{Float64, Missing} || col_eltype == Union{Float64, Nothing, Missing})
+            df[!, col_name] = map(x -> begin
+              if x |> ismissing || x |> isnothing
+                return x
+              elseif x isa AbstractString
+                return tryparse(Float64, x)
+              elseif x isa Integer
+                return Float64(x)
+              else
+                return x
+              end
+            end, df[!, col_name])
+          end
+        end
       else
         # Field is in fields_df (requested) but not in mapping (missing in DF)
         # Check if we can auto-populate it

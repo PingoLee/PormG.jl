@@ -71,6 +71,13 @@ end
   end
 
   # Clear all tables
+  delete(M.Driver_standings.objects, allow_delete_all = true)
+  delete(M.Lap_times.objects, allow_delete_all = true)
+  delete(M.Pit_stops.objects, allow_delete_all = true)
+  delete(M.Qualifying.objects, allow_delete_all = true)
+  delete(M.Sprint_results.objects, allow_delete_all = true)
+  delete(M.Constructor_results.objects, allow_delete_all = true)
+  delete(M.Constructor_standings.objects, allow_delete_all = true)
   delete(M.Circuit.objects, allow_delete_all = true)
   delete(M.Status.objects, allow_delete_all = true)
   delete(M.Driver.objects, allow_delete_all = true)
@@ -117,7 +124,7 @@ end
     # Pre-processing and bulk insert for Race
     rename!(df, lowercase.(names(df)))
     for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time, :time]
-        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end
     try
         bulk_insert(query, df, copy=true)
@@ -130,7 +137,7 @@ end
     query = M.Driver.objects
     df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
     for col in [:number]
-        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end
     bulk_insert(query, df)
     @test query.count() == 861
@@ -144,10 +151,75 @@ end
     # lowercase the column names
     rename!(df, lowercase.(names(df)))
     for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
-        df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end
     bulk_insert(query, df)
     @test query.count() == 26759
+
+    query = M.Driver_standings.objects
+    df = CSV.File(joinpath("f1", "driver_standings.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    for col in [:position, :wins]
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
+    end
+    bulk_insert(query, df, chunk_size=5_000)
+    @test query.count() == nrow(df)
+
+    # Insert Lap Times when the integration model exposes the new table.
+    # We lowercase the CSV headers to match the field naming used by bulk_insert.
+    # The assertion uses the CSV row count directly so the test remains stable if
+    # the fixture is refreshed later.
+    query = M.Lap_times.objects
+    df = CSV.File(joinpath("f1", "lap_times.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    bulk_insert(query, df, chunk_size=5_000)
+    @test query.count() == nrow(df)
+
+    # Insert Pit Stops when the integration model exposes the new table.
+    # The dataset already matches the model shape, so only header normalization is needed.
+    query = M.Pit_stops.objects
+    df = CSV.File(joinpath("f1", "pit_stops.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    df[!, :duration] = map(df[!, :duration], df[!, :milliseconds]) do duration, milliseconds
+      if ismissing(duration) || duration == "\\N" || ismissing(milliseconds) || milliseconds == "\\N"
+        return missing
+      end
+      return Float64(milliseconds) / 1000
+    end
+    bulk_insert(query, df, chunk_size=2_000)
+    @test query.count() == nrow(df)
+
+    query = M.Constructor_standings.objects
+    df = CSV.File(joinpath("f1", "constructor_standings.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    bulk_insert(query, df, chunk_size=5_000)
+    @test query.count() == nrow(df)
+
+    query = M.Constructor_results.objects
+    df = CSV.File(joinpath("f1", "constructor_results.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    bulk_insert(query, df, chunk_size=5_000)
+    @test query.count() == nrow(df)
+
+    query = M.Qualifying.objects
+    df = CSV.File(joinpath("f1", "qualifying.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    for col in [Symbol("q1"), Symbol("q2"), Symbol("q3")]
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
+    end
+    bulk_insert(query, df, chunk_size=5_000)
+    @test query.count() == nrow(df)
+
+    query = M.Sprint_results.objects
+    df = CSV.File(joinpath("f1", "sprint_results.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    for col in [:position, :time, :milliseconds, :fastestlap, :fastestlaptime]
+        df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
+    end
+    bulk_insert(query, df, chunk_size=5_000)
+    @test query.count() == nrow(df)
+    
+
   end  
 
 end

@@ -57,8 +57,16 @@ function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::Or
   if index_name === nothing
     return nothing
   end
-  _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", 
-  Dialect.drop_index(conn, index_name))
+  # PostgreSQL: a UNIQUE constraint creates a backing index with the same name.
+  # DROP INDEX fails when the index backs a constraint, so drop the constraint first.
+  if conn isa PormGPostgres
+    table_name = format_model_name(model_name)
+    drop_sql = """ALTER TABLE \"$table_name\" DROP CONSTRAINT IF EXISTS \"$index_name\";\nDROP INDEX IF EXISTS \"$index_name\";"""
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", drop_sql)
+  else
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name",
+    Dialect.drop_index(conn, index_name))
+  end
   return nothing    
 end
 function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::Symbol; index_name::Union{String, Nothing} = nothing)
@@ -73,8 +81,9 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
        return nothing
     end
     constraint_name = "$(name)_fk" |> lowercase
+    resolved_pk = isnothing(new_field.pk_field) ? "id" : string(new_field.pk_field)
     _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> format_model_name)\"", "\"$(new_field.pk_field)\""))
+    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> format_model_name)\"", "\"$resolved_pk\""))
   end
   return nothing
 end
@@ -85,8 +94,9 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
   if hasfield(field |> typeof, :to) && field.db_constraint
     if conn isa PormGPostgres
       constraint_name = name * "_fk" |> lowercase
+      resolved_pk = isnothing(field.pk_field) ? "id" : string(field.pk_field)
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> format_model_name)\"", "\"$(field.pk_field)\""))
+      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> format_model_name)\"", "\"$resolved_pk\""))
     # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
     # we might need recreation if it's a FK.
     end

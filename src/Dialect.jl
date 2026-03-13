@@ -630,7 +630,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     if new_field.unique
       push!(sql_statements, """ALTER TABLE "$table_name" ADD UNIQUE ("$field_name");""")
     else
-      contrains = get_constraints_unique(conn, table_name)
+      contrains = get_constraints_unique(conn, table_name, field_name)
       if contrains !== nothing
         push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(contrains)";""")
       end
@@ -936,8 +936,144 @@ function iendswith(conn::PormGAbstractType, column::String, value)
   return nothing
 end
 
+# ==============================================================================
+# MIGRATION HISTORY TABLE DDL
+# DDL for the pormg_migrations table that tracks applied migrations.
+# ==============================================================================
 
+"""
+    create_migrations_table(conn::PormGPostgres) -> String
 
+Generate DDL to create the pormg_migrations history table for PostgreSQL.
+"""
+function create_migrations_table(conn::PormGPostgres)::String
+  return """CREATE TABLE IF NOT EXISTS pormg_migrations (
+  "id" SERIAL PRIMARY KEY,
+  "version" VARCHAR(17) NOT NULL UNIQUE,
+  "name" VARCHAR(255) NOT NULL,
+  "checksum" VARCHAR(64) NOT NULL,
+  "sql_content" TEXT NOT NULL DEFAULT '',
+  "applied_at" TIMESTAMP NOT NULL DEFAULT NOW(),
+  "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
+  "is_destructive" BOOLEAN NOT NULL DEFAULT FALSE
+);"""
+end
 
+"""
+    create_migrations_table(conn::PormGSQLite) -> String
+
+Generate DDL to create the pormg_migrations history table for SQLite.
+"""
+function create_migrations_table(conn::PormGSQLite)::String
+  return """CREATE TABLE IF NOT EXISTS pormg_migrations (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "version" VARCHAR(17) NOT NULL UNIQUE,
+  "name" VARCHAR(255) NOT NULL,
+  "checksum" VARCHAR(64) NOT NULL,
+  "sql_content" TEXT NOT NULL DEFAULT '',
+  "applied_at" DATETIME NOT NULL DEFAULT (datetime('now')),
+  "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
+  "is_destructive" BOOLEAN NOT NULL DEFAULT 0
+);"""
+end
+
+"""
+    insert_migration_record_sql(conn::PormGPostgres) -> String
+
+Returns parameterized INSERT for recording an applied migration (PostgreSQL).
+"""
+function insert_migration_record_sql(conn::PormGPostgres)::String
+  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") VALUES (\$1, \$2, \$3, \$4, \$5, \$6);"""
+end
+
+"""
+    insert_migration_record_sql(conn::PormGSQLite) -> String
+
+Returns parameterized INSERT for recording an applied migration (SQLite).
+"""
+function insert_migration_record_sql(conn::PormGSQLite)::String
+  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") VALUES (?, ?, ?, ?, ?, ?);"""
+end
+
+"""
+    update_migration_status_sql(conn::PormGPostgres) -> String
+
+Returns parameterized UPDATE for changing a migration status by version (PostgreSQL).
+"""
+function update_migration_status_sql(conn::PormGPostgres)::String
+  return """UPDATE pormg_migrations SET "status" = \$1 WHERE "version" = \$2;"""
+end
+
+"""
+    update_migration_status_sql(conn::PormGSQLite) -> String
+
+Returns parameterized UPDATE for changing a migration status by version (SQLite).
+"""
+function update_migration_status_sql(conn::PormGSQLite)::String
+  return """UPDATE pormg_migrations SET "status" = ? WHERE "version" = ?;"""
+end
+
+"""
+    select_all_migrations_sql(conn) -> String
+
+Returns SQL to select all migration records ordered by version.
+"""
+function select_all_migrations_sql(conn::Union{PormGPostgres, PormGSQLite})::String
+  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive" FROM pormg_migrations ORDER BY "version" ASC;"""
+end
+
+"""
+    select_migration_by_version_sql(conn::PormGPostgres) -> String
+
+Returns parameterized SQL to select a single migration by version (PostgreSQL).
+"""
+function select_migration_by_version_sql(conn::PormGPostgres)::String
+  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive" FROM pormg_migrations WHERE "version" = \$1;"""
+end
+
+"""
+    select_migration_by_version_sql(conn::PormGSQLite) -> String
+
+Returns parameterized SQL to select a single migration by version (SQLite).
+"""
+function select_migration_by_version_sql(conn::PormGSQLite)::String
+  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive" FROM pormg_migrations WHERE "version" = ?;"""
+end
+
+"""
+    delete_migration_record_sql(conn::PormGPostgres) -> String
+
+Returns parameterized DELETE for removing a migration record by version (PostgreSQL).
+"""
+function delete_migration_record_sql(conn::PormGPostgres)::String
+  return """DELETE FROM pormg_migrations WHERE "version" = \$1;"""
+end
+
+"""
+    delete_migration_record_sql(conn::PormGSQLite) -> String
+
+Returns parameterized DELETE for removing a migration record by version (SQLite).
+"""
+function delete_migration_record_sql(conn::PormGSQLite)::String
+  return """DELETE FROM pormg_migrations WHERE "version" = ?;"""
+end
+
+"""
+    migrations_table_exists_sql(conn::PormGPostgres) -> String
+
+Returns SQL to check if pormg_migrations table exists (PostgreSQL).
+"""
+function migrations_table_exists_sql(conn::PormGPostgres)::String
+  return """SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'pormg_migrations');"""
+end
+
+"""
+    migrations_table_exists_sql(conn::PormGSQLite) -> String
+
+Returns SQL to check if pormg_migrations table exists (SQLite).
+"""
+function migrations_table_exists_sql(conn::PormGSQLite)::String
+  return """SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pormg_migrations';"""
+end
 
 end

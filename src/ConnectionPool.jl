@@ -142,11 +142,14 @@ end
 function close_pool!(pool::PormGPostgres)
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
-      if pool.connections[i] !== nothing
+      conn = pool.connections[i]
+      if conn !== nothing
         try
-          close(pool.connections[i])
+          close(conn)
         catch e
           @warn "Error closing PG connection $i: $e"
+        finally
+          pool.connections[i] = nothing
         end
       end
       pool.available[i] = true
@@ -157,11 +160,14 @@ end
 function close_pool!(pool::PormGSQLite)
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
-      if pool.connections[i] !== nothing
+      conn = pool.connections[i]
+      if conn !== nothing
         try
-          close(pool.connections[i])
+          close(conn)
         catch e
           @warn "Error closing SQLite connection $i: $e"
+        finally
+          pool.connections[i] = nothing
         end
       end
       pool.available[i] = true
@@ -205,6 +211,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
           new_conn = LibPQ.Connection(pool.connection_string)
           push!(pool.connections, new_conn)
           push!(pool.available, false)
+          @warn "PG pool expanded beyond initial size" current_size=length(pool.connections) initial_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
           return new_conn
         catch e
           @error "Failed to expand PG pool: $e"
@@ -222,17 +229,17 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
     
     # No connection available, wait and retry
     retry_count += 1
-    @info "No available SQLite connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
+    @info "No available PG connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
     sleep(0.1)  # Wait 100ms before retrying
   end
   
   # If we've exhausted all retries
   if retry_count >= max_retries
-    @error "Exceeded maximum retry attempts ($max_retries) to acquire SQLite connection" pool_size=pool.pool_size connection_string=pool.connection_string
-    throw("No available SQLite connections in the pool after $max_retries attempts")
+    @error "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+    throw("No available PG connections in the pool after $max_retries attempts")
   else
-    @error "Timeout after $(timeout_seconds) seconds waiting for available SQLite connection" pool_size=pool.pool_size connection_string=pool.connection_string
-    throw("No available SQLite connections in the pool after $(timeout_seconds) seconds")
+    @error "Timeout after $(timeout_seconds) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+    throw("No available PG connections in the pool after $(timeout_seconds) seconds")
   end
 end
 
@@ -277,6 +284,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
           new_conn = _create_sqlite_connection(pool.connection_string)
           push!(pool.connections, new_conn)
           push!(pool.available, false)
+          @warn "SQLite pool expanded beyond initial size" current_size=length(pool.connections) initial_size=pool.pool_size connection_string=pool.connection_string
           return new_conn
         catch e
           @error "Failed to expand SQLite pool: $e"
@@ -449,6 +457,12 @@ struct SQLiteAsyncResponse
   payload::Any
 end
 
+# A single global worker serializes all SQLite async operations across all pool instances.
+# This is intentional: SQLite supports only one concurrent writer per file, and even for
+# reads, WAL mode only provides limited concurrency at the file level. A shared queue
+# prevents connection pool instances from racing on the same file and avoids the
+# "database is locked" errors that arise from concurrent writers on different Julia tasks.
+# The queue capacity (2048) is intentionally large so that producers never block.
 const _sqlite_async_worker_lock = ReentrantLock()
 const _sqlite_async_worker_started = Ref(false)
 const _sqlite_async_work_queue = Channel{SQLiteAsyncWorkItem}(2048)
@@ -688,6 +702,25 @@ fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQL
 fetch(settings::SQLConn, sql::String, params::AbstractPormGParam; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::AbstractPormGParam; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
+function _drain_postgres_connection!(conn::LibPQ.Connection)
+  LibPQ.lock(conn) do
+    while true
+      # COPY can leave a trailing PGresult pending on the connection even after
+      # the main Result is closed. Drain it before the connection returns to the pool.
+      LibPQ.libpq_c.PQconsumeInput(conn.conn) == 1 || error(LOGGER, LibPQ.Errors.PQConnectionError(conn))
+
+      if LibPQ.libpq_c.PQisBusy(conn.conn) == 1
+        yield()
+        continue
+      end
+
+      result_ptr = LibPQ.libpq_c.PQgetResult(conn.conn)
+      result_ptr == C_NULL && return nothing
+      LibPQ.libpq_c.PQclear(result_ptr)
+    end
+  end
+end
+
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)
 
@@ -700,23 +733,29 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
   use_tx_context = tx_conn !== nothing
   
   if use_tx_context
-    conn = tx_conn
+    # Reuse the transaction connection — COPY is part of the open transaction
+    res = LibPQ.execute(tx_conn, LibPQ.CopyIn(sql, data_itr))
     try
-        res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
-        close(res)
-    catch e
-        throw(e)
+      close(res)
+    finally
+      _drain_postgres_connection!(tx_conn)
     end
   else
-    # TEMPORARY TEST: Use fresh connection and close it
-    conn = LibPQ.Connection(connection.connection_string)
+    # Acquire a pool connection for the duration of the COPY stream.
+    # LibPQ.CopyIn owns the connection until the stream is fully consumed,
+    # so we must not release it until execute() returns.
+    conn = acquire_connection(connection)
     try
-        res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
+      res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
+      try
         close(res)
+      finally
+        _drain_postgres_connection!(conn)
+      end
     catch e
       rethrow(e)
     finally
-      close(conn)
+      release_connection(connection, conn)
     end
   end
 end

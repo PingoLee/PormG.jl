@@ -91,6 +91,21 @@ export validate_password, ValidationResult, PasswordValidator  # Password valida
 
 export setup
 
+# Fallback stub for the Tachikoma TUI extension.
+# When `using Tachikoma`, PormGTachikomaExt overrides this with the real implementation.
+"""
+    tui(db_path::String; models_module=nothing, fps=30)
+
+Launch the PormG terminal dashboard with Migrations and Query Inspection panes.
+Requires `Tachikoma.jl` to be installed and loaded (`using Tachikoma`).
+
+See `ext/PormGTachikomaExt.jl` for the full implementation.
+"""
+function tui(db_path::String; models_module::Union{Nothing, Module}=nothing, fps::Int=30)
+  error("PormG.tui() requires Tachikoma.jl. Run `using Tachikoma` before calling PormG.tui().")
+end
+export tui
+
 include("Migrations.jl")
 using .Migrations
 

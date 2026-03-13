@@ -143,13 +143,6 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       end
     end
     
-    # Safely reset connection state before returning to pool.
-    try
-      wait(LibPQ.async_execute(conn, "ROLLBACK"))
-    catch
-      # Already outside transaction or connection error; that's OK.
-    end
-    
     # Return connection to pool
     release_connection(pool, conn)
   end

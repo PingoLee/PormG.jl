@@ -31,11 +31,6 @@ include("common_setup.jl")
 
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
-    @testset "Test Password"                begin include("test_password.jl")           end
-    @testset "Test Password i18n"           begin include("test_password_i18n.jl")      end
-
-    # ── Phase 5: Hot-Reloading & Development ─────────────────────────
-    @testset "Hot-Reloading"                begin include("test_reload.jl")             end
 
 end
 

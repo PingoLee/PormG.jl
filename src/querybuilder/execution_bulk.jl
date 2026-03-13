@@ -50,11 +50,34 @@ function _normalize_bulk_filters(filters)
   return _filters
 end
 
-function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel, 
-                          normalized_columns::Vector, operation::Symbol)
+function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
+                          normalized_columns::Vector, operation::Symbol,
+                          settings=nothing)
   fields = model.field_names
   fields_df::Vector{String} = []
   mapping = Dict{String, String}() # model_field => df_column
+
+  function resolve_fill_value(f_meta, operation::Symbol, settings)
+    if f_meta.default !== nothing
+      return true, f_meta.default
+    elseif f_meta.type == "TIMESTAMPTZ"
+      if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
+        value = settings === nothing ? now() : f_meta.formater(now(), settings.time_zone)
+        return true, value
+      elseif operation == :update && f_meta.auto_now
+        value = settings === nothing ? now() : f_meta.formater(now(), settings.time_zone)
+        return true, value
+      end
+    elseif f_meta.type == "DATE"
+      if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
+        return true, today()
+      elseif operation == :update && f_meta.auto_now
+        return true, today()
+      end
+    end
+
+    return false, nothing
+  end
   
   # 1. Identify mappings and check required columns
   if !isempty(normalized_columns)
@@ -111,41 +134,23 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       if haskey(mapping, field)
         # Field exists in mapping (and DF). Check if we should fill nulls with defaults.
         col_name = mapping[field]
-        should_apply_default = false
-        if f_meta.default !== nothing
-          should_apply_default = true
-        elseif f_meta.type in ["TIMESTAMPTZ", "DATE"]
-          if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-            should_apply_default = true
-          elseif operation == :update && f_meta.auto_now
-            should_apply_default = true
-          end
-        end
+        should_apply_default, fill_value = resolve_fill_value(f_meta, operation, settings)
 
         if should_apply_default
           # Mutate the column to replace missing/nothing with default
           # We only do this if it's already there or if we really need it
-          df[!, col_name] = map(x -> x |> ismissing || x |> isnothing ? f_meta.default : x, df[!, col_name])
+          df[!, col_name] = map(x -> x |> ismissing || x |> isnothing ? fill_value : x, df[!, col_name])
         end
       else
         # Field is in fields_df (requested) but not in mapping (missing in DF)
         # Check if we can auto-populate it
-        should_auto_populate = false
-        if operation in [:insert, :copy] && f_meta.default !== nothing
-          should_auto_populate = true
-        elseif f_meta.type in ["TIMESTAMPTZ", "DATE"]
-          if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-            should_auto_populate = true
-          elseif operation == :update && f_meta.auto_now
-            should_auto_populate = true
-          end
-        end
+        should_auto_populate, fill_value = resolve_fill_value(f_meta, operation, settings)
 
         if should_auto_populate
           # Add new column to DF and update mapping
           # Use first mapped column as a length reference
           ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-          df[!, field] = map(x -> f_meta.default, df[!, ref_col])
+          df[!, field] = map(x -> fill_value, df[!, ref_col])
           mapping[field] = field
         elseif f_meta.primary_key
           # It's a PK, we'll collect it later
@@ -160,21 +165,11 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       end
     else
       # Field not in fields_df. See if we should auto-populate it anyway (e.g. updated_at)
-      should_auto_populate = false
-      if operation in [:insert, :copy] && f_meta.default !== nothing
-        # For inserts, we often want defaults if not specified
-        should_auto_populate = true
-      elseif f_meta.type in ["TIMESTAMPTZ", "DATE"]
-        if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-          should_auto_populate = true
-        elseif operation == :update && f_meta.auto_now
-          should_auto_populate = true
-        end
-      end
+      should_auto_populate, fill_value = resolve_fill_value(f_meta, operation, settings)
 
       if should_auto_populate
         ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-        df[!, field] = map(x -> f_meta.default, df[!, ref_col])
+        df[!, field] = map(x -> fill_value, df[!, ref_col])
         mapping[field] = field
         push!(fields_df, field)
       elseif f_meta.primary_key
@@ -258,7 +253,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   # Prepare columns and DataFrame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
-  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert)
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert, settings)
 
   # Build a list of row value strings by applying each model field formatter.
   results = []
@@ -361,7 +356,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   # Prepare columns and DataFrame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
-  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy)
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy, settings)
 
   # Security: Quote table name and field names
   safe_table_name = safe_table_identifier(string(model.name), connection)
@@ -530,7 +525,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   df = copy ? deepcopy(df_o) : df_o 
 
   # Prepare columns and DataFrame using centralized helpers
-  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update)
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
 
   # colect the filters
   pks = [field for field in keys(model.fields) if model.fields[field].primary_key]

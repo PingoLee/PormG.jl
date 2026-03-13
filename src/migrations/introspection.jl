@@ -409,7 +409,7 @@ end
 
 function get_constraints_unique(conn::PormGPostgres, table_name::String, field_name::String)::String
   query = """
-  SELECT constraint_name
+  SELECT tc.constraint_name
   FROM information_schema.table_constraints tc
   JOIN information_schema.constraint_column_usage ccu
   ON tc.constraint_name = ccu.constraint_name
@@ -444,7 +444,8 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   fields_dict = Dict{String, PormGField}()
 
   # Extract primary key constraints
-  pk_set = Set(split(row[:primary_keys], ", "))
+  # row[:primary_keys] is missing for keyless tables (e.g., Lap_times, Pit_stops that have no IDField)
+  pk_set = ismissing(row[:primary_keys]) ? Set{String}() : Set(split(row[:primary_keys], ", "))
     
   # Extract foreign key constraints
   fk_map = Dict{String, Tuple{String, String}}()

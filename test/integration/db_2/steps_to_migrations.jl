@@ -1,9 +1,9 @@
 # ==============================================================================
-# PormG SQLite Migration Debug Script
+# PormG PostgreSQL Migration Debug Script
 # ==============================================================================
-# This script demonstrates the migration workflow for SQLite.
-# It uses the models defined in test/integration/db_sl/models.jl
-# and the configuration in test/integration/db_sl/connection.yml.
+# This script demonstrates the migration workflow for PostgreSQL.
+# It uses the models defined in test/integration/db_2/models.jl
+# and the configuration in test/integration/db_2/connection.yml.
 # ==============================================================================
 
 # using Tachikoma
@@ -14,8 +14,11 @@ using PormG
 using PormG.Migrations
 
 # 1. Setup the environment
-# We point to the folder containing connection.yml
-DB_KEY = "test/integration/db_sl"
+# We point to the folder containing the PostgreSQL connection.yml.
+# db_2 is the PostgreSQL integration environment used by the migration tests.
+# The connection.yml is expected to exist already because PostgreSQL requires
+# host/user/password/database details that should be reviewed explicitly.
+DB_KEY = "test/integration/db_2"
 
 # These flags make the script easier to use during debugging.
 # - INTERACTIVE_MIGRATE=true will ask for confirmation in the terminal.
@@ -24,17 +27,11 @@ DB_KEY = "test/integration/db_sl"
 INTERACTIVE_MIGRATE = true
 ALLOW_DESTRUCTIVE = false
 
-# If connection.yml does not exist yet, create it configured for SQLite.
-# This is where you choose adapter/database for this debug workflow.
+# PostgreSQL debug scripts should use the committed connection.yml instead of
+# auto-generating one. That keeps the host/database settings explicit.
 conn_yml = joinpath(DB_KEY, "connection.yml")
 if !isfile(conn_yml)
-    @info "Creating SQLite connection file at $conn_yml..."
-    PormG.Generator.create_db_folder_and_yml(
-        path=DB_KEY,
-        adapter="SQLite",
-        database="f1.sqlite",
-        time_zone="America/Sao_Paulo"
-    )
+    error("Missing PostgreSQL connection file at $(conn_yml). Create test/integration/db_2/connection.yml before running this script.")
 end
 
 @info "Loading configuration from $DB_KEY..."
@@ -52,13 +49,9 @@ PormG.Migrations.init_migrations(DB_KEY)
 println(PormG.Migrations.status(DB_KEY))
 
 # 2. Makemigrations
-# This generates a 'migrations/pending_migrations.jl' file 
-# by comparing the current 'models.jl' with the 'f1.sqlite' schema.
-# If the database file doesn't exist, it will be created.
+# This generates a 'migrations/pending_migrations.jl' file by comparing the
+# current 'models.jl' with the live PostgreSQL schema.
 @info "Step 1: Generating migration plan (makemigrations)..."
-if !isfile(joinpath(DB_KEY, "f1.sqlite"))
-    @info "Database file f1.sqlite does not exist. It will be created during migration."
-end
 PormG.Migrations.makemigrations(DB_KEY)
 
 # 2b. Dry-run / plan review
@@ -82,12 +75,11 @@ if PormG.Migrations.is_destructive(dry_run_result) && !ALLOW_DESTRUCTIVE
 end
 
 # 3. Migrate
-# This applies the 'pending_migrations.jl' to the database.
-# The runner now supports:
-# - interactive confirmation,
-# - destructive guards,
-# - migration history recording,
-# - status reporting.
+# This applies the 'pending_migrations.jl' to the PostgreSQL database.
+# PostgreSQL-specific notes:
+# - tables/indexes/constraints are introspected from the live server,
+# - destructive SQL is still blocked unless destructive=true,
+# - the migration history is recorded in pormg_migrations.
 @info "Step 2: Applying migrations (migrate)..."
 if INTERACTIVE_MIGRATE
     @info "Wait for the prompt and type 'yes' to proceed."
@@ -115,8 +107,8 @@ end
 println(PormG.Migrations.status(DB_KEY))
 
 # 4. Verify (Optional)
-# You can now use the models to query the database.
-# PormG.@import_models "test/integration/db_sl/models.jl" SL_Models
+# You can now use the PostgreSQL-backed models to query the database.
+# PormG.@import_models "test/integration/db_2/models.jl" PG_Models
 # ...
 
 # Notes for future migration features:

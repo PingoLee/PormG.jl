@@ -517,7 +517,8 @@ function format_number_sql(value::Union{Missing, Nothing})
     return missing
 end
 function format_number_sql(value::Union{Float16, Float32, Float64})
-  return Float64(value)
+  # Use @sprintf to avoid scientific notation and ensure full precision
+  return @sprintf("%.17g", value)
 end
 function format_number_sql(value::AbstractString)
   # try integer first
@@ -680,7 +681,7 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
         return false
       end
     catch
-      @infiltrate
+      @infiltrate false
     end
   end
   return true
@@ -692,7 +693,11 @@ end
 function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField)::Bool
   new_to = new_field.to isa PormGModel ? new_field.to.name : new_field.to
   old_to = old_field.to isa PormGModel ? old_field.to.name : old_field.to
-  if new_to == old_to && new_field.pk_field == old_field.pk_field
+  normalized_new_to = isnothing(new_to) ? nothing : format_model_name(string(new_to))
+  normalized_old_to = isnothing(old_to) ? nothing : format_model_name(string(old_to))
+  normalized_new_pk = isnothing(new_field.pk_field) ? nothing : format_fild_name(string(new_field.pk_field))
+  normalized_old_pk = isnothing(old_field.pk_field) ? nothing : format_fild_name(string(old_field.pk_field))
+  if normalized_new_to == normalized_old_to && normalized_new_pk == normalized_old_pk
     return true
   end
   return false
@@ -754,7 +759,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
     try
       return converter(default)
     catch e
-      @infiltrate
+      @infiltrate false
       throw(ArgumentError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end
   end

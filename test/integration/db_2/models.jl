@@ -54,34 +54,34 @@ Driver = Models.Model(
   url=Models.CharField()
 )
 
-# Driver_standings = Models.Model(
-#   driverStandingsId = Models.IDField(),
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete=" RESTRICT"),
-#   points = Models.IntegerField(),
-#   position = Models.IntegerField(),
-#   positionText = Models.CharField(),
-#   wins = Models.IntegerField()
-# ) 
+Driver_standings = Models.Model(
+  driverStandingsId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete=" RESTRICT"),
+  points = Models.FloatField(),  # F1 data has half-points (e.g. 1.5) from shared fastest-lap bonuses
+  position = Models.IntegerField(),
+  positionText = Models.CharField(),
+  wins = Models.IntegerField()
+) 
 
-# lap_times = Models.Model(
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-#   lap = Models.IntegerField(),
-#   position = Models.IntegerField(),
-#   time = Models.TimeField(),
-#   milliseconds = Models.IntegerField()
-# )
+Lap_times = Models.Model(
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+  lap = Models.IntegerField(),
+  position = Models.IntegerField(),
+  time = Models.TimeField(),
+  milliseconds = Models.IntegerField()
+)
 
-# pit_stops = Models.Model(
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-#   stop = Models.IntegerField(),
-#   lap = Models.IntegerField(),
-#   time = Models.TimeField(),
-#   duration = Models.FloatField(),
-#   milliseconds = Models.IntegerField()
-# )
+Pit_stops = Models.Model(
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+  stop = Models.IntegerField(),
+  lap = Models.IntegerField(),
+  time = Models.TimeField(),
+  duration = Models.FloatField(),
+  milliseconds = Models.IntegerField()
+)
 
 Constructor = Models.Model(
   constructorId=Models.IDField(),
@@ -91,54 +91,54 @@ Constructor = Models.Model(
   url=Models.CharField()
 )
 
-# Constructor_results = Models.Model(
-#   constructorResultsId = Models.IDField(),
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
-#   points = Models.IntegerField(),
-#   status = Models.CharField()
-# )
+Constructor_results = Models.Model(
+  constructorResultsId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  points = Models.DecimalField(),
+  status = Models.CharField()
+)
 
-# Constructor_standings = Models.Model(
-#   constructorStandingsId = Models.IDField(),
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
-#   points = Models.FloatField(),
-#   position = Models.IntegerField(),
-#   positionText = Models.CharField(),
-#   wins = Models.IntegerField()
-# ) 
+Constructor_standings = Models.Model(
+  constructorStandingsId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  points = Models.DecimalField(),
+  position = Models.IntegerField(),
+  positionText = Models.CharField(),
+  wins = Models.IntegerField()
+) 
 
-# Qualifying = Models.Model(
-#   qualifyingId = Models.IDField(),
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-#   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
-#   number = Models.IntegerField(null=true),
-#   position = Models.IntegerField(null=true),
-#   q1 = Models.TimeField(null=true),
-#   q2 = Models.TimeField(null=true),
-#   q3 = Models.TimeField(null=true)
-# )
+Qualifying = Models.Model(
+  qualifyingId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  number = Models.IntegerField(null=true),
+  position = Models.IntegerField(null=true),
+  q1 = Models.TimeField(null=true),
+  q2 = Models.TimeField(null=true),
+  q3 = Models.TimeField(null=true)
+)
 
-# Sprint_results = Models.Model(
-#   sprintId = Models.IDField(),
-#   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-#   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-#   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
-#   number = Models.IntegerField(null=true),
-#   grid = Models.IntegerField(),
-#   position = Models.IntegerField(null=true),
-#   positionText = Models.CharField(),
-#   positionOrder = Models.IntegerField(),
-#   points = Models.FloatField(),
-#   laps = Models.IntegerField(),
-#   time = Models.CharField(null=true),
-#   milliseconds = Models.IntegerField(null=true),
-#   fastestLap = Models.IntegerField(null=true),
-#   fastestLapTime = Models.TimeField(null=true),
-#   statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
-# )
+Sprint_results = Models.Model(
+  sprintId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  number = Models.IntegerField(null=true),
+  grid = Models.IntegerField(),
+  position = Models.IntegerField(null=true),
+  positionText = Models.CharField(),
+  positionOrder = Models.IntegerField(),
+  points = Models.FloatField(),
+  laps = Models.IntegerField(),
+  time = Models.CharField(null=true),
+  milliseconds = Models.IntegerField(null=true),
+  fastestLap = Models.IntegerField(null=true),
+  fastestLapTime = Models.TimeField(null=true),
+  statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
+)
 
 Result = Models.Model(
   resultId=Models.IDField(),

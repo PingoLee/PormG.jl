@@ -150,12 +150,43 @@ function delete(objct::SQLObjectHandler;
 end
 delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 
+# Sentinel returned by resolve_delete_key when a keyless model should be deleted directly
+# (bare DELETE FROM table, no WHERE clause). Chosen to be an impossible SQL identifier so
+# accidental equality checks against real column names always fail.
+const DIRECT_DELETE_KEY_SENTINEL = "__pormg_direct_delete__"
+
+function resolve_delete_key(model::PormGModel; fallback::Union{Nothing,String}=nothing, allow_direct::Bool=false)
+  pk_field = get_model_pk_field(model)
+  if pk_field !== nothing
+    return string(pk_field) |> lowercase
+  end
+
+  if fallback !== nothing
+    fallback = lowercase(fallback)
+    fallback in model.field_names || throw(ArgumentError("The fallback delete field $(fallback) was not found in $(model.name)"))
+    return fallback
+  end
+
+  allow_direct && return DIRECT_DELETE_KEY_SENTINEL
+
+  throw(ArgumentError("Delete on $(model.name) requires a primary key or an explicit fallback delete field"))
+end
+
+# Shared helper: resolves the delete key for a related model and returns a properly filtered
+# copy of the parent query so all three on_delete branches (CASCADE, SET_NULL, SET_DEFAULT) stay in sync.
+function prepare_related_query(keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel, field_name::Union{String, Symbol})
+  delete_key = resolve_delete_key(related_model; fallback=string(field_name))
+  _query = deepcopy(keys[:objct])
+  delete_key != DIRECT_DELETE_KEY_SENTINEL && _query.values(delete_key)
+  return Dict{Symbol, Union{String, SQLObjectHandler}}(:key => delete_key, :objct => _query)
+end
+
 function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjectHandler, model::PormGModel)
   # Extract IDs from objects - handle NamedTuples or Dict structures
   @infiltrate false
-  pk_field = get_model_pk_field(model) |> string |> lowercase
-  objct.values(pk_field);
-  add_objects_to_collector!(collector, model, pk_field, objct)
+  delete_key = resolve_delete_key(model; allow_direct=isempty(objct.object.filter))
+  delete_key != DIRECT_DELETE_KEY_SENTINEL && objct.values(delete_key)
+  add_objects_to_collector!(collector, model, delete_key, objct)
 end
 
 
@@ -205,10 +236,9 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
       _query.filter("$(field_name)__@in" => dict[1][:objct]);
     else
       or_object = Qor("$(field_name)__@in" => dict[1][:objct])
-      push!(or_object, "$(field_name)__@in" => dict[1][:objct])
       for (index, dict_) in enumerate(dict)
         if index == 1
-          continue # already added
+          continue # already added via Qor constructor
         end
         push!(or_object, "$(field_name)__@in" => dict_[:objct])
       end
@@ -226,9 +256,10 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
     end  
     push!(collector.dependencies[related_model], model)
 
-    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
-    _keys[:key] = pk_model |> string |> lowercase
-    _keys[:objct] = _query    
+    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}(
+      :key => resolve_delete_key(related_model; fallback=string(field_name)),
+      :objct => _query
+    )
 
     field = related_model.fields[String(field_name)]
     handle_on_delete!(collector, field_name, field, model, _keys, related_model)
@@ -240,16 +271,9 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
   keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel)
   @infiltrate false
   if field.on_delete == CASCADE
-    pk_field = get_model_pk_field(related_model) |> string |> lowercase
     @infiltrate false
-    _query = deepcopy(keys[:objct])
-    _query.values(pk_field) 
-    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
-    _keys[:key] = pk_field
-    _keys[:objct] = _query
-    
-    # @info _query |> query
-    add_objects_to_collector!(collector, related_model, pk_field, _query) 
+    _keys = prepare_related_query(keys, related_model, field_name)
+    add_objects_to_collector!(collector, related_model, _keys[:key], _keys[:objct])
     @infiltrate false
     find_related_objects!(collector, related_model, [_keys]) # Recursively find related objects for the related model
   elseif field.on_delete in [PROTECT, RESTRICT]    
@@ -270,15 +294,8 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
       collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Dict{Symbol, Union{String, SQLObjectHandler}}}()
     end
     
-    @infiltrate false
     # Add to field updates using _query object like CASCADE
-    pk_field = get_model_pk_field(related_model) |> string |> lowercase
-    _query = deepcopy(keys[:objct])
-    _query.values(pk_field)
-    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
-    _keys[:key] = pk_field
-    _keys[:objct] = _query
-    collector.field_updates[(field_name |> string, nothing)][related_model] = _keys
+    collector.field_updates[(field_name |> string, nothing)][related_model] = prepare_related_query(keys, related_model, field_name)
 
   elseif field.on_delete == SET_DEFAULT
     # TODO : I dont check if this works
@@ -289,14 +306,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     end    
     
     # Add to field updates using _query object like CASCADE
-    pk_field = get_model_pk_field(related_model) |> string |> lowercase
-    _query = deepcopy(keys[:objct])
-    _query.values(pk_field)
-    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}()
-    _keys[:key] = pk_field
-    _keys[:objct] = _query
-    @infiltrate
-    collector.field_updates[(field_name |> string, default_value)][related_model] = _keys
+    collector.field_updates[(field_name |> string, default_value)][related_model] = prepare_related_query(keys, related_model, field_name)
   end
 end
 
@@ -361,6 +371,21 @@ end
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Symbol, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
   @infiltrate false
+  if size(keys, 1) == 1 && keys[1][:key] == DIRECT_DELETE_KEY_SENTINEL
+    objct = keys[1][:objct]
+    isempty(objct.object.filter) || throw(ArgumentError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
+
+    deleted_counter[model.name] = show_query === :execute ? (objct |> do_count) : 0
+    sql = "DELETE FROM $(model.name |> lowercase)"
+
+    if show_query !== :execute
+      return _show_query_result(show_query, sql, connection, model, :delete, parameters=nothing)
+    end
+
+    with_transaction(connection, sql, conn=conn, params=nothing)
+    return deleted_counter
+  end
+
   # Execute the actual deletion SQL
   _where = String[]
   parameters = get_parameter(connection)
@@ -374,8 +399,10 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     deleted_counter[model.name] = show_query === :execute ? (keys[1][:objct] |> do_count) : 0
     sql = "DELETE FROM $(model.name |> lowercase) WHERE $(join(_where, " OR "))"
   else
-    # TODO : this code has not been tested, I need to check if it works    
-    pk_field = get_model_pk_field(model) |> string |> lowercase
+    # Multi-path merge: all entries for the same model share the same resolved key field.
+    # Keyless (sentinel) models reaching this path are not supported.
+    pk_field = keys[1][:key]
+    pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(ArgumentError("Multi-path delete on keyless model $(model.name) is not supported; define a primary key"))
     _query = model |> object;
     or_object = Qor("$(pk_field)__@in" => keys[1][:objct])
     for (index, key) in enumerate(keys)
@@ -385,10 +412,10 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
       push!(or_object, "$(pk_field)__@in" => key[:objct])
     end
     _query.filter(or_object)
-    deleted_counter[model.name] = show_query === false ? (_query |> do_count) : 0
+    deleted_counter[model.name] = show_query === :execute ? (_query |> do_count) : 0
     _query.values(pk_field) # Ensure the query is built
     @infiltrate false
-    sql = "DELETE FROM $(model.name |> lowercase) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
+    sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(pk_field)\" IN ($(query(_query, parameters=parameters)))"
   end
 
   sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
@@ -405,10 +432,11 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   # Update field values using query object like CASCADE
   @infiltrate false
   pk_field = keys[:key]
+  pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(ArgumentError("Cannot update field on keyless model $(model.name); define a primary key"))
   _query = keys[:objct]
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
-  sql = "UPDATE $(model.name |> lowercase) SET $(field) = $(value_sql) WHERE $(pk_field) IN ($(query(_query, parameters=parameters)))"
+  sql = "UPDATE $(model.name |> lowercase) SET \"$(field)\" = $(value_sql) WHERE \"$(pk_field)\" IN ($(query(_query, parameters=parameters)))"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

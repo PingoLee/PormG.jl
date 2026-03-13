@@ -55,6 +55,33 @@ function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruct
   vector = String.(field)
   _build_row_join(vector, instruct, as=as)  
 end
+
+function _resolve_django_join_field(model::PormGModel, field_name::String, instruct::SQLInstruction)::String
+  instruct.django === nothing && return field_name
+
+  # Single O(1) dict lookup replaces the previous O(n) vector scan + dict access.
+  field = get(model.fields, field_name, nothing)
+
+  if field !== nothing
+    # The field exists directly. Reject the explicit "_id" FK form (callers must use the short form).
+    if endswith(field_name, "_id") && hasfield(typeof(field), :to)
+      short_name = field_name[1:end-3]
+      throw(ArgumentError("In Django-style join paths use '$(short_name)__...' instead of '$(field_name)__...'."))
+    end
+    return field_name
+  end
+
+  # Short-form resolution: "driver" → "driver_id" when a FK with that name exists.
+  # This only applies to snake_case FK convention (e.g. driver_id).
+  # camelCase FKs (e.g. driverid) must be referenced by their full field name.
+  fk_field = get(model.fields, field_name * "_id", nothing)
+  if fk_field !== nothing && hasfield(typeof(fk_field), :to)
+    return field_name * "_id"
+  end
+
+  return field_name
+end
+
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
   vector = copy(field) 
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
@@ -63,7 +90,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
  
   @infiltrate false
 
-  first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+  first_column = _resolve_django_join_field(instruct.object.model, vector[1], instruct)
   last_field::Union{Nothing, PormGField} = nothing
   join_path = field[1]
 
@@ -183,7 +210,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     @infiltrate false
     join_path = join(field[1:length(field)-length(vector) + 1], "__")
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
-    first_column = instruct.django !== nothing ? string(vector[1], "_id") : vector[1]
+    first_column = _resolve_django_join_field(new_object, vector[1], instruct)
 
     # Create a new Dict for this join to avoid mutating previously inserted joins
     prev_how = row_join["how"]

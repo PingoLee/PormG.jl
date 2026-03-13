@@ -45,14 +45,12 @@ adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
 
 @info "🚀 Starting PormG integration tests" folder = PORMG_DB_FOLDER adapter = adapter_name
 
-# If you have custom test macros, define or include them here
-# include("utils/custom_macros.jl")
-
 
 # $env:PORMG_DB="db_sl"; 
 # Sqlite doesn't work well with -t auto, so we can run it without threads for now
 # julia -t auto --project=. -i test/integration/common_setup.jl
 # julia -t auto --project=. test/integration/test_database_setup.jl
+# julia -t auto --project=. test/integration/test_bulk_copy.jl
 # julia -t auto --project=. test/integration/runtests.jl
 # julia -t 1 --project=. test/integration/runtests.jl
 # include("test_bulk_copy.jl")

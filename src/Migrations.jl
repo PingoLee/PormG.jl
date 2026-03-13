@@ -15,6 +15,7 @@ using SQLite
 using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
+import SHA
 import PormG.ConnectionPool: fetch, with_transaction
 import PormG.Configuration
 import PormG.Configuration: get_settings
@@ -28,6 +29,7 @@ import PormG: connection, config, get_constraints_pk, get_constraints_unique
 import PormG: PormGModel, PormGField, SQLConn, PormGPostgres, PormGSQLite
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table
 import PormG: MODEL_PATH, SQLConn, DB_PATH
+import PormG.AdvisoryLock
 
 import PormG.Generator: generate_models_from_db, generate_migration_plan
 
@@ -37,12 +39,18 @@ include("migrations/importers.jl")
 include("migrations/planner.jl")
 include("migrations/runner.jl")
 
-# Exports
+# Exports — existing
 export makemigrations, migrate
 export import_models_from_postgres, import_models_from_sqlite, import_models_from_django
 export django_to_string
 export convertSQLToModel, convert_schema_to_models, get_database_schema
 export get_migration_plan, get_all_models, get_all_dicts
 export get_constraints_fk, get_constraints_index, get_constraints_pk, get_constraints_unique, get_sequence_name
+
+# Exports — new migration lifecycle APIs (Phases 1–7)
+export init_migrations, status, dry_run
+export migrate_to, mark_applied, mark_failed, remove_migration_record
+export MigrationStatus, DryRunResult
+export compute_checksum, is_destructive, total_statements, detect_destructive_actions
 
 end # module Migrations

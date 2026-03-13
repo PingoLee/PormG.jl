@@ -8,7 +8,7 @@ a live database connection. Some complex join tests are deferred for integration
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField
+using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey
 using PormG.QueryBuilder: Q, Qor, F
 import DataFrames
 
@@ -35,6 +35,60 @@ MockSettings = PormG.Configuration.Settings(
   change_data=true
 )
 PormG.config["default"] = MockSettings
+
+# Separate settings key so Django-prefixed query generation is isolated from the
+# generic unit tests above. This uses show_query mode, so no live DB is required.
+DjangoMockSettings = PormG.Configuration.Settings(
+  connections=MockPostgres(),
+  change_data=true,
+  django_prefix="f1"
+)
+PormG.config["django_test"] = DjangoMockSettings
+
+DriverDjangoModel = Model("driver",
+  id=IDField(),
+  forename=CharField(),
+  surname=CharField()
+)
+DriverDjangoModel.connect_key = "django_test"
+DriverDjangoModel._module = Main
+
+ResultDjangoModel = Model("result",
+  id=IDField(),
+  driver_id=ForeignKey(DriverDjangoModel, pk_field="id"),
+  points=IntegerField(null=true)
+)
+ResultDjangoModel.connect_key = "django_test"
+ResultDjangoModel._module = Main
+
+# For multi-hop testing: ConstrResult → result_id (FK→Result) → driver_id (FK→Driver) → forename.
+# This exercises the while-loop call site of _resolve_django_join_field.
+ConstructorDjangoModel = Model("constructor",
+  id=IDField(),
+  name=CharField()
+)
+ConstructorDjangoModel.connect_key = "django_test"
+ConstructorDjangoModel._module = Main
+
+ConstrResultDjangoModel = Model("constructor_result",
+  id=IDField(),
+  result_id=ForeignKey(ResultDjangoModel, pk_field="id"),
+  constructor_id=ForeignKey(ConstructorDjangoModel, pk_field="id")
+)
+ConstrResultDjangoModel.connect_key = "django_test"
+ConstrResultDjangoModel._module = Main
+
+# For camelCase FK convention (real F1 style: driverid, not driver_id).
+# Short-form resolution ("driver" → "driver_id") does NOT apply here because
+# nobody named the field "driver_id" — it is "driverid". Callers must use the
+# full physical field name: "driverid__forename".
+ResultCamelDjangoModel = Model("result_camel",
+  id=IDField(),
+  driverid=ForeignKey(DriverDjangoModel, pk_field="id"),
+  points=IntegerField(null=true)
+)
+ResultCamelDjangoModel.connect_key = "django_test"
+ResultCamelDjangoModel._module = Main
 
 @testset "Complex Query Coverage" begin
 
@@ -100,6 +154,91 @@ PormG.config["default"] = MockSettings
     @test contains(res[:sql_text], "ORDER BY")
     @test contains(res[:sql_text], "LIMIT 10")
     @test contains(res[:sql_text], "OFFSET 5")
+  end
+
+  # ===== Section 3b: Django-style join spelling compatibility =====
+  @testset "Django Join Syntax Compatibility" begin
+
+    # ---- 3b-1: Short form via values() ----
+    # Django convention: caller writes "driver__forename", not "driver_id__forename".
+    # _resolve_django_join_field maps the logical name "driver" → physical FK column "driver_id".
+    q_short = ResultDjangoModel.objects
+    q_short.values("driver__forename")
+    res_short = q_short |> list(show_query=:dict)
+
+    @test res_short isa Dict
+    @test contains(res_short[:sql_text], "INNER JOIN")
+    @test contains(res_short[:sql_text], "driver_id")   # physical column used in ON clause
+    @test contains(res_short[:sql_text], "forename")
+    @test !contains(res_short[:sql_text], "driver_id_id")  # must not double-suffix
+
+    # ---- 3b-2: Explicit _id form via values() must throw ----
+    # "driver_id__forename" is rejected because "driver_id" is the raw FK column name.
+    # Callers must use the short logical form "driver__forename".
+    q_explicit = ResultDjangoModel.objects
+    q_explicit.values("driver_id__forename")
+    err_values = try
+      q_explicit |> list(show_query=:dict)
+      nothing
+    catch e
+      e
+    end
+    @test err_values isa ArgumentError
+    @test contains(sprint(showerror, err_values), "driver__...")
+    @test contains(sprint(showerror, err_values), "driver_id__...")
+
+    # ---- 3b-3: Short form via filter() ----
+    # The same resolution must happen in the WHERE clause path, not just SELECT.
+    # Expected SQL: INNER JOIN on driver_id + WHERE with the forename parameter.
+    q_filter = ResultDjangoModel.objects
+    q_filter.filter("driver__forename" => "Lewis")
+    res_filter = q_filter |> list(show_query=:dict)
+
+    @test res_filter isa Dict
+    @test contains(res_filter[:sql_text], "INNER JOIN")  # join was built
+    @test contains(res_filter[:sql_text], "WHERE")       # filter was applied
+    @test contains(res_filter[:sql_text], "driver_id")  # ON clause uses the physical column
+    @test res_filter[:parameters] == ["Lewis"]
+
+    # ---- 3b-4: Explicit _id form via filter() must also throw ----
+    # Ensures the guard is active on the filter path, not just the values path.
+    q_filter_bad = ResultDjangoModel.objects
+    q_filter_bad.filter("driver_id__forename" => "Lewis")
+    err_filter = try
+      q_filter_bad |> list(show_query=:dict)
+      nothing
+    catch e
+      e
+    end
+    @test err_filter isa ArgumentError
+    @test contains(sprint(showerror, err_filter), "driver__...")
+
+    # ---- 3b-5: Multi-hop join (tests the while-loop call site) ----
+    # ConstrResult → result_id (FK→Result) → driver_id (FK→Driver) → forename.
+    # Each hop uses short-form resolution: "result" → "result_id", "driver" → "driver_id".
+    # Expected SQL: two INNER JOINs and "forename" in the SELECT.
+    q_multi = ConstrResultDjangoModel.objects
+    q_multi.values("result__driver__forename")
+    res_multi = q_multi |> list(show_query=:dict)
+
+    @test res_multi isa Dict
+    # Count INNER JOIN occurrences: one to result, one to driver
+    @test length(collect(eachmatch(r"INNER JOIN", res_multi[:sql_text]))) == 2
+    @test contains(res_multi[:sql_text], "forename")
+    @test !contains(res_multi[:sql_text], "driver_id_id")  # no double-suffix on second hop
+
+    # ---- 3b-6: CamelCase FK convention (real F1 style: driverid, not driver_id) ----
+    # When the FK field has no underscore before "id" (e.g. "driverid"), short-form
+    # resolution does not apply — there is no "driver_id" field to resolve to.
+    # Callers must use the full physical field name: "driverid__forename".
+    q_camel = ResultCamelDjangoModel.objects
+    q_camel.values("driverid__forename")
+    res_camel = q_camel |> list(show_query=:dict)
+
+    @test res_camel isa Dict
+    @test contains(res_camel[:sql_text], "INNER JOIN")
+    @test contains(res_camel[:sql_text], "driverid")   # full camelCase field name in ON clause
+    @test contains(res_camel[:sql_text], "forename")
   end
 
   # ===== Section 4: Multiple Filters =====

@@ -1,6 +1,7 @@
 using Test
 using PormG
 using PormG.QueryBuilder
+using Logging
 
 # The internal types are not exported, so we access them via PormG.QueryBuilder
 const QB = PormG.QueryBuilder
@@ -66,9 +67,13 @@ end
     final = QB.get_final_parameters(params)
     @test final == [2, 1, 3] # select (2) -> where (1, 3)
 
-    # Unknown context fallback (treat as :where)
-    QB.set_context!(params, :something_wrong)
-    QB.add_parameter!(params, 4)
+    # Unknown context fallback (treat as :where). The warning itself is expected and useful in
+    # production, but the unit suite should stay quiet because this test intentionally triggers
+    # the fallback path as a behavioral assertion rather than an operator-facing warning check.
+    Base.CoreLogging.with_logger(Logging.NullLogger()) do
+        QB.set_context!(params, :something_wrong)
+        QB.add_parameter!(params, 4)
+    end
     @test params.where_params[end] == 4
 end
 

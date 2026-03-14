@@ -521,16 +521,24 @@ function format_number_sql(value::Union{Float16, Float32, Float64})
   return @sprintf("%.17g", value)
 end
 function format_number_sql(value::AbstractString)
+  value = strip(value)
+  isempty(value) && throw(ArgumentError("The value is empty and cannot be used as a number"))
+
+  if occursin(r"^[+-]?\d+,\d+$", value)
+    throw(ArgumentError("Does you want to use ',' as decimal separator? Please use '.' instead."))
+  end
+
+  if occursin(r"^[+-]?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+$", value)
+    throw(ArgumentError("Scientific notation strings are not supported. Please use a literal decimal representation instead."))
+  end
+
   # try integer first
-  if (i = tryparse(Int64, strip(value))) !== nothing
+  if (i = tryparse(Int64, value)) !== nothing
     return value
   # then float
-  elseif (f = tryparse(Float64, strip(value))) !== nothing
+  elseif (f = tryparse(Float64, value)) !== nothing
     return value
   else
-    if occursin(r"^\d+,\d+$", value)
-      throw(ArgumentError("Does you want to use ',' as decimal separator? Please use '.' instead."))
-    end
     throw(ArgumentError("The value '$value' is not a valid number"))
   end
 end
@@ -592,7 +600,7 @@ end
 
 
 function format_timezone_sql(value::String; format::String=DATETIME_FORMAT)
-  return validate_timezone(value, format) ? string(value) : throw(ArgumentError("The timezone $value is invalid"))  
+  return validate_timezone(value, format)
 end
 function format_timezone_sql(value::Union{Missing, Nothing})
     return missing

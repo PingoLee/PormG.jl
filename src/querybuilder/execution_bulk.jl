@@ -141,44 +141,6 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
           # We only do this if it's already there or if we really need it
           df[!, col_name] = map(x -> x |> ismissing || x |> isnothing ? fill_value : x, df[!, col_name])
         end
-
-        # Normalize types for specific fields (e.g. IntegerField, BigInt, IDField)
-        if f_meta.type in ["INTEGER", "BIGINT"]
-          col_eltype = eltype(df[!, col_name])
-          if !(col_eltype <: Integer || col_eltype == Union{Int64, Missing} || col_eltype == Union{Int64, Nothing, Missing})
-            df[!, col_name] = map(x -> begin
-              if x |> ismissing || x |> isnothing
-                return x
-              elseif x isa AbstractString
-                return tryparse(Int64, x) # Let it stay as is if it fails, validate_field_data will catch it
-              elseif x isa Float64 || x isa Float32 || x isa Float16
-                if isinteger(x)
-                  return Int64(x)
-                else
-                  # If it is not an integer (e.g. 1.5), we shouldn't force it to integer
-                  return x
-                end
-              else
-                return x
-              end
-            end, df[!, col_name])
-          end
-        elseif f_meta.type == "DOUBLE PRECISION"
-          col_eltype = eltype(df[!, col_name])
-          if !(col_eltype <: AbstractFloat || col_eltype == Union{Float64, Missing} || col_eltype == Union{Float64, Nothing, Missing})
-            df[!, col_name] = map(x -> begin
-              if x |> ismissing || x |> isnothing
-                return x
-              elseif x isa AbstractString
-                return tryparse(Float64, x)
-              elseif x isa Integer
-                return Float64(x)
-              else
-                return x
-              end
-            end, df[!, col_name])
-          end
-        end
       else
         # Field is in fields_df (requested) but not in mapping (missing in DF)
         # Check if we can auto-populate it
@@ -316,7 +278,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         # param_placeholders = add_parameter!(parameters, values)
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index, django_prefix)
-        throw("Error in bulk_update, the row $(index) has a problem: $(e)")
+        throw(ErrorException("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
@@ -414,6 +376,18 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   try
     for i in 1:chunk_size:total_rows
       end_idx = min(i + chunk_size - 1, total_rows)
+
+      for row_index in i:end_idx
+        row = df[row_index, :]
+        try
+          for field in fields_df
+            validate_field_data(model, field, row[mapping[field]], "bulk_copy"; allow_primary_key = true)
+            model.fields[field].formater(row[mapping[field]])
+          end
+        catch e
+          throw(ErrorException("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
+        end
+      end
       
       # Select columns based on mapping and ensure they are in the correct order for the COPY command
       df_chunk = df[i:end_idx, [mapping[f] for f in fields_df]]
@@ -678,7 +652,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[mapping[field]])) for field in joined_columns]
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index, settings.django_prefix !== nothing)
-        rethrow(e)
+        throw(ErrorException("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1

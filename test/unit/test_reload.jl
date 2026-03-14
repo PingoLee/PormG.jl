@@ -20,6 +20,11 @@ function _write_reload_sqlite_connection(path::String)
     end
 end
 
+function _toml_escape_string(value::String)
+    escaped = replace(value, "\\" => "\\\\")
+    return replace(escaped, "\"" => "\\\"")
+end
+
 function _run_import_models_package_regression()
     pormg_root = normpath(joinpath(@__DIR__, "..", ".."))
 
@@ -53,7 +58,7 @@ function _run_import_models_package_regression()
             Revise = \"295af30f-e4ad-537b-8983-00126c2a3abe\"
 
             [sources]
-            PormG = {path = \"$(pormg_root)\"}
+            PormG = {path = \"$(_toml_escape_string(pormg_root))\"}
             """)
         end
 

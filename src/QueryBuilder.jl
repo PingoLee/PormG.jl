@@ -1,7 +1,7 @@
 module QueryBuilder
 
 import DataFrames, Tables, JSON, CSV
-using Dates, TimeZones, Intervals
+using Dates, TimeZones, Intervals, Decimals
 using SQLite, LibPQ
 
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
@@ -78,6 +78,7 @@ export cjoin
 export object
 export page
 export query
+export update
 export do_count, do_exists # i want dont export this anymore
 export list
 export bulk_insert, bulk_copy

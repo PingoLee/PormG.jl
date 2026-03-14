@@ -15,6 +15,7 @@ end
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
+    @testset "Field Validation" include("unit/test_fields_validation.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Password Encoding" include("unit/test_password.jl")
     @testset "Password Validation i18n" include("unit/test_password_i18n.jl")

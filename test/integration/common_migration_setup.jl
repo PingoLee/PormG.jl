@@ -5,6 +5,7 @@ end
 import PormG.Migrations
 import PormG.Migrations: init_migrations, makemigrations, migrate, status
 import PormG.Migrations: MigrationStatus
+import YAML
 
 """
     reset_database!(settings)
@@ -52,6 +53,41 @@ function _reset_postgres!(pool::PormG.PormGPostgres)
       PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"$tbl\" CASCADE;")
     end
   end
+end
+
+"""
+    hydrate_postgres_test_config!(edge_db_path::String, source_settings::PormG.SQLConn)
+
+Populate blank PostgreSQL connection.yml values in the edge-case migration DB folder
+using the currently selected integration database settings.
+
+This keeps committed test fixtures credential-free while still allowing the
+PostgreSQL migration edge-case suite to run against the active integration DB.
+"""
+function hydrate_postgres_test_config!(edge_db_path::String, source_settings::PormG.SQLConn)
+  config_path = joinpath(edge_db_path, "connection.yml")
+  raw = YAML.load_file(config_path)
+  env_name = get(raw, "env", source_settings.app_env)
+  env_key = String(env_name)
+  haskey(raw, env_key) || error("Missing '$env_key' section in $(config_path)")
+
+  edge_cfg = raw[env_key]
+  source_cfg = source_settings.db_config_settings
+
+  for key in ("database", "host", "username", "password", "port", "url")
+    current_value = get(edge_cfg, key, nothing)
+    source_value = get(source_cfg, key, nothing)
+    if (current_value === nothing || isempty(strip(string(current_value)))) &&
+       !(source_value === nothing || isempty(strip(string(source_value))))
+      edge_cfg[key] = source_value
+    end
+  end
+
+  open(config_path, "w") do io
+    YAML.write(io, raw)
+  end
+
+  return nothing
 end
 
 """

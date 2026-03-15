@@ -86,8 +86,32 @@ function _is_integer_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("INTEGER", "BIGINT")
 end
 
+function _is_decimal_field(f_meta)::Bool
+    return getproperty(f_meta, :type) == "DECIMAL"
+end
+
+function _is_float_field(f_meta)::Bool
+    return getproperty(f_meta, :type) in ("FLOAT", "DOUBLE PRECISION")
+end
+
 function _is_decimal_like_field(f_meta)::Bool
-    return getproperty(f_meta, :type) in ("DECIMAL", "DOUBLE PRECISION")
+    return getproperty(f_meta, :type) in ("DECIMAL", "FLOAT", "DOUBLE PRECISION")
+end
+
+function _is_date_field(f_meta)::Bool
+    return getproperty(f_meta, :type) == "DATE"
+end
+
+function _is_time_field(f_meta)::Bool
+    return getproperty(f_meta, :type) == "TIME"
+end
+
+function _is_duration_field(f_meta)::Bool
+    return getproperty(f_meta, :type) == "INTERVAL"
+end
+
+function _is_datetime_field(f_meta)::Bool
+    return getproperty(f_meta, :type) in ("TIMESTAMPTZ", "TIMESTAMP")
 end
 
 function _string_uses_scientific_notation(value::AbstractString)::Bool
@@ -145,6 +169,13 @@ function _count_numeric_digits(value)::Int
     return isempty(digits_only) ? 0 : length(digits_only)
 end
 
+function _count_decimal_places(value)::Int
+    value_str = _normalized_numeric_string(value)
+    point_index = findfirst(==('.'), value_str)
+    point_index === nothing && return 0
+    return length(value_str) - point_index
+end
+
 function _validate_integer_value(model::PormGModel, field::String, value::Any, operation::String)
     if value isa Bool
         _type_mismatch_error(operation, model, field, value, "Int64 or an integer string"; suggestion="pass 0 or 1 as Int64, not Bool")
@@ -166,10 +197,13 @@ function _validate_integer_value(model::PormGModel, field::String, value::Any, o
     end
 end
 
-function _validate_decimal_like_value(model::PormGModel, field::String, value::Any, operation::String)
+function _validate_decimal_value(model::PormGModel, field::String, value::Any, operation::String)
     if value isa Bool
         _type_mismatch_error(operation, model, field, value, "a numeric value or numeric string"; suggestion="pass an Int64, Float64, Decimals.Decimal, or a literal numeric string")
-    elseif value isa Integer || value isa AbstractFloat || value isa Decimals.Decimal
+    elseif value isa Integer || value isa Decimals.Decimal
+        return true
+    elseif value isa AbstractFloat
+        isfinite(value) || _validation_error(operation, model, field, "non-finite numeric values are not allowed"; suggestion="pass a finite Float64 value")
         return true
     elseif value isa AbstractString
         try
@@ -180,6 +214,93 @@ function _validate_decimal_like_value(model::PormGModel, field::String, value::A
         end
     else
         _type_mismatch_error(operation, model, field, value, "a numeric value or numeric string"; suggestion="pass an Int64, Float64, Decimals.Decimal, or a literal numeric string")
+    end
+end
+
+function _validate_float_value(model::PormGModel, field::String, value::Any, operation::String)
+    if value isa Bool
+        _type_mismatch_error(operation, model, field, value, "a finite numeric value or numeric string"; suggestion="pass an Int64, Float64, Decimals.Decimal, or a parseable numeric string")
+    elseif value isa Integer || value isa Decimals.Decimal
+        return true
+    elseif value isa AbstractFloat
+        isfinite(value) || _validation_error(operation, model, field, "non-finite numeric values are not allowed"; suggestion="pass a finite Float64 value")
+        return true
+    elseif value isa AbstractString
+        stripped = strip(value)
+        isempty(stripped) && _validation_error(operation, model, field, "the value is empty and cannot be used as a number"; suggestion="pass a parseable numeric string like \"123.45\"")
+        if occursin(r"^[+-]?\d+,\d+$", stripped)
+            _validation_error(operation, model, field, "comma decimal separators are not supported"; suggestion="use '.' as the decimal separator")
+        end
+        parsed = tryparse(Float64, stripped)
+        parsed === nothing && _type_mismatch_error(operation, model, field, value, "a finite numeric value or numeric string"; suggestion="pass a parseable numeric string like \"123.45\" or \"1.23e4\"")
+        isfinite(parsed) || _validation_error(operation, model, field, "non-finite numeric values are not allowed"; suggestion="pass a finite Float64 value")
+        return true
+    else
+        _type_mismatch_error(operation, model, field, value, "a finite numeric value or numeric string"; suggestion="pass an Int64, Float64, Decimals.Decimal, or a parseable numeric string")
+    end
+end
+
+function _validate_date_value(model::PormGModel, field::String, value::Any, operation::String)
+    if value isa Union{Date, DateTime, ZonedDateTime}
+        return true
+    elseif value isa AbstractString
+        try
+            Models.format_date_sql(value)
+            return true
+        catch e
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Date, DateTime, ZonedDateTime, or a YYYY-MM-DD string")
+        end
+    else
+        _type_mismatch_error(operation, model, field, value, "a Date, DateTime, ZonedDateTime, or YYYY-MM-DD string"; suggestion="normalize the value to a calendar date before calling $operation")
+    end
+end
+
+function _validate_time_value(model::PormGModel, field::String, value::Any, operation::String)
+    if value isa Time
+        return true
+    elseif value isa AbstractString
+        # Standard HH:MM or HH:MM:SS
+        if occursin(r"^\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?$", value)
+            try
+                # Try to parse as Time to validate ranges
+                Time(value)
+                return true
+            catch e
+                _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Time object or a valid HH:MM:SS string")
+            end
+        else
+            _validation_error(operation, model, field, "invalid time format: $value"; suggestion="pass a Time object or an HH:MM:SS string")
+        end
+    else
+        _type_mismatch_error(operation, model, field, value, "a Time object or time string"; suggestion="use Time(...) or normalize to HH:MM:SS")
+    end
+end
+
+function _validate_duration_value(model::PormGModel, field::String, value::Any, operation::String)
+    try
+        Models.format_duration_sql(value)
+        return true
+    catch e
+        if value isa Union{Period, Dates.CompoundPeriod, AbstractString}
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Period, CompoundPeriod, or a duration string like \"1:27.452\"")
+        else
+            _type_mismatch_error(operation, model, field, value, "a Period, CompoundPeriod, or duration string"; suggestion="use Minute(1) + Second(27) + Millisecond(452) or a string like \"1:27.452\"")
+        end
+    end
+end
+
+function _validate_datetime_value(model::PormGModel, field::String, value::Any, operation::String)
+    if value isa Union{DateTime, ZonedDateTime}
+        return true
+    elseif value isa AbstractString
+        try
+            Models.format_timezone_sql(value)
+            return true
+        catch e
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a DateTime, ZonedDateTime, or a datetime string matching the configured timestamp format")
+        end
+    else
+        _type_mismatch_error(operation, model, field, value, "a DateTime, ZonedDateTime, or timezone-aware datetime string"; suggestion="use DateTime(...) or ZonedDateTime(...)")
     end
 end
 
@@ -211,8 +332,20 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
     # 5. Type validation for numeric fields.
     if _is_integer_field(f_meta)
         _validate_integer_value(model, field, value, operation)
+    elseif _is_decimal_field(f_meta)
+        _validate_decimal_value(model, field, value, operation)
+    elseif _is_float_field(f_meta)
+        _validate_float_value(model, field, value, operation)
+    elseif _is_date_field(f_meta)
+        _validate_date_value(model, field, value, operation)
+    elseif _is_time_field(f_meta)
+        _validate_time_value(model, field, value, operation)
+    elseif _is_duration_field(f_meta)
+        _validate_duration_value(model, field, value, operation)
+    elseif _is_datetime_field(f_meta)
+        _validate_datetime_value(model, field, value, operation)
     elseif _is_decimal_like_field(f_meta)
-        _validate_decimal_like_value(model, field, value, operation)
+        _validate_decimal_value(model, field, value, operation)
     end
     
     # 6. Max length validation (Strings)
@@ -227,6 +360,14 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
         digit_count = _count_numeric_digits(value)
         if digit_count > f_meta.max_digits
             _validation_error(operation, model, field, "max_digits is $(f_meta.max_digits), but the normalized numeric value uses $digit_count digits")
+        end
+    end
+
+    # 8. Decimal scale validation (DecimalField)
+    if _is_decimal_field(f_meta) && hasfield(typeof(f_meta), :decimal_places)
+        decimal_places = _count_decimal_places(value)
+        if decimal_places > f_meta.decimal_places
+            _validation_error(operation, model, field, "decimal_places is $(f_meta.decimal_places), but the normalized numeric value uses $decimal_places fractional digits")
         end
     end
     

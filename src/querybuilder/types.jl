@@ -187,7 +187,7 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String,Number,Bool,SQLObjectHandler,SQLTypeF,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Number,Bool,SQLTypeF}
+  values::Union{String,Number,Bool,Dates.Period,Dates.CompoundPeriod,SQLObjectHandler,SQLTypeF,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF}
   column::ColumnPart # Vector{String} is needed
 end
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))

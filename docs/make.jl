@@ -1,5 +1,9 @@
 using Documenter
 using PormG
+using Dates
+using TimeZones
+
+DocMeta.setdocmeta!(PormG, :DocTestSetup, :(using PormG, Dates, TimeZones), recursive=true)
 
 # Build the documentation
 makedocs(

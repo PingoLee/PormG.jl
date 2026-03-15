@@ -56,6 +56,23 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Add **GitHub Actions CI** configuration to run unit tests on push.
   - [ ] Move existing DB tests to `test/integration`.
 
+- [ ] **Django Interoperability Integration Tests**
+  - **Context**: PormG is used to read and write databases owned by Django apps, so compatibility needs to be validated at the database-behavior level, not only at the model-import level.
+  - **Goal**: Add integration tests that exercise the same PostgreSQL tables from both the Django contract perspective and the PormG contract perspective.
+  - [ ] **TIMESTAMPTZ Round-Trip**: Verify that Django-style `DateTimeField` columns written by PormG round-trip correctly when interpreted as UTC-backed timestamps.
+  - [x] **Naive vs Aware Datetime Semantics**: Define and test how naive Julia `DateTime` values map into Django's `USE_TZ=True` expectations, especially when the Django app timezone is not UTC.
+  - [ ] **First Integration Test: Temporal Round-Trip**: Implement a real PostgreSQL test in `test/integration/test_temporal_interop.jl` that:
+    1. Creates a `TIMESTAMPTZ` column.
+    2. Writes a naive `DateTime`.
+    3. Writes a `ZonedDateTime` ("America/Sao_Paulo").
+    4. Asserts that the naive value is stored as UTC and the aware value preserves the instant.
+  - [ ] **Naive Semantic Check**: Explicitly test that passing a `DateTime(2023, 1, 1, 12, 0)` results in the same database state as `ZonedDateTime(2023, 1, 1, 12, 0, tz"UTC")`.
+  - [ ] **Implicit conversion check**: Ensure `DateField` rejects `DateTime` objects to prevent accidental time-truncation bugs without explicit `Date(dt)` calls.
+  - [ ] **DateField Round-Trip**: Verify `DateField` inserts/updates remain date-only when read back through Django models.
+  - [ ] **auto_now / auto_now_add Compatibility**: Check that PormG-managed timestamp defaults align with Django's expectations for audit fields shared by both applications.
+  - [ ] **DecimalField Parity**: Add integration coverage proving PormG numeric validation/serialization matches Django-managed `DecimalField(max_digits, decimal_places)` columns.
+  - [ ] **Table Prefix / Sequence Compatibility**: Validate writes against tables using `django_prefix` and confirm primary key/sequence behavior remains consistent after mixed Django/PormG writes.
+
 - [ ] **Advanced Query Expressions**
   - [ ] Support for **Subqueries** (using `OuterRef`).
   - [ ] **Window Functions** (`OVER`, `RANK`, `ROW_NUMBER`).
@@ -84,6 +101,11 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] **With**: improve function
   - [ ] **cjoin**: improve function
   - [ ] **Contract**: throw an explicit ArgumentError when join_field is nothing
+  - [ ] **Explicit JOIN `ON` predicate API**: add a dedicated API for predicates that must be attached to the join condition itself, instead of reusing `.filter(...)`. This is mainly for cases like reverse joins where users want to keep all base rows and only restrict which related rows are attached.
+  - [ ] **Keep `.filter(...)` semantics stable**: relation filters expressed through `.filter(...)` should continue to compile to `WHERE` predicates with Django-style existence semantics, rather than silently moving those predicates into `ON`.
+  - [ ] **JOIN semantics docs/tests**: document and test the difference between:
+    - relation filters in `WHERE` that restrict the final result set,
+    - join predicates in `ON` that preserve base rows but limit joined rows.
 
 ## 🐘 PostgreSQL Specific Enhancements
 
@@ -120,6 +142,34 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🛠 Project Infrastructure & Quality
 
+- [x] **Field Validation Test Coverage Gaps - Unit Tests** (COMPLETED: 358 tests passing)
+  - **Focus**: Validation logic in `validate_field_data()` without database round-trips.
+  - [x] **Relationship Fields**: ForeignKey & OneToOneField validation in `sanitization.jl`.
+  - [x] **Unique Constraint Validation**: `unique=true` enforcement in validator.
+  - [x] **String Field Boundaries**: CharField/TextField max_length with Unicode edge cases.
+  - [x] **Boolean Edge Cases**: BooleanField truthiness and coercion handling.
+  - [x] **Temporal Field Gaps**: TimeField, DateTimeField (timezone-aware), DateField (string formats, boundary times, bulk operations).
+  - [x] **Numeric Validation**: FloatField, DecimalField (finite-ness, scale/precision checks).
+
+- [ ] **Field Validation Test Coverage Gaps - Integration Tests**
+  - **Focus**: Database write/read validation (complementary to unit tests), missing field types, delete operations.
+  - [ ] **Field DB Round-Trip Tests**: Verify all field types persist and retrieve correctly from PostgreSQL/SQLite.
+    - Test that ORM-written values match their database representation when read back.
+    - Validate type coerccion during write and type recovery during read for each field type.
+  - [ ] **Missing Field Types DB Tests**: Integration tests for:
+    - `TimeField`: Persist time-only values, verify no date contamination.
+    - `UUIDField`: Native UUID support, UUID string parsing and round-trip.
+    - `URLField`: URL validation at model level and database storage.
+    - `SlugField`: Slug validation (alphanumeric + hyphens/underscores) and storage.
+    - `JSONField`: JSON serialization, query support (`@>`, `?` operators), round-trip integrity.
+  - [ ] **Delete Operations with Constraints**: Test cascading deletes and FK relationship cleanup.
+    - Verify `on_delete=CASCADE` removes related records atomically.
+    - Verify `on_delete=SET_NULL` nullifies FK fields in related records.
+    - Verify `on_delete=PROTECT` prevents deletion when related records exist.
+    - Test nested cascade scenarios (3+ levels deep).
+  - [ ] **DELETE Inspection**: Test query inspection for DELETE operations (currently only SELECT/UPDATE inspected).
+    - Verify `inspect_query(:delete)` returns correct SQL and metadata.
+
 - [ ] **SQLite Parity**: Carry over PostgreSQL improvements to the SQLite adapter where possible.
 - [ ] **Performance Benchmarking**: Establish a baseline for query generation and execution overhead.
 - [ ] **Allocation Reduction with IO Strategy** - **priority**: -------------------------------------------------
@@ -139,7 +189,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
         "positionorder" => 1
     )
 
-- [ ] **Check name of operators**: `__@ne` or `__@ne`?
+- [ ] **Check name of operators**: `__@ne` or `__@neq`?
 
 ## Future Considerations
 - [ ] **Parameterize LIMIT/OFFSET (Future)**

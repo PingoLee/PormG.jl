@@ -105,17 +105,17 @@ end
   - `OperObject`: An OperObject with the corresponding operator and values.
 
 """
-function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{String,Number,Bool,Dates.TimeType}
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   if haskey(PormGsuffix, x.first[end])
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end
 end
-function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{String,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType}
+function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{String,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType}
+function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 # Store SQLObject, to use __@in operator
@@ -134,7 +134,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType}
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   if x.first[end] in ["in", "nin"]
     @infiltrate false
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))

@@ -1308,7 +1308,7 @@ mutable struct sDateField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
-  default::Union{String, Nothing}
+  default::Union{Date, Nothing}
   editable::Bool
   auto_now::Bool
   auto_now_add::Bool
@@ -1452,7 +1452,7 @@ mutable struct sDateTimeField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
-  default::Union{String, Nothing}
+  default::Union{ZonedDateTime, DateTime, Nothing}
   editable::Bool
   auto_now::Bool
   auto_now_add::Bool
@@ -1525,10 +1525,30 @@ function DateTimeField(; kwargs...)
   #TIMESTAMPTZ
   type = get(kwargs, :type, "TIMESTAMPTZ") |> uppercase
 
+  normalize_datetime_default(value) = begin
+    if value === nothing
+      nothing
+    elseif value isa Union{ZonedDateTime, DateTime}
+      value
+    elseif value isa AbstractString
+      try
+        ZonedDateTime(value, DATETIME_FORMAT)
+      catch
+        try
+          DateTime(value, DATETIME_FORMAT)
+        catch
+          DateTime(value)
+        end
+      end
+    else
+      throw(ArgumentError("Invalid default value for DateTimeField. Expected a DateTime, ZonedDateTime, or parseable datetime string."))
+    end
+  end
+
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   # Validate default
-  default = validate_default(default, Union{DateTime, Nothing}, "DateTimeField", x -> DateTime(x))
+  default = validate_default(default, Union{ZonedDateTime, DateTime, Nothing}, "DateTimeField", normalize_datetime_default)
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -1620,7 +1640,7 @@ discount = DecimalField(
 function DecimalField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :max_digits, :decimal_places
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :max_digits, :decimal_places, :primary_key
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1638,6 +1658,12 @@ function DecimalField(; kwargs...)
   editable = get(kwargs, :editable, false)
   max_digits = get(kwargs, :max_digits, 10)
   decimal_places = get(kwargs, :decimal_places, 2)
+  primary_key = get(kwargs, :primary_key, false)
+
+  # Validate primary_key rejection for Decimal (Best practice)
+  if primary_key === true
+    throw(ArgumentError("DecimalField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
+  end
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
@@ -1647,6 +1673,11 @@ function DecimalField(; kwargs...)
   max_digits = validate_default(max_digits, Int, "DecimalField", format2int64)
   decimal_places = validate_default(decimal_places, Int, "DecimalField", format2int64)
   
+  # Validate scale vs precision
+  if decimal_places > max_digits
+    throw(ArgumentError("DecimalField 'decimal_places' ($decimal_places) cannot be greater than 'max_digits' ($max_digits)"))
+  end
+
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
@@ -1974,7 +2005,7 @@ weight = FloatField(null=true)
 function FloatField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :primary_key
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1990,12 +2021,18 @@ function FloatField(; kwargs...)
   db_index = get(kwargs, :db_index, false)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
+  primary_key = get(kwargs, :primary_key, false)
+
+  # Validate primary_key rejection for Float (Best practice)
+  if primary_key === true
+    throw(ArgumentError("FloatField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
+  end
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
   
   # Validate default using validate_default
-  default = validate_default(default, Union{Float64, String, Int64, Nothing}, "FloatField", parse)
+  default = validate_default(default, Union{Float64, Nothing}, "FloatField", format2float64)
   
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
@@ -2208,7 +2245,7 @@ mutable struct sTimeField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
-  default::Union{String, Nothing}
+  default::Union{Time, Nothing}
   editable::Bool
   type::String
   formater::Function
@@ -2339,7 +2376,7 @@ mutable struct sDurationField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
-  default::Union{Period, Nothing}
+  default::Union{String, Nothing}
   editable::Bool
   type::String
   formater::Function
@@ -2368,7 +2405,7 @@ function DurationField(; kwargs...)
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
   # Validate default
-  default = validate_default(default, Union{Period, Nothing}, "DurationField", x -> parse(Period, string(x)))
+  default = default === nothing ? nothing : format_duration_sql(default)
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -2386,7 +2423,7 @@ function DurationField(; kwargs...)
     default,
     editable,
     "INTERVAL",
-    format_text_sql
+    format_duration_sql
   )
 end
 

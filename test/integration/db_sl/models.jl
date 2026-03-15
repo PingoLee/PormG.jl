@@ -55,21 +55,21 @@ Driver = Models.Model(
 )
 
 Driver_standings = Models.Model(
-  driverStandingsId=Models.IDField(),
-  raceId=Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId=Models.ForeignKey(Driver, pk_field="driverId", on_delete=" RESTRICT"),
-  points=Models.FloatField(),  # F1 data has half-points (e.g. 1.5) from shared fastest-lap bonuses
-  position=Models.IntegerField(),
-  positionText=Models.CharField(),
-  wins=Models.IntegerField()
-)
+  driverStandingsId = Models.IDField(),
+  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete=" RESTRICT"),
+  points = Models.FloatField(),  # F1 data has half-points (e.g. 1.5) from shared fastest-lap bonuses
+  position = Models.IntegerField(),
+  positionText = Models.CharField(),
+  wins = Models.IntegerField()
+) 
 
 Lap_times = Models.Model(
   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
   lap = Models.IntegerField(),
   position = Models.IntegerField(),
-  time = Models.TimeField(),
+  time = Models.DurationField(),
   milliseconds = Models.IntegerField()
 )
 
@@ -79,7 +79,7 @@ Pit_stops = Models.Model(
   stop = Models.IntegerField(),
   lap = Models.IntegerField(),
   time = Models.TimeField(),
-  duration = Models.FloatField(),
+  duration = Models.DurationField(),
   milliseconds = Models.IntegerField()
 )
 
@@ -95,7 +95,7 @@ Constructor_results = Models.Model(
   constructorResultsId = Models.IDField(),
   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
-  points = Models.FloatField(),  # F1 data has half-points (e.g. 1.5) from shared fastest-lap bonuses
+  points = Models.DecimalField(),
   status = Models.CharField()
 )
 
@@ -103,7 +103,7 @@ Constructor_standings = Models.Model(
   constructorStandingsId = Models.IDField(),
   raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
-  points = Models.FloatField(),
+  points = Models.DecimalField(),
   position = Models.IntegerField(),
   positionText = Models.CharField(),
   wins = Models.IntegerField()
@@ -116,9 +116,9 @@ Qualifying = Models.Model(
   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
   number = Models.IntegerField(null=true),
   position = Models.IntegerField(null=true),
-  q1 = Models.TimeField(null=true),
-  q2 = Models.TimeField(null=true),
-  q3 = Models.TimeField(null=true)
+  q1 = Models.DurationField(null=true),
+  q2 = Models.DurationField(null=true),
+  q3 = Models.DurationField(null=true)
 )
 
 Sprint_results = Models.Model(
@@ -136,7 +136,7 @@ Sprint_results = Models.Model(
   time = Models.CharField(null=true),
   milliseconds = Models.IntegerField(null=true),
   fastestLap = Models.IntegerField(null=true),
-  fastestLapTime = Models.TimeField(null=true),
+  fastestLapTime = Models.DurationField(null=true),
   statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
 )
 
@@ -156,7 +156,7 @@ Result = Models.Model(
   milliseconds=Models.IntegerField(null=true),
   fastestLap=Models.IntegerField(null=true),
   rank=Models.IntegerField(null=true),
-  fastestLapTime=Models.TimeField(null=true),
+  fastestLapTime=Models.DurationField(null=true),
   fastestLapSpeed=Models.FloatField(null=true),
   statusId=Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
 )
@@ -180,8 +180,5 @@ New_join_position = Models.Model(
   result=Models.IntegerField(null=true),
   boolean_field=Models.BooleanField(null=true)
 )
-
-
-# Models.set_models(@__MODULE__, @__DIR__) # This is no longer needed if using @import_models or if self-healing is working
 
 end

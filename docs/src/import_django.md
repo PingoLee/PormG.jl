@@ -195,5 +195,15 @@ user_type = models.CharField(
 4. **Metaclass Options**: Model Meta options are not converted
 5. **Methods**: Model methods are not converted (only fields)
 
+## Datetime Interoperability Contract
+
+When PormG writes into tables that are also managed by Django, timezone semantics need to be explicit.
+
+- `DateTimeField` defaults are stored as `Union{ZonedDateTime, DateTime, Nothing}`.
+- A user-supplied naive Julia `DateTime` is currently serialized as `UTC` through the default formatter path.
+- A `ZonedDateTime` preserves the intended instant and is the recommended type when the source system has a real business timezone.
+- Internal `auto_now` and `auto_now_add` behavior attaches `settings.time_zone` when generating timestamps inside PormG.
+- If your Django app uses `USE_TZ=True` and `TIME_ZONE = "America/Sao_Paulo"`, passing a plain `DateTime(2026, 3, 13, 9, 0)` from Julia does not mean "09:00 Sao Paulo"; it means "09:00 UTC". Use `ZonedDateTime(DateTime(2026, 3, 13, 9, 0), tz"America/Sao_Paulo")` when the civil timezone matters.
+
 
 This will generate Julia models compatible with PormG that maintain the same structure and relationships as your original Django models.\n\n## Using Converted Models with `@import_models`\n\nAfter converting your Django models to PormG format, you can load them in your application using the `@import_models` macro for automatic registration and hot-reloading support:\n\n```julia\n# In your main Julia package:\nmodule MyApp\n    using PormG\n    \n    # Load the converted models\n    PormG.@import_models \"db/models.jl\" models\n    import .models as M\n    \n    # Now you can use queries like:\n    # M.Product.objects.filter(\"price__@gt\" => 100) |> DataFrame\nend\n```\n\nThis approach provides:\n- **Automatic registration** of all converted models\n- **Hot-reloading** during interactive development (with Revise.jl)\n- **Post-precompilation support** so models work in packaged code\n- **No manual `set_models()` calls** required\n\nFor more details on using models in your application, see [Defining Models in PormG](models.md).\n\n```

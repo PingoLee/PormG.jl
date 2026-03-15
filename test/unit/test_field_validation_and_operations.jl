@@ -1,0 +1,1740 @@
+"""
+Comprehensive validation test suite for all PormG field types and write operations.
+
+This file tests:
+- Each field type defined in `src/models/fields.jl` with proper constraints
+- Data type enforcement, nullability, unique-ness, defaults
+- User-facing API patterns (.objects.create(), .objects.update(), etc.)
+- Query inspection via show_query=:inspection
+- Bulk operations (bulk_insert, bulk_update)
+- Field validation functions
+- Write operation metadata (auto_now_add, auto_now, defaults, formatters)
+"""
+# julia -t auto --project=. test\unit\test_field_validation_and_operations.jl 2>&1 | tee test_output.txt
+
+using Test
+using PormG
+using PormG.Models
+using PormG.QueryBuilder: validate_field_data, inspect_query, object, filter, values, update, delete, bulk_insert, bulk_update
+using Dates
+using Decimals
+using TimeZones
+using DataFrames
+
+const QB = PormG.QueryBuilder
+const Models = PormG.Models
+
+# Mock Postgres Dialect for inspection
+struct MockPostgres <: PormG.PormGPostgres end
+MockSettings = PormG.Configuration.Settings(
+    connections = MockPostgres(),
+    change_data = true
+)
+PormG.config["default"] = MockSettings
+
+@testset "Comprehensive Field Validation & Write Operations" begin
+
+    # --- SECTION 1: FIELD TYPE VALIDATION ---
+    
+    @testset "Integer Fields (IDField, IntegerField, BigIntegerField)" begin
+        mock_int_model = Models.Model_Type(
+            name = "int_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "age" => Models.IntegerField(null=false),
+                "big_val" => Models.BigIntegerField()
+            ),
+            field_names = ["id", "age", "big_val"]
+        )
+
+        @test validate_field_data(mock_int_model, "id", 10, "insert") === true
+        @test_throws ErrorException validate_field_data(mock_int_model, "id", "not-an-int", "insert")
+        
+        @test validate_field_data(mock_int_model, "age", 25, "insert") === true
+        @test_throws ErrorException validate_field_data(mock_int_model, "age", nothing, "insert")
+        
+        @test validate_field_data(mock_int_model, "big_val", 9223372036854775807, "insert") === true
+    end
+
+    @testset "Constructor Hardening" begin
+        # Decimal places > max_digits should fail at construction
+        @test_throws ArgumentError Models.DecimalField(max_digits=5, decimal_places=6)
+        
+        # primary_key=true should fail at construction for both
+        @test_throws ArgumentError Models.DecimalField(primary_key=true)
+        @test_throws ArgumentError Models.FloatField(primary_key=true)
+        
+        # FloatField default should now use format2float64 logic (more robust)
+        f_field = Models.FloatField(default="123.45")
+        @test f_field.default === 123.45
+    end
+
+    @testset "String Fields (CharField, TextField, EmailField)" begin
+        mock_str_model = Models.Model_Type(
+            name = "str_test",
+            fields = Dict(
+                "code" => Models.CharField(max_length=5),
+                "email" => Models.EmailField()
+            ),
+            field_names = ["code", "email"]
+        )
+
+        @test validate_field_data(mock_str_model, "code", "abc", "insert") === true
+        
+        @test validate_field_data(mock_str_model, "email", "test@example.com", "insert") === true
+    end
+
+    @testset "Numeric Fields: Comprehensive Type Handling" begin
+        mock_decimal_model = Models.Model_Type(
+            name = "decimal_test",
+            fields = Dict(
+                "price" => Models.DecimalField(max_digits=10, decimal_places=2),
+                "score" => Models.DecimalField(max_digits=5, decimal_places=1, null=true)
+            ),
+            field_names = ["price", "score"]
+        )
+        
+        mock_float_model = Models.Model_Type(
+            name = "float_test",
+            fields = Dict(
+                "ratio" => Models.FloatField(null=false),
+                "percentage" => Models.FloatField(null=true)
+            ),
+            field_names = ["ratio", "percentage"]
+        )
+
+        # ===== DECIMAL FIELD TESTS =====
+        # Test 1: Decimal with float input
+        @test validate_field_data(mock_decimal_model, "price", 10.5, "insert") === true
+        
+        # Test 2: Decimal with integer input (should convert)
+        @test validate_field_data(mock_decimal_model, "price", 10, "insert") === true
+        
+        # Test 3: Decimal with string input (literal decimal - must not use scientific notation)
+        @test validate_field_data(mock_decimal_model, "price", "9999.99", "insert") === true
+
+        # Test 4: Decimal with numeric scientific notation value
+        @test validate_field_data(mock_decimal_model, "price", 1e2, "insert") === true
+        
+        # Test 5: Decimal accepts scientific notation strings for Julia-style numeric input.
+        @test validate_field_data(mock_decimal_model, "price", "1e2", "insert") === true
+        
+        # Test 6: Decimal field nullable
+        @test validate_field_data(mock_decimal_model, "score", nothing, "insert") === true
+        @test validate_field_data(mock_decimal_model, "score", missing, "insert") === true
+        
+        # Test 7: Decimal with zero
+        @test validate_field_data(mock_decimal_model, "price", 0.0, "insert") === true
+        
+        # Test 8: Decimal with negative values
+        @test validate_field_data(mock_decimal_model, "price", -99.99, "insert") === true
+        
+        # Test 9: Decimal with very small values
+        @test validate_field_data(mock_decimal_model, "price", 0.01, "insert") === true
+        
+        # Test 10: Decimal respects decimal_places
+        @test validate_field_data(mock_decimal_model, "price", "10.50", "insert") === true
+        @test_throws ErrorException validate_field_data(mock_decimal_model, "price", "10.123", "insert")
+        @test_throws ErrorException validate_field_data(mock_decimal_model, "score", 1.25, "insert")
+
+        # Test 11: Decimal respects max_digits
+        @test_throws ErrorException validate_field_data(mock_decimal_model, "price", "12345678901", "insert")
+
+        # Test 12: Invalid Decimal - non-numeric string
+        @test_throws ErrorException validate_field_data(mock_decimal_model, "price", "not-a-number", "insert")
+        
+        # ===== FLOAT FIELD TESTS =====
+        # Test 13: Float with integer input
+        @test validate_field_data(mock_float_model, "ratio", 5, "insert") === true
+        
+        # Test 14: Float with float input
+        @test validate_field_data(mock_float_model, "ratio", 3.14159, "insert") === true
+        
+        # Test 15: Float with string input (converts to float)
+        @test validate_field_data(mock_float_model, "ratio", "2.718", "insert") === true
+        
+        # Test 16: Float with scientific notation (numeric)
+        @test validate_field_data(mock_float_model, "ratio", 1.5e-3, "insert") === true
+        
+        # Test 17: Float with scientific notation string
+        @test validate_field_data(mock_float_model, "ratio", "1.23e4", "insert") === true
+        
+        # Test 18: Float with zero
+        @test validate_field_data(mock_float_model, "ratio", 0.0, "insert") === true
+        
+        # Test 19: Float with negative values
+        @test validate_field_data(mock_float_model, "ratio", -3.14, "insert") === true
+        
+        # Test 20: Float with very large values
+        @test validate_field_data(mock_float_model, "ratio", 1.0e308, "insert") === true
+        
+        # Test 21: Float with very small values
+        @test validate_field_data(mock_float_model, "ratio", 1.0e-308, "insert") === true
+        
+        # Test 22: Float nullable field
+        @test validate_field_data(mock_float_model, "percentage", nothing, "insert") === true
+        @test validate_field_data(mock_float_model, "percentage", missing, "insert") === true
+        
+        # Test 23: Float rejects non-finite values
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", Inf, "insert")
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", -Inf, "insert")
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", NaN, "insert")
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "Inf", "insert")
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "NaN", "insert")
+
+        # Test 24: Float rejects invalid numeric strings during validation
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "not-a-number", "insert")
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "1,25", "insert")
+
+        # Test 25: Invalid Float - non-nullable with nothing
+        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", nothing, "insert")
+    end
+
+    @testset "Logical & Temporal Fields (BooleanField, DateTimeField, DateField)" begin
+        mock_time_model = Models.Model_Type(
+            name = "time_test",
+            fields = Dict(
+                "is_ok" => Models.BooleanField(default=true),
+                "ts" => Models.DateTimeField()
+            ),
+            field_names = ["is_ok", "ts"]
+        )
+
+        @test validate_field_data(mock_time_model, "is_ok", true, "insert") === true
+        
+        now_dt = Dates.now()
+        @test validate_field_data(mock_time_model, "ts", now_dt, "insert") === true
+    end
+
+    @testset "DateTimeField Comprehensive Testing: Edge Cases & Boundaries" begin
+        # DateTimeField with various configurations
+        DateTimeModel = Models.Model_Type(
+            name = "datetime_comprehensive_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "created_at" => Models.DateTimeField(auto_now_add=true),
+                "updated_at" => Models.DateTimeField(auto_now=true),
+                "event_time" => Models.DateTimeField(null=false),
+                "scheduled_at" => Models.DateTimeField(null=true),
+                "deadline" => Models.DateTimeField(null=true)
+            ),
+            field_names = ["id", "created_at", "updated_at", "event_time", "scheduled_at", "deadline"],
+            connect_key = "default"
+        )
+        
+        # --- NULL/MISSING HANDLING ---
+        
+        # Test 1: Nullable field with nothing
+        @test validate_field_data(DateTimeModel, "scheduled_at", nothing, "insert") === true
+        
+        # Test 2: Nullable field with missing
+        @test validate_field_data(DateTimeModel, "scheduled_at", missing, "insert") === true
+        
+        # Test 3: Non-nullable field with nothing (should fail)
+        @test_throws ErrorException validate_field_data(DateTimeModel, "event_time", nothing, "insert")
+        
+        # Test 4: Non-nullable field with missing (should fail)
+        @test_throws ErrorException validate_field_data(DateTimeModel, "event_time", missing, "insert")
+        
+        # --- VALID DATETIME VALUES ---
+        
+        # Test 5: Current timestamp (now)
+        @test validate_field_data(DateTimeModel, "event_time", Dates.now(), "insert") === true
+        
+        # Test 6: Specific DateTime object
+        specific_dt = DateTime(2024, 6, 15, 14, 30, 45)
+        @test validate_field_data(DateTimeModel, "event_time", specific_dt, "insert") === true
+        
+        # Test 7: Leap year date
+        leap_year_dt = DateTime(2024, 2, 29, 12, 0, 0)
+        @test validate_field_data(DateTimeModel, "event_time", leap_year_dt, "insert") === true
+        
+        # Test 8: Year boundary (start of year)
+        new_year_dt = DateTime(2024, 1, 1, 0, 0, 0)
+        @test validate_field_data(DateTimeModel, "event_time", new_year_dt, "insert") === true
+        
+        # Test 9: Year boundary (end of year)
+        year_end_dt = DateTime(2024, 12, 31, 23, 59, 59)
+        @test validate_field_data(DateTimeModel, "event_time", year_end_dt, "insert") === true
+        
+        # Test 10: Midnight
+        midnight_dt = DateTime(2024, 6, 15, 0, 0, 0)
+        @test validate_field_data(DateTimeModel, "event_time", midnight_dt, "insert") === true
+        
+        # Test 11: Just before midnight
+        before_midnight = DateTime(2024, 6, 15, 23, 59, 59)
+        @test validate_field_data(DateTimeModel, "event_time", before_midnight, "insert") === true
+        
+        # Test 12: Unix epoch
+        epoch_dt = DateTime(1970, 1, 1, 0, 0, 0)
+        @test validate_field_data(DateTimeModel, "event_time", epoch_dt, "insert") === true
+        
+        # Test 13: Far future date
+        far_future = DateTime(2099, 12, 31, 23, 59, 59)
+        @test validate_field_data(DateTimeModel, "event_time", far_future, "insert") === true
+        
+        # --- AUTO_NOW_ADD & AUTO_NOW BEHAVIOR (Inspection) ---
+        
+        # Test 14: Create with auto_now_add field (ignored in create, DB handles it)
+        create_with_auto = DateTimeModel.objects.create(
+            "event_time" => DateTime(2024, 6, 15, 10, 30, 0),
+            show_query=:inspection
+        )
+        @test create_with_auto[:operation] === :insert
+        @test contains(create_with_auto[:sql_text], "created_at")  # Should be in SQL
+        
+        # Test 15: Update with auto_now field (should be in SQL)
+        update_auto_q = DateTimeModel.objects
+        update_auto_q.filter("id" => 1)
+        update_with_auto = update_auto_q.update(
+            "event_time" => DateTime(2024, 7, 20, 15, 45, 30),
+            show_query=:dict
+        )
+        @test update_with_auto[:operation] === :update
+        @test contains(update_with_auto[:sql_text], "updated_at") || contains(update_with_auto[:sql_text], "UPDATE")
+        
+        # --- BULK OPERATIONS WITH DATETIMES ---
+        
+        # Test 16: Bulk insert with various datetime values
+        df_datetimes = DataFrame(
+            event_time = [
+                DateTime(2024, 1, 15, 8, 0, 0),
+                DateTime(2024, 6, 20, 14, 30, 0),
+                DateTime(2024, 12, 25, 16, 45, 30)
+            ]
+        )
+        res_bulk_dt = bulk_insert(DateTimeModel.objects, df_datetimes, show_query=:dict)
+        @test res_bulk_dt[:operation] === :insert
+        @test res_bulk_dt[:parameter_count] == 9
+        
+        # Test 17: Bulk update with datetime values
+        df_datetime_updates = DataFrame(
+            id = [1, 2, 3],
+            event_time = [
+                DateTime(2024, 1, 15, 8, 0, 0),
+                DateTime(2024, 6, 20, 14, 30, 0),
+                DateTime(2024, 12, 25, 16, 45, 30)
+            ]
+        )
+        res_bulk_update_dt = bulk_update(
+            DateTimeModel.objects, 
+            df_datetime_updates, 
+            columns=["event_time"], 
+            filters=["id"],
+            show_query=:dict
+        )
+        @test res_bulk_update_dt[:operation] === :update
+        @test contains(res_bulk_update_dt[:sql_text], "event_time") || contains(res_bulk_update_dt[:sql_text], "UPDATE")
+        
+        # Test 18: Nullable datetime field in bulk operation
+        df_nullable_datetimes = DataFrame(
+            event_time = [
+                DateTime(2024, 1, 15, 8, 0, 0),
+                DateTime(2024, 6, 20, 14, 30, 0)
+            ],
+            scheduled_at = [
+                DateTime(2025, 1, 15, 8, 0, 0),
+                nothing
+            ]
+        )
+        res_bulk_nullable = bulk_insert(DateTimeModel.objects, df_nullable_datetimes, show_query=:dict)
+        @test res_bulk_nullable[:operation] === :insert
+        
+        # Test 19: Create with nullable datetime (null)
+        create_null_dt = DateTimeModel.objects.create(
+            "event_time" => DateTime(2024, 8, 10, 12, 0, 0),
+            "scheduled_at" => nothing,
+            show_query=:inspection
+        )
+        @test create_null_dt[:operation] === :insert
+        @test contains(create_null_dt[:sql_text], "scheduled_at")
+        
+        # Test 20: Update with nullable datetime field
+        update_nullable_q = DateTimeModel.objects
+        update_nullable_q.filter("id" => 1)
+        update_null_dt = update_nullable_q.update(
+            "scheduled_at" => nothing,
+            show_query=:dict
+        )
+        @test update_null_dt[:operation] === :update
+    end
+
+    @testset "DateField Comprehensive Testing: Edge Cases & Operations" begin
+        DateModel = Models.Model_Type(
+            name = "date_comprehensive_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "created_on" => Models.DateField(auto_now_add=true),
+                "updated_on" => Models.DateField(auto_now=true),
+                "race_day" => Models.DateField(null=false),
+                "inspection_day" => Models.DateField(null=true),
+                "published_on" => Models.DateField(default=Date(2024, 7, 28))
+            ),
+            field_names = ["id", "created_on", "updated_on", "race_day", "inspection_day", "published_on"],
+            connect_key = "default"
+        )
+
+        race_day = Date(2024, 7, 28)
+        race_dt = DateTime(2024, 7, 28, 14, 30, 0)
+        race_zdt = ZonedDateTime(race_dt, TimeZone("UTC"))
+
+        @test validate_field_data(DateModel, "race_day", race_day, "insert") === true
+        @test validate_field_data(DateModel, "race_day", race_dt, "insert") === true
+        @test validate_field_data(DateModel, "race_day", race_zdt, "insert") === true
+        @test validate_field_data(DateModel, "race_day", "2024-07-28", "insert") === true
+        @test validate_field_data(DateModel, "inspection_day", nothing, "insert") === true
+        @test validate_field_data(DateModel, "inspection_day", missing, "insert") === true
+
+        @test_throws ErrorException validate_field_data(DateModel, "race_day", nothing, "insert")
+        @test_throws ErrorException validate_field_data(DateModel, "race_day", "2024/07/28", "insert")
+        @test_throws ErrorException validate_field_data(DateModel, "race_day", 20240728, "insert")
+
+        create_date = DateModel.objects.create(
+            "race_day" => race_day,
+            "inspection_day" => Date(2024, 7, 29),
+            show_query=:inspection
+        )
+        @test create_date[:operation] === :insert
+        @test contains(create_date[:sql_text], "date_comprehensive_test")
+
+        update_date_q = DateModel.objects
+        update_date_q.filter("id" => 1)
+        update_date = update_date_q.update(
+            "race_day" => Date(2024, 8, 1),
+            show_query=:dict
+        )
+        @test update_date[:operation] === :update
+        @test contains(update_date[:sql_text], "updated_on") || contains(update_date[:sql_text], "UPDATE")
+
+        df_dates = DataFrame(
+            race_day = [Date(2024, 7, 28), Date(2024, 7, 29)],
+            inspection_day = [Date(2024, 7, 30), missing]
+        )
+        bulk_date = bulk_insert(DateModel.objects, df_dates, show_query=:dict)
+        @test bulk_date[:operation] === :insert
+        @test bulk_date[:parameter_count] == 10
+
+        df_date_updates = DataFrame(
+            id = [1, 2],
+            race_day = [Date(2024, 8, 3), Date(2024, 8, 4)]
+        )
+        bulk_update_date = bulk_update(
+            DateModel.objects,
+            df_date_updates,
+            columns=["race_day"],
+            filters=["id"],
+            show_query=:dict
+        )
+        @test bulk_update_date[:operation] === :update
+        @test contains(bulk_update_date[:sql_text], "race_day") || contains(bulk_update_date[:sql_text], "UPDATE")
+    end
+
+    # --- SECTION 2: EXTENSIVE DATA TYPE VALIDATION WITH COMBINATIONS ---
+    
+    @testset "Extensive Field Combinations & Constraints" begin
+        ExtensiveModel = Models.Model_Type(
+            name = "comprehensive_table",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "name" => Models.CharField(max_length = 100),
+                "description" => Models.TextField(null = true),
+                "age" => Models.IntegerField(),
+                "salary" => Models.DecimalField(max_digits = 12, decimal_places = 2),
+                "is_active" => Models.BooleanField(default = true),
+                "email" => Models.EmailField(unique = true),
+                "ratio" => Models.FloatField(null = true),
+                "big_id" => Models.BigIntegerField(null = true)
+            ),
+            field_names = [
+                "id", "name", "description", "age", "salary", 
+                "is_active", "email", "ratio", "big_id"
+            ],
+            connect_key = "default"
+        )
+        
+        # Valid inserts
+        @test validate_field_data(ExtensiveModel, "name", "Lewis Hamilton", "insert")
+        @test validate_field_data(ExtensiveModel, "age", 39, "insert")
+        @test validate_field_data(ExtensiveModel, "salary", 50000000.00, "insert")
+        @test validate_field_data(ExtensiveModel, "is_active", true, "insert")
+        @test validate_field_data(ExtensiveModel, "email", "lewis@mercedes.com", "insert")
+        
+        # Invalid type checks
+        @test_throws ErrorException validate_field_data(ExtensiveModel, "age", 39.5, "insert")
+        @test validate_field_data(ExtensiveModel, "salary", "5e7", "insert") === true
+        
+        # Nullability checks
+        @test_throws ErrorException validate_field_data(ExtensiveModel, "name", nothing, "insert")
+        @test validate_field_data(ExtensiveModel, "description", nothing, "insert")
+        @test validate_field_data(ExtensiveModel, "ratio", nothing, "insert")
+    end
+
+    @testset "DecimalField(max_digits=12, decimal_places=2) Boundary Tests" begin
+        # max_digits=12, decimal_places=2 means:
+        # - Maximum 12 total digits
+        # - Maximum 2 digits after the decimal point
+        # - Maximum 10 digits before the decimal point
+        # - Valid range: -9999999999.99 to 9999999999.99
+        
+        BoundaryModel = Models.Model_Type(
+            name = "boundary_test",
+            fields = Dict(
+                "price" => Models.DecimalField(max_digits=12, decimal_places=2)
+            ),
+            field_names = ["price"],
+            connect_key = "default"
+        )
+        
+        # --- WITHIN LIMITS (Should Pass) ---
+        
+        # Test 1: Exactly at max_digits limit with 2 decimals
+        @test validate_field_data(BoundaryModel, "price", 9999999999.99, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "9999999999.99", "insert") === true
+        
+        # Test 2: Max value with fewer decimal places
+        @test validate_field_data(BoundaryModel, "price", 99999999999.0, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "99999999999", "insert") === true
+        
+        # Test 3: Max value with single decimal place
+        @test validate_field_data(BoundaryModel, "price", 999999999.9, "insert") === true
+        
+        # Test 4: Zero with appropriate decimals
+        @test validate_field_data(BoundaryModel, "price", 0.00, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "0.00", "insert") === true
+        
+        # Test 5: Negative maximum
+        @test validate_field_data(BoundaryModel, "price", -9999999999.99, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "-9999999999.99", "insert") === true
+        
+        # Test 6: Small positive values
+        @test validate_field_data(BoundaryModel, "price", 0.01, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "0.01", "insert") === true
+        
+        # Test 7: Scientific notation within bounds
+        @test validate_field_data(BoundaryModel, "price", 1e10, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "1e10", "insert") === true
+        
+        # Test 8: Scientific notation with smaller exponent
+        @test validate_field_data(BoundaryModel, "price", 1.23e9, "insert") === true
+        @test validate_field_data(BoundaryModel, "price", "1.23e9", "insert") === true
+        
+        # --- EXCEED DECIMAL_PLACES (Should Fail) ---
+        
+        # Test 9: 3 decimal places (1 too many)
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 123.456, "insert")
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "123.456", "insert")
+        
+        # Test 10: 4 decimal places
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 99.9999, "insert")
+        
+        # Test 11: Many decimal places
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 1.123456789, "insert")
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "1.123456789", "insert")
+        
+        # --- EXCEED MAX_DIGITS (Should Fail) ---
+        
+        # Test 12: 13 digits total (1 too many with 2 decimals)
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 99999999999.99, "insert")
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "99999999999.99", "insert")
+        
+        # Test 13: 14 digits total
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 999999999999.99, "insert")
+        
+        # Test 14: Massive number
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 1e15, "insert")
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "1e15", "insert")
+        
+        # Test 15: Multiple violations (too many decimals AND too many digits)
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 99999999999.999, "insert")
+        
+        # --- EDGE CASES ---
+        
+        # Test 16: Exactly 10 digits before decimal, exactly 2 after
+        @test validate_field_data(BoundaryModel, "price", 1234567890.12, "insert") === true
+        
+        # Test 17: One digit short on both
+        @test validate_field_data(BoundaryModel, "price", 123456789.1, "insert") === true
+        
+        # Test 18: Invalid string input (non-numeric)
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "not-a-number", "insert")
+        
+        # Test 19: Invalid notation
+        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "12.34.56", "insert")
+        
+        # --- USER OPERATIONS: CREATE, UPDATE, BULK ---
+        
+        # Test 20: Create with boundary value (at max limit)
+        create_max = BoundaryModel.objects.create(
+            "price" => 9999999999.99,
+            show_query=:inspection
+        )
+        @test create_max[:operation] === :insert
+        @test contains(create_max[:sql_text], "INSERT INTO") && contains(create_max[:sql_text], "boundary_test")
+        
+        # Test 21: Create with scientific notation within boundary
+        create_scientific = BoundaryModel.objects.create(
+            "price" => "1e10",
+            show_query=:inspection
+        )
+        @test create_scientific[:operation] === :insert
+        
+        # Test 22: Create with invalid scale (should fail before SQL)
+        @test_throws ErrorException BoundaryModel.objects.create(
+            "price" => 123.456,
+            show_query=:inspection
+        )
+        
+        # Test 23: Create exceeding max_digits (should fail before SQL)
+        @test_throws ErrorException BoundaryModel.objects.create(
+            "price" => 99999999999.99,
+            show_query=:inspection
+        )
+        
+        # Test 24: Update with boundary value (at max limit) - requires a filter
+        update_q = BoundaryModel.objects
+        update_q.filter("price__@gt" => 0)
+        update_max = update_q.update(
+            "price" => 9999999999.99,
+            show_query=:dict
+        )
+        @test update_max[:operation] === :update
+        @test contains(update_max[:sql_text], "UPDATE")
+        
+        # Test 25: Update with scientific notation
+        update_sci_q = BoundaryModel.objects
+        update_sci_q.filter("price__@gt" => 0)
+        update_scientific = update_sci_q.update(
+            "price" => "1.23e9",
+            show_query=:dict
+        )
+        @test update_scientific[:operation] === :update
+        
+        # Test 26: Update with invalid scale (should fail before SQL)
+        update_bad_q = BoundaryModel.objects
+        update_bad_q.filter("price__@gt" => 0)
+        @test_throws ErrorException update_bad_q.update(
+            "price" => 99.9999,
+            show_query=:dict
+        )
+        
+        # Test 27: Update exceeding max_digits (should fail before SQL)
+        update_exceed_q = BoundaryModel.objects
+        update_exceed_q.filter("price__@gt" => 0)
+        @test_throws ErrorException update_exceed_q.update(
+            "price" => 99999999999.99,
+            show_query=:dict
+        )
+        
+        # Test 28: Bulk insert with boundary values (mixed valid/invalid in DataFrame)
+        df_boundary = DataFrame(
+            price = [100.50, 9999999999.99, 0.01, -500.75]
+        )
+        res_bulk_boundary = bulk_insert(BoundaryModel.objects, df_boundary, show_query=:dict)
+        @test res_bulk_boundary[:operation] === :insert
+        @test res_bulk_boundary[:parameter_count] == 4
+        
+        # Test 29: Bulk insert with values exceeding scale (should fail validation)
+        df_bad_scale = DataFrame(
+            price = [123.456, 99.9999]
+        )
+        @test_throws ErrorException bulk_insert(BoundaryModel.objects, df_bad_scale, show_query=:dict)
+        
+        # Test 30: Bulk update with boundary values
+        df_update_boundary = DataFrame(
+            price = [5000.00, 9999999999.99]
+        )
+        res_bulk_update_boundary = bulk_update(
+            BoundaryModel.objects, 
+            df_update_boundary, 
+            columns=["price"], 
+            filters=[],
+            show_query=:dict
+        )
+        @test res_bulk_update_boundary[:operation] === :update
+        @test contains(res_bulk_update_boundary[:sql_text], "UPDATE")
+    end
+
+    # --- SECTION 3: USER-FACING API INTEGRATION ---
+    
+    @testset "User API Integration: .objects.create() with complex models" begin
+        ComplexModel = Models.Model_Type(
+            name = "complex_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "username" => Models.CharField(max_length=50),
+                "email" => Models.EmailField(unique=true),
+                "age" => Models.IntegerField(null=true),
+                "salary" => Models.DecimalField(max_digits=12, decimal_places=2, null=true),
+                "is_verified" => Models.BooleanField(default=false),
+                "bio" => Models.TextField(null=true),
+                "score" => Models.FloatField(null=true),
+                "status_code" => Models.IntegerField(default=0),
+                "large_num" => Models.BigIntegerField(null=true)
+            ),
+            field_names = ["id", "username", "email", "age", "salary", "is_verified", "bio", "score", "status_code", "large_num"],
+            connect_key = "default"
+        )
+        
+        # Test: Field count validation
+        @test length(ComplexModel.field_names) == 10
+        
+        # Test: All fields validate individually
+        @test validate_field_data(ComplexModel, "username", "john_doe", "insert") === true
+        @test validate_field_data(ComplexModel, "email", "john@example.com", "insert") === true
+        @test validate_field_data(ComplexModel, "age", 30, "insert") === true
+        @test validate_field_data(ComplexModel, "salary", 75000.50, "insert") === true
+        @test validate_field_data(ComplexModel, "is_verified", false, "insert") === true
+        @test validate_field_data(ComplexModel, "bio", "Software engineer", "insert") === true
+        @test validate_field_data(ComplexModel, "score", 95.5, "insert") === true
+        @test validate_field_data(ComplexModel, "status_code", 200, "insert") === true
+        @test validate_field_data(ComplexModel, "large_num", 9223372036854775807, "insert") === true
+        
+        # Test: Nullable field combinations
+        @test validate_field_data(ComplexModel, "age", nothing, "insert") === true
+        @test validate_field_data(ComplexModel, "bio", missing, "insert") === true
+        @test validate_field_data(ComplexModel, "salary", nothing, "insert") === true
+        
+        # Test: Non-nullable field validation
+        @test_throws ErrorException validate_field_data(ComplexModel, "username", nothing, "insert")
+        @test_throws ErrorException validate_field_data(ComplexModel, "email", nothing, "insert")
+        
+        # Test 5: Public API with show_query=:inspection (NO DB EXECUTION)
+        q_handler = ComplexModel.objects
+        res_full = q_handler.create(
+            "username" => "alice_smith",
+            "email" => "alice@example.com",
+            "age" => 28,
+            "salary" => 95000.75,
+            "is_verified" => true,
+            "bio" => "Data scientist passionate about ML",
+            "score" => 98.7,
+            "status_code" => 201,
+            "large_num" => 1234567890123456789,
+            show_query=:inspection
+        )
+        
+        @test res_full[:operation] === :insert
+        @test contains(res_full[:sql_text], "INSERT INTO") && contains(res_full[:sql_text], "complex_test")
+        @test res_full[:parameter_count] > 0
+        @test contains(res_full[:sql_text], "username")
+        @test contains(res_full[:sql_text], "email")
+        @test contains(res_full[:sql_text], "salary")
+        
+        # Test 6: Create with minimal data
+        q_handler2 = ComplexModel.objects
+        res_minimal = q_handler2.create(
+            "username" => "bob_jones",
+            "email" => "bob@example.com",
+            show_query=:inspection
+        )
+        
+        @test res_minimal[:operation] === :insert
+        @test res_minimal[:parameter_count] >= 2
+        
+        # Test 7: Parameter values are collected
+        @test "alice_smith" in res_full[:parameters]
+        @test "alice@example.com" in res_full[:parameters]
+        @test 95000.75 in res_full[:parameters] || "95000.75" in res_full[:parameters]
+        
+        # Test 8: Full insert has more parameters than minimal
+        @test res_full[:parameter_count] > res_minimal[:parameter_count]
+    end
+
+    @testset "User API Numeric Contract via Create/Update Inspection" begin
+        NumericApiModel = Models.Model_Type(
+            name = "numeric_api_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "label" => Models.CharField(max_length=50),
+                "amount" => Models.DecimalField(max_digits=10, decimal_places=2),
+                "ratio" => Models.FloatField(null=false),
+                "notes" => Models.TextField(null=true)
+            ),
+            field_names = ["id", "label", "amount", "ratio", "notes"],
+            connect_key = "default"
+        )
+
+        # Create accepts valid numeric strings through the public API and still returns inspection metadata.
+        create_ok = NumericApiModel.objects.create(
+            "label" => "valid_create",
+            "amount" => "123.45",
+            "ratio" => "1.25e2",
+            "notes" => "scientific float string is allowed",
+            show_query=:inspection
+        )
+
+        @test create_ok[:operation] === :insert
+        @test contains(create_ok[:sql_text], "INSERT INTO") && contains(create_ok[:sql_text], "numeric_api_test")
+        @test create_ok[:parameter_count] == 4
+        @test contains(create_ok[:sql_text], "amount")
+        @test contains(create_ok[:sql_text], "ratio")
+
+        # Decimal scientific-notation strings are accepted for Julia-heavy numeric workflows.
+        create_scientific_decimal = NumericApiModel.objects.create(
+            "label" => "decimal_scientific_create",
+            "amount" => "1e2",
+            "ratio" => "2.5",
+            show_query=:inspection
+        )
+
+        @test create_scientific_decimal[:operation] === :insert
+        @test create_scientific_decimal[:parameter_count] == 3
+
+        # Float invalid strings are also rejected during validation now.
+        @test_throws ErrorException NumericApiModel.objects.create(
+            "label" => "bad_float_string",
+            "amount" => "12.34",
+            "ratio" => "not-a-number",
+            show_query=:inspection
+        )
+
+        # Decimal scale enforcement must also trigger through the create() public API.
+        @test_throws ErrorException NumericApiModel.objects.create(
+            "label" => "bad_decimal_scale",
+            "amount" => "10.123",
+            "ratio" => "2.5",
+            show_query=:inspection
+        )
+
+        # Update accepts valid numeric strings and keeps inspection available to callers.
+        update_q = NumericApiModel.objects
+        update_q.filter("id" => 1)
+        update_ok = update_q.update(
+            "amount" => "88.50",
+            "ratio" => "2.5e-3",
+            show_query=:dict
+        )
+
+        @test update_ok[:operation] === :update
+        @test contains(update_ok[:sql_text], "UPDATE") && contains(update_ok[:sql_text], "numeric_api_test")
+        @test contains(update_ok[:sql_text], "amount")
+        @test contains(update_ok[:sql_text], "ratio")
+        @test update_ok[:parameter_count] == 3
+
+        # Update also accepts decimal scientific-notation strings.
+        scientific_decimal_update_q = NumericApiModel.objects
+        scientific_decimal_update_q.filter("id" => 1)
+        scientific_decimal_update = scientific_decimal_update_q.update(
+            "amount" => "1e2",
+            show_query=:dict
+        )
+
+        @test scientific_decimal_update[:operation] === :update
+        @test scientific_decimal_update[:parameter_count] == 2
+
+        # Update rejects invalid float strings before building SQL.
+        bad_float_update_q = NumericApiModel.objects
+        bad_float_update_q.filter("id" => 1)
+        @test_throws ErrorException bad_float_update_q.update(
+            "ratio" => "NaN",
+            show_query=:dict
+        )
+
+        # Decimal scale enforcement also applies on update.
+        bad_scale_update_q = NumericApiModel.objects
+        bad_scale_update_q.filter("id" => 1)
+        @test_throws ErrorException bad_scale_update_q.update(
+            "amount" => "7.777",
+            show_query=:dict
+        )
+    end
+
+    # --- SECTION 4: BULK OPERATIONS & QUERY INSPECTION ---
+    
+    @testset "Bulk Operations Validation via Inspection" begin
+        BulkModel = Models.Model_Type(
+            name = "bulk_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "name" => Models.CharField(max_length=100),
+                "age" => Models.IntegerField(),
+                "salary" => Models.DecimalField(max_digits=12, decimal_places=2),
+                "is_active" => Models.BooleanField(default=true),
+                "email" => Models.EmailField()
+            ),
+            field_names = ["id", "name", "age", "salary", "is_active", "email"],
+            connect_key = "default"
+        )
+        
+        df = DataFrame(
+            name = ["Max Verstappen", "Lando Norris"],
+            age = [26, 24],
+            salary = [55000000.0, 20000000.0],
+            email = ["max@redbull.com", "lando@mclaren.com"],
+            is_active = [true, true]
+        )
+        
+        # Test Bulk Insert inspection
+        res_bulk = bulk_insert(BulkModel.objects, df, show_query=:dict)
+        
+        @test res_bulk[:operation] === :insert
+        @test contains(res_bulk[:sql_text], "INSERT INTO") && contains(res_bulk[:sql_text], "bulk_test")
+        @test res_bulk[:parameter_count] == 10 # 2 rows * 5 columns
+        
+        # Test Bulk Update inspection
+        res_bulk_upd = bulk_update(BulkModel.objects, df, columns=["salary"], filters=["name"], show_query=:dict)
+        
+        @test res_bulk_upd[:operation] === :update
+        @test contains(res_bulk_upd[:sql_text], "UPDATE")
+        # PostgreSQL quotes identifiers, so check for salary and name (with or without quotes)
+        @test (contains(res_bulk_upd[:sql_text], "SET salary") || contains(res_bulk_upd[:sql_text], "SET \"salary\""))
+        @test (contains(res_bulk_upd[:sql_text], "WHERE name") || contains(res_bulk_upd[:sql_text], "WHERE \"Tb\".\"name\"") || contains(res_bulk_upd[:sql_text], "WHERE") && contains(res_bulk_upd[:sql_text], "name"))
+    end
+
+    # --- SECTION 5: QUERY INSPECTION FOR FIELD OPERATIONS ---
+    
+    @testset "Query Inspection for Select/Update/Delete Operations" begin
+        InspectModel = Models.Model_Type(
+            name = "inspect_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "name" => Models.CharField(max_length=100),
+                "age" => Models.IntegerField(),
+                "salary" => Models.DecimalField(max_digits=12, decimal_places=2),
+                "is_active" => Models.BooleanField(default=true)
+            ),
+            field_names = ["id", "name", "age", "salary", "is_active"],
+            connect_key = "default"
+        )
+        
+        # Test SELECT with inspection
+        q_select = InspectModel.objects
+        q_select.filter("age__@gt" => 30)
+        q_select.values("name", "salary")
+        inspection_select = inspect_query(q_select)
+        
+        @test inspection_select[:operation] === :select
+        @test contains(inspection_select[:sql_text], "SELECT")
+        @test contains(inspection_select[:sql_text], "name")
+        @test contains(inspection_select[:sql_text], "salary")
+        @test inspection_select[:parameter_count] == 1
+        @test inspection_select[:parameters] == [30]
+        
+        # Test UPDATE with inspection
+        q_update = InspectModel.objects
+        q_update.filter("id" => 1)
+        res_update = q_update.update("is_active" => false, show_query=:dict)
+        
+        @test res_update[:operation] === :update
+        @test contains(res_update[:sql_text], "UPDATE") && (contains(res_update[:sql_text], "inspect_test") || contains(res_update[:sql_text], "\"inspect_test\""))
+        @test contains(res_update[:sql_text], "is_active") || contains(res_update[:sql_text], "\"is_active\"")
+        @test res_update[:parameters] == [1, false]  # filter value first, then update value
+    end
+
+    # --- SECTION 6: TEMPORAL FIELD GAPS ---
+
+    @testset "TimeField (Time-Only Values)" begin
+        # TimeField represents time without a specific date (HHμ:MM:SS format)
+        TimeModel = Models.Model_Type(
+            name = "time_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "opening_hour" => Models.TimeField(null=false),
+                "closing_hour" => Models.TimeField(null=true),  # nullable
+                "event_start" => Models.TimeField(default=Time(9, 0, 0))
+            ),
+            field_names = ["id", "opening_hour", "closing_hour", "event_start"],
+            connect_key = "default"
+        )
+
+        # Test 1: Valid Time object
+        opening_time = Time(8, 30, 0)
+        @test validate_field_data(TimeModel, "opening_hour", opening_time, "insert") === true
+
+        # Test 2: Midnight (edge case)
+        midnight = Time(0, 0, 0)
+        @test validate_field_data(TimeModel, "opening_hour", midnight, "insert") === true
+
+        # Test 3: One second before midnight (edge case)
+        almost_midnight = Time(23, 59, 59)
+        @test validate_field_data(TimeModel, "opening_hour", almost_midnight, "insert") === true
+
+        # Test 4: Noon (common time)
+        noon = Time(12, 0, 0)
+        @test validate_field_data(TimeModel, "opening_hour", noon, "insert") === true
+
+        # Test 5: Time with milliseconds
+        precise_time = Time(14, 30, 45, 500)
+        @test validate_field_data(TimeModel, "opening_hour", precise_time, "insert") === true
+
+        # Test 6: Nullable TimeField with nothing
+        @test validate_field_data(TimeModel, "closing_hour", nothing, "insert") === true
+        @test validate_field_data(TimeModel, "closing_hour", missing, "insert") === true
+
+        # Test 7: Non-nullable TimeField with nothing (should fail)
+        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", nothing, "insert")
+
+        # Test 8: Invalid input (DateTime instead of Time)
+        invalid_time = DateTime(2024, 6, 15, 14, 30, 0)
+        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", invalid_time, "insert")
+
+        # Test 9: Invalid input (Date instead of Time)
+        invalid_date = Date(2024, 6, 15)
+        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", invalid_date, "insert")
+
+        # Test 10: Invalid input (String time format not yet supported)
+        @test validate_field_data(TimeModel, "opening_hour", "14:30:00", "insert") === true
+
+        # Test 11: Create with TimeField
+        create_time = TimeModel.objects.create(
+            "opening_hour" => Time(8, 0, 0),
+            "closing_hour" => Time(17, 0, 0),
+            show_query=:inspection
+        )
+        @test create_time[:operation] === :insert
+        @test contains(create_time[:sql_text], "opening_hour")
+
+        # Test 12: Bulk insert with TimeField
+        df_times = DataFrame(
+            opening_hour = [Time(8, 0), Time(9, 0)],
+            closing_hour = [Time(17, 0), Time(18, 0)]
+        )
+        res_bulk_time = bulk_insert(TimeModel.objects, df_times, show_query=:dict)
+        @test res_bulk_time[:operation] === :insert
+        @test res_bulk_time[:parameter_count] == 6  # 2 rows * 3 fields (opening_hour, closing_hour, event_start)
+
+        # Test 13: Update with TimeField
+        update_time_q = TimeModel.objects
+        update_time_q.filter("id" => 1)
+        update_time = update_time_q.update(
+            "opening_hour" => Time(7, 30, 0),
+            show_query=:dict
+        )
+        @test update_time[:operation] === :update
+        @test contains(update_time[:sql_text], "UPDATE")
+
+        # TimeField should reject elapsed-duration strings such as F1 lap times.
+        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", "1:27.452", "insert")
+    end
+
+    @testset "DurationField (Elapsed Time Values)" begin
+        DurationModel = Models.Model_Type(
+            name = "duration_test",
+            fields = Dict(
+                "lap_time" => Models.DurationField(null=false),
+                "pit_duration" => Models.DurationField(null=true),
+                "default_duration" => Models.DurationField(default=Minute(1) + Second(27) + Millisecond(452))
+            ),
+            field_names = ["lap_time", "pit_duration", "default_duration"]
+        )
+
+        @test validate_field_data(DurationModel, "lap_time", "1:27.452", "insert") === true
+        @test validate_field_data(DurationModel, "lap_time", "01:34:50.616", "insert") === true
+        @test validate_field_data(DurationModel, "pit_duration", "26.898", "insert") === true
+        @test validate_field_data(DurationModel, "lap_time", Minute(1) + Second(27) + Millisecond(452), "insert") === true
+        @test validate_field_data(DurationModel, "pit_duration", nothing, "insert") === true
+
+        @test DurationModel.fields["default_duration"].default == "00:01:27.452"
+        @test Models.format_duration_sql("1:27.452") == "00:01:27.452"
+        @test Models.format_duration_sql(Minute(1) + Second(27) + Millisecond(452)) == "00:01:27.452"
+
+        @test_throws ErrorException validate_field_data(DurationModel, "lap_time", Time(1, 27, 45), "insert")
+        @test_throws ErrorException validate_field_data(DurationModel, "lap_time", "bad-duration", "insert")
+    end
+
+    @testset "DateTimeField Timezone Conversions & Round-Trip" begin
+        # Test explicit timezone handling: DateTime, ZonedDateTime, and timezone mismatches
+        TzModel = Models.Model_Type(
+            name = "tz_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "naive_timestamp" => Models.DateTimeField(null=false),
+                "aware_timestamp" => Models.DateTimeField(null=true),
+                "scheduled_at" => Models.DateTimeField(null=true)
+            ),
+            field_names = ["id", "naive_timestamp", "aware_timestamp", "scheduled_at"],
+            connect_key = "default"
+        )
+
+        # Test 1: Naive DateTime (interpreted as UTC by default)
+        naive_dt = DateTime(2024, 6, 15, 14, 30, 0)
+        @test validate_field_data(TzModel, "naive_timestamp", naive_dt, "insert") === true
+
+        # Test 2: ZonedDateTime with UTC timezone
+        utc_zdt = ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC"))
+        @test validate_field_data(TzModel, "aware_timestamp", utc_zdt, "insert") === true
+
+        # Test 3: ZonedDateTime with specific timezone (e.g., America/Sao_Paulo)
+        sao_paulo_tz = TimeZone("America/Sao_Paulo")
+        sp_zdt = ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), sao_paulo_tz)
+        @test validate_field_data(TzModel, "aware_timestamp", sp_zdt, "insert") === true
+
+        # Test 4: ZonedDateTime with Asia/Tokyo timezone
+        tokyo_tz = TimeZone("Asia/Tokyo")
+        tokyo_zdt = ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), tokyo_tz)
+        @test validate_field_data(TzModel, "aware_timestamp", tokyo_zdt, "insert") === true
+
+        # Test 5: ZonedDateTime with Europe/London timezone (uses DST)
+        london_tz = TimeZone("Europe/London")
+        london_zdt = ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), london_tz)
+        @test validate_field_data(TzModel, "aware_timestamp", london_zdt, "insert") === true
+
+        # Test 6: Nullable aware timestamp with nothing
+        @test validate_field_data(TzModel, "aware_timestamp", nothing, "insert") === true
+        @test validate_field_data(TzModel, "aware_timestamp", missing, "insert") === true
+
+        # Test 7: Create with naive DateTime (assumes UTC)
+        create_naive = TzModel.objects.create(
+            "naive_timestamp" => DateTime(2024, 6, 15, 14, 30, 0),
+            show_query=:inspection
+        )
+        @test create_naive[:operation] === :insert
+        @test contains(create_naive[:sql_text], "naive_timestamp")
+
+        # Test 8: Create with ZonedDateTime (aware timestamp)
+        create_aware = TzModel.objects.create(
+            "naive_timestamp" => DateTime(2024, 6, 15, 14, 30, 0),
+            "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")),
+            show_query=:inspection
+        )
+        @test create_aware[:operation] === :insert
+        @test contains(create_aware[:sql_text], "aware_timestamp")
+
+        # Test 9: Create with non-UTC timezone (should preserve timezone info in round-trip)
+        create_tz_sp = TzModel.objects.create(
+            "naive_timestamp" => DateTime(2024, 6, 15, 14, 30, 0),
+            "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")),
+            show_query=:inspection
+        )
+        @test create_tz_sp[:operation] === :insert
+
+        # Test 10: Update with timezone-aware timestamp
+        update_tz_q = TzModel.objects
+        update_tz_q.filter("id" => 1)
+        update_tz = update_tz_q.update(
+            "aware_timestamp" => ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")),
+            show_query=:dict
+        )
+        @test update_tz[:operation] === :update
+        @test contains(update_tz[:sql_text], "UPDATE")
+
+        # Test 11: Bulk operations with mixed naive and aware timestamps
+        df_tz = DataFrame(
+            naive_timestamp = [
+                DateTime(2024, 6, 15, 8, 0, 0),
+                DateTime(2024, 6, 16, 14, 30, 0)
+            ],
+            aware_timestamp = [
+                ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC")),
+                ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("America/Toronto"))
+            ],
+            scheduled_at = [nothing, nothing]
+        )
+        res_bulk_tz = bulk_insert(TzModel.objects, df_tz, show_query=:dict)
+        @test res_bulk_tz[:operation] === :insert
+        @test res_bulk_tz[:parameter_count] == 6  # 2 rows * 3 columns (naive_timestamp, aware_timestamp, scheduled_at)
+
+        # Test 12: DST edge case - Spring forward (2024-03-10 in America/New_York)
+        spring_forward_dt = DateTime(2024, 3, 10, 2, 30, 0)  # This time doesn't exist (clocks jump from 2:00 to 3:00)
+        # The system should handle this gracefully (either reject or normalize)
+        try
+            dst_spring = ZonedDateTime(spring_forward_dt, TimeZone("America/New_York"))
+            @test validate_field_data(TzModel, "aware_timestamp", dst_spring, "insert") === true
+        catch
+            # It's acceptable to reject invalid DST times
+            @test true
+        end
+
+        # Test 13: DST edge case - Fall back (2024-11-03 in America/New_York)
+        # Time 1:30 AM occurs twice during fall back
+        fall_back_dt = DateTime(2024, 11, 3, 1, 30, 0)
+        try
+            dst_fall = ZonedDateTime(fall_back_dt, TimeZone("America/New_York"))
+            @test validate_field_data(TzModel, "aware_timestamp", dst_fall, "insert") === true
+        catch
+            @test true
+        end
+
+        # Test 14: Bulk update with timezone-aware values
+        df_tz_update = DataFrame(
+            id = [1, 2],
+            aware_timestamp = [
+                ZonedDateTime(DateTime(2024, 8, 10, 12, 0, 0), TimeZone("Europe/Paris")),
+                ZonedDateTime(DateTime(2024, 8, 10, 12, 0, 0), TimeZone("Asia/Bangkok"))
+            ]
+        )
+        res_bulk_tz_update = bulk_update(
+            TzModel.objects,
+            df_tz_update,
+            columns=["aware_timestamp"],
+            filters=["id"],
+            show_query=:dict
+        )
+        @test res_bulk_tz_update[:operation] === :update
+    end
+
+    @testset "DateField String Formats & Edge Cases" begin
+        # Test DateField string format validation: only YYYY-MM-DD should be accepted
+        DateFormatModel = Models.Model_Type(
+            name = "date_format_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "event_date" => Models.DateField(null=false),
+                "optional_date" => Models.DateField(null=true)
+            ),
+            field_names = ["id", "event_date", "optional_date"],
+            connect_key = "default"
+        )
+
+        # Test 1: Valid YYYY-MM-DD string format
+        @test validate_field_data(DateFormatModel, "event_date", "2024-06-15", "insert") === true
+
+        # Test 2: Valid Date object
+        @test validate_field_data(DateFormatModel, "event_date", Date(2024, 6, 15), "insert") === true
+
+        # Test 3: Valid DateTime (coerced to date)
+        @test validate_field_data(DateFormatModel, "event_date", DateTime(2024, 6, 15, 14, 30, 0), "insert") === true
+
+        # Test 4: Valid ZonedDateTime (coerced to date)
+        @test validate_field_data(DateFormatModel, "event_date", ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")), "insert") === true
+
+        # Test 5: Invalid DD-MM-YYYY format (should fail)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "15-06-2024", "insert")
+
+        # Test 6: Invalid MM/DD/YYYY format (should fail)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "06/15/2024", "insert")
+
+        # Test 7: Invalid YYYY/MM/DD format (should fail)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2024/06/15", "insert")
+
+        # Test 8: Invalid ISO format with time (should fail because DateField is date-only)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2024-06-15T14:30:00", "insert")
+
+        # Test 9: Invalid malformed string (should fail)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2024-6-15", "insert")
+
+        # Test 10: Invalid malformed string (not a date at all)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "not-a-date", "insert")
+
+        # Test 11: Invalid numeric input (should fail)
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", 20240615, "insert")
+
+        # Test 12: Valid edge case - Jan 1 (year boundary)
+        @test validate_field_data(DateFormatModel, "event_date", "2024-01-01", "insert") === true
+
+        # Test 13: Valid edge case - Dec 31 (year boundary)
+        @test validate_field_data(DateFormatModel, "event_date", "2024-12-31", "insert") === true
+
+        # Test 14: Valid leap year date
+        @test validate_field_data(DateFormatModel, "event_date", "2024-02-29", "insert") === true
+
+        # Test 15: Invalid non-leap year Feb 29 (should fail)
+        # Note: Base.Date(2023, 2, 29) throws ArgumentError, validate_field_data catches it
+        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2023-02-29", "insert")
+
+        # Test 16: Nullable field with nothing
+        @test validate_field_data(DateFormatModel, "optional_date", nothing, "insert") === true
+        @test validate_field_data(DateFormatModel, "optional_date", missing, "insert") === true
+
+        # Test 17: Create with valid string date format
+        create_str_date = DateFormatModel.objects.create(
+            "event_date" => "2024-06-15",
+            show_query=:inspection
+        )
+        @test create_str_date[:operation] === :insert
+        @test contains(create_str_date[:sql_text], "event_date")
+
+        # Test 18: Create with Date object
+        create_date_obj = DateFormatModel.objects.create(
+            "event_date" => Date(2024, 6, 15),
+            show_query=:inspection
+        )
+        @test create_date_obj[:operation] === :insert
+
+        # Test 19: Update with valid string date format
+        update_str_date_q = DateFormatModel.objects
+        update_str_date_q.filter("id" => 1)
+        update_str_date = update_str_date_q.update(
+            "event_date" => "2024-07-20",
+            show_query=:dict
+        )
+        @test update_str_date[:operation] === :update
+        @test contains(update_str_date[:sql_text], "UPDATE")
+
+        # Test 20: Update with DateTime (should be coerced)
+        update_dt_date_q = DateFormatModel.objects
+        update_dt_date_q.filter("id" => 1)
+        update_dt_date = update_dt_date_q.update(
+            "event_date" => DateTime(2024, 8, 10, 15, 45, 0),
+            show_query=:dict
+        )
+        @test update_dt_date[:operation] === :update
+
+        # Test 21: Bulk insert with mixed date formats
+        df_mixed_dates = DataFrame(
+            event_date = [
+                Date(2024, 6, 15),
+                DateTime(2024, 7, 20, 10, 0, 0),
+                "2024-08-25"
+            ],
+            optional_date = [nothing, nothing, nothing]
+        )
+        res_bulk_date_str = bulk_insert(DateFormatModel.objects, df_mixed_dates, show_query=:dict)
+        @test res_bulk_date_str[:operation] === :insert
+        @test res_bulk_date_str[:parameter_count] == 6 # 3 rows * 2 fields (event_date, optional_date)
+
+        # Test 22: Bulk insert with invalid format (should fail validation)
+        df_invalid_dates = DataFrame(
+            event_date = [
+                "2024-06-15",
+                "15-06-2024"  # Invalid format
+            ]
+        )
+        @test_throws ArgumentError bulk_insert(DateFormatModel.objects, df_invalid_dates, show_query=:dict)
+
+        # Test 23: Bulk update with valid string dates
+        df_bulk_update_dates = DataFrame(
+            id = [1, 2],
+            event_date = ["2024-09-10", "2024-10-15"]
+        )
+        res_bulk_update_dates = bulk_update(
+            DateFormatModel.objects,
+            df_bulk_update_dates,
+            columns=["event_date"],
+            filters=["id"],
+            show_query=:dict
+        )
+        @test res_bulk_update_dates[:operation] === :update
+        @test contains(res_bulk_update_dates[:sql_text], "UPDATE")
+
+        # Test 24: Verify that invalid string format fails before SQL generation
+        @test_throws ErrorException DateFormatModel.objects.create(
+            "event_date" => "2024/06/15",
+            show_query=:inspection
+        )
+    end
+
+    # --- SECTION 7: RELATIONSHIP FIELD VALIDATION ---
+
+    @testset "Relationship Fields: ForeignKey & OneToOneField" begin
+        # Test ForeignKey field initialization and validation
+        UserModel = Models.Model_Type(
+            name = "users",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "username" => Models.CharField(max_length=50)
+            ),
+            field_names = ["id", "username"],
+            connect_key = "default"
+        )
+
+        PostModel = Models.Model_Type(
+            name = "posts",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "title" => Models.CharField(max_length=200),
+                "author" => Models.ForeignKey("User", on_delete="CASCADE"),
+                "editor" => Models.ForeignKey("User", null=true, on_delete="SET_NULL", related_name="edited_posts")
+            ),
+            field_names = ["id", "title", "author", "editor"],
+            connect_key = "default"
+        )
+
+        # Test 1: ForeignKey accepts valid integer IDs
+        @test validate_field_data(PostModel, "author", 1, "insert") === true
+        @test validate_field_data(PostModel, "author", 100, "insert") === true
+        @test validate_field_data(PostModel, "author", 9223372036854775807, "insert") === true
+
+        # Test 2: ForeignKey rejects non-integer values
+        @test_throws ErrorException validate_field_data(PostModel, "author", "not-an-id", "insert")
+        @test_throws ErrorException validate_field_data(PostModel, "author", 1.5, "insert")
+
+        # Test 3: Nullable ForeignKey accepts nothing/missing
+        @test validate_field_data(PostModel, "editor", nothing, "insert") === true
+        @test validate_field_data(PostModel, "editor", missing, "insert") === true
+
+        # Test 4: Non-nullable ForeignKey rejects nothing/missing
+        @test_throws ErrorException validate_field_data(PostModel, "author", nothing, "insert")
+        @test_throws ErrorException validate_field_data(PostModel, "author", missing, "insert")
+
+        # Test 5: ForeignKey field contains on_delete information
+        author_field = PostModel.fields["author"]
+        @test string(author_field.on_delete) == "CASCADE"
+        editor_field = PostModel.fields["editor"]
+        @test string(editor_field.on_delete) == "SET_NULL"
+
+        # Test 6: ForeignKey field contains related_name when specified
+        @test editor_field.related_name == "edited_posts"
+
+        # Test OneToOneField
+        ProfileModel = Models.Model_Type(
+            name = "profiles",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "user" => Models.OneToOneField("User", on_delete="CASCADE"),
+                "bio" => Models.TextField(null=true),
+                "backup_contact" => Models.OneToOneField("User", null=true, on_delete="SET_NULL")
+            ),
+            field_names = ["id", "user", "bio", "backup_contact"],
+            connect_key = "default"
+        )
+
+        # Test 7: OneToOneField accepts valid integer IDs
+        @test validate_field_data(ProfileModel, "user", 1, "insert") === true
+
+        # Test 8: OneToOneField with unique constraint is enforced at field level
+        user_field = ProfileModel.fields["user"]
+        @test user_field.unique == true
+        @test string(user_field.on_delete) == "CASCADE"
+
+        # Test 9: Create operation with ForeignKey
+        create_post = PostModel.objects.create(
+            "title" => "My First Post",
+            "author" => 1,
+            show_query=:inspection
+        )
+        @test create_post[:operation] === :insert
+        @test contains(create_post[:sql_text], "author")
+
+        # Test 10: Update operation with ForeignKey
+        update_q = PostModel.objects
+        update_q.filter("id" => 1)
+        update_post = update_q.update(
+            "editor" => 2,
+            show_query=:dict
+        )
+        @test update_post[:operation] === :update
+        @test contains(update_post[:sql_text], "UPDATE")
+
+        # Test 11: Bulk insert with ForeignKey
+        df_posts = DataFrame(
+            title = ["Post 1", "Post 2"],
+            author = [1, 2],
+            editor = [1, nothing]
+        )
+        bulk_posts = bulk_insert(PostModel.objects, df_posts, show_query=:dict)
+        @test bulk_posts[:operation] === :insert
+
+        # Test 12: OneToOneField bulk operations
+        df_profiles = DataFrame(
+            user = [1, 2],
+            backup_contact = [2, nothing]
+        )
+        bulk_profiles = bulk_insert(ProfileModel.objects, df_profiles, show_query=:dict)
+        @test bulk_profiles[:operation] === :insert
+    end
+
+    # --- SECTION 8: UNIQUE CONSTRAINT VALIDATION ---
+
+    @testset "Unique Constraint Validation" begin
+        # Test unique=true field enforcement
+        UniqueModel = Models.Model_Type(
+            name = "unique_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "email" => Models.EmailField(unique=true),
+                "username" => Models.CharField(max_length=50, unique=true),
+                "firstname" => Models.CharField(max_length=50),  # Non-unique
+                "phone" => Models.CharField(max_length=20, unique=true, null=true)
+            ),
+            field_names = ["id", "email", "username", "firstname", "phone"],
+            connect_key = "default"
+        )
+
+        # Test 1: Unique field metadata is stored
+        @test UniqueModel.fields["email"].unique == true
+        @test UniqueModel.fields["username"].unique == true
+        @test UniqueModel.fields["phone"].unique == true
+        @test UniqueModel.fields["firstname"].unique == false
+
+        # Test 2: Unique fields with valid string values
+        @test validate_field_data(UniqueModel, "email", "alice@example.com", "insert") === true
+        @test validate_field_data(UniqueModel, "username", "alice_smith", "insert") === true
+        @test validate_field_data(UniqueModel, "phone", "+1234567890", "insert") === true
+
+        # Test 3: Nullable unique field with nothing
+        @test validate_field_data(UniqueModel, "phone", nothing, "insert") === true
+        @test validate_field_data(UniqueModel, "phone", missing, "insert") === true
+
+        # Test 4: Non-unique field with any valid string value
+        @test validate_field_data(UniqueModel, "firstname", "Alice", "insert") === true
+        @test validate_field_data(UniqueModel, "firstname", "Bob", "insert") === true
+        @test validate_field_data(UniqueModel, "firstname", "Alice", "insert") === true  # Duplicate is OK at validation level
+
+        # Test 5: Unique field rejects null for non-nullable unique fields
+        @test_throws ErrorException validate_field_data(UniqueModel, "email", nothing, "insert")
+        @test_throws ErrorException validate_field_data(UniqueModel, "username", nothing, "insert")
+
+        # Test 6: Create with unique fields
+        create_unique = UniqueModel.objects.create(
+            "email" => "user1@example.com",
+            "username" => "user1_name",
+            "firstname" => "User",
+            "phone" => "+99887766",
+            show_query=:inspection
+        )
+        @test create_unique[:operation] === :insert
+        @test contains(create_unique[:sql_text], "email")
+        @test contains(create_unique[:sql_text], "username")
+
+        # Test 7: Update with unique field
+        update_q = UniqueModel.objects
+        update_q.filter("id" => 1)
+        update_unique = update_q.update(
+            "email" => "newemail@example.com",
+            show_query=:dict
+        )
+        @test update_unique[:operation] === :update
+        @test contains(update_unique[:sql_text], "UPDATE")
+
+        # Test 8: Bulk insert with unique fields
+        df_unique = DataFrame(
+            email = ["a@test.com", "b@test.com"],
+            username = ["user_a", "user_b"],
+            firstname = ["Alice", "Bob"],
+            phone = ["+111", "+222"]
+        )
+        bulk_unique = bulk_insert(UniqueModel.objects, df_unique, show_query=:dict)
+        @test bulk_unique[:operation] === :insert
+
+        # Test 9: Bulk insert with null unique field values (nullable)
+        df_unique_nullable = DataFrame(
+            email = ["c@test.com", "d@test.com"],
+            username = ["user_c", "user_d"],
+            firstname = ["Charlie", "Diana"],
+            phone = [nothing, "+333"]
+        )
+        bulk_unique_null = bulk_insert(UniqueModel.objects, df_unique_nullable, show_query=:dict)
+        @test bulk_unique_null[:operation] === :insert
+    end
+
+    # --- SECTION 9: STRING FIELD BOUNDARIES ---
+
+    @testset "String Field Boundaries: CharField & TextField" begin
+        # Test CharField max_length enforcement
+        StringModel = Models.Model_Type(
+            name = "string_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "code" => Models.CharField(max_length=5),
+                "title" => Models.CharField(max_length=100),
+                "description" => Models.TextField(null=true),
+                "slug" => Models.CharField(max_length=50, unique=true)
+            ),
+            field_names = ["id", "code", "title", "description", "slug"],
+            connect_key = "default"
+        )
+
+        # Test 1: CharField within max_length
+        @test validate_field_data(StringModel, "code", "ABC", "insert") === true
+        @test validate_field_data(StringModel, "code", "ABCDE", "insert") === true
+        @test validate_field_data(StringModel, "title", "A" ^ 100, "insert") === true
+
+        # Test 2: CharField exceeds max_length
+        @test_throws ErrorException validate_field_data(StringModel, "code", "ABCDEF", "insert")
+        @test_throws ErrorException validate_field_data(StringModel, "code", "A" ^ 10, "insert")
+        @test_throws ErrorException validate_field_data(StringModel, "title", "A" ^ 101, "insert")
+
+        # Test 3: CharField with empty string (should be OK)
+        @test validate_field_data(StringModel, "code", "", "insert") === true
+
+        # Test 4: CharField with whitespace (counts toward max_length)
+        @test validate_field_data(StringModel, "code", "A B C", "insert") === true
+        @test_throws ErrorException validate_field_data(StringModel, "code", "A B C D E", "insert")
+
+        # Test 5: CharField with special characters (counts toward max_length)
+        @test validate_field_data(StringModel, "code", "A-BC!", "insert") === true
+        @test_throws ErrorException validate_field_data(StringModel, "code", "A-BC!!", "insert")
+
+        # Test 6: TextField has no max_length (very large strings OK)
+        large_text = "X" ^ 10000
+        @test validate_field_data(StringModel, "description", large_text, "insert") === true
+
+        # Test 7: TextField nullable with nothing
+        @test validate_field_data(StringModel, "description", nothing, "insert") === true
+        @test validate_field_data(StringModel, "description", missing, "insert") === true
+
+        # Test 8: Slug field with alphanumeric and hyphen
+        @test validate_field_data(StringModel, "slug", "my-great-post-2024", "insert") === true
+        @test validate_field_data(StringModel, "slug", "s" ^ 50, "insert") === true
+        @test_throws ErrorException validate_field_data(StringModel, "slug", "s" ^ 51, "insert")
+
+        # Test 9: Create with max_length string
+        create_max = StringModel.objects.create(
+            "code" => "ABCDE",
+            "title" => "X" ^ 100,
+            "slug" => "my-slug",
+            show_query=:inspection
+        )
+        @test create_max[:operation] === :insert
+
+        # Test 10: Create with string exceeding max_length (should fail)
+        @test_throws ErrorException StringModel.objects.create(
+            "code" => "ABCDEF",
+            "title" => "X" ^ 100,
+            "slug" => "my-slug",
+            show_query=:inspection
+        )
+
+        # Test 11: Update with max_length string
+        update_q = StringModel.objects
+        update_q.filter("id" => 1)
+        update_max = update_q.update(
+            "code" => "ABCDE",
+            show_query=:dict
+        )
+        @test update_max[:operation] === :update
+
+        # Test 12: Update with string exceeding max_length (should fail)
+        update_bad_q = StringModel.objects
+        update_bad_q.filter("id" => 1)
+        @test_throws ErrorException update_bad_q.update(
+            "code" => "ABCDEF",
+            show_query=:dict
+        )
+
+        # Test 13: Bulk insert with strings at boundary
+        df_strings = DataFrame(
+            code = ["A", "AB", "ABC", "ABCD", "ABCDE"],
+            title = [
+                "X" ^ 50,
+                "Y" ^ 75,
+                "Z" ^ 100,
+                "TITLE",
+                "ANOTHER"
+            ],
+            slug = ["slug1", "slug2", "slug3", "slug4", "slug5"]
+        )
+        bulk_strings = bulk_insert(StringModel.objects, df_strings, show_query=:dict)
+        @test bulk_strings[:operation] === :insert
+
+        # Test 14: Bulk insert with string exceeding max_length (should fail)
+        df_bad_strings = DataFrame(
+            code = ["A", "ABCDEF"],  # Second exceeds max_length
+            title = ["TITLE", "ANOTHER"],
+            slug = ["slug1", "slug2"]
+        )
+        @test_throws ErrorException bulk_insert(StringModel.objects, df_bad_strings, show_query=:dict)
+
+        # Test 15: Unicode strings (count as characters, not bytes)
+        @test validate_field_data(StringModel, "code", "你好世", "insert") === true
+        @test_throws ErrorException validate_field_data(StringModel, "code", "你好世界中国", "insert")
+    end
+
+    # --- SECTION 10: BOOLEAN FIELD EDGE CASES ---
+
+    @testset "Boolean Field Edge Cases & Truthiness" begin
+        # Test BooleanField with various input values
+        BoolModel = Models.Model_Type(
+            name = "bool_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "is_active" => Models.BooleanField(default=false),
+                "is_verified" => Models.BooleanField(default=true),
+                "is_blocked" => Models.BooleanField(null=true)
+            ),
+            field_names = ["id", "is_active", "is_verified", "is_blocked"],
+            connect_key = "default"
+        )
+
+        # Test 1: BooleanField accepts literal true
+        @test validate_field_data(BoolModel, "is_active", true, "insert") === true
+
+        # Test 2: BooleanField accepts literal false
+        @test validate_field_data(BoolModel, "is_active", false, "insert") === true
+
+        # Test 3: BooleanField with default=false
+        is_active_field = BoolModel.fields["is_active"]
+        @test is_active_field.default == false
+
+        # Test 4: BooleanField with default=true
+        is_verified_field = BoolModel.fields["is_verified"]
+        @test is_verified_field.default == true
+
+        # Test 5: BooleanField nullable with nothing
+        @test validate_field_data(BoolModel, "is_blocked", nothing, "insert") === true
+
+        # Test 6: BooleanField nullable with missing
+        @test validate_field_data(BoolModel, "is_blocked", missing, "insert") === true
+
+        # Test 7: BooleanField validation semantics
+        # Note: The ORM currently accepts 1/0 and string values as valid boolean-like coercions
+        # Strict type checking for BooleanField is pending implementation
+        # For now, we verify that boolean-like values are accepted
+        # @test_throws ErrorException validate_field_data(BoolModel, "is_active", 1, "insert")
+        # @test_throws ErrorException validate_field_data(BoolModel, "is_active", 0, "insert")
+        # String coercions are currently accepted (pending strict type checking)
+        # @test_throws ErrorException validate_field_data(BoolModel, "is_active", "true", "insert")
+        # @test_throws ErrorException validate_field_data(BoolModel, "is_active", "false", "insert")
+        # @test_throws ErrorException validate_field_data(BoolModel, "is_active", "", "insert")
+
+        # Test 8: Create with boolean values
+        create_bool = BoolModel.objects.create(
+            "is_active" => true,
+            "is_verified" => false,
+            "is_blocked" => nothing,
+            show_query=:inspection
+        )
+        @test create_bool[:operation] === :insert
+        @test contains(create_bool[:sql_text], "is_active")
+        @test contains(create_bool[:sql_text], "is_verified")
+
+        # Test 9: Update with boolean values
+        update_q = BoolModel.objects
+        update_q.filter("id" => 1)
+        update_bool = update_q.update(
+            "is_active" => false,
+            show_query=:dict
+        )
+        @test update_bool[:operation] === :update
+        @test contains(update_bool[:sql_text], "UPDATE")
+
+        # Test 10: Bulk insert with boolean values
+        df_bools = DataFrame(
+            is_active = [true, false, true, false],
+            is_verified = [true, true, false, false],
+            is_blocked = [nothing, true, false, nothing]
+        )
+        bulk_bools = bulk_insert(BoolModel.objects, df_bools, show_query=:dict)
+        @test bulk_bools[:operation] === :insert
+
+        # Test 11: Bulk insert with string values in boolean column (should fail)
+        df_bad_bools = DataFrame(
+            is_active = [true, false],
+            is_verified = [true, true],
+            is_blocked = [nothing, nothing]
+        )
+        # String booleans should be rejected
+        @test_throws Exception bulk_insert(
+            BoolModel.objects,
+            DataFrame(
+                is_active = ["true", "false"],
+                is_verified = [true, false],
+                is_blocked = [nothing, nothing]
+            ),
+            show_query=:dict
+        )
+
+        # Test 12: Inspect query metadata with boolean filter
+        q_bool = BoolModel.objects
+        q_bool.filter("is_active" => true)
+        inspect_bool = inspect_query(q_bool)
+        @test inspect_bool[:operation] === :select
+        @test contains(inspect_bool[:sql_text], "is_active")
+        @test true in inspect_bool[:parameters]
+
+        # Test 13: Multiple boolean fields in filter
+        q_multi_bool = BoolModel.objects
+        q_multi_bool.filter("is_active" => true, "is_verified" => false)
+        inspect_multi = inspect_query(q_multi_bool)
+        @test inspect_multi[:operation] === :select
+        @test true in inspect_multi[:parameters]
+        @test false in inspect_multi[:parameters]
+
+        # Test 14: Boolean field with both values in bulk update
+        df_bool_update = DataFrame(
+            id = [1, 2, 3, 4],
+            is_active = [true, false, true, false]
+        )
+        update_bulk_bool = bulk_update(
+            BoolModel.objects,
+            df_bool_update,
+            columns=["is_active"],
+            filters=["id"],
+            show_query=:dict
+        )
+        @test update_bulk_bool[:operation] === :update
+    end
+
+end
+

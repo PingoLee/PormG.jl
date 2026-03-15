@@ -8,6 +8,39 @@
 # SQLite Introspection
 # ---
 
+function _strip_sqlite_default_wrapper(default_val)
+  default_val === nothing && return nothing
+  ismissing(default_val) && return nothing
+
+  stripped = strip(String(default_val))
+  while length(stripped) >= 2 && startswith(stripped, "(") && endswith(stripped, ")")
+    inner = strip(stripped[2:end-1])
+    inner == stripped && break
+    stripped = inner
+  end
+
+  return stripped
+end
+
+function _normalize_sqlite_default(default_val, type_sym::Symbol)
+  stripped = _strip_sqlite_default_wrapper(default_val)
+  stripped === nothing && return nothing
+
+  uppercase(stripped) == "NULL" && return nothing
+
+  if type_sym == :BooleanField
+    lowered = lowercase(replace(stripped, "'" => "", "\"" => ""))
+    lowered in ["1", "true", "t"] && return true
+    lowered in ["0", "false", "f"] && return false
+  end
+
+  if length(stripped) >= 2 && startswith(stripped, "'") && endswith(stripped, "'")
+    return replace(stripped[2:end-1], "''" => "'")
+  end
+
+  return stripped
+end
+
 function get_database_schema(db::PormGSQLite)
   # Query the sqlite_master table to get the schema information
   schema_query = "SELECT type, name, sql FROM sqlite_master WHERE type='table' OR type='index';"
@@ -83,6 +116,8 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   for match in column_matches
     # println(match.captures)
     column_name, column_type, nullable, default_value = match.captures
+    type_sym = get(type_map, column_type, :TextField)
+    normalized_default = _normalize_sqlite_default(default_value, type_sym)
     # check if column_name is a primary key
     if haskey(pk_map, column_name)
       field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
@@ -90,7 +125,7 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
       on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
     else
-      field_instance = getfield(Models, type_map[column_type])(null=!(nullable === nothing), default= default_value === nothing ? default_value : replace(default_value, "'" => ""))
+      field_instance = getfield(Models, type_sym)(null=!(nullable === nothing), default=normalized_default)
     end
             
     fields_dict[Symbol(column_name)] = field_instance
@@ -135,7 +170,7 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
     else
         type_sym = get(type_map, base_type, :TextField)
         # Handle decimal precision if present
-        field = getfield(Models, type_sym)(null=nullable, default=default_val)
+      field = getfield(Models, type_sym)(null=nullable, default=_normalize_sqlite_default(default_val, type_sym))
         if type_sym == :CharField && occursin("(", col_type)
             m = match(r"\((\d+)\)", col_type)
             if m !== nothing

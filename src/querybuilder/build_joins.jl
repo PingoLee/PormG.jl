@@ -173,8 +173,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
-    last_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]   
-    row_join["how"] = _determine_join_type(last_field, second_fild_name= vector[2]) 
+    join_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]
+    row_join["how"] = _determine_join_type(join_field, second_fild_name= vector[2])
+    size(vector, 1) == 2 && (last_field = reverse_model.fields[vector[2]])
     foreign_table_name = instruct.object.model.related_objects[vector[1]][3] |> String
     if foreign_table_name === nothing
       throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")
@@ -243,8 +244,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias
-      last_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
-      row_join["how"] = _determine_join_type(last_field, previus_how=prev_how, second_fild_name= vector[2])
+      join_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
+      row_join["how"] = _determine_join_type(join_field, previus_how=prev_how, second_fild_name= vector[2])
+      size(vector, 1) == 2 && (last_field = reverse_model.fields[vector[2]])
       foreign_table_name = new_object.related_objects[vector[1]][3] |> String
       if foreign_table_name === nothing
         throw("Error in _build_row_join, the column $(foreign_table_name) does not have a foreign key")

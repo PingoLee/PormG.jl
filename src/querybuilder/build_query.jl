@@ -84,6 +84,49 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
   return nothing
 end
 
+function _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc::SQLInstruction)
+  if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool}
+    return raw_value
+  end
+  return formatted_value
+end
+
+function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInstruction)
+  if haskey(instruc.tab_field_cache, alias)
+    formatted_value = instruc.tab_field_cache[alias].formater(raw_value)
+    return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+  end
+
+  for selected_value in instruc.object.values
+    selected_alias = selected_value.custom_as !== nothing ? selected_value.custom_as : selected_value._as
+    selected_alias == alias || continue
+
+    if isa(selected_value, SQLTypeField) && isa(selected_value.field, SQLTypeFunction)
+      sql_function = selected_value.field
+
+      if sql_function.formater !== nothing
+        formatted_value = sql_function.formater(raw_value)
+        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+      elseif sql_function.function_name == "AVG"
+        formatted_value = Models.format_number_sql(raw_value)
+        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+      elseif haskey(PormGTypeField, sql_function.function_name)
+        formatted_value = getfield(Models, PormGTypeField[sql_function.function_name])(raw_value)
+        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+      elseif sql_function.function_name in ["SUM", "COUNT"]
+        formatted_value = Models.format_number_sql(raw_value)
+        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+      elseif sql_function.function_name in ["MAX", "MIN"] && sql_function.column isa String && haskey(instruc.object.model.fields, sql_function.column)
+        formatted_value = instruc.object.model.fields[sql_function.column].formater(raw_value)
+        return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+      end
+    end
+  end
+
+  formatted_value = IntegerField().formater(raw_value)
+  return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
+end
+
 """
   get_filter_query(object::SQLObject, instruc::SQLInstruction)
 
@@ -110,14 +153,9 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           # @infiltrate
           rethrow(e)
         end
-        if haskey(instruc.tab_field_cache, v.column._as)
-          _validation = instruc.tab_field_cache[instruc.cache[v.column._as]._as]
-        else
-          _validation = IntegerField()
-        end
         # Switch to having context for positional parameters
         set_context!(instruc, :having)
-        placeholder = add_parameter!(instruc, _validation.formater(v.values))
+        placeholder = add_parameter!(instruc, _resolve_having_filter_value(v.column._as, v.values, instruc))
         push!(instruc.having, "$(field) $(v.operator) $(placeholder)")
         set_context!(instruc, :where)
         continue

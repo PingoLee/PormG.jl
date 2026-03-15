@@ -2,6 +2,22 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+# function ensure_integration_schema_current!()
+#   settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
+#   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
+
+#   PormG.Migrations.init_migrations(PORMG_DB_FOLDER)
+#   PormG.Migrations.makemigrations(PORMG_DB_FOLDER, interactive=false)
+
+#   if isfile(pending_path)
+#     PormG.Migrations.migrate(PORMG_DB_FOLDER, interactive=false)
+#   end
+
+#   return nothing
+# end
+
+# ensure_integration_schema_current!()
+
 # conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
 @testset "Database Setup Insert" begin
   @testset "Schema Evolution and Error Recovery" begin
@@ -180,12 +196,7 @@ end
     query = M.Pit_stops.objects
     df = CSV.File(joinpath("f1", "pit_stops.csv")) |> DataFrame
     rename!(df, lowercase.(names(df)))
-    df[!, :duration] = map(df[!, :duration], df[!, :milliseconds]) do duration, milliseconds
-      if ismissing(duration) || duration == "\\N" || ismissing(milliseconds) || milliseconds == "\\N"
-        return missing
-      end
-      return Float64(milliseconds) / 1000
-    end
+    df[!, :duration] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, :duration])
     bulk_insert(query, df, chunk_size=2_000)
     @test query.count() == nrow(df)
 

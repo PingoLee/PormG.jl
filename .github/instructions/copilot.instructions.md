@@ -14,7 +14,7 @@ applyTo: "**"
 # QueryBuilder Architecture (Modular Design)
 - [src/QueryBuilder.jl](../../src/QueryBuilder.jl) is now the entry point that includes 13 specialized modules from `src/querybuilder/`:
   - **types.jl** – Core type definitions (SQLObjectQuery, OperObject, QObject, etc.) and **type aliases** for Union complexity (FilterType, CTEDict, JoinDict, ConnType, OptionalString, FieldPart, ColumnPart).
-  - **sanitization.jl** – SQL injection prevention (sanitize_identifier, escape_like_pattern, quote_identifier).
+  - **sanitization.jl** – SQL injection prevention and **strict numeric validation** (validates `FloatField` finite-ness and `DecimalField` scale/precision before SQL generation).
   - **parameters.jl** – Parameterized query construction (PgParameterizedQuery, SQLiteParameterizedQuery, add_parameter!).
   - **functions.jl** – Aggregate and scalar functions (Sum, Avg, Count, Max, Min, Cast, Concat, Extract, When, etc.).
   - **operators.jl** – Operator definitions and constants (reserved for future operator expansion).
@@ -28,12 +28,14 @@ applyTo: "**"
   - **execution_bulk.jl** – Bulk insert/update from DataFrames (bulk_insert, bulk_update with chunking).
 
 # Models & query patterns
-- Define models with `Models.Model` and always call `Models.set_models(@__MODULE__, @__DIR__)` after the module so `related_objects`, `connect_key`, and the cache are populated (see [test/db/models/automatic_models.jl](../../test/db/models/automatic_models.jl) for how auto-generated modules look).
+- Define models with `Models.Model` and always call `Models.set_models(@__MODULE__, @__DIR__)` after the module so `related_objects`, `connect_key`, and the cache are populated (see [test/integration/db/automatic_models.jl](../../test/integration/db/automatic_models.jl) for how auto-generated modules look).
 - Keep **Julia model variable names capitalized** even for snake_case SQL tables. Example: prefer `Pit_stops = Models.Model(...)` and `Lap_times = Models.Model(...)`, while the SQL table names remain `pit_stops` / `lap_times`. Some ORM reflection and deletion paths derive related model symbols with `uppercasefirst(...)`, so lowercase bindings are fragile.
 - `Models.Model_to_str` is the serialization layer used by migrations and import helpers; it mirrors the kwargs you pass in `Model(...)` and should be updated whenever field structs gain new keyword arguments.
 - Query building happens through [src/QueryBuilder.jl](../../src/QueryBuilder.jl) (now distributed across 13 specialized modules); pipe a model into `object`, then call `filter`, `values`, `order_by`, `distinct`, and `update` on the returned `ObjectHandler`.
 - Type aliases in `querybuilder/types.jl` provide a unified semantic layer: use `FilterType` for filter objects, `CTEDict` for CTE metadata, `JoinDict` for join configurations, and `ConnType` for database connections.
 - `src/Migrations.jl` now exposes `init_migrations`, `status`, `dry_run`, `mark_applied`, `mark_failed`, and `remove_migration_record` in addition to the existing schema/import helpers.
+- Temporal field contract is now explicit: `DateTimeField.default` stores `Union{ZonedDateTime, DateTime, Nothing}`; user-supplied naive `DateTime` values serialize as UTC through the default formatter path, while `auto_now` and `auto_now_add` attach `settings.time_zone`; `ZonedDateTime` is the preferred interop type for Django-backed `TIMESTAMPTZ` columns.
+- `DateField` currently accepts `Date`, `DateTime`, `ZonedDateTime`, and `YYYY-MM-DD` strings, coercing temporal values to their calendar date; do not document stricter rejection semantics unless the implementation changes.
 
 # Migration workflow conventions
 - Treat `pormg_migrations` as the runtime source of truth for applied/failed migration state.

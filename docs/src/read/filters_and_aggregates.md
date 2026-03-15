@@ -148,4 +148,4 @@ GROUP BY 1, 2, 3
 HAVING COUNT("Tb"."grid") <= 3
 ```
 
-For more complex aggregate expressions such as `Sum("points") / Count("resultid")`, see [F Expressions and Q Objects](f_expressions.md).
+For more complex aggregate expressions such as `Sum("points") / Count("resultid")`, see [Field Expressions](field_expressions.md) and [Q Objects](q_objects.md).

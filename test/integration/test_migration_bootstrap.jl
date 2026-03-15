@@ -155,6 +155,7 @@ end
   else
     # PostgreSQL: use the committed connection.yml in db_test_migration_pg/
     selected_settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
+    hydrate_postgres_test_config!(joinpath(@__DIR__, edge_db_name), selected_settings)
 
     # Detect whether the edge-case database actually points at the same
     # PostgreSQL instance/database as the selected integration environment.

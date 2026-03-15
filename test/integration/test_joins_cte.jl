@@ -138,20 +138,34 @@ end
   @test size(df, 1) == 1
   @test df[1, :result__resultid] == 1
 
-  # get values to compare
+    seed_ids = [910001, 910002]
+    seed_names = ["reverse-join-a", "reverse-join-b"]
+    cleanup = M.Just_a_test_deletion.objects;
+    cleanup.filter("id__@in" => seed_ids);
+    delete(cleanup)
+
+    cleanup = M.Just_a_test_deletion.objects;
+    cleanup.filter("name__@in" => seed_names);
+    delete(cleanup)
+
+  seed = M.Just_a_test_deletion.objects;
+    seed.create("id" => seed_ids[1], "name" => seed_names[1], "test_result" => 1)
+    seed.create("id" => seed_ids[2], "name" => seed_names[2], "test_result" => 2)
+
   query_a = M.Just_a_test_deletion.objects;
+    query_a.filter("name__@in" => seed_names);
   query_a.values("id", "name", "test_result", "test_result2");
   df_a = query_a |> DataFrame
 
   # Test reverse join with model with id and multiple fields in reverse model
-  query = M.Result.objects;
-  query.values("test_deletion__id", "test_deletion__name", "resultid");
-  query.filter("test_deletion__id__@isnull" => false);
+    query = M.Result.objects.values("test_deletion__id", "test_deletion__name", "resultid").filter("test_deletion__name__@in" => seed_names);
   df = query |> DataFrame
-  query |> show_query
+  #   query |> show_query
+  # insp = query |> inspect_query
   @test size(df, 1) == size(df_a, 1)
   @test all(in.(df.test_deletion__id, Ref(df_a.id)))
   @test all(in.(df.test_deletion__name, Ref(df_a.name)))
+  @test sort(collect(skipmissing(df.resultid))) == [1, 2]
 end
 
 @testset "CTE with JOIN functionality" begin

@@ -69,7 +69,7 @@ Lap_times = Models.Model(
   driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
   lap = Models.IntegerField(),
   position = Models.IntegerField(),
-  time = Models.TimeField(),
+  time = Models.DurationField(),
   milliseconds = Models.IntegerField()
 )
 
@@ -79,7 +79,7 @@ Pit_stops = Models.Model(
   stop = Models.IntegerField(),
   lap = Models.IntegerField(),
   time = Models.TimeField(),
-  duration = Models.FloatField(),
+  duration = Models.DurationField(),
   milliseconds = Models.IntegerField()
 )
 
@@ -116,9 +116,9 @@ Qualifying = Models.Model(
   constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
   number = Models.IntegerField(null=true),
   position = Models.IntegerField(null=true),
-  q1 = Models.TimeField(null=true),
-  q2 = Models.TimeField(null=true),
-  q3 = Models.TimeField(null=true)
+  q1 = Models.DurationField(null=true),
+  q2 = Models.DurationField(null=true),
+  q3 = Models.DurationField(null=true)
 )
 
 Sprint_results = Models.Model(
@@ -136,7 +136,7 @@ Sprint_results = Models.Model(
   time = Models.CharField(null=true),
   milliseconds = Models.IntegerField(null=true),
   fastestLap = Models.IntegerField(null=true),
-  fastestLapTime = Models.TimeField(null=true),
+  fastestLapTime = Models.DurationField(null=true),
   statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
 )
 
@@ -156,7 +156,7 @@ Result = Models.Model(
   milliseconds=Models.IntegerField(null=true),
   fastestLap=Models.IntegerField(null=true),
   rank=Models.IntegerField(null=true),
-  fastestLapTime=Models.TimeField(null=true),
+  fastestLapTime=Models.DurationField(null=true),
   fastestLapSpeed=Models.FloatField(null=true),
   statusId=Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
 )

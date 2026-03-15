@@ -50,9 +50,19 @@ Adhere strictly to the following guidelines:
   - *Correct (Derived comparison)*: `query.filter(F("raceid__date") <= F("driverid__dob") + 30)`
   - *Correct (Column as value)*: `query.filter("points__@gt" => F("grid"))`
   - *Avoid*: `query.filter(F("points") > 20)` when the standard `"field__@operator" => value` form expresses the same scalar predicate more clearly.
+- **Numeric Field Contracts (Strict Validation)**:
+  - **Early Fail**: Validation happens at the ORM layer (`sanitization.jl`) before reaching the database.
+  - **FloatField**: Must be a `Number` or a strictly-valid numeric `String` (including scientific notation). Explicitly rejects non-finite values (`Inf`, `NaN`) and non-numeric garbage.
+  - **DecimalField**: Validates `max_digits` and `decimal_places` (scale) in Julia. Strings like `"1e2"` are supported if they resolve to finite values within the configured scale.
+- **Temporal Field Contracts (Current Behavior)**:
+  - **DateTimeField storage**: `DateTimeField` stores defaults as `Union{ZonedDateTime, DateTime, Nothing}`.
+  - **Naive `DateTime` inputs**: A plain Julia `DateTime` passed by user code is currently interpreted as `UTC` when serialized through the default formatter path.
+  - **Aware inputs**: Use `ZonedDateTime` whenever the source timestamp has a real civil timezone such as `America/Sao_Paulo`; this is the stable interop path for Django `USE_TZ=True` databases.
+  - **Auto-managed timestamps**: Internal `auto_now` and `auto_now_add` paths use `settings.time_zone` when attaching a timezone to generated values.
+  - **DateField coercion**: `DateField` currently accepts `Date`, `DateTime`, `ZonedDateTime`, and `YYYY-MM-DD` strings. `DateTime` and `ZonedDateTime` are coerced to their calendar date.
 - **DataFrames**: The primary output format for analytical queries is `DataFrame`.
 - **Dicts:** `list` returns `Vector{Dict{Symbol, Any}}`.
-- **Parameters:** Always use parameterized queries to prevent SQL Injection. Never interpolate strings directly into SQL commands.
+- **Parameters**: Always use parameterized queries to prevent SQL Injection. Never interpolate strings directly into SQL commands.
 
 ## 3. Directory Structure & Environments
 

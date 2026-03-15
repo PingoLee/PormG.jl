@@ -2,7 +2,7 @@ module Configuration
 
 import YAML, Logging
 import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
-import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT
+import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE
 import PormG: Generator
 import PormG.Infiltrator: @infiltrate
 
@@ -457,7 +457,7 @@ mutable struct Settings <: SQLConn
       change_db           = false,
       change_data         = false,
       connections         = nothing,
-      time_zone           = DATETIME_FORMAT,
+          time_zone           = UTC_TIMEZONE,
       django_prefix       = nothing
   ) =
   new(

@@ -485,6 +485,12 @@ Product = Models.Model(
 
 **Format**: YYYY-MM-DD
 
+**Current Contract**:
+- Accepts `Date` directly.
+- Also accepts `DateTime` and `ZonedDateTime`, coercing them to the calendar date before SQL generation.
+- Accepts `YYYY-MM-DD` strings.
+- This means `DateField` is currently permissive; it does not yet reject datetime values automatically.
+
 ```julia
 # Personal information
 User = Models.Model(
@@ -520,10 +526,22 @@ Invoice = Models.Model(
 
 **Use Cases**: Timestamps, logs, audit trails, precise timing.
 
+**Current Contract**:
+- `default` values are normalized to `Union{ZonedDateTime, DateTime, Nothing}`.
+- Passing `ZonedDateTime` preserves the instant and is the recommended path for shared Django/PostgreSQL tables.
+- Passing a plain Julia `DateTime` through the standard formatter path currently interprets that value as `UTC`.
+- Internal `auto_now` and `auto_now_add` paths attach `settings.time_zone` to generated timestamps before serialization.
+- If your Django app uses `USE_TZ=True` with a non-UTC active timezone, you should treat plain `DateTime` as a deliberate UTC input and use `ZonedDateTime` for local civil times.
+
 #### TIMESTAMPTZ vs TIMESTAMP
 By default, `DateTimeField` uses `TIMESTAMPTZ`. 
 - **TIMESTAMPTZ** (Recommended): Stores values in UTC internally and converts them to your session's timezone upon retrieval. This ensures consistency across different geographical regions.
 - **TIMESTAMP**: Stores the exact date and time provided without any timezone conversion. You can switch to this by passing `type="TIMESTAMP"`.
+
+#### Naive vs Aware Inputs
+- **Aware input**: `ZonedDateTime(2026, 3, 13, 9, 0, tz"America/Sao_Paulo")` keeps the source timezone semantics explicit.
+- **Naive input**: `DateTime(2026, 3, 13, 9, 0)` is currently serialized as `UTC`, not as `settings.time_zone`.
+- **Interop rule**: if the upstream system thinks in a local timezone, convert to `ZonedDateTime` before `create`, `update`, `bulk_insert`, or `bulk_update`.
 
 ```julia
 # Audit and logging

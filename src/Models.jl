@@ -509,6 +509,103 @@ function format_text_sql(value::Time)
   return string(value)
 end  
 
+function _duration_to_nanoseconds(value::Period)::Int64
+  if value isa Week
+    return Int64(Dates.value(value)) * 7 * 24 * 60 * 60 * 1_000_000_000
+  elseif value isa Day
+    return Int64(Dates.value(value)) * 24 * 60 * 60 * 1_000_000_000
+  elseif value isa Hour
+    return Int64(Dates.value(value)) * 60 * 60 * 1_000_000_000
+  elseif value isa Minute
+    return Int64(Dates.value(value)) * 60 * 1_000_000_000
+  elseif value isa Second
+    return Int64(Dates.value(value)) * 1_000_000_000
+  elseif value isa Millisecond
+    return Int64(Dates.value(value)) * 1_000_000
+  elseif value isa Microsecond
+    return Int64(Dates.value(value)) * 1_000
+  elseif value isa Nanosecond
+    return Int64(Dates.value(value))
+  end
+
+  throw(ArgumentError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals."))
+end
+
+function _duration_to_nanoseconds(value::Dates.CompoundPeriod)::Int64
+  total = Int64(0)
+  for period in Dates.periods(value)
+    total += _duration_to_nanoseconds(period)
+  end
+  return total
+end
+
+function _duration_from_seconds_string(value::AbstractString)::String
+  match_result = match(r"^([+-]?)(\d+)(?:\.(\d+))?$", value)
+  match_result === nothing && throw(ArgumentError("The duration $value is invalid"))
+
+  sign, seconds_str, fraction = match_result.captures
+  fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
+  fraction = fraction == "." ? "" : fraction
+  return "$(sign === "-" ? "-" : "")00:00:$(lpad(seconds_str, 2, '0'))$(fraction)"
+end
+
+function _normalize_duration_string(value::AbstractString)::String
+  stripped = strip(value)
+  isempty(stripped) && throw(ArgumentError("The duration cannot be empty"))
+
+  if (match_result = match(r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$", stripped)) !== nothing
+    sign, hours, minutes, seconds, fraction = match_result.captures
+    fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
+    fraction = fraction == "." ? "" : fraction
+    return "$(sign === "-" ? "-" : "")$(hours):$(minutes):$(seconds)$(fraction)"
+  elseif (match_result = match(r"^([+-]?)(\d+):(\d{2})(?:\.(\d+))?$", stripped)) !== nothing
+    sign, minutes, seconds, fraction = match_result.captures
+    fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
+    fraction = fraction == "." ? "" : fraction
+    return "$(sign === "-" ? "-" : "")00:$(lpad(minutes, 2, '0')):$(seconds)$(fraction)"
+  elseif occursin(r"^[+-]?\d+(?:\.\d+)?$", stripped)
+    return _duration_from_seconds_string(stripped)
+  end
+
+  throw(ArgumentError("The duration $value is invalid. Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or SS(.sss)."))
+end
+
+function _duration_nanoseconds_to_string(total_nanoseconds::Int64)::String
+  sign = total_nanoseconds < 0 ? "-" : ""
+  remaining = abs(total_nanoseconds)
+
+  hours, remaining = divrem(remaining, 3_600_000_000_000)
+  minutes, remaining = divrem(remaining, 60_000_000_000)
+  seconds, nanoseconds = divrem(remaining, 1_000_000_000)
+
+  fraction = ""
+  if nanoseconds != 0
+    fraction = "." * rstrip(lpad(string(nanoseconds), 9, '0'), '0')
+  end
+
+  return "$(sign)$(lpad(string(hours), 2, '0')):$(lpad(string(minutes), 2, '0')):$(lpad(string(seconds), 2, '0'))$(fraction)"
+end
+
+function format_duration_sql(value::Union{Missing, Nothing})
+  return missing
+end
+
+function format_duration_sql(value::AbstractString)
+  return _normalize_duration_string(value)
+end
+
+function format_duration_sql(value::Period)
+  return _duration_nanoseconds_to_string(_duration_to_nanoseconds(value))
+end
+
+function format_duration_sql(value::Dates.CompoundPeriod)
+  return _duration_nanoseconds_to_string(_duration_to_nanoseconds(value))
+end
+
+function format_duration_sql(value)
+  throw(ArgumentError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format"))
+end
+
 function format_number_sql(value::Integer)
   return value
     # return string(value)    
@@ -528,15 +625,12 @@ function format_number_sql(value::AbstractString)
     throw(ArgumentError("Does you want to use ',' as decimal separator? Please use '.' instead."))
   end
 
-  if occursin(r"^[+-]?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+$", value)
-    throw(ArgumentError("Scientific notation strings are not supported. Please use a literal decimal representation instead."))
-  end
-
   # try integer first
   if (i = tryparse(Int64, value)) !== nothing
     return value
   # then float
   elseif (f = tryparse(Float64, value)) !== nothing
+    isfinite(f) || throw(ArgumentError("Non-finite numeric values are not supported. Please use a finite numeric value instead."))
     return value
   else
     throw(ArgumentError("The value '$value' is not a valid number"))
@@ -589,7 +683,13 @@ function format_date_sql(value::ZonedDateTime)
 end
 function format_date_sql(value::AbstractString)
   if occursin(r"^\d{4}-\d{2}-\d{2}$", value)
-    return value
+    try
+        # Validate that it's a real calendar date (e.g. not 2023-02-29)
+        Date(value)
+        return value
+    catch e
+        throw(ArgumentError("The date $value is invalid: $(sprint(showerror, e))"))
+    end
   else
     throw(ArgumentError("The date $value is invalid"))
   end  
@@ -608,6 +708,9 @@ end
 function format_timezone_sql(value::ZonedDateTime)
     # return string("'", value, "'")    
   return value |> string
+end
+function format_timezone_sql(value::DateTime)
+  return format_timezone_sql(value, "UTC") |> string
 end
 function format_timezone_sql(value::DateTime, timezone::String)
   # function used just in create 

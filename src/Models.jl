@@ -613,12 +613,12 @@ end
 function format_number_sql(value::Union{Missing, Nothing})
     return missing
 end
-function format_number_sql(value::Union{Float16, Float32, Float64})
+function format_number_sql(value::Union{Float16, Float32, Float64}) # TODO: @sprintf is necessary?
   # Use @sprintf to avoid scientific notation and ensure full precision
   return @sprintf("%.17g", value)
 end
 function format_number_sql(value::AbstractString)
-  value = strip(value)
+  value = value |> string |> strip
   isempty(value) && throw(ArgumentError("The value is empty and cannot be used as a number"))
 
   if occursin(r"^[+-]?\d+,\d+$", value)
@@ -639,7 +639,9 @@ end
 function format_number_sql(value::AbstractArray)
   arrayref::Vector{Union{String, Integer, Missing}} = []
   for v in value
-    push!(arrayref, v |> format_number_sql)
+    # Ensure nested strings (like SubString) are converted to String or Integer as required by the Union
+    res = v |> format_number_sql
+    push!(arrayref, res isa AbstractString ? string(res) : res)
   end
   # return string("(", join(arrayref, ","), ")")
   return arrayref
@@ -841,6 +843,10 @@ end
 function format2int64(x::AbstractString)::Int64
   return parse(Int64, x |> string) 
 end
+function format2int64(x::Decimals.Decimal)::Int64
+  return Int64(x)
+end
+
 # convert string to Float64
 function format2float64(x::Union{Int, AbstractString})::Float64
   return parse(Float64, x |> string) 

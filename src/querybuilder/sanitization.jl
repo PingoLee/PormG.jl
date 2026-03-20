@@ -181,6 +181,13 @@ function _validate_integer_value(model::PormGModel, field::String, value::Any, o
         _type_mismatch_error(operation, model, field, value, "Int64 or an integer string"; suggestion="pass 0 or 1 as Int64, not Bool")
     elseif value isa Integer
         return true
+    elseif value isa Decimals.Decimal
+        try
+            Int64(value)
+            return true
+        catch
+            _type_mismatch_error(operation, model, field, value, "Int64, an integer-valued Decimal, or an integer string"; suggestion="round or convert the Decimal to Int64 before calling $operation")
+        end
     elseif value isa AbstractString
         stripped = strip(value)
         if _string_uses_scientific_notation(stripped)
@@ -193,7 +200,7 @@ function _validate_integer_value(model::PormGModel, field::String, value::Any, o
     elseif value isa AbstractFloat
         _type_mismatch_error(operation, model, field, value, "Int64 or an integer string"; suggestion="convert the value with Int64(...) before calling $operation")
     else
-        _type_mismatch_error(operation, model, field, value, "Int64 or an integer string")
+        _type_mismatch_error(operation, model, field, value, "Int64, an integer-valued Decimal, or an integer string")
     end
 end
 

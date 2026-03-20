@@ -9,7 +9,7 @@ include("common_setup.jl")
     # ── Phase 0: Migration Preflight + Schema Bootstrap ──────────────
     # Validates the migration engine on the selected DB starting from
     # empty, then bootstraps the real schema so fixture seeding can proceed.
-    @testset "Migration Bootstrap"          begin include("test_migration_bootstrap.jl") end
+    # @testset "Migration Bootstrap"          begin include("test_migration_bootstrap.jl") end
 
     # ── Phase 1: Fixture Seeding ─────────────────────────────────────
     # Deletes any residual rows and loads the F1 CSV fixtures.

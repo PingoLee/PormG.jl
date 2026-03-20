@@ -56,25 +56,35 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
   for v in object.order
     found_in_select = false
     v_field_copy = deepcopy(v.field)
+
+    # Check if the ORDER BY target matches a selected alias. Only those aliases can be
+    # referenced directly in ORDER BY. Cached join paths created while resolving CTE join_field
+    # entries must reuse their resolved SQL selector instead of quoting the raw lookup string.
+    for value in object.values
+      if isa(value, SQLTypeFunction) && value.field.agregate == true
+        continue
+      end
+
+      selected_alias = value.custom_as !== nothing ? value.custom_as : value._as
+      if selected_alias == v_field_copy._as
+        found_in_select = true
+        break
+      end
+    end
+
     if haskey(instruc.cache, v_field_copy._as)
-      # Use the alias name instead of the expression to avoid double parameterization
-      # most databases (PG, SQLite, MySQL) support aliases in ORDER BY
-      v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
+      if found_in_select
+        # Use the alias name instead of the expression to avoid double parameterization.
+        # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
+        v_field_copy.field = quote_identifier(v_field_copy._as, instruc.connection)
+      else
+        v_field_copy.field = instruc.cache[v_field_copy._as].field
+      end
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
     push!(instruc.order, string(v_field_copy.field, " ", v.orientation))
     instruc.cache[v_field_copy._as] = v_field_copy
-
-    # check if the field is in the select
-    for value in object.values
-      if isa(value, SQLTypeFunction) && value.field.agregate == true
-        continue
-      elseif value._as == v_field_copy._as
-        found_in_select = true
-        break
-      end
-    end
 
     if !found_in_select
       push!(instruc.group, v_field_copy.field)

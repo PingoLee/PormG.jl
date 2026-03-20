@@ -64,6 +64,41 @@ The `PormG` module provides a set of abstractions and functions for working with
 - **Description**: Executes a function while holding a PostgreSQL advisory lock.
 - **Usage**: `with_advisory_lock(db_key, lock_key) do ... end`
 
+## Server-Facing Configuration API
+
+The following entries document the server-facing configuration API for applications that bootstrap multiple databases and expose health endpoints.
+
+### `Configuration.load(path; env=nothing)`
+- **Description**: Loads or reloads a static database folder using an explicit environment override when provided.
+- **Why**: Prevents server startup from relying entirely on global `ENV["PORMG_ENV"]` mutation.
+- **Target usage**:
+  ```julia
+  PormG.Configuration.load("db"; env="prod")
+  PormG.Configuration.load("db_sch"; env="prod")
+  ```
+
+### `Configuration.load_many(paths; env=nothing)`
+- **Description**: Bootstraps several static configuration folders in one call.
+- **Why**: Server applications frequently load multiple model folders and should not need custom loops over `Configuration.load(...)`.
+- **Target usage**:
+  ```julia
+  PormG.Configuration.load_many(["db", "db_sch"]; env=config.env)
+  ```
+
+### `Configuration.is_loaded(path_or_key)`
+- **Description**: Reports whether PormG has already registered settings for a given folder path or connection key.
+- **Why**: Applications should not use `get_settings(...)` as a proxy for registration checks.
+
+### `Configuration.ping(path_or_key)`
+- **Description**: Performs a real reachability check against the configured database.
+- **Why**: A health endpoint must distinguish "settings exist" from "database is actually reachable".
+
+### `Configuration.status(path_or_key)`
+- **Description**: Returns a richer status payload combining loaded state, reachability, adapter, and environment.
+- **Why**: Worker diagnostics and HTTP health handlers often need more than a `Bool`.
+
+For the design rationale and the environment-order hazard caused by eager `@import_models` loading, see [configuration.md](configuration.md).
+
 ## Abstract Types
 
 ### `PormGAbstractType`

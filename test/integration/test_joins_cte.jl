@@ -226,6 +226,34 @@ end
         @test nrow(filter(row -> row.driverid == 22, df)) == 1
         
     end
+
+    @testset "CTE join_field nested path keeps ORDER BY resolved" begin
+        # TODO: extend test to order with alias, field, joined field and etc.
+        # This regression covers a CTE join_field that references a nested join path on the main
+        # query. Building the CTE join caches that path, and ORDER BY must reuse the resolved SQL
+        # selector rather than quoting the raw lookup string like "driverid__surname".
+        driver_lookup = M.Driver.objects
+        driver_lookup.filter("driverid__@lte" => 5)
+        driver_lookup.values("surname", "driverid")
+
+        query = M.Result.objects
+        With(query.object, "driver_lookup", driver_lookup, join_field="driverid__surname" => "surname")
+
+        query.filter("resultid__@lte" => 50)
+        query.values(
+            "resultid",
+            "driver_name" => "driverid__surname",
+            "driver_lookup__driverid"
+        )
+        query.order_by("driverid__surname", "resultid")
+
+        insp = query |> inspect_query
+        df = query |> DataFrame
+
+        @test !occursin("\"driverid__surname\"", insp[:sql_text])
+        @test occursin(r"ORDER BY\s+\"[A-Za-z0-9_]+\"\.\"surname\" ASC", insp[:sql_text])
+        @test nrow(df) == 50
+    end
     
     @testset "Multiple CTEs" begin
         # First CTE: Recent races

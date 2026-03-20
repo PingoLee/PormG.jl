@@ -51,6 +51,13 @@ PormG.config["default"] = MockSettings
         @test_throws ErrorException validate_field_data(mock_int_model, "id", "not-an-int", "insert")
         
         @test validate_field_data(mock_int_model, "age", 25, "insert") === true
+        # Django accepts Decimal for IntegerField by coercing through int(value).
+        # PormG should accept exact integer-valued Decimal inputs as well, but it
+        # must still reject fractional Decimal values to avoid silent truncation.
+        @test validate_field_data(mock_int_model, "age", parse(Decimal, "25"), "insert") === true
+        @test validate_field_data(mock_int_model, "age", parse(Decimal, "25.0"), "insert") === true
+        @test_throws ErrorException validate_field_data(mock_int_model, "age", parse(Decimal, "25.5"), "insert")
+        @test Models.format2int64(parse(Decimal, "25.0")) == 25
         @test_throws ErrorException validate_field_data(mock_int_model, "age", nothing, "insert")
         
         @test validate_field_data(mock_int_model, "big_val", 9223372036854775807, "insert") === true
@@ -188,6 +195,26 @@ PormG.config["default"] = MockSettings
 
         # Test 25: Invalid Float - non-nullable with nothing
         @test_throws ErrorException validate_field_data(mock_float_model, "ratio", nothing, "insert")
+    end
+
+    @testset "Numeric Formatter: AbstractString Regression" begin
+        # This regression covers the query-builder path used by IN filters on numeric fields.
+        # In Julia, slicing can yield `SubString{String}` instead of `String`, unlike Python/Django
+        # where the sliced value remains the same string type. The ORM should normalize that input
+        # at the formatter boundary instead of forcing application code to pre-convert it.
+        raw_cbo = "123456"
+        sliced_cbo = SubString(raw_cbo, 2, 4)
+
+        @test Models.format_number_sql(sliced_cbo) == "234"
+
+        # The array case is the important regression: an `IN` filter may pass a vector of string
+        # fragments collected from CSV parsing or slicing, and the formatter must not throw when
+        # storing those normalized numeric strings in its internal vector.
+        sliced_codes = [SubString(raw_cbo, 1, 2), SubString(raw_cbo, 5, 6)]
+        formatted_codes = Models.format_number_sql(sliced_codes)
+
+        @test formatted_codes == ["12", "56"]
+        @test all(code -> code isa Union{String, Integer, Missing}, formatted_codes)
     end
 
     @testset "Logical & Temporal Fields (BooleanField, DateTimeField, DateField)" begin

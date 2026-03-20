@@ -17,6 +17,7 @@ end
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
+    @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "Password Encoding" include("unit/test_password.jl")
     @testset "Password Validation i18n" include("unit/test_password_i18n.jl")
     # include("unit/test_migration_planner.jl")

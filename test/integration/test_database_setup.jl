@@ -215,6 +215,7 @@ end
     query = M.Qualifying.objects
     df = CSV.File(joinpath("f1", "qualifying.csv")) |> DataFrame
     rename!(df, lowercase.(names(df)))
+    hasproperty(df, :qualifyid) && rename!(df, :qualifyid => :qualifyingid)
     for col in [Symbol("q1"), Symbol("q2"), Symbol("q3")]
         df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end

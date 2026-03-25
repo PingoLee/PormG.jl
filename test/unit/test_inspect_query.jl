@@ -66,7 +66,7 @@ PormG.config["default"] = MockSettings
     q = DriverModel.objects
     q.filter("nationality" => "British")
     
-    res_select = list(q, show_query=:dict)
+    res_select = q.list( show_query=:dict)
     @test res_select[:operation] === :select
     @test res_select[:model] == "drivers"
     
@@ -78,7 +78,7 @@ PormG.config["default"] = MockSettings
     @test contains(res_update[:sql_text], "UPDATE")
     
     # Test: delete(show_query=:dict) returns :operation => :delete
-    res_delete = delete(q, show_query=:dict)
+    res_delete = q.delete( show_query=:dict)
     @test res_delete[:operation] === :delete
     @test res_delete[:model] == "drivers"
     @test contains(res_delete[:sql_text], "DELETE")
@@ -317,13 +317,13 @@ PormG.config["default"] = MockSettings
     q = DriverModel.objects
     
     # Valid modes should work (using show_query to avoid actual DB execution with MockPostgres)
-    @test (q |> PormG.QueryBuilder.list(show_query=:dict)) isa Dict
-    @test (q |> PormG.QueryBuilder.list(show_query=:params)) isa Vector
-    @test (q |> PormG.QueryBuilder.list(show_query=:sql)) isa String
-    @test (q |> PormG.QueryBuilder.list(show_query=:none)) === nothing
+    @test (q.list(show_query=:dict)) isa Dict
+    @test (q.list(show_query=:params)) isa Vector
+    @test (q.list(show_query=:sql)) isa String
+    @test (q.list(show_query=:none)) === nothing
     
     # Invalid mode should throw
-    @test_throws ArgumentError (q |> PormG.QueryBuilder.list(show_query=:invalid))
+    @test_throws ArgumentError (q.list(show_query=:invalid))
   end
 
   # ===== Section 14: Comparison: inspect_query vs show_query =====
@@ -339,7 +339,7 @@ PormG.config["default"] = MockSettings
     inspection = inspect_query(q1)
     
     # Using show_query (for backward compatibility)
-    show_result = q2 |> PormG.QueryBuilder.list(show_query=:dict)
+    show_result = q2.list(show_query=:dict)
     
     # Core SQL and parameters should match
     @test inspection[:sql_text] == show_result[:sql_text]

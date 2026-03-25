@@ -11,7 +11,7 @@ import PormG: SQLType, SQLConn, PormGSQLite, PormGPostgres, PormGSQLiteParam, Po
 import PormG: PormGsuffix, PormGtransform, run_in_transaction
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, current_task
 import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for, get_settings as get_configuration_settings
-import PormG.Infiltrator: @infiltrate
+import PormG: @pormg_debug
 import Base: first
 
 #
@@ -79,10 +79,8 @@ export object
 export page
 export query
 export update
-export do_count, do_exists # i want dont export this anymore
-export list
-export bulk_insert, bulk_copy
-export delete
+# do_count and do_exists are now strictly used as functors (query.count(), query.exists())
+export bulk_insert, bulk_update, bulk_copy
 
 include("documentation/querybuilder.jl")
 

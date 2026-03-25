@@ -87,7 +87,7 @@ end
   # We check the functional correctness (DB updated) which proves binding was applied.
   query = M.Just_a_test_deletion.objects
   # Ensure a clean state for the test
-  query.exists() && delete(query; allow_delete_all=true)
+  query.exists() && query.delete(allow_delete_all=true)
   query.create("id" => 500, "name" => "original", "test_result" => 10)
 
   # Update two columns using a filter; this exercises both WHERE and SET bindings
@@ -96,7 +96,7 @@ end
 
   query = M.Just_a_test_deletion.objects
   query.filter("id" => 500)
-  updated_row = query |> list
+  updated_row = query.list()
   @test updated_row[1][:name] == "updated"
   @test updated_row[1][:test_result] == 20
 
@@ -160,7 +160,7 @@ end
   end
   
   # Test 2: DELETE with show_query=:sql returns SQL string
-  delete_queries = delete(M.Circuit.objects, allow_delete_all=true, show_query=:sql)
+  delete_queries = M.Circuit.objects.delete(allow_delete_all=true, show_query=:sql)
   # Verify the circuit table still exists after show_query (no actual deletion)
   @test M.Circuit.objects.exists()
   @test delete_queries isa String || delete_queries isa Vector{Any}
@@ -252,7 +252,7 @@ end
     q_check = M.Just_a_test_deletion.objects.filter("name" => payload)
     @test q_check.count() == 1
     
-    item = q_check |> list |> first
+    item = q_check.list() |> first
     @test item[:name] == payload  # The DB should have stored the quotes and semicolon as literal text
   end
 

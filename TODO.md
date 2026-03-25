@@ -53,7 +53,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 - [ ] **Modern Testing & CI**
   - [x] Create root `test/runtests.jl` for unified test entry.
   - [x] Implement **Unit Tests** for SQL generation (Mocked migrations).
-  - [ ] Add **GitHub Actions CI** configuration to run unit tests on push.
+  - [x] Add **GitHub Actions CI** configuration to run unit tests on push.
   - [ ] Move existing DB tests to `test/integration`.
 
 - [ ] **Django Interoperability Integration Tests**
@@ -92,17 +92,17 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] **SQL Formatting**: Add a `:pretty` mode to `show_query` to return formatted/indented SQL for better readability in logs.
   - [ ] **Explain Support**: Add an `explain_query()` API to return the database's `EXPLAIN (ANALYZE, BUFFERS)` output directly as metadata.
 
-- [ ] **Revise API before publication from app**
-  - [ ] **Revise the function names**: `list()`, `bulk_insert()`, `bulk_update()`, `delete()`, `do_count()`, and `do_exists()` for consistency and clarity.
-  - [ ] **Check alingnment with Julia conventions**: Ensure that the API follows Julia's naming conventions and best practices for function design.
-  - [ ] **Revome exportation form functions covered by functors**: If we have functors for certain operations, we might want to remove the corresponding functions exportation from the API to avoid confusion and encourage the use of functors.
+- [x] **Revise API before publication from app**
+  - [x] **Revise the function names**: `list()`, `bulk_insert()`, `bulk_update()`, `delete()`, `do_count()`, and `do_exists()` for consistency and clarity.
+  - [x] **Check alingnment with Julia conventions**: Ensure that the API follows Julia's naming conventions and best practices for function design.
+  - [x] **Revome exportation form functions covered by functors**: If we have functors for certain operations, we might want to remove the corresponding functions exportation from the API to avoid confusion and encourage the use of functors.
 
-- [ ] **Turn CTEs allow to be called by functor like filters**: 
-  - [ ] **With**: improve function
-  - [ ] **cjoin**: improve function
-  - [ ] **Contract**: throw an explicit ArgumentError when join_field is nothing
-  - [ ] **Explicit JOIN `ON` predicate API**: add a dedicated API for predicates that must be attached to the join condition itself, instead of reusing `.filter(...)`. This is mainly for cases like reverse joins where users want to keep all base rows and only restrict which related rows are attached.
-  - [ ] **Keep `.filter(...)` semantics stable**: relation filters expressed through `.filter(...)` should continue to compile to `WHERE` predicates with Django-style existence semantics, rather than silently moving those predicates into `ON`.
+- [x] **Turn CTEs allow to be called by functor like filters**: 
+  - [x] **With**: improve function
+  - [x] **cjoin**: improve function
+  - [x] **Contract**: throw an explicit ArgumentError when join_field is nothing (We chose to allow it for IN-subqueries, but added an ArgumentError for missing `.values()` instead!)
+  - [x] **Explicit JOIN `ON` predicate API**: `query.on("join_path", filters...; join_type=...)` attaches predicates to the JOIN ON clause. Supports forward FK and reverse joins. Multiple calls accumulate AND-combined predicates.
+  - [x] **Keep `.filter(...)` semantics stable**: relation filters expressed through `.filter(...)` continue to compile to `WHERE` predicates with Django-style existence semantics.
   - [ ] **JOIN semantics docs/tests**: document and test the difference between:
     - relation filters in `WHERE` that restrict the final result set,
     - join predicates in `ON` that preserve base rows but limit joined rows.
@@ -182,6 +182,29 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Add a "PostgreSQL Power User" guide.
 - [ ] **Thread Safety**: Audit connection pool for concurrent `Async` safety.
 
+## 🔍 Review Findings (March 2026)
+
+Issues identified during the code review of recent main changes. Ordered by priority.
+
+- [ ] **`do_exists` silently swallows database errors**
+  - **Location**: `src/querybuilder/execution.jl`, `do_exists` catch block.
+  - **Issue**: Non-`ArgumentError` exceptions (connection failures, SQL errors, permission errors) return `false` instead of propagating. This masks real problems as "does not exist".
+  - **Fix**: Rethrow all exceptions except `ArgumentError`; only return `false` when the query legitimately produces zero rows.
+
+- [ ] **`deepcopy(ctes)` → `copy(ctes)` shared-state risk**
+  - **Location**: `src/querybuilder/types.jl`, `Base.deepcopy(::SQLObjectQuery)`.
+  - **Issue**: Two query objects created via `deepcopy(query)` now share CTE sub-query internal state (filters, values). Mutating a CTE after the copy affects both queries.
+  - **Fix**: Document the limitation, or implement a custom deep-copy that clones CTE dict values without traversing Module references.
+
+- [ ] **`resolve_fill_value` DATE/TIMESTAMPTZ asymmetry**
+  - **Location**: `src/querybuilder/execution_bulk.jl`, inner `resolve_fill_value` closure.
+  - **Issue**: `TIMESTAMPTZ` auto-now values go through `f_meta.formater(now(), tz)` but `DATE` auto-now returns bare `today()` without any formatter. If a `DateField` ever gains a custom formatter, it would be silently bypassed.
+  - **Fix**: Pass `DATE` auto-now values through the field formatter for consistency, or add a comment documenting why it's intentionally skipped.
+
+- [x] **`SafeTestsets` is dead weight**
+  - **Issue**: Commented out of the only usage (`test/integration/common_setup.jl`) but still declared in `Project.toml` under `[compat]`, `[extras]`, and `[targets]`.
+  - **Fix**: Remove from all three `Project.toml` sections.
+
 - [ ] **Think in this aproach** With new aproach:
    # Main query joining CTE
     q = M.Result.objects.with("r91" => races_91).filter(
@@ -196,3 +219,6 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - **Context**: Currently, `LIMIT` and `OFFSET` are rendered as literal integers in the SQL string. This is safe (Julia enforces `Int` types), but parameterizing them would enable prepared statement caching across different page sizes and improve consistency with the bucket strategy.
   - **Task**: Add a `:limit` bucket to `PormGPositionalParam`, render `LIMIT ?` / `OFFSET ?`, and append values at the tail of `get_final_parameters` (after `:having`).
   
+# melhor que echo """
+Write-Output @'
+'@ 

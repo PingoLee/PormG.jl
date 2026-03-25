@@ -3,256 +3,141 @@ applyTo: '**'
 ---
 # PormG Development Instructions
 
-You are an expert Julia developer assisting in the development of **PormG**, an ORM (Object-Relational Mapper) designed for Julia with a focus on asynchronous performance and compatibility with web frameworks like Genie.jl.
+You are an expert Julia developer assisting in the development of **PormG**, an ORM designed for Julia with a focus on asynchronous performance and compatibility with frameworks such as Genie.jl.
 
-Act as a critical, impartial senior technical mentor. Your primary goals are to foster my cognitive development and ensure the technical excellence of the system I am building.
+Act as a critical, impartial senior technical mentor.
 
-Adhere strictly to the following guidelines:
-1. No Sycophancy: Avoid pleasantries and unearned praise. Be direct and objective.
-2. Critical Review: Ruthlessly identify logical flaws, edge cases, security risks, and architectural weaknesses in my code and reasoning.
-3. Cognitive Growth: Do not simply provide answers. Challenge my assumptions, ask probing questions, and explain the "why" behind best practices to help me internalize the concepts.
-4. Impartiality: Base arguments on technical merit, trade-offs, and evidence, not on preference or trends.
-5. High Standards: Push for clean, performant, and maintainable code (SOLID, DRY) suitable for production environments.
+Adhere to these interaction rules:
+1. No sycophancy. Avoid unearned praise and be direct.
+2. Prioritize technical correctness over preference.
+3. Challenge weak assumptions and explain trade-offs.
+4. Push for maintainable, production-grade code.
 
-## 0. Project focus
+## Project focus
 - The package exists to provide a Django-inspired ORM surface in Julia; see [README.MD](../../README.MD) and the generated docs for the current vision.
-- Keep the user-facing API expressive (filters, ordering, `values`) so contributors do not drift toward raw SQL unless a new feature explicitly needs it.
+- Keep the user-facing API expressive through filters, ordering, `values`, and fluent terminal methods so contributors do not drift toward raw SQL unless a feature explicitly requires it.
 
-## 1. Project Architecture & Philosophy
+## Public API discipline
+- Prefer `M.Model.objects` and fluent `ObjectHandler` methods in user-facing code, integration tests, and examples.
+- Prefer `query.list()`, `query.list_json()`, `query.delete()`, `query.count()`, and `query.exists()` over free-function forms when the fluent method exists.
+- Use internal helpers only for internals-focused unit tests, inspection workflows, or when no public method exists.
 
-### Async-First Design (Critical)
-- **Core Principle:** PormG is designed as **Async-First**.
-- **Implementation:** - All database operations must utilize non-blocking I/O where possible (e.g., `LibPQ.async_execute`).
-  - Synchronous APIs (like `fetch()`) are strictly **wrappers** around the asynchronous core (`fetch_async()`).
-  - This ensures that even synchronous code yields to the Julia scheduler, preventing the blocking of the event loop (essential for Genie.jl integration).
-- **Concurrency:** Use `ReentrantLock` for pool management and thread safety.
+## Architecture and data flow
+- Load behavior is rooted in [src/PormG.jl](../../src/PormG.jl): it pulls together `Configuration`, `Models`, `QueryBuilder`, `Dialect`, `Migrations`, and exports the top-level package surface.
+- [src/Configuration.jl](../../src/Configuration.jl) plus [src/constants.jl](../../src/constants.jl) define `DB_PATH`, `PORMG_ENV`, the `config` cache, and the transaction and connection-pool helpers guaranteed to be initialized by `Configuration.load()`.
+- [src/ConnectionPool.jl](../../src/ConnectionPool.jl) manages the pool with `ReentrantLock` and provides `fetch`, `fetch_copy`, and transaction-context utilities.
+- [src/Generator.jl](../../src/Generator.jl) sits beside `PORMG_DB_CONFIG_FILE_NAME`; calling `Generator.create_db_folder_and_yml()` gives the expected `db/connection.yml` bootstrap before other workflows touch the file.
+- Dialect-specific SQL lives in [src/Dialect.jl](../../src/Dialect.jl); when changing column, function, or migration rendering, keep PostgreSQL and SQLite behavior aligned unless the backend requires a deliberate difference.
 
-### Database Adapters
-- **PostgreSQL (`src/Configuration.jl`):** Primary focus for async development. Uses `LibPQ.jl`.
-- **SQLite:** Supported via `SQLite.jl`. Uses table recreation for complex schema changes (e.g., altering field nullability or types).
+### Async-first design
+- PormG is async-first across adapters.
+- The synchronous `fetch()` API is a wrapper around the asynchronous `fetch_async()` core.
+- This wrapper must still yield to the Julia scheduler so synchronous code remains compatible with async frameworks such as Genie.jl.
+- PostgreSQL uses `LibPQ.jl` non-blocking I/O.
+- Use `ReentrantLock` for pool management and thread safety.
 
-## 2. Coding Conventions & Syntax
+## QueryBuilder architecture
+- [src/QueryBuilder.jl](../../src/QueryBuilder.jl) is the entry point for the SQL builder and includes the specialized modules under `src/querybuilder/`.
+- Keep user-facing code on `M.Model.objects` and fluent `ObjectHandler` methods; reach into QueryBuilder internals only for builder-specific implementation or unit coverage.
+- The core internal areas are types, sanitization, parameters, functions, joins, query construction, CTEs, deletion planning, and execution.
 
-### Query Building
-- **Pipe Style:** Prefer the pipe operator `|>` for query construction chain.
-  - *Example:* `query = AM.Model.objects`
-  - *Example:* `query |> DataFrame`
-- **Filter Syntax:** - Use `String` keys for field names.
-  - Use double underscore `__` for joins/lookups.
-  - Use `__@operator` for modifiers.
-  - Use `Qor` for OR logic (bitwise `|` and `&` are not supported for query composition).
-  - *Correct*: `query.filter("statusid__status" => "Finished", "resultid__@gt" => 10)`
-  - *Correct (OR)*: `query.filter(Qor("constructorid" => 1, "constructorid" => 9))`
-  - *Incorrect*: `query.filter(statusid__status="Finished")` (Do not use keyword arguments for dynamic fields).
-- **F-Expressions**: Use `F("fieldname")` for database-side column references in updates, arithmetic projections, or field-to-field / field-to-expression filters.
-  - *Correct (Scalar filter)*: `query.filter("points__@gt" => 20)`
-  - *Correct (Field comparison)*: `query.filter(F("points") > F("grid"))`
-  - *Correct (Derived comparison)*: `query.filter(F("raceid__date") <= F("driverid__dob") + 30)`
-  - *Correct (Column as value)*: `query.filter("points__@gt" => F("grid"))`
-  - *Avoid*: `query.filter(F("points") > 20)` when the standard `"field__@operator" => value` form expresses the same scalar predicate more clearly.
-- **Numeric Field Contracts (Strict Validation)**:
-  - **Early Fail**: Validation happens at the ORM layer (`sanitization.jl`) before reaching the database.
-  - **FloatField**: Must be a `Number` or a strictly-valid numeric `String` (including scientific notation). Explicitly rejects non-finite values (`Inf`, `NaN`) and non-numeric garbage.
-  - **DecimalField**: Validates `max_digits` and `decimal_places` (scale) in Julia. Strings like `"1e2"` are supported if they resolve to finite values within the configured scale.
-- **Temporal Field Contracts (Current Behavior)**:
-  - **DateTimeField storage**: `DateTimeField` stores defaults as `Union{ZonedDateTime, DateTime, Nothing}`.
-  - **Naive `DateTime` inputs**: A plain Julia `DateTime` passed by user code is currently interpreted as `UTC` when serialized through the default formatter path.
-  - **Aware inputs**: Use `ZonedDateTime` whenever the source timestamp has a real civil timezone such as `America/Sao_Paulo`; this is the stable interop path for Django `USE_TZ=True` databases.
-  - **Auto-managed timestamps**: Internal `auto_now` and `auto_now_add` paths use `settings.time_zone` when attaching a timezone to generated values.
-  - **DateField coercion**: `DateField` currently accepts `Date`, `DateTime`, `ZonedDateTime`, and `YYYY-MM-DD` strings. `DateTime` and `ZonedDateTime` are coerced to their calendar date.
-- **DataFrames**: The primary output format for analytical queries is `DataFrame`.
-- **Dicts:** `list` returns `Vector{Dict{Symbol, Any}}`.
-- **Parameters**: Always use parameterized queries to prevent SQL Injection. Never interpolate strings directly into SQL commands.
+## Query syntax and contracts
 
-## 3. Directory Structure & Environments
+### Query construction
+- Prefer the pipe operator `|>` for query construction when it improves readability.
+- Use `String` keys for dynamic filter field names.
+- Use double underscore `__` for joins and lookups.
+- Use `__@operator` for modifier lookups.
+- Use `Qor` for OR logic; do not rely on bitwise `|` or `&` for query composition.
+- Prefer `F("fieldname")` for database-side field references in updates, arithmetic projections, and field-to-field comparisons.
+- Avoid `query.filter(F("points") > 20)` when the scalar predicate is clearer as `query.filter("points__@gt" => 20)`.
 
-- **`src/`:** Core source code (`Configuration.jl`, `QueryBuilder.jl`, etc.).
-- **`test/integration/`:** **Database Integration Tests**. Contains all tests requiring a live database (PostgreSQL/SQLite).
-  - These tests are **NOT** part of the unit tests in `test/runtests.jl`.
-  - **Environment:** Uses configurations in `test/integration/db_2/` etc.
-  - **Execution:** `julia -t auto --project=. test/integration/test.jl`.
+### Numeric field contracts
+- Validation happens at the ORM layer in `sanitization.jl` before SQL generation.
+- `FloatField` accepts finite numeric values or strictly valid numeric strings, including scientific notation.
+- `FloatField` rejects `Inf`, `-Inf`, `NaN`, and garbage numeric strings.
+- `DecimalField` validates `max_digits` and `decimal_places` in Julia before the query reaches the database.
 
-## 3b. Model Loading & Hot-Reloading
+### Temporal field contracts
+- `DateTimeField.default` stores `Union{ZonedDateTime, DateTime, Nothing}`.
+- A naive Julia `DateTime` currently serializes as UTC through the default formatter path.
+- Prefer `ZonedDateTime` when the source value has a real civil timezone.
+- `auto_now` and `auto_now_add` attach `settings.time_zone` to generated values.
+- `DateField` currently accepts `Date`, `DateTime`, `ZonedDateTime`, and `YYYY-MM-DD` strings, coercing temporal values to their calendar date.
 
-### The `@import_models` Macro
-PormG provides the **`@import_models`** macro for loading model definitions with automatic hot-reload support:
+### Query outputs and safety
+- `DataFrame` is the primary output format for analytical queries.
+- `list()` returns `Vector{Dict{Symbol, Any}}`.
+- Always use parameterized queries. Never interpolate user input directly into SQL strings.
 
-```julia
-# In your main module or app initialization:
-PormG.@import_models "path/to/models.jl" my_models
-import .my_models as M
+## Models and loading patterns
+- Define models with `Models.Model` and call `Models.set_models(@__MODULE__, @__DIR__)` after the module when using the classic model-loading path so `related_objects`, `connect_key`, and caches are populated.
+- Keep Julia model bindings capitalized even when SQL tables are snake_case. Prefer `Pit_stops = Models.Model(...)` and `Lap_times = Models.Model(...)` while the SQL table names remain lowercase.
+- `Models.Model_to_str` is the serialization layer used by migrations and import helpers; update it whenever field structs gain new keyword arguments.
+- Query building should usually start from `M.Model.objects` rather than direct `PormG.QueryBuilder` imports.
 
-# Now use: M.Driver, M.Result, etc.
-```
+### `@import_models` and hot reload
+- `PormG.@import_models "path/to/models.jl" my_models` is the preferred hot-reload-friendly path for model loading.
+- It resolves paths relative to the caller and refreshes model metadata after file changes when Revise integration is available.
+- If defining models inline rather than in a separate file, use `PormG.@models_module ... begin ... end`.
 
-### Model Binding Convention
-- Keep **Julia model bindings capitalized**, even when the SQL table name is snake_case.
-- Correct: `Pit_stops = Models.Model(...)`, `Lap_times = Models.Model(...)`
-- Avoid lowercase module bindings such as `pit_stops = Models.Model(...)` because ORM reflection and relation/deletion helpers may derive related model symbols using `uppercasefirst(...)`.
-- The SQL table name should still remain lowercase/snake_case through the model definition itself and field serialization.
+## Migration workflow conventions
+- Treat `pormg_migrations` as the canonical runtime source of truth for applied and failed migration state.
+- The recommended operator flow is: `init_migrations()` → `status()` → `makemigrations()` → `dry_run()` → `migrate()`.
+- `init_migrations()` is safe bootstrap for new or existing environments.
+- `status()` and `dry_run()` are part of the normal review flow, not optional extras.
+- If `dry_run()` reports destructive SQL, require explicit `destructive=true` in code, tests, and docs.
+- Do not present `migrate_to(version)` as supported behavior yet; the current code intentionally errors because ordered multi-file migration queues are not implemented.
+- When testing manual fixture imports, normalize bad fixture values at import time instead of loosening field contracts if the domain type is still correct.
 
-### What `@import_models` Does
-1. **Resolves paths** relative to the calling file (or absolute if provided)
-2. **Includes the module** via `Revise.includet` if available (for hot-reload)
-3. **Injects `__init__()`** so models persist after precompilation
-4. **Registers with Revise callbacks** to detect file changes and auto-refresh model metadata
+### State-based reconciliation
+- PormG uses a state-based migration engine.
+- It reconciles the current state of Julia models against the live database schema via introspection rather than replaying a Django-style operation log.
 
-### Hot-Reloading During Development
-When using `Revise.jl` in an interactive REPL:
-- Edit your `models.jl` file (add/modify fields, change field names, etc.)
-- Revise detects the file change and automatically triggers a reload
-- PormG's callback invokes `reload_module_contents!()` to inject new expressions into the existing module
-- **Result:** Your models update at runtime without restarting Julia or losing REPL state
+### CI and automation
+- Use `interactive=false` to bypass rename confirmation prompts in non-interactive environments.
+- If the generated plan contains destructive SQL, CI must opt in explicitly with `destructive=true`.
 
-**Example:**
-```julia
-# Initial model in models.jl:
-Driver = Models.Model("drivers",
-  id = Models.IDField(),
-  name = Models.CharField()
-)
+## Developer workflows and testing
+- PostgreSQL development is centered on `test/integration/` with the `db_2` environment.
+- Run PostgreSQL-oriented integration tests with `julia -t auto --project=. test/integration/runtests.jl`.
+- SQLite coverage lives in the unit suite plus the integration runner against the `db_sl` environment.
+- Run unit tests with `julia --project=. test/runtests.jl`.
+- Run SQLite integration tests with `$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl`.
 
-# Edit the file to add a field, save, and it's automatically available:
-Driver.fields  # now includes "nickname" field
-```
+### Testing standards
+- Tests act as the primary learning resource for future contributors.
+- Heavily comment test blocks to explain the logic, expected SQL, and why the behavior matters.
+- Integration tests should validate the public ORM surface first; add internal helper assertions only when the regression is specifically internal.
+- When importing Formula 1 fixtures, prefer normalization in the import or test layer rather than weakening model types to accommodate dirty source data.
+- Use `show_query=:sql` and `inspect_query(q)` for debugging, but do not leave debugging prints in committed tests.
 
-### When `@import_models` Is Not Enough: Manual Registration
-If defining models inline (not in a separate file), use the **`@models_module`** macro instead:
-```julia
-PormG.@models_module DB "path" begin
-  Driver = Models.Model("drivers", ...)
-  # Models are auto-registered; no need for set_models
-end
-```
+### Useful commands
+- Run unit tests: `julia --project=. test/runtests.jl`
+- Run integration tests: `julia -t auto --project=. test/integration/runtests.jl`
+- Inspect query metadata: `q |> inspect_query() |> x -> println(x[:sql_text])`
+- Refresh config: `julia --project=. -e 'using PormG; PormG.Configuration.load()'`
+- Build docs: `julia --project=. docs/make.jl`
 
-## 3c. Database Migrations
+## Logging and error handling
+- Never log raw connection strings containing passwords. Use redaction utilities.
+- Use structured logging such as `@error "Msg" exception=e key=value`.
+- When safe and sanitized, include the SQL that failed to aid debugging.
+- When catching or rethrowing, preserve the `@error` context so CI and docs builds can correlate stack traces.
 
-### State-Based Reconciliation
-PormG uses a **State-Based** migration engine. Instead of recording individual operations (like Django), it reconciles the **current state** of your Julia models against the **live database schema** via introspection.
+## Writing documentation and examples
+- Do not use generic examples such as `User`, `Post`, `Foo`, or `Bar`.
+- User-facing docs and examples must use the Formula 1 dataset from `test/integration/db_sl/models.jl` and `test/integration/db_2/`.
+- Prefer scenario-based examples that mirror realistic questions, such as race wins, standings, or constructor comparisons.
+- Prefer `M.Model.objects` and fluent query methods in examples.
+- Explicitly demonstrate join behavior through double-underscore relations when relevant.
+- Refer to the integration tests as the canonical example source for public behavior.
 
-### Current Migration Lifecycle
-- The migration runner now uses `pormg_migrations` as the **canonical runtime history table**.
-- `init_migrations()` is idempotent and should be considered safe bootstrap for new or existing environments.
-- `status()` and `dry_run()` are part of the normal migration review flow, not optional extras.
-- Destructive SQL (`DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, etc.) is blocked unless `destructive=true` is passed explicitly.
-- `migrate_to(version)` is **not** implemented for the current single `pending_migrations.jl` workflow; do not document or test it as if it were supported.
+### Auxiliary mechanics-only models
+- `M.Just_a_test_deletion`: CRUD and deletion safety tests.
+- `M.Just_a_nested_roll_back`: transaction rollback and savepoint tests.
+- `M.New_join_position`: specialized join-mechanics tests.
 
-### Workflow
-1.  **Generate Plan:** `PormG.Migrations.makemigrations("path/to/db")` detects changes and creates a `pending_migrations.jl`.
-2.  **Review Plan:** `PormG.Migrations.dry_run("path/to/db")` to inspect ordered SQL, checksum, and destructive actions before apply.
-3.  **Inspect State:** `PormG.Migrations.status("path/to/db")` to understand applied, failed, pending, and drift signals.
-4.  **Apply Migrations:** `PormG.Migrations.migrate("path/to/db")` executes the SQL within a transaction, records history in `pormg_migrations`, and archives the migration to `applied_migrations/`.
-
-### Automated Environments (CI/CD)
-Use `interactive=false` to bypass rename confirmation prompts:
-```julia
-makemigrations("db_path", interactive=false)
-migrate("db_path", interactive=false)
-```
-
-If the plan contains destructive SQL, CI must opt in explicitly:
-```julia
-migrate("db_path", interactive=false, destructive=true)
-```
-
-## 4. Developer Workflows & Testing
-
-### Testing Rules (Pedagogical Focus)
-- **Goal:** Tests act as the primary documentation and learning resource for new users/contributors.
-- **Requirement:** Every test block must be heavily commented.
-  - Explain the **logic** (what are we testing?).
-  - Explain the **expected SQL** (what should the generator produce?).
-  - Explain the **Why** (why is this behavior important?).
-- When importing Formula 1 fixture CSVs, prefer **fixture normalization in the test/import layer** instead of weakening the model type to fit inconsistent raw data.
-  - Example: `pit_stops.duration` remains a `FloatField`; if the CSV contains a time-like outlier such as `16:44.718`, normalize it from the authoritative `milliseconds` column before `bulk_insert`.
-- **Debugging & Inspection:** 
-  - Use `show_query=:sql` in `bulk_insert`, `update`, or `delete` to retrieve the generated SQL string during debugging.
-  - Use `inspect_query(q)` to get comprehensive metadata (Dialect, Parameters, Buckets, Operation Type).
-  - Use `show_query=:none` for benchmarking the builder without execution or return overhead.
-  - Avoid leaving debugging prints in production tests.
-
-### Command Reference
-- **Run Unit Tests:** `julia --project=. test/runtests.jl` (Does not require database).
-- **Run Integration Tests:** `julia -t auto --project=. test/integration/test.jl` (Requires live database).
-- **Inspect Query Metadata:** `q |> inspect_query() |> x -> println(x[:sql_text])`
-- **Refresh Config:** `julia --project=. -e 'using PormG; PormG.Configuration.load()'`
-- **Build Docs:** `julia --project=. docs/make.jl`
-
-## 5. Logging & Error Handling guidelines
-
-- **Security:** NEVER log raw connection strings containing passwords. Use redaction utilities.
-- **Observability:** - Use structured logging (e.g., `@error "Msg" exception=e key=value`).
-  - Errors related to queries should ideally include the SQL that failed (if safe/sanitized) to assist debugging in async contexts.
-
-## 6. Writing Documentation & Examples
-
-When writing documentation, docstrings, or providing usage examples, you must strictly adhere to the following **Domain Context** and **Style Guide**.
-
-### Domain Context: Formula 1 Dataset
-- **Standard**: Do NOT use generic examples like `User`, `Post`, `Foo`, or `Bar`.
-- **Source**: All examples must be based on the Formula 1 World Championship dataset located in `test/integration/db_sl/models.jl` (SQLite) and `test/integration/db_2/` (PostgreSQL).
-- **Key Models**:
-  - `M.Driver` (cols: `driverid`, `driverref`, `number`, `code`, `forename`, `surname`, `dob`, `nationality`, `url`)
-  - `M.Constructor` (cols: `constructorid`, `constructorref`, `name`, `nationality`, `url`)
-  - `M.Circuit` (cols: `circuitid`, `circuitref`, `name`, `location`, `country`, `lat`, `lng`, `alt`, `url`)
-  - `M.Race` (cols: `raceid`, `year`, `round`, `circuitid`, `name`, `date`, `time`, `url`; nullable: `fp1_date/time`, `fp2_date/time`, `fp3_date/time`, `quali_date/time`, `sprint_date/time`)
-  - `M.Status` (cols: `statusid`, `status`)
-  - `M.Result` (central fact table — `resultid`, `raceid`, `driverid`, `constructorid`, `number`, `grid`, `position`, `positiontext`, `positionorder`, `points`, `laps`, `time`, `milliseconds`, `fastestlap`, `rank`, `fastestlaptime`, `fastestlapspeed`, `statusid`)
-  - `M.Driver_standings` (cols: `driverstandingsid`, `raceid`, `driverid`, `points`, `position`, `positiontext`, `wins`)
-  - `M.Constructor_results` (cols: `constructorresultsid`, `raceid`, `constructorid`, `points`, `status`)
-  - `M.Constructor_standings` (cols: `constructorstandingsid`, `raceid`, `constructorid`, `points`, `position`, `positiontext`, `wins`)
-  - `M.Qualifying` (cols: `qualifyingid`, `raceid`, `driverid`, `constructorid`, `number`, `position`, `q1`, `q2`, `q3`)
-  - `M.Sprint_results` (cols: `sprintid`, `raceid`, `driverid`, `constructorid`, `number`, `grid`, `position`, `positiontext`, `positionorder`, `points`, `laps`, `time`, `milliseconds`, `fastestlap`, `fastestlaptime`, `statusid`)
-  - `M.Lap_times` (**keyless** — no IDField; cols: `raceid`, `driverid`, `lap`, `position`, `time`, `milliseconds`)
-  - `M.Pit_stops` (**keyless** — no IDField; cols: `raceid`, `driverid`, `stop`, `lap`, `time`, `duration`, `milliseconds`)
-
-### Auxiliary Models for Mechanics Testing
-While user-facing documentation must strictly use the F1 dataset, specific auxiliary models are permitted **exclusively** for testing internal ORM mechanics (e.g., destructive operations, transaction isolation, complex join edge-cases) to preserve the integrity of the main dataset.
-- **Allowed Auxiliary Models:**
-  - `M.Just_a_test_deletion`: For CRUD and deletion safety tests. Has two nullable FKs to `Result` (`test_result`, `test_result2`).
-  - `M.Just_a_nested_roll_back`: For testing transaction atomicity and savepoints. Has a nullable FK to `Just_a_test_deletion`.
-  - `M.New_join_position`: For testing specific join mechanics or definitions. Cols: `id`, `description`, `result`, `boolean_field`.
-
-### Reference Examples for Documentation
-
-**Bad Example (Generic):**
-```julia
-# Fetch users
-q = User.objects
-q.filter("age" => 20)
-```
-
-**Good Example (F1 Dataset):**
-```julia
-# Example: Find all victories by Ayrton Senna
-# We query the 'Result' model and join with 'Driver' and 'Status'
-import PormG.models as M
-
-query = M.Result.objects
-query.filter(
-    "driverid__forename" => "Ayrton", 
-    "driverid__surname" => "Senna", 
-    "positionorder" => 1  # 1st place
-)
-
-# Select specific fields across tables
-query.values(
-    "raceid__year",              # Join: Result -> Race
-    "raceid__name",              # Join: Result -> Race
-    "constructorid__name"        # Join: Result -> Constructor
-)
-
-df = query |> DataFrame
-```
-### Example Style Guide
-1. **Scenario-Based**: Examples should represent real-world questions (e.g., "Find all Brazilian drivers who won a race in 1991").
-2. **Pipe Syntax**: Always use the `|>` operator and `object` helper.
-3. **Double-Underscore Joins**: Explicitly demonstrate PormG's join capability using `__`.
-4. **Look by example in the existing tests**: Refer to `test/integration/test.jl` or `test/integration/test_******.jl` for well-documented examples.
-
-### Explaining the SQL
-
-When documenting complex queries, briefly explain the generated SQL logic to help users understand the ORM's behavior:
-```julia
-# The example above automatically performs an INNER JOIN between results, drivers, and races based on the foreign keys defined in the models.
-```
+### Documentation style
+- When documenting complex queries, briefly explain the generated SQL shape.
+- Keep limitations explicit instead of implying unsupported features are complete.

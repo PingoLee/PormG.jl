@@ -2,7 +2,7 @@ module ConnectionPool
 
 import Logging
 import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel
-import PormG.Infiltrator: @infiltrate
+import PormG: @pormg_debug
 
 import SQLite
 import LibPQ
@@ -340,7 +340,7 @@ function release_connection(pool::PormGSQLite, conn::SQLite.DB)
 end
 
 function is_connection_alive(conn::LibPQ.Connection)
-  @infiltrate false
+  @pormg_debug false
   try
     return LibPQ.status(conn) == LibPQ.libpq_c.CONNECTION_OK
   catch
@@ -674,7 +674,7 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, 
   params::Union{Nothing, AbstractPormGParam} = nothing,
   ignore_tx::Bool = false)
-  @infiltrate false
+  @pormg_debug false
   
   # Use async-first approach: start async query then await
   fetch_task = fetch_async(connection, sql; conn=conn, params=params, ignore_tx=ignore_tx)

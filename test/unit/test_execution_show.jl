@@ -26,20 +26,20 @@ PormG.config["default"] = MockSettings
   q = TestDriver.objects.filter("forename" => "Lewis")
 
   # query with :dict
-  res = q |> list(show_query=:dict)
+  res = q.list(show_query=:dict)
   @test res isa Dict
   @test haskey(res, :sql_text)
   @test haskey(res, :parameters)
   @test res[:parameters] == ["Lewis"]
 
   # query with :sql
-  sql = q |> list(show_query=:sql)
+  sql = q.list(show_query=:sql)
   @test sql isa String
   @test contains(sql, "drivers")
   @test contains(sql, "WHERE")
 
   # query with :params
-  params = q |> list(show_query=:params)
+  params = q.list(show_query=:params)
   @test params == ["Lewis"]
 
   # bulk_insert with :dict

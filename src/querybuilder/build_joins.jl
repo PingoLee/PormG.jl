@@ -1,25 +1,19 @@
 
 "build a row to join"
 function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing, second_fild_name::Union{String, Nothing}=nothing)
-  valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
-
   if previus_how !== nothing && previus_how == "LEFT"
     # if the previous join was a LEFT JOIN, the current join must be a LEFT JOIN
     return "LEFT"
   end
   
-  @infiltrate false
+  @pormg_debug false
   if !hasproperty(field, :how)
     if second_fild_name !== nothing
       _check_if_field_is_a_operator(second_fild_name)
     end
     throw(ArgumentError("The field '$(field)' does not have a 'how' property"))
   elseif field.how !== nothing && !isempty(field.how)
-    join_type = uppercase(strip(field.how))
-    if join_type ∉ valid_joins
-      throw(ArgumentError("Invalid join type '$(field.how)'. Valid types: $(join(valid_joins, ", "))"))
-    end
-    return join_type
+    return _normalize_join_type(field.how)
   end
   
   return field.null ? "LEFT" : "INNER"
@@ -88,7 +82,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   foreing_table_module::Module = instruct.object.model._module::Module
   row_join = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
  
-  @infiltrate false
+  @pormg_debug false
 
   first_column = _resolve_django_join_field(instruct.object.model, vector[1], instruct)
   last_field::Union{Nothing, PormGField} = nothing
@@ -96,7 +90,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   # Check if first_column references a CTE table
   if haskey(instruct.object.ctes, vector[1])
-    @infiltrate false
+    @pormg_debug false
     cte_name = vector[1]
     cte_dict = instruct.object.ctes[cte_name]
     if !haskey(cte_dict, "model")
@@ -110,7 +104,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     join_field_pair = cte_dict["join_field"]::Pair{String, String}
     main_table_key = join_field_pair.first    # e.g., "driverid" from main table
     cte_table_key = join_field_pair.second    # e.g., "driverid" from CTE
-    @infiltrate false
+    @pormg_debug false
     
     if !haskey(cte_model.fields, cte_table_key)
       available = join(collect(keys(cte_model.fields)), ", ")
@@ -139,17 +133,17 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         
     row_join["key_b"] = cte_table_key
 
-    @infiltrate false
+    @pormg_debug false
 
     foreign_table_name = cte_model
     last_field = cte_model.fields[vector[2]]
    
-  elseif first_column in instruct.object.model.field_names || haskey(instruct.object.custom_join, join_path)
+  elseif first_column in instruct.object.model.field_names || _get_join_field(instruct.object, join_path) !== nothing
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
-    # @infiltrate
-    first_field = haskey(instruct.object.custom_join, join_path) ? instruct.object.custom_join[join_path]["field"] : instruct.object.model.fields[first_column]
-    # @infiltrate
+    # @pormg_debug
+    first_field = _get_join_field(instruct.object, join_path) !== nothing ? _get_join_field(instruct.object, join_path) : instruct.object.model.fields[first_column]
+    # @pormg_debug
     row_join["how"] = _determine_join_type(first_field, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
     foreign_table_name = first_field.to
     if foreign_table_name === nothing
@@ -161,12 +155,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
       size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
     end
-    # @infiltrate
+    # @pormg_debug
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["key_b"] = first_field.pk_field::String
     row_join["key_a"] = first_column
   elseif haskey(instruct.object.model.related_objects, vector[1])
-    # @infiltrate false
+    # @pormg_debug false
     s_model = Symbol(uppercasefirst(string(instruct.object.model.related_objects[vector[1]][3])))
     reverse_model = getfield(foreing_table_module, s_model)
     length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
@@ -189,26 +183,30 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["key_a"] = instruct.object.model.related_objects[vector[1]][2] |> String
     row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
     foreign_table_name = s_model |> string
-    @infiltrate false
+    @pormg_debug false
   else
-    @infiltrate false
+    @pormg_debug false
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
 
-  if haskey(instruct.object.custom_join, join_path)
-    @infiltrate false
-    row_join["on_conditions"] = instruct.object.custom_join[join_path]["filters"]
+  join_type_override = _get_join_type_override(instruct.object, join_path)
+  join_type_override !== nothing && (row_join["how"] = join_type_override)
+
+  join_filters = _get_join_filters(instruct.object, join_path)
+  if join_filters !== nothing && !isempty(join_filters)
+    @pormg_debug false
+    row_join["on_conditions"] = join_filters
   end
 
   tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path) 
   
   vector = vector[2:end]  
 
-  @infiltrate false
+  @pormg_debug false
   
   while size(vector, 1) > 1
     # get new object
-    @infiltrate false
+    @pormg_debug false
     join_path = join(field[1:length(field)-length(vector) + 1], "__")
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
     first_column = _resolve_django_join_field(new_object, vector[1], instruct)
@@ -265,9 +263,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
 
-    @infiltrate false   
-    if haskey(instruct.object.custom_join, join_path)
-      row_join["on_conditions"] = instruct.object.custom_join[join_path]["filters"]
+    @pormg_debug false   
+    join_type_override = _get_join_type_override(instruct.object, join_path)
+    join_type_override !== nothing && (row_join["how"] = join_type_override)
+
+    join_filters = _get_join_filters(instruct.object, join_path)
+    if join_filters !== nothing && !isempty(join_filters)
+      row_join["on_conditions"] = join_filters
     end
     
     tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
@@ -279,7 +281,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # last_column is the last column in the join ex. last_login
   # vector is the full path to the column ex. user__last_login__date (including functions (except the suffix))
 
-  # @infiltrate
+  # @pormg_debug
 
   # println("$(join(field, "__"))")
   # functions must be processed here

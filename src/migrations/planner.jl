@@ -135,12 +135,12 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
 end
 
 function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn; interactive::Bool = true)::Nothing
-  # @infiltrate model_name == :new_join_position
+  # @pormg_debug model_name == :new_join_position
   if Models.are_model_fields_equal(current_schema[model_name][:model], model)
     # println("Model $model_name are equal")
   else        
     # Compare fields
-    @infiltrate false
+    @pormg_debug false
     # Convert keys(model.fields) to an array of stripped strings and keep mapping to original key
     model_fields_map = Dict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
     stripped_model_fields = Set(keys(model_fields_map))
@@ -164,7 +164,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       end
     end    
     
-    @infiltrate false
+    @pormg_debug false
     # Pass maps to resolve fields so original keys can be used for accessing model.fields
     _resolve_table_fields(conn, model_name, model, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
       
@@ -199,7 +199,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         end
         
         # if field_name == "time"
-        #   @infiltrate
+        #   @pormg_debug
         # end
         
         isempty(colect_not_equal) && continue                       
@@ -217,7 +217,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         
         # Check if the field is also indexed
         if !field.primary_key && field.db_index && !model.fields[original_db_key].db_index
-          @infiltrate false
+          @pormg_debug false
           index_name = "$(name)_idx"
           _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name_stripped", 
           Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name_stripped\""]))
@@ -225,7 +225,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
 
         # Check if is need to remove the index
         if !field.primary_key && old_field.db_index && !field.db_index
-          @infiltrate
+          @pormg_debug
           index_name = model.cache["index"][original_db_key]
           _drop_index(conn, migration_plan, model_name, field_name_stripped, index_name=index_name)
           # _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name_stripped", 
@@ -337,12 +337,12 @@ if isempty(models)
   return migration_plan  
 end
 
-@infiltrate false
+@pormg_debug false
 
 for model in models # models is olds models
   model_name = model.name |> Symbol
   # model_name = lowercase(string(model.name)) |> Symbol
-  @infiltrate false
+  @pormg_debug false
   if haskey(current_schema, model_name)
     current_schema[model_name][:exist] = true
     _alter_table_fields(conn, migration_plan, model_name, model, current_schema, settings, interactive=interactive)
@@ -355,7 +355,7 @@ for model in models # models is olds models
   end
 end
 
-@infiltrate false
+@pormg_debug false
 
 # Check for models in the current schema that are not in the models
 for (model_name, model) in current_schema
@@ -411,7 +411,7 @@ for (model_name, model) in current_schema
  
 end
 
-@infiltrate false
+@pormg_debug false
 
 # at last check all models in futher_processing to drop
 if haskey(futher_processing, :drop_table)
@@ -434,7 +434,7 @@ if !settings.change_db
   @warn("The database is not set to change_db, so the migration plan will not be applied.")
   return
 end
-@infiltrate false
+@pormg_debug false
 models_array::Vector{PormGModel} = []
 try
   models_array = convert_schema_to_models(connection)
@@ -455,11 +455,11 @@ Base.include(temp_module, path)
 # current_models = get_all_models(Base.invokelatest(getfield, temp_module, :models))
 current_models = Base.invokelatest(get_all_models, Base.invokelatest(getfield, temp_module, :models)) # TODO : i need create abstrations to deal with change :models name
 
-@infiltrate false
+@pormg_debug false
 
 migration_plan = get_migration_plan(models_array, current_models, connection, settings, interactive=interactive)
 
-@infiltrate false
+@pormg_debug false
 
 # store migration_plan as pending_migrations.jl file
 if migration_plan |> isempty

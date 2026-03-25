@@ -7,7 +7,7 @@ end
     # The goal is to pin down the new strict policy: bulk operations must reject type
     # mismatches before SQL execution rather than silently coercing values.
     base_query = M.Just_a_test_deletion.objects
-    base_query |> do_exists && delete(base_query; allow_delete_all = true)
+    base_query |> do_exists && base_query.delete(allow_delete_all = true)
 
     @testset "bulk_insert rejects Float64 for integer-backed fields" begin
         # The `test_result` field is a ForeignKey backed by BIGINT. A Float64 like 14.0 used
@@ -37,7 +37,7 @@ end
         df_nullable = DataFrames.DataFrame(name = ["nullable-ok"], test_result = [missing])
         bulk_insert(query, df_nullable)
 
-        row = M.Just_a_test_deletion.objects.filter("name" => "nullable-ok") |> list |> first
+        row = M.Just_a_test_deletion.objects.filter("name" => "nullable-ok").list() |> first
         @test ismissing(row[:test_result]) || isnothing(row[:test_result])
 
         # `name` is required, so missing must fail before the database sees the row. That keeps
@@ -62,14 +62,14 @@ end
         # 1. Setting an optional field to missing should succeed.
         # 2. Passing a Float64 into an integer-backed field should fail without partial writes.
         query = M.Just_a_test_deletion.objects
-        query |> do_exists && delete(query; allow_delete_all = true)
+        query |> do_exists && query.delete(allow_delete_all = true)
         query.create("name" => "update-target", "test_result" => 1, "test_result2" => 2)
 
         current = M.Just_a_test_deletion.objects.filter("name" => "update-target") |> DataFrame
         nullable_update = DataFrames.DataFrame(id = current.id, test_result2 = [missing])
         bulk_update(query, nullable_update, columns = ["test_result2", "id"], filters = ["id"])
 
-        updated = M.Just_a_test_deletion.objects.filter("name" => "update-target") |> list |> first
+        updated = M.Just_a_test_deletion.objects.filter("name" => "update-target").list() |> first
         @test ismissing(updated[:test_result2]) || isnothing(updated[:test_result2])
 
         bad_update = DataFrames.DataFrame(id = current.id, test_result = [22.0])
@@ -85,7 +85,7 @@ end
         @test occursin("test_result", string(err))
         @test occursin("expected Int64 or an integer string", string(err))
 
-        unchanged = M.Just_a_test_deletion.objects.filter("name" => "update-target") |> list |> first
+        unchanged = M.Just_a_test_deletion.objects.filter("name" => "update-target").list() |> first
         @test unchanged[:test_result] == 1
     end
 end
@@ -101,7 +101,7 @@ else
     query = M.Just_a_test_deletion.objects
     
     # 1. Clean up
-    query |> do_exists && delete(query; allow_delete_all = true)
+    query.exists() && query.delete(allow_delete_all = true)
     @test query.count() == 0
 
     # 2. Create a DataFrame for bulk copy
@@ -128,7 +128,7 @@ else
     @test results[5, :test_result] == 500
 
     # 5. Test with column mapping
-    delete(query, allow_delete_all = true)
+    query.delete(allow_delete_all = true)
     df_mapped = DataFrames.DataFrame(
         raw_name = ["Mapped 1", "Mapped 2"],
         raw_val = [10, 20]
@@ -139,7 +139,7 @@ else
 
     # 6. Test with automated sequence update
     # Fetch current IDs to see where we are
-    last_id = query.order_by("-id").values("id") |> list |> first |> x -> x[:id]
+    last_id = query.order_by("-id").values("id").list() |> first |> x -> x[:id]
     
     # Create a new row via standard create() to ensure sequence didn't break
     new_row = query.create("name" => "Sequence check", "test_result" => 999)
@@ -155,7 +155,7 @@ end
     
     # Clean up from any previous test runs
     try
-        query |> do_exists && delete(query; allow_delete_all = true)
+        query |> do_exists && query.delete(allow_delete_all = true)
     catch
         # Ignore errors if table doesn't exist yet
     end
@@ -205,13 +205,13 @@ end
 
 @testset "COPY Validation and Missing Handling" begin
     query = M.Just_a_test_deletion.objects
-    query |> do_exists && delete(query; allow_delete_all = true)
+    query |> do_exists && query.delete(allow_delete_all = true)
 
     # This confirms COPY respects the same nullable-field policy as bulk_insert. We allow
     # missing on `test_result` because the model marks that foreign key as nullable.
     df_nullable = DataFrames.DataFrame(name = ["copy-nullable"], test_result = [missing])
     bulk_copy(query, df_nullable)
-    row = query.filter("name" => "copy-nullable") |> list |> first
+    row = query.filter("name" => "copy-nullable").list() |> first
     @test ismissing(row[:test_result]) || isnothing(row[:test_result])
 
     # Required-field failures should be reported before the COPY stream is sent, otherwise the

@@ -1,7 +1,33 @@
 module PormG
 
 using PrecompileTools
-using Infiltrator
+
+# Internal debug hook — no-op in production.
+#
+# HOW TO USE BREAKPOINTS (requires dev + Revise, because macros are compile-time):
+#
+#   Step 1 — switch to source in your project:
+#     ]dev PormG
+#
+#   Step 2 — load Revise + Infiltrator before PormG in your REPL/startup.jl:
+#     using Revise, Infiltrator
+#     using PormG   # Revise now tracks PormG source
+#
+#   Step 3 — redefine the macro (before editing any source file):
+#     PormG.eval(:(macro pormg_debug(ex); :(Infiltrator.@infiltrate($(esc(ex)))); end))
+#
+#   Step 4 — edit the target .jl file (e.g. change `@pormg_debug false` → `@pormg_debug true`).
+#     Revise re-parses the file and the macro now expands to a real breakpoint.
+#
+# NOTE: redefining the macro alone (without Revise re-parsing the call site) has no effect,
+# because macro expansion happens at parse time, not at runtime.
+macro pormg_debug()
+    return nothing
+end
+macro pormg_debug(ex)
+    return nothing
+end
+export @pormg_debug
 
 import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
 
@@ -80,10 +106,10 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, list, list_json, page, update, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
+import .QueryBuilder: object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 
-export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, list, list_json, update, bulk_insert, bulk_update, bulk_copy, delete, do_count, do_exists, With, cjoin, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
-export with_advisory_lock, try_advisory_lock, release_advisory_lock
+export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
+export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
 export make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS # Password utilities

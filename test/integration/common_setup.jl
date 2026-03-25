@@ -6,12 +6,25 @@ using Revise
 using PormG
 using DataFrames
 using CSV
-using Test, SafeTestsets
+using Test#, SafeTestsets
 using Dates
 using JSON
 using UUIDs
 using Base.Threads: Atomic, atomic_add!
-using Infiltrator: @infiltrate
+
+# Optional Infiltrator support — re-wires @pormg_debug to real breakpoints when available.
+# Infiltrator is a test-only dep (see [extras] in Project.toml); it is never loaded in production.
+if !isinteractive()
+    # Non-interactive (CI / Pkg.test): keep @pormg_debug as a no-op — do nothing.
+elseif !isnothing(get(ENV, "PORMG_INFILTRATOR", nothing))
+    try
+        @eval using Infiltrator
+        PormG.eval(:(macro pormg_debug(ex); :(Infiltrator.@infiltrate($(esc(ex)))); end))
+        @info "Infiltrator loaded — @pormg_debug is live"
+    catch e
+        @warn "Could not load Infiltrator" exception=e
+    end
+end
 
 import PormG: with_transaction, Models, Dialect
 import PormG.Configuration: with_tx_context, get_tx_connection

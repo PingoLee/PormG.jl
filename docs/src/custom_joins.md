@@ -186,6 +186,52 @@ This distinction matters:
 - `.filter(...)` is for base-query predicates that belong in `WHERE`
 - Passing base-table fields to `cjoin(filters=...)` is not a good API contract and should be treated as unsupported usage
 
+### Dedicated `on()` API for Existing Join Paths
+
+When the join path already exists through the model graph, you do not need to redefine it with `cjoin()` just to add ON-clause predicates. Use the chainable `query.on()` method instead:
+
+```julia
+query = M.Result.objects
+query.on("driverid", "nationality" => "Brazilian", "code" => "SEN")
+query.values("resultid", "driverid__surname", "points")
+
+df = query |> DataFrame
+```
+
+This keeps all base `Result` rows in the query tree while only attaching `Driver` rows that satisfy the ON predicates.
+
+You can also override the join type directly from `query.on()`:
+
+```julia
+query = M.Result.objects
+query.on("driverid", "nationality" => "Brazilian", join_type="INNER")
+query.values("resultid", "driverid__surname")
+```
+
+This changes the join keyword to `INNER JOIN` while keeping the predicate in the `ON` clause instead of moving it to `WHERE`.
+
+### Reverse Join Example with `on()`
+
+Reverse joins are the main use case for the dedicated API because they let you preserve base rows while limiting which related rows attach.
+
+```julia
+query = M.Result.objects
+query.on("test_deletion", "name__@in" => ["reverse-join-a", "reverse-join-b"])
+query.filter("resultid__@in" => [1, 2, 3])
+query.values("resultid", "test_deletion__name")
+
+df = query |> DataFrame
+```
+
+With the default `LEFT` semantics, all three `Result` rows remain, but only the matching reverse rows are attached. If you want only the matched base rows, switch to `join_type="INNER"` on the same `on()` call.
+
+### Contract of `on()`
+
+- `query.on("path", ...)` targets an existing join path, including reverse joins such as `"test_deletion"` and nested paths such as `"raceid__circuitid"`
+- multiple predicates are combined with `AND` unless you use `Qor(...)`
+- repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
+- `.filter(...)` keeps its existing `WHERE` semantics and is not silently rewritten into `ON`
+
 ### When cjoin is Applied
 
 The `cjoin` configuration is only applied when you access fields through the join path:

@@ -9,7 +9,7 @@ import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_m
 import PormG: get_constraints_pk, get_constraints_unique
 import PormG.Models: Migration, get_model_pk_field, format_model_name
 
-import PormG.Infiltrator: @infiltrate
+import PormG: @pormg_debug
 
 
 # Date Part Wrappers
@@ -893,7 +893,7 @@ function get_objects_to_delete(connection::PormGPostgres, model::PormGModel, ins
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
   """
   # Execute the query to get IDs of objects to delete
-  @infiltrate false
+  @pormg_debug false
   result = LibPQ.execute(connection, sql_to_delete)
   return Tables.rowtable(result)
 end

@@ -4,14 +4,14 @@ import YAML, Logging
 import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE
 import PormG: Generator
-import PormG.Infiltrator: @infiltrate
+import PormG: @pormg_debug
 
 import SQLite
 import LibPQ
 using Base.ScopedValues: ScopedValue, with
 
 export env, Settings, connection, close_pool!, get_settings
-export with_tx_context, register_connection, unregister_connection, set_connection_resolver
+export with_tx_context, in_transaction_context, register_connection, unregister_connection, set_connection_resolver
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 
@@ -206,7 +206,7 @@ function _build_connection_pool!(settings::SQLConn, path::String)
       ":memory:"
     end
 
-    @infiltrate false
+    @pormg_debug false
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
     settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write)
 
@@ -313,7 +313,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   path === nothing && (path = DB_PATH )
   selected_env = _effective_env(env)
 
-  @infiltrate false
+  @pormg_debug false
 
   # check if the path exists
   if !isdir(path)

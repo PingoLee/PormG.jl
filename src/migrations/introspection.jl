@@ -246,7 +246,7 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
     # index > 4 && break
   end  
   # println(models_array)
-  # @infiltrate 
+  # @pormg_debug 
   return models_array
 end
 
@@ -355,7 +355,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     """
 
   df = DataFrame(fetch(db, query))
-  # @infiltrate false
+  # @pormg_debug false
   if nrow(df) == 0
       @warn("No tables found in the database.")
   end
@@ -517,7 +517,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # Detect if the column is indexed
       db_index = haskey(index_map, col_name |> Symbol)
 
-      @infiltrate false
+      @pormg_debug false
 
       # Extract max_length if it exists
       if occursin(r"varchar\((\d+)\)", col_type) || occursin(r"char\((\d+)\)", col_type) 
@@ -579,7 +579,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         end
       end
 
-      # @infiltrate col == "qt_referencia bigint DEFAULT (0)::numeric"
+      # @pormg_debug col == "qt_referencia bigint DEFAULT (0)::numeric"
 
       # println(col)
       
@@ -622,7 +622,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   if !isempty(index_map)   
     model_resp.cache = Dict("index" => index_map)
   end
-  @infiltrate false
+  @pormg_debug false
   return model_resp
 
 end

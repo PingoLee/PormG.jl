@@ -1,0 +1,21 @@
+name: TagBot
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      lookback:
+        default: "3"
+
+jobs:
+  TagBot:
+    # Only run when triggered by JuliaTagBot or manually via workflow_dispatch.
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: JuliaRegistries/TagBot@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Reuses the same SSH key already configured for Documenter deploys.
+          ssh: ${{ secrets.DOCUMENTER_KEY }}

@@ -41,7 +41,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     if haskey(instruc.cache, v_copy._as)
       instruc.select[i] = instruc.cache[v_copy._as]  # TODO That is necessary in get_select_query    
     else
-      @infiltrate false
+      @pormg_debug false
       v_copy.field = _get_select_query(v_copy.field, instruc, _as=v_copy._as)
       instruc.select[i] = v_copy
       if v_copy._as === nothing
@@ -151,16 +151,16 @@ end
 """
 function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
-  @infiltrate false
+  @pormg_debug false
   for v in object.filter
     if isa(v, SQLTypeOper)
-      @infiltrate false
+      @pormg_debug false
       if isa(v.column, SQLTypeField) && isa(v.column.field, String) && !contains(v.column.field, "__") && !(v.column.field in instruc.object.model.field_names)
-        # @infiltrate false
+        # @pormg_debug false
         field = try
           instruc.cache[v.column._as].field
         catch e
-          # @infiltrate
+          # @pormg_debug
           rethrow(e)
         end
         # Switch to having context for positional parameters
@@ -181,9 +181,77 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
 end
 
 function build_row_join_sql_text(instruc::SQLInstruction)
-  @infiltrate false
-  for value in instruc.row_join
-    # Switch to :join context before processing any filters or table markers inside this join
+  @pormg_debug false
+
+  # --- Phase 1: pre-resolve ON conditions -----------------------------------
+  # Filter resolution for deep paths (e.g. "raceid__circuitid__country") may
+  # create additional join entries in instruc.row_join via _build_row_join.
+  # By pre-resolving with an index-based loop we process newly created entries
+  # in order and store the generated SQL fragments for Phase 2.
+  n_before = length(instruc.row_join)
+  on_clause_extras = Dict{Int, Vector{String}}()
+  i = 1
+  while i <= length(instruc.row_join)
+    value = instruc.row_join[i]
+    set_context!(instruc, :join)
+
+    if haskey(value, "on_conditions") && value["on_conditions"] !== nothing
+      on_conditions = value["on_conditions"]::Vector{FilterType}
+      alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
+      original_alias = instruc.alias
+      extras = String[]
+
+      for condition in on_conditions
+        condition_sql = _get_filter_query(condition, instruc)
+        condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
+        push!(extras, condition_sql)
+      end
+
+      instruc.alias = original_alias
+      on_clause_extras[i] = extras
+    end
+    i += 1
+  end
+
+  # --- Phase 1b: relocate forward-referencing ON extras ----------------------
+  # When ON extras for join `idx` reference the alias of a join `dep_idx` that
+  # was *created* during Phase 1 (i.e. dep_idx > n_before), it means the ON
+  # condition uses a deep path (e.g. raceid__circuitid__country) that chains
+  # through the current join's target table.  Emitting those extras on `idx`
+  # would forward-reference `dep_idx` (whose JOIN clause hasn't appeared yet).
+  #
+  # Fix: move such extras to `dep_idx`'s ON clause, which is the join whose
+  # alias is referenced.  The base ON of `dep_idx` already references `idx`'s
+  # alias_b (the parent), so ordering is satisfied: idx emits first, dep_idx
+  # emits second with the relocated extras.
+  for idx in 1:n_before
+    haskey(on_clause_extras, idx) || continue
+    extras = on_clause_extras[idx]
+    relocated = falses(length(extras))
+
+    for dep_idx in (n_before+1):length(instruc.row_join)
+      dep_alias = instruc.row_join[dep_idx]["alias_b"]
+      for (ei, extra) in enumerate(extras)
+        if !relocated[ei] && occursin("\"$(dep_alias)\"", extra)
+          # Move this extra to dep_idx's ON clause
+          if !haskey(on_clause_extras, dep_idx)
+            on_clause_extras[dep_idx] = String[]
+          end
+          push!(on_clause_extras[dep_idx], extra)
+          relocated[ei] = true
+        end
+      end
+    end
+
+    # Keep only the non-relocated extras on the original join
+    if any(relocated)
+      on_clause_extras[idx] = extras[.!relocated]
+      isempty(on_clause_extras[idx]) && delete!(on_clause_extras, idx)
+    end
+  end
+
+  # --- Phase 2: emit JOIN SQL text in original order -------------------------
+  for (idx, value) in enumerate(instruc.row_join)
     set_context!(instruc, :join)
     b_quoted = safe_table_identifier(value["b"], instruc.connection)
     alias_b_quoted = quote_identifier(value["alias_b"], instruc.connection)
@@ -194,19 +262,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     # Build base ON clause
     on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
 
-    # Add additional ON conditions if present (from cjoin)
-    if haskey(value, "on_conditions") && value["on_conditions"] !== nothing
-      on_conditions = value["on_conditions"]::Vector{FilterType}
-      original_alias = instruc.alias
-
-      for condition in on_conditions
-        condition_sql = _get_filter_query(condition, instruc)
-        condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
-
-        on_clause *= " AND $condition_sql"
+    # Append pre-resolved ON condition fragments
+    if haskey(on_clause_extras, idx)
+      for extra in on_clause_extras[idx]
+        on_clause *= " AND $extra"
       end
-
-      instruc.alias = original_alias
     end
 
     push!(instruc.join, """ $(value["how"]) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
@@ -224,7 +284,7 @@ function build(object::SQLObject;
 
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))
-  @infiltrate false
+  @pormg_debug false
   instruct = InstrucObject(text="",
     object=object,
     table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
@@ -247,9 +307,10 @@ function build(object::SQLObject;
   # This ensures cjoin filters are applied even in UPDATE/DELETE without explicit field paths.
   # We check against instruct.row_path to avoid redundant materialization (forcing them twice).
   for c_j in object.custom_join
-    if c_j |> Base.first ∉ instruct.row_path
+    config = c_j |> Base.last
+    if c_j |> Base.first ∉ instruct.row_path && config isa Dict{String,Any} && haskey(config, "field") && config["field"] isa PormGField
       array = split(c_j |> Base.first, "__")
-      push!(array, (c_j|>Base.last)["field"].pk_field)
+      push!(array, config["field"].pk_field)
       _build_row_join(array, instruct)
     end
   end

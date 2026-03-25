@@ -23,7 +23,7 @@ end
   @testset "Schema Evolution and Error Recovery" begin
     # 1. Schema Evolution: Reordered columns and extra columns
     query = M.Status.objects
-    delete(query, allow_delete_all=true)
+    query.delete(allow_delete_all=true)
     
     # Create DF with extra column and different order
     df_evolved = DataFrame(
@@ -65,7 +65,7 @@ end
     @test query.count() == 0
 
     # 3. Multi-chunk Error Recovery: Atomicity across chunks
-    delete(M.Status.objects, allow_delete_all=true)
+    M.Status.objects.delete(allow_delete_all=true)
     df_multi = DataFrame(
         statusid = [2001, 2002, 2001, 2003], # 2001 is repeated in the 3rd row
         status = ["Chunk 1", "Chunk 1", "Chunk 2 (Fail)", "Chunk 2"]
@@ -87,19 +87,19 @@ end
   end
 
   # Clear all tables
-  delete(M.Driver_standings.objects, allow_delete_all = true)
-  delete(M.Lap_times.objects, allow_delete_all = true)
-  delete(M.Pit_stops.objects, allow_delete_all = true)
-  delete(M.Qualifying.objects, allow_delete_all = true)
-  delete(M.Sprint_results.objects, allow_delete_all = true)
-  delete(M.Constructor_results.objects, allow_delete_all = true)
-  delete(M.Constructor_standings.objects, allow_delete_all = true)
-  delete(M.Circuit.objects, allow_delete_all = true)
-  delete(M.Status.objects, allow_delete_all = true)
-  delete(M.Driver.objects, allow_delete_all = true)
-  delete(M.Constructor.objects, allow_delete_all = true)
-  delete(M.Result.objects, allow_delete_all = true)
-  delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+  M.Driver_standings.objects.delete(allow_delete_all = true)
+  M.Lap_times.objects.delete(allow_delete_all = true)
+  M.Pit_stops.objects.delete(allow_delete_all = true)
+  M.Qualifying.objects.delete(allow_delete_all = true)
+  M.Sprint_results.objects.delete(allow_delete_all = true)
+  M.Constructor_results.objects.delete(allow_delete_all = true)
+  M.Constructor_standings.objects.delete(allow_delete_all = true)
+  M.Circuit.objects.delete(allow_delete_all = true)
+  M.Status.objects.delete(allow_delete_all = true)
+  M.Driver.objects.delete(allow_delete_all = true)
+  M.Constructor.objects.delete(allow_delete_all = true)
+  M.Result.objects.delete(allow_delete_all = true)
+  M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 
   @testset "Single insertions" begin
 

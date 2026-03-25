@@ -930,6 +930,45 @@ end
     @test cte_len + join_len + where_len == param_count
 end
 
+@testset "Alignment Verification - on() merges filters and overrides join type" begin
+    # on() should behave like a dedicated ON-clause API for an existing join path.
+    # Multiple calls against the same path should merge predicates, while join_type
+    # should override the join keyword used by the SQL builder.
+    q = M.Result.objects
+    q.on("driverid", "nationality" => "Brazilian")
+    q.on("driverid", "code" => "SEN", join_type="INNER")
+    q.filter("points" => 10)
+    q.values("driverid__surname")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test insp[:parameter_buckets][:join] == ["Brazilian", "SEN"]
+    @test insp[:parameter_buckets][:where] == [10]
+    @test contains(sql, "INNER JOIN")
+    @test match(r"ON\s+.*?nationality.*?code.*?WHERE"s, sql) !== nothing
+end
+
+@testset "Alignment Verification - on() supports reverse joins" begin
+    # Reverse joins are the main reason a dedicated ON API exists.
+    # The base rows should be preserved while only matching reverse rows attach.
+    q = M.Result.objects
+    q.on("test_deletion", "name" => "reverse-join-a")
+    q.filter("resultid__@in" => [1, 2, 3])
+    q.values("resultid", "test_deletion__name")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test insp[:parameter_buckets][:join] == ["reverse-join-a"]
+    @test insp[:parameter_buckets][:where] == [1, 2, 3]
+    @test contains(sql, "LEFT JOIN")
+    # PormG uses table aliases in ON clauses (e.g. "Tb_1"."name"), so the table name
+    # "just_a_test_deletion" appears in the JOIN clause (before ON), not inside the ON condition.
+    # The correct check: table name appears in the JOIN clause, field name appears in the ON clause.
+    @test match(r"JOIN.*?test_deletion.*?ON.*?name.*?WHERE"s, sql) !== nothing
+end
+
 @testset "Alignment Verification - Positive HAVING" begin
     # Test that parameters in HAVING (aggregate filters) land in :having bucket
     # Note: Aggregate filters must refer to an alias from values() that uses an aggregate function

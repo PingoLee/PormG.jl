@@ -12,7 +12,7 @@ import Base.deepcopy
 using Decimals
 
 
-import PormG.Infiltrator: @infiltrate
+import PormG: @pormg_debug
 
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -124,7 +124,7 @@ end
 
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 function set_models(_module::Module, path::String)::Nothing
-  @infiltrate false
+  @pormg_debug false
   models = get_all_models(_module)  
 
   # Register for lazy loading / self-healing
@@ -153,7 +153,7 @@ function set_models(_module::Module, path::String)::Nothing
     end
   end
 
-  @infiltrate false
+  @pormg_debug false
   if isnothing(connect_key)
     # Try to load using the path as the primary key
     Configuration.load(path)
@@ -172,7 +172,7 @@ function set_models(_module::Module, path::String)::Nothing
     dict_tables_c = Dict{String, Int}()
     dict_tables_fiels = Dict{String, Vector{String}}()
     model.connect_key = connect_key
-    # @infiltrate model.name == "dash_tab_cvat" 
+    # @pormg_debug model.name == "dash_tab_cvat" 
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey || field isa sOneToOneField
@@ -191,7 +191,7 @@ function set_models(_module::Module, path::String)::Nothing
           dict_tables_fiels[field_to.name] = [field_name]
         end
         if dict_tables_c[field_to.name] > 1
-          @infiltrate false
+          @pormg_debug false
           if field.related_name === nothing 
             field.related_name = string(get_model_name(model, settings), "_", field_name) |> lowercase
             @info("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
@@ -202,7 +202,7 @@ function set_models(_module::Module, path::String)::Nothing
             field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, get_model_name(model, settings), get_model_pk_field(model) |> Symbol)
           end
         elseif dict_tables_c[field_to.name] == 1
-          @infiltrate false
+          @pormg_debug false
           model_name = get_model_name(model, settings)
           if field.related_name === nothing            
             field_to.related_objects[model_name |> string] = (field_name |> Symbol, field.pk_field |> Symbol, model_name |> Symbol, get_model_pk_field(model) |> Symbol)
@@ -259,7 +259,7 @@ function ensure_model_initialized(model::PormGModel)
     end
 
     # Case 2: Uninitialized or lost registration
-    @infiltrate false
+    @pormg_debug false
     
     # 2a. Check explicitly registered modules
     for (mod, path) in REGISTERED_MODULES
@@ -344,7 +344,7 @@ end
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
-function Model(name::AbstractString, fields::NTuple{N, Pair{Symbol, T}}) where N where T <: Any
+function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
@@ -373,7 +373,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
   fields_dict = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
-    @infiltrate false
+    @pormg_debug false
     field_name = field_name |> String |> format_fild_name
     if !(field isa PormGField)
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
@@ -426,7 +426,7 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
     try
       fields = struct_name in [:ForeignKey, :OneToOneField] ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
     catch e
-      # @infiltrate
+      # @pormg_debug
     end
   end
   model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
@@ -501,7 +501,7 @@ function format_text_sql(value::AbstractArray)
   for v in value
     push!(arrayref, v |> format_text_sql)
   end
-  @infiltrate false
+  @pormg_debug false
   # return string("(", join(arrayref, ","), ")")
   return arrayref
 end
@@ -794,7 +794,7 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
         return false
       end
     catch
-      @infiltrate false
+      @pormg_debug false
     end
   end
   return true
@@ -876,7 +876,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
     try
       return converter(default)
     catch e
-      @infiltrate false
+      @pormg_debug false
       throw(ArgumentError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end
   end

@@ -121,7 +121,7 @@ end
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
   if x.first[end] in ["in", "nin"]
-    # @infiltrate
+    # @pormg_debug
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
@@ -136,7 +136,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   if x.first[end] in ["in", "nin"]
-    @infiltrate false
+    @pormg_debug false
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   elseif x.first[end] == "range"
     if length(x.second) != 2
@@ -164,10 +164,10 @@ function _check_filter(x::Pair)
   if isa(x.first, String)
     check = String.(split(x.first, "__@"))
     try
-      # @infiltrate
+      # @pormg_debug
       return _get_pair_to_oper(check => x.second)
     catch e
-      @infiltrate false
+      @pormg_debug false
       @error "Error in filter processing '$(x.first)'" exception = (e, catch_backtrace())
       rethrow(e)
     end
@@ -247,7 +247,7 @@ function _insert_join(
   row_join::Vector{Dict{String,Union{String,Vector{FilterType}}}},
   row::Dict{String,Union{String,Vector{FilterType}}},
   row_path::Vector{String}, join_path::String)
-  @infiltrate false
+  @pormg_debug false
   if size(row_join, 1) == 0
     push!(row_join, row)
     push!(row_path, join_path)
@@ -255,7 +255,7 @@ function _insert_join(
   else
     check = filter(r -> r["a"] == row["a"] && r["b"] == row["b"] && r["key_a"] == row["key_a"] && r["key_b"] == row["key_b"] && r["alias_a"] == row["alias_a"], row_join)
     if size(check, 1) == 0
-      @infiltrate false
+      @pormg_debug false
       push!(row_join, row)
       push!(row_path, join_path)
       return row["alias_b"]
@@ -277,6 +277,39 @@ function _check_if_field_is_a_operator(field::String)
     throw(ArgumentError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
   end
 end
+
+function _normalize_join_type(join_type::String)
+  valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
+  normalized = uppercase(strip(join_type))
+  normalized in valid_joins || throw(ArgumentError("Invalid join type '$(join_type)'. Valid types: $(join(valid_joins, ", "))"))
+  return normalized
+end
+
+function _get_join_config(q::SQLObject, join_path::String)
+  haskey(q.custom_join, join_path) || return nothing
+  config = q.custom_join[join_path]
+  return config isa Dict{String,Any} ? config : nothing
+end
+
+function _get_join_field(q::SQLObject, join_path::String)
+  config = _get_join_config(q, join_path)
+  config === nothing && return nothing
+  return get(config, "field", nothing)
+end
+
+function _get_join_filters(q::SQLObject, join_path::String)
+  config = _get_join_config(q, join_path)
+  config === nothing && return nothing
+  filters = get(config, "filters", nothing)
+  return filters isa Vector{FilterType} ? filters : nothing
+end
+
+function _get_join_type_override(q::SQLObject, join_path::String)
+  config = _get_join_config(q, join_path)
+  config === nothing && return nothing
+  join_type = get(config, "join_type", nothing)
+  return join_type isa String ? join_type : nothing
+end
 """
 This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
 """
@@ -284,7 +317,7 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   # check if last_column a field from the model    
   if !(field in model.field_names)
     _check_if_field_is_a_operator(field)
-    @infiltrate false
+    @pormg_debug false
     throw(ArgumentError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
@@ -364,10 +397,17 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
+    quoted_alias = quote_identifier(instruc.alias, instruc.connection)
+    
+    # Fast path: allow "*" to select all main-table columns seamlessly.
+    # We intercept this before _solve_field to prevent the missing-field validation error.
+    if v == "*"
+      return string(quoted_alias, ".*")
+    end
+    
     if _as !== nothing && haskey(instruc.tab_field_cache, _as)
       instruc.tab_field_cache[_as] = instruc.object.model.fields[v]
     end
-    quoted_alias = quote_identifier(instruc.alias, instruc.connection)
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
   end
 end
@@ -502,38 +542,38 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   end
 end
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
-  @infiltrate false
+  @pormg_debug false
   column = _get_filter_query(v.column, instruc)
   if isa(v.values, SQLTypeF)
-    @infiltrate false
+    @pormg_debug false
     # F expressions are safe since they reference model fields    
     placeholders = _get_filter_query(v.values, instruc)
     return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formater !== nothing
-    @infiltrate false
+    @pormg_debug false
     placeholders = add_parameter!(instruc, v.column.field.formater(v.values))
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.field.function_name])(v.values))
     # value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
     # Function with formater
-    @infiltrate false
+    @pormg_debug false
     placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.function_name])(v.values))
   elseif isa(v.values, SQLObjectHandler)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
-      @infiltrate
+      @pormg_debug
       throw("Error in values, $(v.column.field) in filter is not a object")
     end
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
   else
-    @infiltrate false
+    @pormg_debug false
     if isa(v.column, SQLTypeField)
-      @infiltrate false
+      @pormg_debug false
       _get_select_query(v.column, instruc, _as=v.column._as) # TODO, how do this i where before do operates
     else
-      @infiltrate false
+      @pormg_debug false
     end
     if v.operator in ["ISNULL"]
       return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
@@ -564,23 +604,23 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
         placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains=is_like_op, operator=v.operator)
       catch e
-        @infiltrate false
+        @pormg_debug false
         if contains(string(e), "The date") && contains(string(e), "is invalid")
           throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
-        @infiltrate false
+        @pormg_debug false
         rethrow(e)
       end
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
-      @infiltrate false
+      @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
       placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
-      @infiltrate false
+      @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
-      @infiltrate false
+      @pormg_debug false
       throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
     end
   end
@@ -605,7 +645,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       throw("Error in operator: $(v.operator), the value must be a String or a Vector of Strings")
     end
   elseif v.operator in ["contains", "icontains", "startswith", "endswith"]
-    @infiltrate false
+    @pormg_debug false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else
     throw("Error in operator, $(v.operator) is not a valid operator")

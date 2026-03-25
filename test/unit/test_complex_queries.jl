@@ -97,7 +97,7 @@ ResultCamelDjangoModel._module = Main
     # Test: Greater than operator
     q = RaceModel.objects
     q.filter("year__@gt" => 2020)
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test haskey(res, :sql_text)
@@ -108,7 +108,7 @@ ResultCamelDjangoModel._module = Main
     # Test: Less than or equal operator
     q2 = RaceModel.objects
     q2.filter("year__@lte" => 1990)
-    res2 = q2 |> list(show_query=:dict)
+    res2 = q2.list(show_query=:dict)
 
     @test res2[:parameters] == [1990]
     @test contains(res2[:sql_text], "<=")
@@ -116,7 +116,7 @@ ResultCamelDjangoModel._module = Main
     # Test: Not equal operator
     q3 = RaceModel.objects
     q3.filter("year__@ne" => 2021)
-    res3 = q3 |> list(show_query=:dict)
+    res3 = q3.list(show_query=:dict)
 
     @test res3[:parameters] == [2021]
   end
@@ -126,7 +126,7 @@ ResultCamelDjangoModel._module = Main
     # Test: contains/icontains for LIKE
     q = DriverModel.objects
     q.filter("forename__@contains" => "lew")
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "LIKE") || contains(res[:sql_text], "LOWER")
@@ -135,7 +135,7 @@ ResultCamelDjangoModel._module = Main
     q2 = DriverModel.objects
     q2.filter("nationality" => "British")
     q2.filter("forename__@contains" => "lewis")
-    res2 = q2 |> list(show_query=:dict)
+    res2 = q2.list(show_query=:dict)
 
     @test length(res2[:parameters]) >= 2
     @test contains(res2[:sql_text], "WHERE")
@@ -148,7 +148,7 @@ ResultCamelDjangoModel._module = Main
     q.order_by("forename")  # ascending order
     q.limit(10)
     q.offset(5)
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "ORDER BY")
@@ -164,7 +164,7 @@ ResultCamelDjangoModel._module = Main
     # _resolve_django_join_field maps the logical name "driver" → physical FK column "driver_id".
     q_short = ResultDjangoModel.objects
     q_short.values("driver__forename")
-    res_short = q_short |> list(show_query=:dict)
+    res_short = q_short.list(show_query=:dict)
 
     @test res_short isa Dict
     @test contains(res_short[:sql_text], "INNER JOIN")
@@ -178,7 +178,7 @@ ResultCamelDjangoModel._module = Main
     q_explicit = ResultDjangoModel.objects
     q_explicit.values("driver_id__forename")
     err_values = try
-      q_explicit |> list(show_query=:dict)
+      q_explicit.list(show_query=:dict)
       nothing
     catch e
       e
@@ -192,7 +192,7 @@ ResultCamelDjangoModel._module = Main
     # Expected SQL: INNER JOIN on driver_id + WHERE with the forename parameter.
     q_filter = ResultDjangoModel.objects
     q_filter.filter("driver__forename" => "Lewis")
-    res_filter = q_filter |> list(show_query=:dict)
+    res_filter = q_filter.list(show_query=:dict)
 
     @test res_filter isa Dict
     @test contains(res_filter[:sql_text], "INNER JOIN")  # join was built
@@ -205,7 +205,7 @@ ResultCamelDjangoModel._module = Main
     q_filter_bad = ResultDjangoModel.objects
     q_filter_bad.filter("driver_id__forename" => "Lewis")
     err_filter = try
-      q_filter_bad |> list(show_query=:dict)
+      q_filter_bad.list(show_query=:dict)
       nothing
     catch e
       e
@@ -219,7 +219,7 @@ ResultCamelDjangoModel._module = Main
     # Expected SQL: two INNER JOINs and "forename" in the SELECT.
     q_multi = ConstrResultDjangoModel.objects
     q_multi.values("result__driver__forename")
-    res_multi = q_multi |> list(show_query=:dict)
+    res_multi = q_multi.list(show_query=:dict)
 
     @test res_multi isa Dict
     # Count INNER JOIN occurrences: one to result, one to driver
@@ -233,7 +233,7 @@ ResultCamelDjangoModel._module = Main
     # Callers must use the full physical field name: "driverid__forename".
     q_camel = ResultCamelDjangoModel.objects
     q_camel.values("driverid__forename")
-    res_camel = q_camel |> list(show_query=:dict)
+    res_camel = q_camel.list(show_query=:dict)
 
     @test res_camel isa Dict
     @test contains(res_camel[:sql_text], "INNER JOIN")
@@ -247,7 +247,7 @@ ResultCamelDjangoModel._module = Main
     q = DriverModel.objects
     q.filter("nationality" => "British")
     q.filter("forename__@contains" => "lewis")
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "WHERE")
@@ -261,7 +261,7 @@ ResultCamelDjangoModel._module = Main
     q = DriverModel.objects
     q.distinct(true)
     q.filter("nationality" => "Italian")
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "DISTINCT")
@@ -273,7 +273,7 @@ ResultCamelDjangoModel._module = Main
     # Test: Selecting specific fields (projection)
     q = DriverModel.objects
     q.values("forename", "surname", "nationality")
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "SELECT")
@@ -288,24 +288,24 @@ ResultCamelDjangoModel._module = Main
     q.filter("nationality" => "German")
 
     # Mode: :dict (default structured format)
-    res_dict = q |> list(show_query=:dict)
+    res_dict = q.list(show_query=:dict)
     @test res_dict isa Dict
     @test haskey(res_dict, :sql_text)
     @test haskey(res_dict, :parameters)
 
     # Mode: :sql (only SQL string)
-    res_sql = q |> list(show_query=:sql)
+    res_sql = q.list(show_query=:sql)
     @test res_sql isa String
     @test contains(res_sql, "SELECT")
     @test contains(res_sql, "drivers")
 
     # Mode: :params (only parameters array)
-    res_params = q |> list(show_query=:params)
+    res_params = q.list(show_query=:params)
     @test res_params isa Vector
     @test res_params == ["German"]
 
     # Mode: :inspection (should behave like :dict)
-    res_inspection = q |> list(show_query=:inspection)
+    res_inspection = q.list(show_query=:inspection)
     @test res_inspection isa Dict
     @test haskey(res_inspection, :sql_text)
   end
@@ -317,12 +317,12 @@ ResultCamelDjangoModel._module = Main
     q.filter("nationality" => "Spanish")
 
     # Test with :dict
-    res_dict = q |> list(show_query=:dict)
+    res_dict = q.list(show_query=:dict)
     @test res_dict isa Dict
     @test haskey(res_dict, :sql_text)
 
     # Test: list_json returns dict when show_query=:dict
-    res_json = q |> list_json(show_query=:dict)
+    res_json = q.list_json(show_query=:dict)
     @test res_json isa Dict
   end
 
@@ -360,7 +360,7 @@ ResultCamelDjangoModel._module = Main
     q.order_by("forename")
     q.limit(5)
 
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "WHERE")
@@ -374,7 +374,7 @@ ResultCamelDjangoModel._module = Main
     # Test: Q object with multiple conditions
     q = DriverModel.objects
     q.filter(Q("nationality" => "British", "forename__@contains" => "lew"))
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test res isa Dict
     @test contains(res[:sql_text], "WHERE")
@@ -384,7 +384,7 @@ ResultCamelDjangoModel._module = Main
     q2 = RaceModel.objects
     q2.filter("year__@gte" => 2010)
     q2.filter("year__@lte" => 2020)
-    res2 = q2 |> list(show_query=:dict)
+    res2 = q2.list(show_query=:dict)
 
     @test contains(res2[:sql_text], "AND")
     @test length(res2[:parameters]) == 2
@@ -400,7 +400,7 @@ ResultCamelDjangoModel._module = Main
     q.offset(10)
 
     # Get just the SQL text
-    sql = q |> list(show_query=:sql)
+    sql = q.list(show_query=:sql)
     @test sql isa String
     @test contains(sql, "SELECT")
     @test contains(sql, "ORDER BY")
@@ -408,13 +408,46 @@ ResultCamelDjangoModel._module = Main
     @test contains(sql, "OFFSET 10")
 
     # Get just the parameters
-    params = q |> list(show_query=:params)
+    params = q.list(show_query=:params)
     @test params == ["Italian"]
 
     # Get full structure
-    full = q |> list(show_query=:dict)
+    full = q.list(show_query=:dict)
     @test full[:sql_text] == sql
     @test full[:parameters] == params
+  end
+
+  # ===================================================================
+  # Section: _query_select returns valid SQL when all array slots are filled
+  # ===================================================================
+  # Regression: _query_select relied on finding an unassigned trailing slot in
+  # the values array to trigger `return join(...)`. If every slot was assigned
+  # the function fell through and returned `nothing`, producing "nothing" in
+  # the SELECT clause. The fix adds an explicit return after the loop.
+  @testset "SELECT clause renders correctly for every values count" begin
+    # Single value — minimal case; the array has exactly one assigned slot.
+    q1 = DriverModel.objects
+    q1.values("forename")
+    res1 = q1.list(show_query=:dict)
+    @test res1 isa Dict
+    @test contains(res1[:sql_text], "SELECT")
+    @test !contains(res1[:sql_text], "nothing")  # bug symptom: literal "nothing"
+    @test contains(res1[:sql_text], "forename")
+
+    # Two values — exercises the loop body twice.
+    q2 = DriverModel.objects
+    q2.values("forename", "surname")
+    res2 = q2.list(show_query=:dict)
+    @test !contains(res2[:sql_text], "nothing")
+    @test contains(res2[:sql_text], "forename")
+    @test contains(res2[:sql_text], "surname")
+
+    # All four model fields — fully packed array, no trailing unassigned slot.
+    q3 = DriverModel.objects
+    q3.values("id", "forename", "surname", "nationality")
+    res3 = q3.list(show_query=:dict)
+    @test !contains(res3[:sql_text], "nothing")
+    @test contains(res3[:sql_text], "\"id\"")  # id is quoted to avoid keyword collision
   end
 
 end

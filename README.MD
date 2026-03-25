@@ -1,71 +1,129 @@
 # PormG.jl
 
-**PormG.jl** is a Julia ORM inspired by Django ORM, aiming to provide a familiar, expressive, and productive interface for database operations in Julia. 
-
-> **Note:** This project is in a very early stage of development and is a personal hobby — I am not a professional programmer. The package is not yet available for general use. I am looking for people interested in contributing and helping to improve the system!
+**PormG.jl** is a Django-inspired ORM for Julia with async-first execution, designed for use with high-concurrency web frameworks like [Genie.jl](https://genieframework.com/). It provides an expressive query builder, automatic migrations, and cross-database support for PostgreSQL and SQLite.
 
 ## 📚 Documentation
 
-For comprehensive documentation, tutorials, and API reference, visit:
+Full documentation, tutorials, and API reference:
 **[https://pingolee.github.io/PormG.jl/dev/](https://pingolee.github.io/PormG.jl/dev/)**
-
 
 ---
 
-## Example: Model Definition
+## Installation
 
-**Django ORM (Python):**
-```python
-from django.db import models
-
-class User(models.Model):
-    name = models.CharField(max_length=100)
-    age = models.IntegerField()
+```julia
+using Pkg
+Pkg.add(url="https://github.com/PingoLee/PormG.jl")
 ```
 
-**PormG.jl (Julia):**
+Once registered in the Julia General Registry:
+
 ```julia
+using Pkg
+Pkg.add("PormG")
+```
+
+---
+
+## Quick Start
+
+### Define models
+
+```julia
+# db/models.jl
 module models
 import PormG.Models
 
-User = Models.Model(
-  id = Models.IDField(),
-  name = Models.CharField(max_length=100),
-  age = Models.IntegerField()
+Driver = Models.Model("drivers",
+    id          = Models.IDField(),
+    forename    = Models.CharField(max_length=50),
+    surname     = Models.CharField(max_length=50),
+    nationality = Models.CharField(max_length=50),
+    dob         = Models.DateField(null=true),
 )
-Models.set_models(@__MODULE__, @__DIR__)
+
+Result = Models.Model("results",
+    id             = Models.IDField(),
+    raceid         = Models.ForeignKeyField(Race, on_delete="CASCADE"),
+    driverid       = Models.ForeignKeyField(Driver, on_delete="CASCADE"),
+    constructorid  = Models.ForeignKeyField(Constructor, on_delete="CASCADE"),
+    positionorder  = Models.IntegerField(),
+    points         = Models.FloatField(),
+)
 end
+```
+
+### Load configuration and models
+
+```julia
+using PormG, DataFrames
+
+PormG.Configuration.load("db")          # loads db/settings.yml
+PormG.@import_models "db/models.jl" models
+import .models as M
+```
+
+### Query the database
+
+```julia
+# All Brazilian drivers who won a race — INNER JOINs resolved automatically
+df = M.Result.objects.filter(
+      "driverid__nationality" => "Brazilian",
+      "positionorder"         => 1
+    ).values(
+      "driverid__forename", 
+      "driverid__surname",
+      "raceid__year",
+      "raceid__name"
+    ).order_by("-raceid__year") |> DataFrame
+```
+
+```julia
+# Wins per constructor using aggregation
+df = M.Result.objects.filter(
+      "positionorder" => 1
+    ).values(
+      "constructorid__name", "wins" => Count("id")
+    ).order_by("-wins") |> DataFrame
+```
+
+### Create and update records
+
+```julia
+# bulk_insert returns the inserted rows as a DataFrame
+df = DataFrame([
+    Dict("forename" => "Ayrton", "surname" => "Senna", "nationality" => "Brazilian"),
+    Dict("forename" => "Alain",  "surname" => "Prost",  "nationality" => "French"),
+])    
+result = bulk_insert(M.Driver, df)
+
+# Update in-place
+M.Driver.objects.filter("nationality" => "Brazilian").update("nationality" => "Brazil")
 ```
 
 ---
 
-## Example: Querying
+## Key Features
 
-**Django ORM:**
-```python
-from .models import *
-query = User.objects.filter(name="Alice").order_by("-age").values("name", "age")
-result = list(query)
-print(query)
-```
+- **Async-first** — non-blocking I/O via `LibPQ.async_execute`; synchronous helpers are thin wrappers
+- **Django-style filter syntax** — `__` for joins, `__@gt` / `__@in` / `__@contains` for operators
+- **F-expressions** — column arithmetic and field-to-field comparisons: `F("points") > F("grid")`
+- **Aggregation & annotation** — `Count`, `Sum`, `Avg`, `Max`, `Min` with `GROUP BY` handled automatically
+- **Migrations** — state-based schema reconciliation with `makemigrations` / `migrate`
+- **Multi-database** — switch connections at runtime with `.db("tenant_id")`
+- **Advisory locks** — distributed coordination via `with_advisory_lock`
+- **Transactions** — `run_in_transaction` with savepoint support
 
-**PormG.jl:**
-```julia
-Base.include(your_module, "db/models.jl")
-import your_module.automatic_models as M
-query = M.User.objects.filter("name"=>"Alice").order_by("-age").values("name", "age");
-result = query |> list
-println(query)
-```
+---
 
 ## Contributing
 
-Contributions and feedback are welcome! Please open issues or pull requests on GitHub.
+Contributions are welcome. Please open an issue or pull request on GitHub.
+See the [Contributing & Debugging](https://pingolee.github.io/PormG.jl/dev/contributing/) page
+for the development workflow, debugging guide, and testing conventions.
 
 ---
 
 ## License
 
 MIT License
-
----

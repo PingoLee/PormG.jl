@@ -145,7 +145,7 @@ function query(q::SQLObjectHandler;
   show_query::Symbol = :execute
   )
 
-  @infiltrate false
+  @pormg_debug false
 
   # Create a shared table alias counter for both CTEs and main query
   table_alias === nothing && (table_alias = SQLTbAlias())
@@ -170,19 +170,27 @@ function query(q::SQLObjectHandler;
   !is_subquery && set_context!(parameters, :cte)
   with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)  
 
-  @infiltrate false
+  @pormg_debug false
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
   # Subqueries skip context switching to inherit the parent's current bucket.
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=!is_subquery)
   
+  # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
+  # Only enforce during actual execution (:execute) — inspection/dry-run modes (:dict, :sql,
+  # :inspection, etc.) must be allowed to build joined queries without .values() so that
+  # inspect_query() and show_query=:dict work on un-projected joined queries.
+  if isempty(q.object.values) && !isempty(instruction.join) && show_query === :execute
+    throw(ArgumentError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
+  end
+
   # Restore the context for parent query if this was a subquery
   if is_subquery && old_context !== nothing
     set_context!(parameters, old_context)
   end
   if cte !== nothing
-    @infiltrate false
+    @pormg_debug false
     _build_cte_custom_model(cte, instruction)
   end
   
@@ -272,14 +280,21 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
   q.object.order = []# clear order_by
   q.object.values = [] # clear values
 
-  instruction = build(q.object, table_alias=table_alias, connection=connection) 
+  # Create shared table alias and parameters BEFORE building CTEs
+  # so CTE parameters are numbered first (critical for positional backends).
+  table_alias === nothing && (table_alias = SQLTbAlias())
+  parameters = get_parameter(connection)
+
+  # Build WITH clause first — CTE params land in :cte bucket before main params.
+  set_context!(parameters, :cte)
+  with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+
+  # Main query continues from where CTE numbering left off.
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
   
   # Quote table name and alias to prevent SQL injection
   safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
-  
-  # Build WITH clause if CTEs are defined
-  with_clause = build_cte_clause(q.object.ctes, instruction.connection, instruction.parameters, table_alias)
   
   resposta = """$(with_clause)SELECT
       COUNT($(q.object.distinct ? "DISTINCT *" : "*"))
@@ -307,7 +322,18 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
     q.object.order = [] # clear order_by
     q.object.values = [] # clear values
-    instruction = build(q.object, table_alias=table_alias, connection=connection)
+
+    # Create shared table alias and parameters BEFORE building CTEs
+    # so CTE parameters are numbered first (critical for positional backends).
+    table_alias === nothing && (table_alias = SQLTbAlias())
+    parameters = get_parameter(connection)
+
+    # Build WITH clause first — CTE params land in :cte bucket before main params.
+    set_context!(parameters, :cte)
+    with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+
+    # Main query continues from where CTE numbering left off.
+    instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
     limit_clause = "LIMIT 1"
     offset_clause = q.object.offset > 0 ? "OFFSET $(q.object.offset)" : ""
     
@@ -316,7 +342,7 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     safe_alias = quote_identifier(instruction.alias, instruction.connection)
     
     sql = """
-    SELECT 1
+    $(with_clause)SELECT 1
     FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
@@ -324,12 +350,12 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     $limit_clause
     $offset_clause
     """    
-    @infiltrate false
+    @pormg_debug false
     result = fetch(settings, sql, instruction.parameters) |> Tables.rowtable
-    @infiltrate false
+    @pormg_debug false
     return length(result) > 0
   catch e
-    @infiltrate false
+    @pormg_debug false
     # Re-throw validation/argument errors so user sees helpful messages
     if e isa ArgumentError
       rethrow(e)
@@ -436,7 +462,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
 end
 
 function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::SQLConn; ignore_tx::Bool = false)
-  @infiltrate false
+  @pormg_debug false
   for field in pk_field
     if settings.change_db
       try
@@ -452,7 +478,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         end
       end
     elseif settings.django_prefix !== nothing
-      @infiltrate false
+      @pormg_debug false
       try
         # For Django prefixed tables, try with django prefix pattern
         sequence_name = "$(model.name)_$(field)_seq"
@@ -532,7 +558,7 @@ end
 # Helper function to check if a field is a date field
 function _is_date_field(field_name::String, instruc::SQLInstruction)
   model = instruc.object.model
-  # @infiltrate
+  # @pormg_debug
   if haskey(model.fields, field_name)
     field_type = model.fields[field_name].type
     return field_type in ["DATE", "TIMESTAMPTZ", "TIMESTAMP"]
@@ -564,7 +590,7 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
       _set_update_query(v.field_name, instruc)
     end
 
-    # @infiltrate
+    # @pormg_debug
     right_side = if isa(v.operand, FExpression)
       _set_update_query(v.operand, instruc)
     elseif isa(v.operand, SQLTypeFunction)
@@ -737,7 +763,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
                             parameters=parameters)
   end
 
-  # @infiltrate
+  # @pormg_debug
 
   # return nothing
 

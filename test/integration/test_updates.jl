@@ -6,7 +6,7 @@ end
 
 @testset "Single and Bulk Insert/Update" begin
   query = M.Just_a_test_deletion.objects;
-  query.exists() && delete(query; allow_delete_all = true);
+    query.exists() && query.delete(allow_delete_all = true);
   # Seed the table with a few rows so updates have targets
   query.create("name" => "test", "test_result" => 1)
   query.create("name" => "test", "test_result" => 2)
@@ -75,7 +75,7 @@ end
 
 @testset "F Expression Updates" begin
   query = M.Just_a_test_deletion.objects
-  query |> do_exists && delete(query; allow_delete_all = true)
+    query |> do_exists && query.delete(allow_delete_all = true)
   query.create("name" => "fexpr", "test_result" => 1)
   query.create("name" => "fexpr", "test_result" => 2)
   query.create("name" => "fexpr", "test_result" => 3)
@@ -149,34 +149,34 @@ end
 @testset "Complex Join Updates and Date Arithmetic" begin
   # 1. Update using a value from a joined table (Cross-table update)
   query = M.Just_a_test_deletion.objects
-  query.exists() && delete(query; allow_delete_all = true)
+    query.exists() && query.delete(allow_delete_all = true)
   query.create("name" => "temp", "test_result" => 1) # Result 1 driver is Lewis Hamilton
   
   # Join from Just_a_test_deletion -> Result -> Driver
   query.filter("id__@gt" => 0)
   query.update("name" => F("test_result__driverid__forename"))
   
-  updated_row = query |> list |> first
+    updated_row = query.list() |> first
   @test updated_row[:name] == "Lewis"
 
   # 2. Date Arithmetic in Updates (Testing the dialect-specific date math)
   # Australian Grand Prix 2009 is 2009-03-29
   race_query = M.Race.objects.filter("raceid" => 1)
-  original_row = race_query |> list |> first
+    original_row = race_query.list() |> first
   
   # Ensure we have Date objects for calculation (SQLite might return strings)
   orig_date = original_row[:date] isa String ? Date(original_row[:date]) : original_row[:date]
   
   # Add 7 days: 2009-03-29 + 7 = 2009-04-05
   race_query.update("date" => F("date") + 7)
-  new_date_row = (race_query |> list |> first)
+    new_date_row = (race_query.list() |> first)
   new_date = new_date_row[:date] isa String ? Date(new_date_row[:date]) : new_date_row[:date]
   
   @test new_date == (orig_date + Dates.Day(7))
   
   # Subtract 7 days: Back to 2009-03-29
   race_query.update("date" => F("date") - 7)
-  restored_row = (race_query |> list |> first)
+    restored_row = (race_query.list() |> first)
   restored_date = restored_row[:date] isa String ? Date(restored_row[:date]) : restored_row[:date]
   @test restored_date == orig_date
   
@@ -186,24 +186,24 @@ end
 
 @testset "Null and Missing handling in Updates" begin
   query = M.Just_a_test_deletion.objects
-  query.exists() && delete(query; allow_delete_all = true)
+    query.exists() && query.delete(allow_delete_all = true)
   query.create("name" => "null_test", "test_result" => 1, "test_result2" => 1)
   
   # Update to nothing (NULL)
   query.filter("name" => "null_test").update("test_result2" => nothing)
-  res1 = query |> list |> first
+    res1 = query.list() |> first
   @test ismissing(res1[:test_result2]) || isnothing(res1[:test_result2])
   
   # Update to missing (NULL)
   query.filter("name" => "null_test").update("test_result2" => 1) # set back
   query.filter("name" => "null_test").update("test_result2" => missing)
-  res2 = query |> list |> first
+    res2 = query.list() |> first
   @test ismissing(res2[:test_result2]) || isnothing(res2[:test_result2])
 end
 
 @testset "Update Validation and Constraints" begin
     query = M.Just_a_test_deletion.objects
-    query.exists() && delete(query; allow_delete_all = true)
+    query.exists() && query.delete(allow_delete_all = true)
     query.create("name" => "valid", "test_result" => 1)
     
     # 1. Primary Key Protection: Attempting to update the ID field should throw
@@ -219,7 +219,7 @@ end
 
 @testset "Update Edge Cases: Zero matches and Multi-F" begin
     # Use fresh query objects for each step to avoid filter accumulation
-    M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all = true)
+    M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     M.Just_a_test_deletion.objects.create("name" => "multi_f", "test_result" => 10, "test_result2" => 20)
     
     # 1. Update matching zero rows: should not error and return nothing
@@ -230,7 +230,7 @@ end
         "test_result" => F("test_result") + 5,
         "test_result2" => F("test_result2") * 2
     )
-    res = M.Just_a_test_deletion.objects.filter("name" => "multi_f") |> list |> first
+    res = M.Just_a_test_deletion.objects.filter("name" => "multi_f").list() |> first
     @test res[:test_result] == 15
     @test res[:test_result2] == 40
 end
@@ -240,7 +240,7 @@ end
     db_key = PORMG_DB_FOLDER
     
     # 1. Setup fresh data
-    M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all=true)
+    M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
     M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 10)
     M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 20)
     
@@ -261,11 +261,11 @@ end
     end
     
     # After rollback, row1 should still have its ORIGINAL value (10), not 11.
-    res1 = M.Just_a_test_deletion.objects.filter("name" => "row1") |> list |> first
+    res1 = M.Just_a_test_deletion.objects.filter("name" => "row1").list() |> first
     @test res1[:test_result] == 10
     
     # Clean up
-    delete(M.Just_a_test_deletion.objects, allow_delete_all=true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 end
 
 @testset "Advanced Update Scenarios" begin
@@ -273,7 +273,7 @@ end
     
     @testset "CASE Expressions in SET" begin
         # Reset table
-        M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all = true)
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         
         M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 10)
         M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 20)
@@ -285,16 +285,16 @@ end
             default=200
         ))
         
-        res1 = M.Just_a_test_deletion.objects.filter("name" => "row1") |> list |> first
+        res1 = M.Just_a_test_deletion.objects.filter("name" => "row1").list() |> first
         @test res1[:test_result] == 100
         
-        res2 = M.Just_a_test_deletion.objects.filter("name" => "row2") |> list |> first
+        res2 = M.Just_a_test_deletion.objects.filter("name" => "row2").list() |> first
         @test res2[:test_result] == 200
     end
 
     @testset "Deep Join Chains (A->B->C->D)" begin
         # Result -> Race -> Circuit -> country (verified parameter ordering)
-        M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all = true)
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         M.Just_a_test_deletion.objects.create("name" => "temp", "test_result" => 1) # Result 1 = Lewis Hamilton, British, Australian GP, Australia
         
         # We use a value from 3 levels deep: Result -> Race -> Circuit -> Name
@@ -303,12 +303,12 @@ end
             "test_result__driverid__nationality" => "British"
         ).update("name" => F("test_result__raceid__circuitid__name"))
         
-        res = M.Just_a_test_deletion.objects.filter("test_result" => 1) |> list |> first
+        res = M.Just_a_test_deletion.objects.filter("test_result" => 1).list() |> first
         @test res[:name] == "Albert Park Grand Prix Circuit"
     end
 
     @testset "Subquery in WHERE" begin
-        M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all = true)
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         M.Just_a_test_deletion.objects.create("name" => "target", "test_result" => 1)
         M.Just_a_test_deletion.objects.create("name" => "other", "test_result" => 2)
         
@@ -323,7 +323,7 @@ end
     end
 
     @testset "Bulk Update Atomicity on Partial Failure" begin
-        M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all = true)
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 1)
         M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 2)
         
@@ -339,7 +339,7 @@ end
         end
         
         # Verify row1 was NOT updated to "success1"
-        res1 = M.Just_a_test_deletion.objects.filter("test_result" => 1) |> list |> first
+        res1 = M.Just_a_test_deletion.objects.filter("test_result" => 1).list() |> first
         @test res1[:name] == "row1"
     end
 
@@ -347,7 +347,7 @@ end
         # This test ensures that the 'Adaptor' strategy correctly maps DataFrame columns
         # to Model fields without renaming the original DataFrame columns.
         
-        M.Just_a_test_deletion.objects.exists() && delete(M.Just_a_test_deletion.objects; allow_delete_all = true)
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         
         @testset "bulk_insert with explicit mapping" begin
             # DataFrame has names different from model
@@ -384,7 +384,7 @@ end
                 columns=["update_val" => "test_result", "record_id" => "id"], 
                 filters=["id"])
             
-            res1 = M.Just_a_test_deletion.objects.filter("name" => "Mapped1") |> list |> first
+            res1 = M.Just_a_test_deletion.objects.filter("name" => "Mapped1").list() |> first
             @test res1[:test_result] == 101
             
             # Verify DataFrame columns were NOT renamed
@@ -406,14 +406,14 @@ end
 
         @testset "Mixed Static and Dynamic Filters" begin
             query = M.Just_a_test_deletion.objects
-            query.exists() && delete(query; allow_delete_all = true)
+            query.exists() && query.delete(allow_delete_all = true)
             
             # Setup: Cat1 (update) and Cat2 (skip)
             query.create("name" => "Cat1", "test_result" => 10)
             query.create("name" => "Cat1", "test_result" => 20)
             query.create("name" => "Cat2", "test_result" => 30)
             
-            ids = query.order_by("id") |> list
+            ids = query.order_by("id").list()
             
             df = DataFrame(
                 "df_id" => [ids[1][:id], ids[2][:id], ids[3][:id]],
@@ -430,7 +430,7 @@ end
             )
             
             # Verify with a fresh query to include all categories
-            results = M.Just_a_test_deletion.objects.order_by("id") |> list
+            results = M.Just_a_test_deletion.objects.order_by("id").list()
             @test length(results) == 3
             @test results[1][:test_result] == 100
             @test results[2][:test_result] == 200

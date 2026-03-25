@@ -8,7 +8,7 @@ import PormG: SQLConn, PormGPostgres, PormGSQLite
 import PormG.Configuration: get_settings
 import PormG.ConnectionPool: acquire_connection, release_connection, reconnect_db, is_connection_error
 
-import Infiltrator: @infiltrate
+import PormG: @pormg_debug
 export with_advisory_lock
 
 
@@ -157,7 +157,7 @@ with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString; kwargs..
 
 # Wrapper to use by database name string
 function with_advisory_lock(f::Function, db::String, key::AbstractString; kwargs...)
-  @infiltrate false
+  @pormg_debug false
   settings = get_settings(db)
   return with_advisory_lock(f, settings, key; kwargs...)
 end

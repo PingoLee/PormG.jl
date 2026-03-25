@@ -21,7 +21,7 @@ import PormG.Configuration
 import PormG.Configuration: get_settings
 using Logging
 
-import PormG.Infiltrator: @infiltrate
+import PormG: @pormg_debug
 
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name

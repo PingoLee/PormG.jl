@@ -129,7 +129,7 @@ function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
-function When(x::NTuple{N, Pair{String, T}}; then::Any = 0, _else::Any = missing) where {T, N}
+function When(x::NTuple{N, <:Pair}; then::Any = 0, _else::Any = missing) where N
   return When(Q(x), then = then, _else = _else)
 end
 function  When(x::Pair{String, T}; then::Any = 0, _else::Any = missing) where T

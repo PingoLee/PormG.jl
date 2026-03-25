@@ -360,7 +360,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
           fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
         end
       catch e
-        @infiltrate
+        @pormg_debug
         error_msg = "Error processing field '$field_name' in class '$class_name': $(e)"
         throw(ErrorException(error_msg))
       end

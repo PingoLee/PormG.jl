@@ -16,7 +16,6 @@ using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
 using PormG.QueryBuilder: Q
-using Infiltrator: @infiltrate
 
 # ---------------------------------------------------------------------------
 # Minimal test models — same shape as test_complex_queries.jl so both files
@@ -66,7 +65,7 @@ const _R = _OperTestRace
     ]
       # Expected SQL: WHERE "id" <op> $1
       q   = _D.objects.filter("id__@$suffix" => 42)
-      res = q |> list(show_query=:dict)
+      res = q.list(show_query=:dict)
 
       @test contains(res[:sql_text], sql_op)  # "@$suffix must emit '$sql_op' in SQL"
       @test res[:parameters] == [42]          # "@$suffix must bind value 42"
@@ -80,13 +79,13 @@ const _R = _OperTestRace
     # Expected SQL: WHERE "id" BETWEEN $1 AND $2
     # With Vector
     q_vec = _D.objects.filter("id__@range" => [10, 50])
-    res_vec = q_vec |> list(show_query=:dict)
+    res_vec = q_vec.list(show_query=:dict)
     @test contains(res_vec[:sql_text], "BETWEEN")
     @test res_vec[:parameters] == [10, 50]
 
     # With Tuple — both forms must be accepted
     q_tup = _D.objects.filter("id__@range" => (10, 50))
-    res_tup = q_tup |> list(show_query=:dict)
+    res_tup = q_tup.list(show_query=:dict)
     @test contains(res_tup[:sql_text], "BETWEEN")
     @test res_tup[:parameters] == [10, 50]
   end
@@ -100,7 +99,7 @@ const _R = _OperTestRace
     # Expected SQL (Postgres): WHERE "id" = ANY($1)
     # Expected SQL (generic):  WHERE "id" IN ($1, $2, $3)
     q_in  = _D.objects.filter("id__@in"  => lucky)
-    res_in = q_in |> list(show_query=:dict)
+    res_in = q_in.list(show_query=:dict)
     @test contains(res_in[:sql_text], "= ANY") || contains(res_in[:sql_text], " IN ")
     if contains(res_in[:sql_text], "= ANY")
       @test res_in[:parameters] == [lucky]
@@ -111,7 +110,7 @@ const _R = _OperTestRace
     # Expected SQL (Postgres): WHERE "id" <> ALL($1)
     # Expected SQL (generic):  WHERE "id" NOT IN ($1, $2, $3)
     q_nin  = _D.objects.filter("id__@nin" => lucky)
-    res_nin = q_nin |> list(show_query=:dict)
+    res_nin = q_nin.list(show_query=:dict)
     @test contains(res_nin[:sql_text], "<> ALL") || contains(res_nin[:sql_text], "NOT IN")
     if contains(res_nin[:sql_text], "<> ALL")
       @test res_nin[:parameters] == [lucky]
@@ -128,27 +127,26 @@ const _R = _OperTestRace
     # contains → LIKE '%val%'
     # The bound value must be wrapped in % wildcards.
     q_c = _D.objects.filter("forename__@contains" => "lew")
-    r_c = q_c |> list(show_query=:dict)
+    r_c = q_c.list(show_query=:dict)
     @test contains(r_c[:sql_text], "LIKE") || contains(r_c[:sql_text], "ILIKE")
     @test r_c[:parameters] == ["%lew%"]
 
     # icontains → ILIKE '%val%' (Postgres) or LIKE with LOWER (SQLite)
     # The bound value must be lowercased so the wildcard match is case-insensitive.
     q_ic = _D.objects.filter("forename__@icontains" => "LEW")
-    r_ic = q_ic |> list(show_query=:dict)
-    # @infiltrator
+    r_ic = q_ic.list(show_query=:dict)
     @test contains(r_ic[:sql_text], "ILIKE") || contains(r_ic[:sql_text], "LIKE")
     @test r_ic[:parameters] == ["%LEW%"] 
 
     # startswith → LIKE 'val%'
     q_sw = _D.objects.filter("nationality__@startswith" => "Brit")
-    r_sw = q_sw |> list(show_query=:dict)
+    r_sw = q_sw.list(show_query=:dict)
     @test contains(r_sw[:sql_text], "LIKE") || contains(r_sw[:sql_text], "ILIKE")
     @test r_sw[:parameters] == ["Brit%"]
 
     # endswith → LIKE '%val'
     q_ew = _D.objects.filter("forename__@endswith" => "wis")
-    r_ew = q_ew |> list(show_query=:dict)
+    r_ew = q_ew.list(show_query=:dict)
     @test contains(r_ew[:sql_text], "LIKE") || contains(r_ew[:sql_text], "ILIKE")
     @test r_ew[:parameters] == ["%wis"]
   end
@@ -159,12 +157,12 @@ const _R = _OperTestRace
   @testset "NULL check operator (isnull)" begin
     # isnull => true  → IS NULL
     q_null = _D.objects.filter("forename__@isnull" => true)
-    r_null = q_null |> list(show_query=:dict)
+    r_null = q_null.list(show_query=:dict)
     @test contains(r_null[:sql_text], "IS NULL") || contains(r_null[:sql_text], "ISNULL")
 
     # isnull => false → IS NOT NULL
     q_notnull = _D.objects.filter("forename__@isnull" => false)
-    r_notnull = q_notnull |> list(show_query=:dict)
+    r_notnull = q_notnull.list(show_query=:dict)
     @test contains(r_notnull[:sql_text], "IS NOT NULL") || contains(r_notnull[:sql_text], "ISNULL")
   end
 
@@ -173,7 +171,7 @@ const _R = _OperTestRace
   # =========================================================================
   @testset "Default equality (no suffix → =)" begin
     q   = _D.objects.filter("id" => 1)
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
     @test contains(res[:sql_text], "=")
     @test res[:parameters] == [1]
   end
@@ -189,7 +187,7 @@ const _R = _OperTestRace
       "id__@lte"              => 50,
       "nationality__@icontains" => "brit"
     )
-    res = q |> list(show_query=:dict)
+    res = q.list(show_query=:dict)
 
     @test contains(res[:sql_text], ">")
     @test contains(res[:sql_text], "<=")

@@ -183,7 +183,7 @@ end
 
 function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjectHandler, model::PormGModel)
   # Extract IDs from objects - handle NamedTuples or Dict structures
-  @infiltrate false
+  @pormg_debug false
   delete_key = resolve_delete_key(model; allow_direct=isempty(objct.object.filter))
   delete_key != DIRECT_DELETE_KEY_SENTINEL && objct.values(delete_key)
   add_objects_to_collector!(collector, model, delete_key, objct)
@@ -193,7 +193,7 @@ end
 function add_objects_to_collector!(collector::DeletionCollector, model::PormGModel, key::String, objct::SQLObjectHandler)
   # Add to collector
   # @info objct |> query
-  @infiltrate false
+  @pormg_debug false
   if !haskey(collector.objects, model)
     collector.objects[model] = []
   end
@@ -223,7 +223,7 @@ end
 
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
   # For each foreign key in the model (model has FK -> related_model)
-  @infiltrate false
+  @pormg_debug false
   _django = collector.settings.django_prefix === nothing ? false : true
     
   # For models with foreign keys pointing to this model (related_model has FK -> model)
@@ -245,7 +245,7 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
       _query.filter(or_object)
     end
     
-    @infiltrate false
+    @pormg_debug false
     _query |> do_exists || continue # No related objects, skip
      
     # @info _query |> query
@@ -269,12 +269,12 @@ end
 
 function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, 
   keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel)
-  @infiltrate false
+  @pormg_debug false
   if field.on_delete == CASCADE
-    @infiltrate false
+    @pormg_debug false
     _keys = prepare_related_query(keys, related_model, field_name)
     add_objects_to_collector!(collector, related_model, _keys[:key], _keys[:objct])
-    @infiltrate false
+    @pormg_debug false
     find_related_objects!(collector, related_model, [_keys]) # Recursively find related objects for the related model
   elseif field.on_delete in [PROTECT, RESTRICT]    
     # More descriptive error with field name, constraint type, and sample IDs
@@ -282,7 +282,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
-    @infiltrate false
+    @pormg_debug false
     # check if the field allow null
     if !field.null
       throw(ArgumentError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
@@ -290,7 +290,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
 
     # Add field update to set field to NULL
     if !haskey(collector.field_updates, (field_name |> string, nothing))
-      @infiltrate false
+      @pormg_debug false
       collector.field_updates[(field_name |> string, nothing)] = Dict{PormGModel, Dict{Symbol, Union{String, SQLObjectHandler}}}()
     end
     
@@ -362,7 +362,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
   # 2. Don't appear in models_with_dependents
   for (model, keys) in collector.objects
     if !(model in models_with_dependents)
-      @infiltrate false
+      @pormg_debug false
       collector.fast_deletes[model] = keys
     end
   end
@@ -370,7 +370,7 @@ end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Symbol, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
-  @infiltrate false
+  @pormg_debug false
   if size(keys, 1) == 1 && keys[1][:key] == DIRECT_DELETE_KEY_SENTINEL
     objct = keys[1][:objct]
     isempty(objct.object.filter) || throw(ArgumentError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
@@ -414,7 +414,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     _query.filter(or_object)
     deleted_counter[model.name] = show_query === :execute ? (_query |> do_count) : 0
     _query.values(pk_field) # Ensure the query is built
-    @infiltrate false
+    @pormg_debug false
     sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(pk_field)\" IN ($(query(_query, parameters=parameters)))"
   end
 
@@ -423,14 +423,14 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)
   end
-  @infiltrate false
+  @pormg_debug false
   result, conn = with_transaction(connection, sql, conn=conn, params=parameters)
   return deleted_counter  # Return count of deleted objects
 end
 
 function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Symbol, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
   # Update field values using query object like CASCADE
-  @infiltrate false
+  @pormg_debug false
   pk_field = keys[:key]
   pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(ArgumentError("Cannot update field on keyless model $(model.name); define a primary key"))
   _query = keys[:objct]

@@ -149,11 +149,11 @@ function Base.deepcopy(obj::SQLObjectQuery)
       list_joins=deepcopy(obj.list_joins),
       row_join=deepcopy(obj.row_join),
       distinct=obj.distinct,
-      ctes=deepcopy(obj.ctes),
+      ctes=copy(obj.ctes),  # shallow copy: CTEDict values contain PormGModel → Module that deepcopy can't handle
       custom_join=copy(obj.custom_join)  # shallow copy: PormGField refs contain Model_Type → Module that deepcopy can't handle
     )
   catch e
-    @infiltrate false
+    @pormg_debug false
     @error "Error in deepcopy for SQLObjectQuery: $e" exception = (e, catch_backtrace())
     rethrow(e)
   end
@@ -162,7 +162,7 @@ function Base.deepcopy(filter::Vector{FilterType})
   return [deepcopy(f) for f in filter]
 end
 function Base.deepcopy(oper::SQLTypeOper)
-  @infiltrate false
+  @pormg_debug false
   return OperObject(
     operator=oper.operator,
     values=oper.values |> typeof <: SQLObjectHandler ? oper.values : deepcopy(oper.values),

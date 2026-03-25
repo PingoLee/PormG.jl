@@ -11,7 +11,7 @@ function _up_values(str::String)
   elseif haskey(PormGsuffix, check[end])
     throw("Invalid argument: $(str) does not must contain operators (lte, gte, contains ...)")
   else
-    @infiltrate false
+    @pormg_debug false
     return SQLField(_check_function(check), join(check, "__"))
   end
 end
@@ -33,7 +33,7 @@ function up_values!(q::SQLObject, values)
         try
           push!(q.values, SQLField(_check_function(v.second), v.first))
         catch e
-          @infiltrate false
+          @pormg_debug false
           @error "Error processing values pair: $e" exception = (e, catch_backtrace())
         end
       elseif isa(v.second, SQLTypeText)
@@ -139,14 +139,22 @@ function _query_select(array::Vector{SQLTypeField})
       if !isassigned(array, i, 1)
         return join(colect, ", \n  ")
       else
-        @infiltrate false
-        if isa(array[i, 1], SQLField) && array[i, 1].custom_as !== nothing
-          push!(colect, "$(array[i, 1].field) as $(array[i, 1].custom_as)")
+        field = array[i, 1]
+        field_str = string(field.field)
+        
+        # Exclude wildcard projections from receiving an `AS alias` suffix (e.g., `Tb.* AS *` is invalid SQL)
+        if field._as == "*" || endswith(field_str, ".*") || field_str == "*"
+          push!(colect, field_str)
+        elseif isa(field, SQLField) && field.custom_as !== nothing
+          push!(colect, "$(field_str) as $(field.custom_as)")
+        elseif field._as !== nothing && field._as != ""
+          push!(colect, "$(field_str) as $(field._as)")
         else
-          push!(colect, "$(array[i, 1].field) as $(array[i, 1]._as)")
+          push!(colect, field_str)
         end
       end
     end
+    return join(colect, ", \n  ")
   end
 end
 
@@ -211,6 +219,16 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return ChainCaller(page!, q)
   elseif sym === :distinct
     return ChainCaller(distinct!, q)
+  elseif sym === :with
+    # Chainable: query.with("cte_name" => sub_query; join_field=..., join_type=...)
+    # Uses closure (not ChainCaller) so keyword arguments are forwarded correctly.
+    return (args...; kwargs...) -> (With(q, args...; kwargs...); q)
+  elseif sym === :cjoin
+    # Chainable: query.cjoin("field" => "Model"; filters=[...], join_type=...)
+    return (args...; kwargs...) -> (cjoin(q, args...; kwargs...); q)
+  elseif sym === :on
+    # Chainable: query.on("join_path", "field" => value; join_type="INNER")
+    return (args...; kwargs...) -> (on(q, args...; kwargs...); q)
   elseif sym === :copy
     return () -> deepcopy(q)
 

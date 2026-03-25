@@ -147,11 +147,15 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         should_auto_populate, fill_value = resolve_fill_value(f_meta, operation, settings)
 
         if should_auto_populate
-          # Add new column to DF and update mapping
-          # Use first mapped column as a length reference
-          ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-          df[!, field] = map(x -> fill_value, df[!, ref_col])
-          mapping[field] = field
+          is_static_default = f_meta.default !== nothing
+          is_explicit_update = operation == :update && !isempty(normalized_columns)
+          if !(is_explicit_update && is_static_default)
+            # Add new column to DF and update mapping
+            # Use first mapped column as a length reference
+            ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
+            df[!, field] = map(x -> fill_value, df[!, ref_col])
+            mapping[field] = field
+          end
         elseif f_meta.primary_key
           # It's a PK, we'll collect it later
         elseif !f_meta.null && operation in [:insert, :copy]
@@ -168,10 +172,18 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       should_auto_populate, fill_value = resolve_fill_value(f_meta, operation, settings)
 
       if should_auto_populate
-        ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-        df[!, field] = map(x -> fill_value, df[!, ref_col])
-        mapping[field] = field
-        push!(fields_df, field)
+        # For an explicit-scope UPDATE (columns= was provided), a static `default`
+        # must NOT leak into fields_df.  Temporal auto_now/auto_now_add injections
+        # are always allowed because they are an intentional ORM side-effect.
+        # For INSERT/COPY, or UPDATE with columns=nothing, behavior is unchanged.
+        is_static_default = f_meta.default !== nothing
+        is_explicit_update = operation == :update && !isempty(normalized_columns)
+        if !(is_explicit_update && is_static_default)
+          ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
+          df[!, field] = map(x -> fill_value, df[!, ref_col])
+          mapping[field] = field
+          push!(fields_df, field)
+        end
       elseif f_meta.primary_key
         push!(pk_field, field)
       end
@@ -283,7 +295,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
       if count == chunk_size || index == total
-        # @infiltrate
+        # @pormg_debug
         res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
         push!(results, res)
         count = 0
@@ -613,7 +625,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   safe_set_parts = []
   for field in fields_df
     if !(field in deny_fields)
-      # @infiltrate
+      # @pormg_debug
       quoted_field = quote_identifier(field, connection)
       quoted_source_field = quote_identifier(field, connection)
       field_type = model.fields[field].type |> lowercase
@@ -693,7 +705,7 @@ function _bulk_update(model::PormGModel,
   show_query::Symbol,
   instruction::Union{SQLInstruction, Nothing})
 
-  @infiltrate false
+  @pormg_debug false
   if instruction !== nothing && instruction.join |> length > 0
     throw("Error in bulk_update, the join is not allowed in bulk_update")
   end

@@ -1,6 +1,15 @@
 using Test
 using PormG
-using Infiltrator
+
+const HAS_AQUA = let available = false
+    try
+        @eval using Aqua
+        available = true
+    catch
+        available = false
+    end
+    available
+end
 
 # Ensure environment is set for unit tests
 if !haskey(ENV, "PORMG_ENV")
@@ -8,6 +17,12 @@ if !haskey(ENV, "PORMG_ENV")
 end
 
 @testset "PormG Unit Tests" begin
+    if HAS_AQUA
+        @testset "Aqua Quality Checks" begin
+            Aqua.test_all(PormG)
+        end
+    end
+
     # Unit tests that don't require a live database
     @testset "Contextual Buckets (SQLite)" include("unit/test_parameters.jl")
     @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
@@ -20,6 +35,7 @@ end
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "Password Encoding" include("unit/test_password.jl")
     @testset "Password Validation i18n" include("unit/test_password_i18n.jl")
+    @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
     # include("unit/test_migration_planner.jl")
 end
 

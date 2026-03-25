@@ -10,7 +10,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
 @testset "Transactions and Context Propagation" begin
   # cleanup
   @info "Running initial cleanup"
-  delete(M.Just_a_test_deletion.objects, allow_delete_all = true, show_query = :execute)
+  M.Just_a_test_deletion.objects.delete(allow_delete_all = true, show_query = :execute)
   @info "Cleanup finished"
 
   @testset "with_transaction block" begin
@@ -30,7 +30,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
     @test sort(df.name) == ["test1", "test2"]
 
     # cleanup for next test
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Nested with_tx_context shares connection" begin
@@ -59,7 +59,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
     @test sort(df.name) == ["n1", "n2"]
 
     # cleanup for next test
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Transactions and Context rollback" begin
@@ -112,12 +112,12 @@ settings = PormG.config[PORMG_DB_FOLDER]
     df = q |> DataFrame
     @test nrow(df) == 0
 
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Scheduling a pre-created Task inside a transaction does NOT inherit context" begin
     # Create a Task *outside* any transaction (captures no tx context)
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 
     child_saw_tx = Atomic{Bool}(false)
     task_ran = Atomic{Bool}(false)
@@ -158,11 +158,11 @@ settings = PormG.config[PORMG_DB_FOLDER]
     q = M.Just_a_test_deletion.objects
     @test q.count() == (adapter_name == "SQLite" ? 0 : 1)
 
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Multithreaded inserts" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     thread_count = 5
     @sync for i in 1:thread_count
       @async begin
@@ -172,14 +172,14 @@ settings = PormG.config[PORMG_DB_FOLDER]
 
     q = M.Just_a_test_deletion.objects
     @test q.count() == thread_count
-    names = sort((q |> list) .|> x -> x[:name])
+    names = sort(q.list() .|> x -> x[:name])
     @test names == sort(["mt-$(i)" for i in 1:thread_count])
 
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Multithreaded inserts with transactions" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     thread_count = 5
     PormG.run_in_transaction(settings) do
       @sync for i in 1:thread_count
@@ -190,13 +190,13 @@ settings = PormG.config[PORMG_DB_FOLDER]
     end
     q = M.Just_a_test_deletion.objects
     @test q.count() == thread_count
-    names = sort((q |> list) .|> x -> x[:name])
+    names = sort(q.list() .|> x -> x[:name])
     @test names == sort(["mt-tx-$(i)" for i in 1:thread_count])
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Rollback in multithreaded inserts with transactions" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     thread_count = 5
     got_error = false
     try
@@ -218,11 +218,11 @@ settings = PormG.config[PORMG_DB_FOLDER]
     q = M.Just_a_test_deletion.objects
     @test q.count() == 0
 
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Multithreaded stress insert" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     
     # Reduce worker count for SQLite to avoid excessive "database is locked" errors 
     # under heavy concurrent writes which SQLite serializes.
@@ -248,7 +248,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
           else
             if last_name != ""
               query.filter("name" => last_name)
-              delete(query)
+              query.delete()
               atomic_add!(deleted, 1)
               last_name = ""
             end
@@ -263,11 +263,11 @@ settings = PormG.config[PORMG_DB_FOLDER]
     q = M.Just_a_test_deletion.objects
     # df = q |> DataFrame
     @test q.count() == expected
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Transaction isolation under pressure" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     worker_count = min(Base.Threads.nthreads() > 0 ? Base.Threads.nthreads() : 4, 12)
     committed = Atomic{Int}(0)
     rolled_back = Atomic{Int}(0)
@@ -298,11 +298,11 @@ settings = PormG.config[PORMG_DB_FOLDER]
     @test q.count() == committed[]
     @test context_seen[] == worker_count
     @test committed[] + rolled_back[] == worker_count
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Async fetch inside transaction" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     worker_count = min(Base.Threads.nthreads() > 0 ? Base.Threads.nthreads() : 4, 6)
     fetch_success = Atomic{Int}(0)
 
@@ -325,11 +325,11 @@ settings = PormG.config[PORMG_DB_FOLDER]
     q = M.Just_a_test_deletion.objects
     @test q.count() == worker_count
     @test fetch_success[] == worker_count
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Transaction with delection and bulk operations" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 
     # Pre-insert some records
     q = M.Just_a_test_deletion.objects
@@ -355,7 +355,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
       # instruc.parameters.parameters[1]  
 
       df = q |> DataFrame
-      delete(q)
+      q.delete()
 
       # Bulk insert
       bulk_data = [Dict("name" => "bulk-$(i)", "test_result" => 900 + i) for i in 1:5]
@@ -369,18 +369,18 @@ settings = PormG.config[PORMG_DB_FOLDER]
 
     q = M.Just_a_test_deletion.objects
     @test q.count() == 6
-    names = sort((q |> list) .|> x -> x[:name])
+    names = sort(q.list() .|> x -> x[:name])
     @test names == vcat(sort(["bulk-$(i)" for i in 1:5]), ["test_update"])
     q = M.Just_a_test_deletion.objects
     q.filter("name" => "test_update")
     df = q |> DataFrame
     @test nrow(df) == 1
     @test df[1, :test_result2] === 457
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   @testset "Transaction error cleanup" begin
-    delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     
     (M.Just_a_test_deletion.objects).create("name" => "child-in-tx", "test_result" => 456)
 
@@ -399,7 +399,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
         q = M.Just_a_test_deletion.objects
         PormG.bulk_insert(q, df)
 
-        delete(M.Just_a_test_deletion.objects, allow_delete_all = true)
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 
         PormG.bulk_update(q, df) 
 

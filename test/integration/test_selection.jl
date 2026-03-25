@@ -6,12 +6,12 @@ end
   query = M.Result.objects;
   query.filter("statusid__status" => "Finished", "resultid" => 26745);
   query.values("resultid", "raceid__circuitid__name", "driverid__forename", "constructorid__name", "statusid__status", "grid", "laps");
-  dict = query |> list
+  dict = query.list()
   @test length(dict) == 1
   @test dict[1][:resultid] == 26745
   @test dict[1][:laps] == 58
 
-  dict_json = query |> list_json
+  dict_json = query.list_json()
   @test isa(dict_json, String)
   @test JSON.parse(dict_json)[1]["resultid"] == 26745
 end
@@ -29,7 +29,7 @@ end
   df = query |> DataFrame
   @test "quarter" in names(df)
 
-  dict = query |> list
+  dict = query.list()
   @test haskey(dict[1], :circuit) && haskey(dict[1], :quarter)
 end
 

@@ -4,6 +4,43 @@
 
 The `PormG` module provides a set of abstractions and functions for working with SQL databases in Julia. It includes various types for SQL operations, models, and migrations, along with utilities for querying and manipulating data. Detailed documentation for reading operations can be found in the [Reading Overview](read/index.md).
 
+## Query Chaining (Functor API)
+
+PormG embraces a Django-style, object-oriented query builder approach.
+Most database operations are not standalone functions, but rather methods chained directly from the `Model.objects` entrypoint.
+
+### Chainable Methods (Return Handler)
+These methods modify the query builder and allow further chaining:
+- `filter(key => value)`
+- `values("field1", "field2")` — or use `"*"` to select all main-table columns: `.values("*", "joined_model__field")`
+- `order_by("-field")`
+- `limit(10)`, `offset(5)`
+- `with("cte_name" => sub_query)`
+- `cjoin("field" => "TargetModel")`
+- `on("join_path", "field" => value)`
+
+> [!IMPORTANT]
+> Queries that use `cjoin()` **must** call `.values(...)` explicitly before execution.
+> A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with
+> `ArgumentError: Duplicate variable names`. PormG will throw a clear error if you forget.
+> Use `.values("*", "joined_model__field")` to quickly select all main-table columns
+> plus specific fields from the joined table.
+
+### Terminal Methods (Execute Query)
+These methods finalize the query and execute it against the database:
+- `list()`: Returns the result set
+- `list_json()`: Returns results as a JSON string
+- `count()`: Runs a `SELECT COUNT(*)` and returns an integer
+- `exists()`: Returns a boolean indicating if matching records exist
+- `create(key => value)`: Inserts a single record and returns it
+- `update(key => value)`: Updates matching records
+- `delete()`: Deletes matching records
+
+**Example:**
+```julia
+M.Driver.objects.filter("nationality" => "British").order_by("surname").list()
+```
+
 ## Exported Functions
 
 ### `object`
@@ -36,10 +73,6 @@ The `PormG` module provides a set of abstractions and functions for working with
   ```
 - **Note on parameter buckets:** `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string and do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
 
-### `list`
-- **Description**: Lists records from the database.
-- **Usage**: `list(...)`
-
 ### `bulk_insert`
 - **Description**: Inserts multiple records into the database in a single operation.
 - **Usage**: `bulk_insert(...)`
@@ -47,18 +80,6 @@ The `PormG` module provides a set of abstractions and functions for working with
 ### `bulk_update`
 - **Description**: Updates multiple records in the database in a single operation.
 - **Usage**: `bulk_update(...)`
-
-### `delete`
-- **Description**: Deletes records from the database.
-- **Usage**: `delete(...)`
-
-### `do_count`
-- **Description**: Counts the number of records that match a query.
-- **Usage**: `do_count(...)`
-
-### `do_exists`
-- **Description**: Checks if any records exist that match a query.
-- **Usage**: `do_exists(...)`
 
 ### `with_advisory_lock`
 - **Description**: Executes a function while holding a PostgreSQL advisory lock.
@@ -134,12 +155,23 @@ conn = SQLConn(...)  # Create a connection to the database
 
 ### Inserting Records
 ```julia
-bulk_insert(conn, data)  # Insert multiple records
+# Single insert via functor
+record = M.Driver.objects.create("surname" => "Hamilton", "nationality" => "British")
+
+# Bulk insert remains a free function
+bulk_insert(M.Driver.objects, data)  # data is a Vector of NamedTuples or Dicts
 ```
 
 ### Querying Records
 ```julia
-results = list(conn, query)  # Retrieve records based on a query
+# Django-style chaining (preferred API)
+results = M.Driver.objects.filter("nationality" => "British").list()
+
+# With a custom join — must specify values() to avoid duplicate columns
+results = M.Result.objects
+  .cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"])
+  .values("*", "driverid__surname")
+  .list()
 ```
 
 ## Conclusion

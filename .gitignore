@@ -4,6 +4,10 @@ Manifest.toml
 test/integration/db_2/migrations/
 todo.txt
 
+# --- Personal dev notes (not for contributors) ---
+publish_todo.md
+release_guide.md
+
 # --- Documentação (Gerada Automaticamente) ---
 
 docs/build/*

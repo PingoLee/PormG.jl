@@ -11,7 +11,7 @@ function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
     if haskey(query.object.model.fields, "id")
       join_field = Pair("id", "id")
     else
-      throw("CTE query model must have a primary key field 'id' or specify join_field")
+      throw(ArgumentError("CTE query model must have a primary key field 'id' or specify join_field"))
     end
   end
   table = CTEDict(
@@ -30,13 +30,34 @@ function With(q::SQLObject, name::String, query::SQLObjectHandler;
   if haskey(q.ctes, name)
     throw("CTE with name $(name) already exists in the query; please use a different name")
   end
-  @infiltrate false
+  @pormg_debug false
   q.ctes[name] = cte_fields
   return q
 end
 With(o::SQLObjectHandler, name::String, query::SQLObjectHandler;
   join_field::Union{Pair{String,String},Nothing}=nothing,
   join_type::String="LEFT") = With(o.object, name, query, join_field=join_field, join_type=join_type)
+
+"""
+Pair-accepting overload for `With`, enabling the functor-style API:
+
+```julia
+# Django-idiomatic chain:
+races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
+q = M.Result.objects
+  .with("r91" => races_91, join_field="raceid" => "raceid")
+  .filter("positionorder" => 1)
+```
+
+The `Pair` first argument maps the CTE name to its sub-query handler.
+All keyword arguments are forwarded to the underlying `With` implementation.
+"""
+function With(o::SQLObjectHandler, pair::Pair{String,<:SQLObjectHandler};
+  join_field::Union{Pair{String,String},Nothing}=nothing,
+  join_type::String="LEFT")
+  With(o.object, pair.first, pair.second, join_field=join_field, join_type=join_type)
+  return o
+end
 
 
 
@@ -125,6 +146,124 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
   end
 end
 
+function _collect_join_filters(filters)
+  _filters::Vector{Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF}} = Vector{Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF}}()
+
+  if filters === nothing
+    return _filters
+  elseif isa(filters, Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF})
+    push!(_filters, filters)
+  elseif isa(filters, Vector)
+    for f in filters
+      if isa(f, Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF})
+        push!(_filters, f)
+      else
+        throw(ArgumentError("Invalid filter type in array: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
+      end
+    end
+  else
+    throw(ArgumentError("Invalid filters type: $(typeof(filters)). Use a Pair, Q, Qor, OP, F expression, or an array of these."))
+  end
+
+  return _filters
+end
+
+function _resolve_join_target_model(q::SQLObject, join_path::String)
+  parts = split(join_path, "__")
+  isempty(parts) && throw(ArgumentError("on() requires a non-empty join path."))
+
+  current_model = q.model
+  current_module = q.model._module
+
+  for (index, part) in enumerate(parts)
+    current_path = join(parts[1:index], "__")
+
+    if index == 1 && haskey(q.ctes, part)
+      throw(ArgumentError("on() does not target CTE names. Use with(..., join_type=...) to configure CTE join types."))
+    end
+
+    field = if part in current_model.field_names
+      current_model.fields[part]
+    elseif index == 1 && _get_join_field(q, current_path) !== nothing
+      _get_join_field(q, current_path)
+    else
+      nothing
+    end
+
+    if field !== nothing
+      if !hasproperty(field, :to) || field.to === nothing
+        throw(ArgumentError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use cjoin(..., field=...) first if this path depends on a custom link."))
+      end
+
+      current_model = field.to isa PormGModel ? field.to : getfield(current_module, Symbol(String(field.to)))
+    elseif haskey(current_model.related_objects, part)
+      reverse_model = Symbol(uppercasefirst(string(current_model.related_objects[part][3])))
+      current_model = getfield(current_module, reverse_model)
+    else
+      throw(ArgumentError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'."))
+    end
+  end
+
+  return current_model
+end
+
+function on(q::SQLObject, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
+  target_model = _resolve_join_target_model(q, join_path)
+  parsed_filters = Vector{FilterType}()
+
+  for filter in filters
+    prefixed = _prefix_join_filter(filter, join_path, target_model)
+
+    if isa(prefixed, Pair)
+      push!(parsed_filters, _check_filter(prefixed))
+    elseif isa(prefixed, FilterType)
+      push!(parsed_filters, prefixed)
+    else
+      throw(ArgumentError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
+    end
+  end
+
+  existing = get(q.custom_join, join_path, Dict{String,Any}())
+
+  if isempty(parsed_filters) && join_type === nothing
+    throw(ArgumentError("on() requires at least one ON predicate or a join_type override."))
+  end
+
+  existing_join_type = get(existing, "join_type", nothing)
+  join_type_normalized = if join_type === nothing
+    existing_join_type isa String ? existing_join_type : "LEFT"
+  else
+    _normalize_join_type(join_type)
+  end
+
+  existing_filters = get(existing, "filters", FilterType[])
+  if !(existing_filters isa Vector{FilterType})
+    existing_filters = FilterType[]
+  end
+
+  existing["filters"] = vcat(existing_filters, parsed_filters)
+  existing["join_type"] = join_type_normalized
+  q.custom_join[join_path] = existing
+
+  return q
+end
+
+# Concrete overload resolves the ambiguity with on(::SQLObject, ::String, ::AbstractVector)
+# that Aqua detects when q is a SQLObjectHandler (subtype matching is ambiguous otherwise).
+function on(q::SQLObjectHandler, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
+  on(q.object, join_path, filters; join_type=join_type)
+  return q
+end
+
+function on(q::SQLObjectHandler, join_path::String, args...; filters=nothing, join_type::Union{String,Nothing}=nothing)
+  positional_filters = _collect_join_filters(collect(args))
+  kw_filters = _collect_join_filters(filters)
+  combined_filters = vcat(positional_filters, kw_filters)
+
+  on(q.object, join_path, combined_filters; join_type=join_type)
+  return q
+end
+
 
 """
 Add a custom join to the query object that does not have to follow the model's foreign key relationships.
@@ -171,7 +310,7 @@ function cjoin(
     throw(ArgumentError("That is not supported yet: main_join with related fields. Please, provide just the field name of the main model."))
   end
 
-  @infiltrate false
+  @pormg_debug false
   if (split(main_join.first, "__") |> length) == 1 && main_join.first ∉ q.model.field_names
     throw(ArgumentError("The field '$(main_join.first)' is not a field in model '$(q.model.table_name)'. The fields are: $(q.model.field_names)"))
   end
@@ -194,7 +333,7 @@ function cjoin(
     end
   end
 
-  @infiltrate false
+  @pormg_debug false
   foreign_model::Union{PormGModel,Nothing} = nothing
 
   if field === nothing
@@ -206,7 +345,7 @@ function cjoin(
       return nothing
     end
     foreign_model = getfield(q.model._module, Symbol(main_join.second))
-    @infiltrate false
+    @pormg_debug false
     pk_field = Models.get_model_pk_field(foreign_model)
     if !isa(pk_field, Symbol)
       throw(ArgumentError("Foreign model '$(foreign_model.name)' does not have a valid/single primary key field."))
@@ -277,30 +416,13 @@ function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing
   field = get(kwargs, :field, nothing)
   join_type = get(kwargs, :join_type, nothing)
   warn = get(kwargs, :warn, true)
-
-  _filters::Vector{Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF}} = Vector{Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF}}()
-  @infiltrate false
-  if filters === nothing
-    # pass
-  elseif isa(filters, Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF})
-    push!(_filters, filters)
-  elseif isa(filters, Vector)
-    for f in filters
-      if isa(f, Union{Pair,String,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF})
-        push!(_filters, f)
-      else
-        throw(ArgumentError("Invalid filter type in array: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
-      end
-    end
-  else
-    throw(ArgumentError("Invalid filters type: $(typeof(filters)). Use a Pair, Q, Qor, OP, F expression, or an array of these."))
-  end
+  _filters = _collect_join_filters(filters)
 
   if field !== nothing && !isa(field, PormGField)
     throw(ArgumentError("Invalid field type: $(typeof(field)). Use a PormGField or nothing."))
   end
 
-  @infiltrate false
+  @pormg_debug false
 
   cjoin(q.object, main_join, _filters, field, join_type, warn)
   return q
@@ -322,11 +444,11 @@ Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
 function build_cte_clause(ctes::Dict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias})
   isempty(ctes) && return ""
 
-  @infiltrate false
+  @pormg_debug false
   cte_parts = String[]
   for (cte_name, cte_fields) in ctes
     # Extract the query from the fields dict
-    @infiltrate false
+    @pormg_debug false
     if !haskey(cte_fields, "query")
       @error "CTE '$cte_name' does not have a query" fields = keys(cte_fields)
       continue
@@ -342,7 +464,7 @@ function build_cte_clause(ctes::Dict{String,CTEDict}, connection, parameters::Un
     # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
     cte_sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields)
 
-    @infiltrate false
+    @pormg_debug false
 
     # Quote the CTE name
     safe_cte_name = quote_identifier(cte_name, connection)
@@ -421,7 +543,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
       field  # fallback to alias
     end
 
-    @infiltrate false
+    @pormg_debug false
 
     fields = instruct.object.model.fields
     if haskey(fields, base_col)
@@ -447,19 +569,27 @@ end
 function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   values = instruct.object.values
   fields = Dict{String,PormGField}()
-  @infiltrate false
-  for field_names in values
-    # fields[field_names.field] = _set_field_from_sql_function(field_names.field, field_names._as, instruct)
-    key_new = field_names.custom_as !== nothing ? field_names.custom_as : field_names._as
+  selected_field_names = String[]
+  @pormg_debug false
+  for value_part in values
+    # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
+    key_new = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
     try
-      fields[key_new] = _set_field_from_sql_function(field_names.field, field_names._as, instruct)
+      fields[key_new] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
+      push!(selected_field_names, key_new)
     catch e
-      @infiltrate false
+      @pormg_debug false
       throw(e)
     end
   end
-  @infiltrate false
+  @pormg_debug false
 
-  cte["model"] = Models.Model("", fields)
+  cte["model"] = Models.Model_Type(
+    name = "",
+    fields = fields,
+    field_names = selected_field_names,
+    _module = instruct.object.model._module,
+    connect_key = instruct.object.model.connect_key
+  )
 
 end

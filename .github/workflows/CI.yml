@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs for the same branch when a new push arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.julia-version }} — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test on minimum supported version and latest stable.
+        # Integration tests (test/integration/) require a live PostgreSQL database
+        # and are NOT part of this CI job — they run separately in a dev environment.
+        julia-version: ['1.12', '1']
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - uses: julia-actions/cache@v2
+
+      - uses: julia-actions/julia-buildpkg@v2
+
+      # julia-runtest runs test/runtests.jl via Pkg.test().
+      # Unit tests have no external database dependency.
+      - uses: julia-actions/julia-runtest@v2

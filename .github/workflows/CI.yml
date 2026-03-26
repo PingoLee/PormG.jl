@@ -32,8 +32,8 @@ jobs:
 
       - uses: julia-actions/cache@v2
 
-      - uses: julia-actions/julia-buildpkg@v2
+      - uses: julia-actions/julia-buildpkg@v1
 
       # julia-runtest runs test/runtests.jl via Pkg.test().
       # Unit tests have no external database dependency.
-      - uses: julia-actions/julia-runtest@v2
+      - uses: julia-actions/julia-runtest@v1

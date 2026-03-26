@@ -144,4 +144,25 @@ end
         @test all(df.points_per_entry .> 5)
     end
 
+    @testset "HAVING with FK alias and aggregate alias" begin
+        # Production code combines a joined-field alias in values() with a filter
+        # on an aggregate alias. That belongs here because the regression is the
+        # HAVING promotion, not basic selection.
+        q = M.Result.objects
+        q.values(
+            "constructor" => "constructorid__name",
+            "wins" => Count("resultid")
+        )
+        q.filter("positionorder" => 1)
+        q.filter("wins__@gt" => 50)
+        q.order_by("-wins")
+
+        df = q |> DataFrame
+
+        @test "constructor" in names(df)
+        @test "wins" in names(df)
+        @test all(df.wins .> 50)
+        @test any(name -> name in df.constructor, ["Ferrari", "McLaren"])
+    end
+
 end

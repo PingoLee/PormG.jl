@@ -436,5 +436,60 @@ end
             @test results[2][:test_result] == 200
             @test results[3][:test_result] == 30    # Remains 30 because name was Cat2
         end
+
+            @testset "bulk_update with lookup operators in filters" begin
+              # Production code combines DataFrame-driven row matching with static
+              # lookup filters. Keep this here so the regression stays on the bulk
+              # UPDATE path instead of relying on lower-level WHERE builder tests.
+              M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_1", "test_result" => 1)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_2", "test_result" => 2)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_3", "test_result" => 3)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_4", "test_result" => 4)
+
+              q = M.Just_a_test_deletion.objects.filter("name" => "lookup_test_1")
+              q.update("test_result2" => 1)
+
+              query = M.Just_a_test_deletion.objects
+              df = query.filter("name__@icontains" => "lookup_test").order_by("id") |> DataFrame
+
+              for row in eachrow(df)
+                row.name = "updated_$(row.id)"
+              end
+
+              bulk_update(M.Just_a_test_deletion.objects, df,
+                columns=["name"],
+                filters=["id", "test_result2__@isnull" => true, "test_result__@in" => [2, 3]])
+
+              row1 = M.Just_a_test_deletion.objects.filter("test_result" => 1).list() |> first
+              row2 = M.Just_a_test_deletion.objects.filter("test_result" => 2).list() |> first
+              row3 = M.Just_a_test_deletion.objects.filter("test_result" => 3).list() |> first
+              row4 = M.Just_a_test_deletion.objects.filter("test_result" => 4).list() |> first
+
+              @test row1[:name] == "lookup_test_1"
+              @test row2[:name] == "updated_$(row2[:id])"
+              @test row3[:name] == "updated_$(row3[:id])"
+              @test row4[:name] == "lookup_test_4"
+            end
+
+            @testset "delete by dynamically collected ID list" begin
+              # Delete is a write-path terminal method, so keep this with the DML
+              # coverage rather than in a generic production-pattern file.
+              M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+
+              M.Just_a_test_deletion.objects.create("name" => "del_1", "test_result" => 1)
+              M.Just_a_test_deletion.objects.create("name" => "del_2", "test_result" => 2)
+              M.Just_a_test_deletion.objects.create("name" => "del_3", "test_result" => 3)
+              M.Just_a_test_deletion.objects.create("name" => "del_keep", "test_result" => 4)
+
+              df = M.Just_a_test_deletion.objects.filter("name__@icontains" => "del_").order_by("id") |> DataFrame
+              ids = df.id[1:3] |> collect |> unique |> sort
+
+              M.Just_a_test_deletion.objects.filter("id__@in" => ids).delete()
+
+              @test M.Just_a_test_deletion.objects.filter("id__@in" => ids).count() == 0
+              @test M.Just_a_test_deletion.objects.filter("name" => "del_keep").count() == 1
+            end
     end
 end

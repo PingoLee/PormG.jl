@@ -16,7 +16,7 @@ include("common_setup.jl")
     @testset "Inserções e Schema"           begin include("test_database_setup.jl")     end
 
     # ── Phase 2: Behavioral Tests (reads, filters, expressions) ──────
-    @testset "Seleção e Filtros"            begin include("test_selection.jl")          end
+    @testset "Seleção e Filtros"            begin include("test_selection.jl")          end # TODO: split this into multiple files (selection, filters, expressions)
     @testset "Field Expressions"            begin include("test_field_expressions.jl")  end
     @testset "Atualizações (Updates)"       begin include("test_updates.jl")            end
     @testset "Bulk copy"                    begin include("test_bulk_copy.jl")          end
@@ -29,7 +29,6 @@ include("common_setup.jl")
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end # TODO: extend this test
-
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 

@@ -17,16 +17,16 @@ PormG provides several ways to execute a query and return data.
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
-| `.list()` / `query |> list` | `Vector{Dict{Symbol, Any}}` | Returns all rows as a collection of dictionaries. |
-| `.all()` / `query |> all` | `Vector{Dict}` | Alias for `.list()`. |
+| `.list()` | `Vector{Dict{Symbol, Any}}` | Returns all rows as a collection of dictionaries. |
+| `.all()` | `Vector{Dict}` | Alias for `.list()`. |
 | `query |> DataFrame` | `DataFrame` | Returns results as a Julia `DataFrame` (recommended for analysis). |
-| `.count()` / `query |> do_count` | `Int` | Returns the number of rows matching the query. |
-| `.exists()` / `query |> do_exists` | `Bool` | Returns `true` if at least one row matches. |
+| `.count()` | `Int` | Returns the number of rows matching the query. |
+| `.exists()` | `Bool` | Returns `true` if at least one row matches. |
 | `.first()` | `Dict` or `nothing` | Returns the first matching record or `nothing`. |
 
 ## Query Styles
 
-PormG supports both a fluent interface and the older pipe-oriented style.
+PormG supports both a fluent interface and a legacy pipe-oriented style.
 
 ### Fluent Interface
 
@@ -39,6 +39,9 @@ results = M.Result.objects.db("client_42").filter("points__@gt" => 10).all()
 ```
 
 ### Pipe Style
+
+The pipe style is still supported, but the fluent `query.method()` form is the
+public style to prefer in docs, tests, and user-facing examples.
 
 ```julia
 query = M.Driver.objects |> filter("nationality" => "Brazilian")

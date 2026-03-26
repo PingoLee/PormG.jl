@@ -104,4 +104,52 @@ else
     wait(lock_task)
   end
 
+  @testset "AdvisoryLock: wait=false immediate failure when held" begin
+    # The production scheduler uses wait=false to skip duplicate work instead of
+    # queueing. This regression proves the non-blocking path succeeds when free
+    # and throws without running the protected block when another session holds it.
+    dbname = haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))
+
+    free_key = "test_advisory_lock_wait_false_free_$(uuid4())"
+    @test PormG.with_advisory_lock(dbname, free_key; wait=false) do
+      :acquired
+    end == :acquired
+
+    held_key = "test_advisory_lock_wait_false_held_$(uuid4())"
+    entered_lock = Channel{Bool}(1)
+    release_lock = Channel{Bool}(1)
+
+    holder = @async begin
+      PormG.with_advisory_lock(dbname, held_key; wait=true, strategy=:block, timeout_ms=10_000) do
+        put!(entered_lock, true)
+        take!(release_lock)
+      end
+    end
+
+    take!(entered_lock)
+
+    executed = false
+    got_error = false
+    err_msg = ""
+
+    logger = Base.CoreLogging.SimpleLogger(IOBuffer(), Base.CoreLogging.Error)
+    Base.CoreLogging.with_logger(logger) do
+      try
+        PormG.with_advisory_lock(dbname, held_key; wait=false) do
+          executed = true
+        end
+      catch e
+        got_error = true
+        err_msg = sprint(showerror, e)
+      end
+    end
+
+    put!(release_lock, true)
+    wait(holder)
+
+    @test got_error
+    @test !executed
+    @test occursin("Failed to acquire advisory lock", err_msg)
+  end
+
 end # End of if adapter_name != "SQLite"

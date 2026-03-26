@@ -48,11 +48,11 @@ df = query |> DataFrame
 ```julia
 query = M.Result.objects
 query.filter("raceid__circuitid__name__@contains" => "Monaco")
-count = query |> do_count
+count = query.count()
 
 query = M.Result.objects
 query.filter("raceid__circuitid__name__@icontains" => "monaco")
-count = query |> do_count
+count = query.count()
 ```
 
 ## In and Not In
@@ -82,6 +82,7 @@ query.values(
     "laps"
 )
 results = query |> list
+results = query.list()
 ```
 
 For exclusion-like logic, prefer `@nin` when you truly mean a set exclusion:

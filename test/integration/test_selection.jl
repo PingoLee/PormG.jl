@@ -16,6 +16,58 @@ end
   @test JSON.parse(dict_json)[1]["resultid"] == 26745
 end
 
+@testset ".exists() and .count() guard patterns" begin
+  # These are read-side terminal methods and fit better in the selection suite
+  # than in a generic production-pattern file.
+  #
+  # Cleanup at the boundary keeps each subtest deterministic even if this file
+  # is run in isolation while developing a regression fix.
+  M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+
+  @testset "exists() returns false on empty table" begin
+    # Why this matters: guard clauses in application code often branch on
+    # `query.exists()` before doing inserts or deletes. A false positive here
+    # would be a destructive regression.
+    q = M.Just_a_test_deletion.objects.filter("name" => "nonexistent_sentinel")
+    @test q.exists() == false
+  end
+
+  @testset "count() returns 0 on empty match" begin
+    # Why this matters: count() is the numeric sibling of exists(). Keeping both
+    # behaviors together makes it easier to spot read-path regressions.
+    q = M.Just_a_test_deletion.objects.filter("name" => "nonexistent_sentinel")
+    @test q.count() == 0
+  end
+
+  @testset "create-if-not-exists pattern" begin
+    # Production code frequently does:
+    #   if query.exists() == false
+    #       query.create(...)
+    #   end
+    #
+    # Maintenance note: the second branch intentionally repeats the same guard so
+    # a regression shows up as a duplicate-row failure instead of being hidden by
+    # shared fixture state.
+    q = M.Just_a_test_deletion.objects.filter("name" => "guard_test_row")
+
+    if q.exists() == false
+      M.Just_a_test_deletion.objects.create("name" => "guard_test_row", "test_result" => 1)
+    end
+
+    @test M.Just_a_test_deletion.objects.filter("name" => "guard_test_row").exists() == true
+    @test M.Just_a_test_deletion.objects.filter("name" => "guard_test_row").count() == 1
+
+    q2 = M.Just_a_test_deletion.objects.filter("name" => "guard_test_row")
+    if q2.exists() == false
+      M.Just_a_test_deletion.objects.create("name" => "guard_test_row", "test_result" => 2)
+    end
+
+    @test M.Just_a_test_deletion.objects.filter("name" => "guard_test_row").count() == 1
+  end
+
+  M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+end
+
 @testset "Test As functionality for custom alias" begin
   query = M.Result.objects;
   query.filter("statusid__status" => "Finished", "resultid" => 26745);
@@ -31,6 +83,41 @@ end
 
   dict = query.list()
   @test haskey(dict[1], :circuit) && haskey(dict[1], :quarter)
+end
+
+@testset "One-liner fluent chain to DataFrame" begin
+  @testset "filter + values + order_by piped to DataFrame" begin
+    # This covers the production pattern where the entire read query is built in
+    # one expression and executed immediately as a DataFrame.
+    #
+    # Maintenance note: keeping this as a single expression protects the chaining
+    # surface itself, not just the underlying SQL behavior.
+    df = M.Result.objects.filter(
+      "statusid__status" => "Finished",
+      "raceid__year" => 1991,
+    ).values(
+      "resultid", "driverid__surname", "raceid__name"
+    ).order_by(
+      "resultid"
+    ) |> DataFrame
+
+    @test df isa DataFrame
+    @test "resultid" in names(df)
+    @test "driverid__surname" in names(df)
+    @test "raceid__name" in names(df)
+    @test nrow(df) > 0
+    @test issorted(df.resultid)
+  end
+
+  @testset "filter + order_by piped to DataFrame (no explicit values)" begin
+    # This covers the simpler full-row read shape used in app code.
+    df = M.Circuit.objects.filter("country" => "Japan").order_by("name") |> DataFrame
+
+    @test df isa DataFrame
+    @test nrow(df) > 0
+    @test "name" in names(df)
+    @test "country" in names(df)
+  end
 end
 
 @testset "Filtering and Value Selection" begin
@@ -55,6 +142,18 @@ end
   df = query |> DataFrame
   @test length(names(df)) == 6
   @test filter(r -> r.statusid__status == "Engine", df) |> x -> nrow(x) == 2026
+
+  # Deep FK traversal on a leaf string field should work with lookup operators.
+  deep_query = M.Result.objects
+  deep_query.filter("raceid__circuitid__country__@icontains" => "united")
+  deep_query.values("resultid", "raceid__circuitid__country", "driverid__surname")
+  deep_query.order_by("resultid")
+  deep_df = deep_query.page(10, 0) |> DataFrame
+
+  @test nrow(deep_df) > 0
+  @test all(row -> occursin("United", row.raceid__circuitid__country) ||
+                   occursin("united", lowercase(row.raceid__circuitid__country)),
+           eachrow(deep_df))
 end
 
 @testset "Ordering and Aggregations" begin
@@ -72,6 +171,56 @@ end
     @test size(df, 1) == 39
     @test df[1, :raceid__circuitid__name] == "Circuit de Barcelona-Catalunya"
     @test df[39, :raceid__circuitid__name] == "Red Bull Ring"
+
+    # Regression: FK aliases plus aggregates in the same values() call should
+    # still group correctly and expose the aliased columns in the DataFrame.
+    query = M.Result.objects
+    query.filter("statusid__status" => "Finished")
+    query.values("circuit_name" => "raceid__circuitid__name", "race_count" => Count("resultid"))
+    query.order_by("-race_count")
+    df = query |> DataFrame
+
+    @test "circuit_name" in names(df)
+    @test "race_count" in names(df)
+    @test nrow(df) > 0
+    @test df[1, :race_count] >= df[end, :race_count]
+
+    # Regression: multiple joined fields plus multiple aggregates should coexist
+    # without breaking grouping or alias propagation.
+    query = M.Result.objects
+    query.filter("positionorder__@lte" => 3)
+    query.values(
+      "driverid__surname",
+      "constructorid__name",
+      "podiums" => Count("resultid"),
+      "best_points" => Max("points"),
+    )
+    query.order_by("-podiums")
+    df = query |> DataFrame
+
+    @test "driverid__surname" in names(df)
+    @test "constructorid__name" in names(df)
+    @test "podiums" in names(df)
+    @test "best_points" in names(df)
+    @test nrow(df) > 0
+    @test any(df.podiums .> 50)
+
+    # Regression: mixed ascending joined field and descending aggregate alias in
+    # order_by(...) should render a stable ORDER BY clause.
+    query = M.Result.objects
+    query.values(
+      "driverid__nationality",
+      "cnt" => Count("resultid"),
+    )
+    query.filter("positionorder" => 1)
+    query.order_by("driverid__nationality", "-cnt")
+    df = query |> DataFrame
+    inspection = PormG.QueryBuilder.inspect_query(query)
+    sql_upper = uppercase(inspection[:sql_text])
+
+    @test nrow(df) > 0
+    @test occursin("ORDER BY", sql_upper)
+    @test occursin("DESC", sql_upper)
 end
 
 
@@ -144,6 +293,170 @@ end
   df = query |> DataFrame
   @test filter(r -> r.positionorder == 1 || r.positionorder == 2, df) |> x -> nrow(x) == 0
 
+end
+
+@testset "Qor Filtering" begin
+  @testset "nested Q branches with mixed lookups" begin
+    # The public API uses Qor(...) to join OR branches and Q(...) to group
+    # AND conditions inside each branch. Verify both the combined count and
+    # a sampled result set without emitting one assertion per returned row.
+    #
+    # Maintenance note: counting each branch separately makes the expected row
+    # count explicit, while the paged sample checks that the returned rows still
+    # satisfy the logical shape of the filter after future refactors.
+    query = M.Result.objects
+    query.filter(Qor(
+      Q("positionorder" => 1, "driverid__nationality__@ne" => "British"),
+      Q("positionorder" => 2, "driverid__nationality" => "German")
+    ))
+
+    branch_a = M.Result.objects.filter(
+      "positionorder" => 1,
+      "driverid__nationality__@ne" => "British",
+    ).count()
+    branch_b = M.Result.objects.filter(
+      "positionorder" => 2,
+      "driverid__nationality" => "German",
+    ).count()
+
+    sample = query.copy()
+    sample.values("resultid", "positionorder", "driverid__nationality")
+    sample.order_by("resultid")
+    df = sample.page(25, 0) |> DataFrame
+
+    @test query.count() == branch_a + branch_b
+    @test all(row -> (
+      (row.positionorder == 1 && row.driverid__nationality != "British") ||
+      (row.positionorder == 2 && row.driverid__nationality == "German")
+    ), eachrow(df))
+  end
+
+  @testset "Qor with @in branch preserves OR semantics" begin
+    # Maintenance note: this case guards OR-set logic where one branch is a plain
+    # equality check and the other uses an array lookup. The overlap calculation
+    # matters because OR semantics should deduplicate rows matched by both sides.
+    query = M.Result.objects
+    query.filter(Qor(
+      Q("raceid__year" => 1991),
+      Q("raceid__circuitid__country__@in" => ["Japan", "Italy"])
+    ))
+
+    branch_a = M.Result.objects.filter("raceid__year" => 1991).count()
+    branch_b = M.Result.objects.filter("raceid__circuitid__country__@in" => ["Japan", "Italy"]).count()
+    overlap = M.Result.objects.filter(
+      "raceid__year" => 1991,
+      "raceid__circuitid__country__@in" => ["Japan", "Italy"],
+    ).count()
+
+    sample = query.copy()
+    sample.values("resultid", "raceid__year", "raceid__circuitid__country")
+    sample.order_by("resultid")
+    df = sample.page(25, 0) |> DataFrame
+
+    @test query.count() == branch_a + branch_b - overlap
+    @test all(row -> (
+      row.raceid__year == 1991 || row.raceid__circuitid__country in ["Japan", "Italy"]
+    ), eachrow(df))
+  end
+
+  @testset "Qor fallback branch with impossible id is a no-op" begin
+    # Production code uses an impossible id branch as a safe fallback when an
+    # input array may be empty. This test ensures that pattern keeps the real
+    # branch intact instead of broadening or collapsing the query.
+    query = M.Result.objects
+    query.filter(Qor(
+      Q("driverid__surname" => "Senna"),
+      "resultid" => 0,
+    ))
+
+    sample = query.copy()
+    sample.values("resultid", "driverid__surname")
+    sample.order_by("resultid")
+    df = sample.page(20, 0) |> DataFrame
+
+    @test query.count() == M.Result.objects.filter("driverid__surname" => "Senna").count()
+    @test all(df.driverid__surname .== "Senna")
+  end
+
+  @testset "Qor with repeated field names on string lookups" begin
+    # This mirrors repeated icontains clauses on the same field family. The test
+    # stays intentionally small: one assertion for non-empty output and one that
+    # verifies every returned row still satisfies one of the OR branches.
+    query = M.Circuit.objects
+    query.filter(Qor(
+      "name__@icontains" => "monaco",
+      "name__@icontains" => "monza",
+      "country__@icontains" => "japan",
+    ))
+    query.values("circuitid", "name", "country")
+    query.order_by("name")
+    df = query |> DataFrame
+
+    @test nrow(df) > 0
+    @test all(row -> (
+      occursin("monaco", lowercase(row.name)) ||
+      occursin("monza", lowercase(row.name)) ||
+      occursin("japan", lowercase(row.country))
+    ), eachrow(df))
+  end
+end
+
+@testset "Pagination" begin
+  @testset "page functor with limit and offset" begin
+    # The chainable API is query.page(limit, offset). This belongs with
+    # the read/selection tests because pagination is a selection concern.
+    query = M.Result.objects
+    query.filter("statusid__status" => "Finished")
+    query.values("resultid", "driverid__forename")
+    query.order_by("resultid")
+    df = query.page(5, 0) |> DataFrame
+
+    @test nrow(df) == 5
+    @test "resultid" in names(df)
+    @test "driverid__forename" in names(df)
+    @test issorted(df.resultid)
+  end
+
+  @testset "page functor with offset skips rows" begin
+    query = M.Result.objects
+    query.filter("statusid__status" => "Finished")
+    query.values("resultid")
+    query.order_by("resultid")
+
+    first_page = query.copy().page(3, 0) |> DataFrame
+    second_page = query.copy().page(3, 3) |> DataFrame
+
+    @test nrow(first_page) == 3
+    @test nrow(second_page) == 3
+    @test isempty(intersect(first_page.resultid, second_page.resultid))
+    @test minimum(second_page.resultid) > maximum(first_page.resultid)
+  end
+
+  @testset "limit and offset functors compose" begin
+    # The current public API also exposes limit() and offset() as chainable
+    # functors. This verifies the fully fluent pagination path.
+    query = M.Result.objects
+    query.filter("statusid__status" => "Finished")
+    query.values("resultid", "driverid__forename")
+    query.order_by("resultid")
+    df = query.limit(1).offset(0) |> DataFrame
+
+    @test nrow(df) == 1
+    @test df[1, :resultid] == 1
+  end
+
+  @testset "page in one-liner query chain" begin
+    df = M.Circuit.objects.filter(
+      "country__@icontains" => "a"
+    ).values(
+      "circuitid", "name", "country"
+    ).order_by(
+      "-name"
+    ).page(10, 0) |> DataFrame
+
+    @test nrow(df) <= 10
+    @test "country" in names(df)
+  end
 end
 
 

@@ -251,8 +251,8 @@ end
 
 # Inspect results (non-test checks)
 q = M.Just_a_test_deletion.objects
-println("Total rows after transaction: ", q |> do_count)
-println("Names: ", sort((q |> list) .|> x -> x[:name]))
+println("Total rows after transaction: ", q.count())
+println("Names: ", sort(q.list() .|> x -> x[:name]))
 ```
 
 Note: This mirrors `test_transactions.jl` coverage — it demonstrates delete + bulk insert + bulk update inside one transaction and shows how a later rollback would revert all operations.
@@ -318,7 +318,7 @@ end
 # The record was never inserted because the transaction rolled back
 q = M.Result.objects
 q.filter("raceid" => 1)
-@test (q |> do_count) == 0
+@test q.count() == 0
 ```
 
 ### Nested Exception Handling

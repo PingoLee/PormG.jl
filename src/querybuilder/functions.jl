@@ -429,8 +429,11 @@ Set pagination parameters for a SQL query object.
 - `offset::Integer`: Number of records to skip from the beginning (default: 0)
 
 # Examples
-page(query, limit=20, offset=10) |> list |> DataFrame or page(query, 20, 10)
-page(query, limit=20) |> list |> DataFrame or page(query, 20)
+query.page(20, 10) |> DataFrame
+query.page(20) |> DataFrame
+
+The function form `page(query, 20, 10)` is still supported, but the fluent
+`query.page(...)` style is the preferred public API.
 """
 function page(object::SQLObjectHandler; limit::Integer = 10, offset::Integer = 0)
   object.object.limit = limit

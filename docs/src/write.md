@@ -190,7 +190,7 @@ end
 bulk_insert(query, df)
 
 # You can verify the result
-query |> do_count
+query.count()
 26759
 ```
 
@@ -231,7 +231,7 @@ query = M.Driver.objects
 bulk_copy(query, df)
 
 # Verify
-query |> do_count
+query.count()
 3
 ```
 
@@ -285,7 +285,7 @@ new_driver = query.create("forename" => "Oscar", "surname" => "Piastri", "nation
 ```julia
 # Load drivers from CSV
 drivers_csv = CSV.File("f1/drivers.csv") |> DataFrame
-M.Driver.objects |> do_exists && bulk_copy(M.Driver.objects, drivers_csv)
+M.Driver.objects.exists() || bulk_copy(M.Driver.objects, drivers_csv)
 
 # Load constructors
 constructors_csv = CSV.File("f1/constructors.csv") |> DataFrame
@@ -300,10 +300,10 @@ results_csv = CSV.File("f1/results.csv") |> DataFrame
 bulk_copy(M.Result.objects, results_csv)
 
 # Verify all loaded
-M.Driver.objects |> do_count          # 800+
-M.Constructor.objects |> do_count     # 200+
-M.Race.objects |> do_count            # 1100+
-M.Result.objects |> do_count          # 25000+
+M.Driver.objects.count()          # 800+
+M.Constructor.objects.count()     # 200+
+M.Race.objects.count()            # 1100+
+M.Result.objects.count()          # 25000+
 ```
 
 #### Safety: SQL Injection Protection
@@ -330,7 +330,7 @@ df_safe = DataFrame(
 bulk_copy(M.Just_a_test_deletion.objects, df_safe)
 
 # All rows are safely retrieved without any SQL being executed
-M.Just_a_test_deletion.objects |> do_count
+M.Just_a_test_deletion.objects.count()
 3
 ```
 
@@ -344,7 +344,7 @@ Update specific records using filters:
 # Update a single record
 query = M.Driver.objects;
 query.filter("forename" => "Lewis");
-query |> do_count
+query.count()
 1
 df = query |> DataFrame
 1×9 DataFrame
@@ -575,7 +575,7 @@ With F, you can do all basic mathematical operations directly in the database.
 
 ```julia
 query = M.Just_a_test_deletion.objects;
-query |> do_exists && delete(query; allow_delete_all = true)
+query.exists() && query.delete(allow_delete_all = true)
 query.create("name" => "fexpr", "test_result" => 1)
 query.create("name" => "fexpr", "test_result" => 2)
 query.create("name" => "fexpr", "test_result" => 3)

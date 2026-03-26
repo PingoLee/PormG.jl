@@ -180,7 +180,7 @@ import PormG.models as M
 
 # Load initial reference data
 circuits_df = CSV.File("f1/circuits.csv") |> DataFrame
-M.Circuit.objects |> do_exists && delete(M.Circuit.objects, allow_delete_all=true)
+M.Circuit.objects.exists() && M.Circuit.objects.delete(allow_delete_all=true)
 bulk_copy(M.Circuit.objects, circuits_df)
 
 # Load drivers
@@ -188,7 +188,7 @@ drivers_df = CSV.File("f1/drivers.csv") |> DataFrame
 for col in [:number]
     drivers_df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, drivers_df[!, col])
 end
-M.Driver.objects |> do_exists && delete(M.Driver.objects, allow_delete_all=true)
+M.Driver.objects.exists() && M.Driver.objects.delete(allow_delete_all=true)
 bulk_copy(M.Driver.objects, drivers_df)
 
 # Load races with pre-processing
@@ -197,7 +197,7 @@ rename!(races_df, lowercase.(names(races_df)))
 for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time]
     races_df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, races_df[!, col])
 end
-M.Race.objects |> do_exists && delete(M.Race.objects, allow_delete_all=true)
+M.Race.objects.exists() && M.Race.objects.delete(allow_delete_all=true)
 bulk_copy(M.Race.objects, races_df)
 
 # Load results (the largest table)
@@ -206,15 +206,15 @@ rename!(results_df, lowercase.(names(results_df)))
 for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
     results_df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, results_df[!, col])
 end
-M.Result.objects |> do_exists && delete(M.Result.objects, allow_delete_all=true)
+M.Result.objects.exists() && M.Result.objects.delete(allow_delete_all=true)
 bulk_copy(M.Result.objects, results_df, chunk_size=10000)
 
 # Verify all data loaded
 @info "Data loaded" \
-    circuits=M.Circuit.objects |> do_count \
-    drivers=M.Driver.objects |> do_count \
-    races=M.Race.objects |> do_count \
-    results=M.Result.objects |> do_count
+    circuits=M.Circuit.objects.count() \
+    drivers=M.Driver.objects.count() \
+    races=M.Race.objects.count() \
+    results=M.Result.objects.count()
 ```
 
 ---

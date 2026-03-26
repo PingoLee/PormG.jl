@@ -36,7 +36,7 @@ function _cleanup_configuration_test_keys(keys::Vector{String})
 end
 
 @testset "Explicit env reload keeps Settings synchronized" begin
-    mktempdir() do temp_root
+    mktempdir(; allow_delayed_delete=true) do temp_root
         db_dir = joinpath(temp_root, "db")
         mkpath(db_dir)
         _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
@@ -61,7 +61,7 @@ end
 end
 
 @testset "load_many and is_loaded support multi-folder bootstrap" begin
-    mktempdir() do temp_root
+    mktempdir(; allow_delayed_delete=true) do temp_root
         db_dir = joinpath(temp_root, "db")
         db_sch_dir = joinpath(temp_root, "db_sch")
         mkpath(db_dir)
@@ -83,7 +83,7 @@ end
 end
 
 @testset "ping and status distinguish loaded from reachable" begin
-    mktempdir() do temp_root
+    mktempdir(; allow_delayed_delete=true) do temp_root
         db_dir = joinpath(temp_root, "db")
         mkpath(db_dir)
         _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))

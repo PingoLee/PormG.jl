@@ -1,5 +1,4 @@
 using Test
-using UUIDs: uuid4
 using PormG
 
 if !haskey(ENV, "PORMG_ENV")
@@ -50,7 +49,7 @@ function _run_import_models_package_regression()
         open(joinpath(pkg_root, "Project.toml"), "w") do f
             write(f, """
             name = \"$(pkg_name)\"
-            uuid = \"$(uuid4())\"
+            uuid = \"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d\"
             version = \"0.1.0\"
 
             [deps]

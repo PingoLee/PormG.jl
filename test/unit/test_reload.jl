@@ -53,6 +53,7 @@ function _run_import_models_package_regression()
             version = \"0.1.0\"
 
             [deps]
+            Pkg = \"44cfe95a-1eb2-52ea-b672-e2afdf69b78f\"
             PormG = \"7d8d7541-4d3d-4580-80a2-17064efb0993\"
             Revise = \"295af30f-e4ad-537b-8983-00126c2a3abe\"
 

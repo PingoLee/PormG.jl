@@ -94,7 +94,7 @@ end
 bulk_insert(query, df)
 
 # You can verify the result
-query |&gt; do_count
+query.count()
 26759</code></pre><p>By pre-processing the data, you ensure it&#39;s compatible with your database schema, leading to a smooth and successful bulk insert.</p><hr/><h2 id="Ultra-Fast-Bulk-Inserts-with-PostgreSQL-COPY"><a class="docs-heading-anchor" href="#Ultra-Fast-Bulk-Inserts-with-PostgreSQL-COPY">Ultra-Fast Bulk Inserts with PostgreSQL COPY</a><a id="Ultra-Fast-Bulk-Inserts-with-PostgreSQL-COPY-1"></a><a class="docs-heading-anchor-permalink" href="#Ultra-Fast-Bulk-Inserts-with-PostgreSQL-COPY" title="Permalink"></a></h2><h3 id="bulk_copy:-PostgreSQL-Native-High-Performance-Insertion"><a class="docs-heading-anchor" href="#bulk_copy:-PostgreSQL-Native-High-Performance-Insertion">bulk_copy: PostgreSQL Native High-Performance Insertion</a><a id="bulk_copy:-PostgreSQL-Native-High-Performance-Insertion-1"></a><a class="docs-heading-anchor-permalink" href="#bulk_copy:-PostgreSQL-Native-High-Performance-Insertion" title="Permalink"></a></h3><p>For truly massive datasets, PormG provides <code>bulk_copy()</code>, which uses PostgreSQL&#39;s native <code>COPY FROM STDIN</code> protocol—the fastest way to bulk insert data into PostgreSQL.</p><p>The <code>COPY</code> protocol bypasses the standard SQL statement parser for each row, achieving <strong>10-100x faster insertion</strong> than <code>bulk_insert()</code> on large datasets.</p><h4 id="Why-Use-bulk_copy?"><a class="docs-heading-anchor" href="#Why-Use-bulk_copy?">Why Use bulk_copy?</a><a id="Why-Use-bulk_copy?-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Use-bulk_copy?" title="Permalink"></a></h4><ul><li><strong>Raw Speed</strong>: Uses PostgreSQL&#39;s optimized binary protocol, not SQL statements</li><li><strong>Memory Efficient</strong>: Streams data without loading everything into memory simultaneously</li><li><strong>Safe by Design</strong>: Data is completely isolated from SQL parsing (immune to SQL injection)</li><li><strong>Ideal for</strong>: Large initial data loads, data migrations, ETL pipelines</li></ul><h4 id="Basic-Usage"><a class="docs-heading-anchor" href="#Basic-Usage">Basic Usage</a><a id="Basic-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Usage" title="Permalink"></a></h4><pre><code class="language-julia hljs">using DataFrames
 import PormG.models as M
 
@@ -110,7 +110,7 @@ query = M.Driver.objects
 bulk_copy(query, df)
 
 # Verify
-query |&gt; do_count
+query.count()
 3</code></pre><h4 id="Advanced:-Column-Mapping"><a class="docs-heading-anchor" href="#Advanced:-Column-Mapping">Advanced: Column Mapping</a><a id="Advanced:-Column-Mapping-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced:-Column-Mapping" title="Permalink"></a></h4><p>If your DataFrame column names differ from the database schema, use the <code>columns</code> parameter:</p><pre><code class="language-julia hljs"># DataFrame with different column names
 df_raw = DataFrame(
     first_name = [&quot;Lewis&quot;, &quot;Max&quot;],
@@ -134,7 +134,7 @@ new_driver = query.create(&quot;forename&quot; =&gt; &quot;Oscar&quot;, &quot;su
 
 # new_driver will have a unique ID (not colliding with bulk-inserted rows)</code></pre><h4 id="Example:-Loading-F1-Data-at-Scale"><a class="docs-heading-anchor" href="#Example:-Loading-F1-Data-at-Scale">Example: Loading F1 Data at Scale</a><a id="Example:-Loading-F1-Data-at-Scale-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-Loading-F1-Data-at-Scale" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Load drivers from CSV
 drivers_csv = CSV.File(&quot;f1/drivers.csv&quot;) |&gt; DataFrame
-M.Driver.objects |&gt; do_exists &amp;&amp; bulk_copy(M.Driver.objects, drivers_csv)
+M.Driver.objects.exists() || bulk_copy(M.Driver.objects, drivers_csv)
 
 # Load constructors
 constructors_csv = CSV.File(&quot;f1/constructors.csv&quot;) |&gt; DataFrame
@@ -149,10 +149,10 @@ results_csv = CSV.File(&quot;f1/results.csv&quot;) |&gt; DataFrame
 bulk_copy(M.Result.objects, results_csv)
 
 # Verify all loaded
-M.Driver.objects |&gt; do_count          # 800+
-M.Constructor.objects |&gt; do_count     # 200+
-M.Race.objects |&gt; do_count            # 1100+
-M.Result.objects |&gt; do_count          # 25000+</code></pre><h4 id="Safety:-SQL-Injection-Protection"><a class="docs-heading-anchor" href="#Safety:-SQL-Injection-Protection">Safety: SQL Injection Protection</a><a id="Safety:-SQL-Injection-Protection-1"></a><a class="docs-heading-anchor-permalink" href="#Safety:-SQL-Injection-Protection" title="Permalink"></a></h4><p><code>bulk_copy()</code> is inherently immune to SQL injection because:</p><ol><li><strong>Data is never parsed as SQL</strong> — <code>COPY FROM STDIN</code> treats all input as pure data</li><li><strong>CSV escaping is automatic</strong> — Quotes, commas, newlines are handled safely by Julia&#39;s <code>CSV.jl</code></li><li><strong>No string interpolation</strong> — Table and column names are sanitized via <code>quote_identifier</code></li></ol><p>You can safely insert rows containing SQL metacharacters:</p><pre><code class="language-julia hljs"># These strings are stored as-is, not executed
+M.Driver.objects.count()          # 800+
+M.Constructor.objects.count()     # 200+
+M.Race.objects.count()            # 1100+
+M.Result.objects.count()          # 25000+</code></pre><h4 id="Safety:-SQL-Injection-Protection"><a class="docs-heading-anchor" href="#Safety:-SQL-Injection-Protection">Safety: SQL Injection Protection</a><a id="Safety:-SQL-Injection-Protection-1"></a><a class="docs-heading-anchor-permalink" href="#Safety:-SQL-Injection-Protection" title="Permalink"></a></h4><p><code>bulk_copy()</code> is inherently immune to SQL injection because:</p><ol><li><strong>Data is never parsed as SQL</strong> — <code>COPY FROM STDIN</code> treats all input as pure data</li><li><strong>CSV escaping is automatic</strong> — Quotes, commas, newlines are handled safely by Julia&#39;s <code>CSV.jl</code></li><li><strong>No string interpolation</strong> — Table and column names are sanitized via <code>quote_identifier</code></li></ol><p>You can safely insert rows containing SQL metacharacters:</p><pre><code class="language-julia hljs"># These strings are stored as-is, not executed
 df_safe = DataFrame(
     name = [
         &quot;&#39;; DROP TABLE drivers; --&quot;,
@@ -165,11 +165,11 @@ df_safe = DataFrame(
 bulk_copy(M.Just_a_test_deletion.objects, df_safe)
 
 # All rows are safely retrieved without any SQL being executed
-M.Just_a_test_deletion.objects |&gt; do_count
+M.Just_a_test_deletion.objects.count()
 3</code></pre><h3 id="Single-Record-Updates"><a class="docs-heading-anchor" href="#Single-Record-Updates">Single Record Updates</a><a id="Single-Record-Updates-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Record-Updates" title="Permalink"></a></h3><p>Update specific records using filters:</p><pre><code class="language-julia hljs"># Update a single record
 query = M.Driver.objects;
 query.filter(&quot;forename&quot; =&gt; &quot;Lewis&quot;);
-query |&gt; do_count
+query.count()
 1
 df = query |&gt; DataFrame
 1×9 DataFrame
@@ -303,7 +303,7 @@ df = query |&gt; DataFrame
    1 │      1  Hamilton         1  hamilton   British      1985-01-07  HAM      http://en.wikipedia.org/wiki/Lew…  Lewis
 
 query.update(&quot;number&quot; =&gt; 44)</code></pre><p>With F, you can do all basic mathematical operations directly in the database.</p><pre><code class="language-julia hljs">query = M.Just_a_test_deletion.objects;
-query |&gt; do_exists &amp;&amp; delete(query; allow_delete_all = true)
+query.exists() &amp;&amp; query.delete(allow_delete_all = true)
 query.create(&quot;name&quot; =&gt; &quot;fexpr&quot;, &quot;test_result&quot; =&gt; 1)
 query.create(&quot;name&quot; =&gt; &quot;fexpr&quot;, &quot;test_result&quot; =&gt; 2)
 query.create(&quot;name&quot; =&gt; &quot;fexpr&quot;, &quot;test_result&quot; =&gt; 3)
@@ -354,4 +354,4 @@ sql = query.update(&quot;grid&quot; =&gt; F(&quot;driverid__number&quot;), show_
 # Returns: &quot;UPDATE \&quot;result\&quot; AS \&quot;Tb\&quot; SET \&quot;grid\&quot; = \&quot;Tb_1\&quot;.\&quot;number\&quot; FROM \&quot;driver\&quot; AS \&quot;Tb_1\&quot; WHERE \&quot;Tb\&quot;.\&quot;driverid\&quot; = \&quot;Tb_1\&quot;.\&quot;driverid\&quot; AND \&quot;Tb\&quot;.\&quot;resultid\&quot; = $1&quot;
 
 sql = query.update(&quot;positiontext&quot; =&gt; F(&quot;raceid__circuitid__country&quot;), show_query=:sql)
-# Returns: &quot;UPDATE \&quot;result\&quot; AS \&quot;Tb\&quot; SET \&quot;positiontext\&quot; = \&quot;Tb_2\&quot;.\&quot;country\&quot; FROM \&quot;race\&quot; AS \&quot;Tb_1\&quot;, \&quot;circuit\&quot; AS \&quot;Tb_2\&quot; WHERE \&quot;Tb\&quot;.\&quot;raceid\&quot; = \&quot;Tb_1\&quot;.\&quot;raceid\&quot; AND \&quot;Tb_1\&quot;.\&quot;circuitid\&quot; = \&quot;Tb_2\&quot;.\&quot;circuitid\&quot; AND \&quot;Tb\&quot;.\&quot;resultid\&quot; = $1&quot;</code></pre><hr/><p>This comprehensive guide covers all data writing operations in PormG. For more details on querying data, see the <a href="../read/">Reading overview</a>. For field definitions and validation, refer to <a href="../fields/">fields.md</a>.</p></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 26 March 2026 14:13">Thursday 26 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+# Returns: &quot;UPDATE \&quot;result\&quot; AS \&quot;Tb\&quot; SET \&quot;positiontext\&quot; = \&quot;Tb_2\&quot;.\&quot;country\&quot; FROM \&quot;race\&quot; AS \&quot;Tb_1\&quot;, \&quot;circuit\&quot; AS \&quot;Tb_2\&quot; WHERE \&quot;Tb\&quot;.\&quot;raceid\&quot; = \&quot;Tb_1\&quot;.\&quot;raceid\&quot; AND \&quot;Tb_1\&quot;.\&quot;circuitid\&quot; = \&quot;Tb_2\&quot;.\&quot;circuitid\&quot; AND \&quot;Tb\&quot;.\&quot;resultid\&quot; = $1&quot;</code></pre><hr/><p>This comprehensive guide covers all data writing operations in PormG. For more details on querying data, see the <a href="../read/">Reading overview</a>. For field definitions and validation, refer to <a href="../fields/">fields.md</a>.</p></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 26 March 2026 14:27">Thursday 26 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

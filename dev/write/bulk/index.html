@@ -74,7 +74,7 @@ import PormG.models as M
 
 # Load initial reference data
 circuits_df = CSV.File(&quot;f1/circuits.csv&quot;) |&gt; DataFrame
-M.Circuit.objects |&gt; do_exists &amp;&amp; delete(M.Circuit.objects, allow_delete_all=true)
+M.Circuit.objects.exists() &amp;&amp; M.Circuit.objects.delete(allow_delete_all=true)
 bulk_copy(M.Circuit.objects, circuits_df)
 
 # Load drivers
@@ -82,7 +82,7 @@ drivers_df = CSV.File(&quot;f1/drivers.csv&quot;) |&gt; DataFrame
 for col in [:number]
     drivers_df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, drivers_df[!, col])
 end
-M.Driver.objects |&gt; do_exists &amp;&amp; delete(M.Driver.objects, allow_delete_all=true)
+M.Driver.objects.exists() &amp;&amp; M.Driver.objects.delete(allow_delete_all=true)
 bulk_copy(M.Driver.objects, drivers_df)
 
 # Load races with pre-processing
@@ -91,7 +91,7 @@ rename!(races_df, lowercase.(names(races_df)))
 for col in [:fp1_date, :fp1_time, :fp2_date, :fp2_time, :fp3_date, :fp3_time, :quali_date, :quali_time, :sprint_date, :sprint_time]
     races_df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, races_df[!, col])
 end
-M.Race.objects |&gt; do_exists &amp;&amp; delete(M.Race.objects, allow_delete_all=true)
+M.Race.objects.exists() &amp;&amp; M.Race.objects.delete(allow_delete_all=true)
 bulk_copy(M.Race.objects, races_df)
 
 # Load results (the largest table)
@@ -100,15 +100,15 @@ rename!(results_df, lowercase.(names(results_df)))
 for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime, :fastestlapspeed, :number]
     results_df[!, col] = map(x -&gt; ismissing(x) || x == &quot;\\N&quot; ? missing : x, results_df[!, col])
 end
-M.Result.objects |&gt; do_exists &amp;&amp; delete(M.Result.objects, allow_delete_all=true)
+M.Result.objects.exists() &amp;&amp; M.Result.objects.delete(allow_delete_all=true)
 bulk_copy(M.Result.objects, results_df, chunk_size=10000)
 
 # Verify all data loaded
 @info &quot;Data loaded&quot; \
-    circuits=M.Circuit.objects |&gt; do_count \
-    drivers=M.Driver.objects |&gt; do_count \
-    races=M.Race.objects |&gt; do_count \
-    results=M.Result.objects |&gt; do_count</code></pre><hr/><h2 id="Bulk-Update"><a class="docs-heading-anchor" href="#Bulk-Update">Bulk Update</a><a id="Bulk-Update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update" title="Permalink"></a></h2><p><code>bulk_update()</code> allows you to update multiple records from a <code>DataFrame</code>. It typically uses a temporary table or a <code>values</code> join to update the database in a single transaction.</p><h3 id="Basic-Usage-2"><a class="docs-heading-anchor" href="#Basic-Usage-2">Basic Usage</a><a class="docs-heading-anchor-permalink" href="#Basic-Usage-2" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get existing data
+    circuits=M.Circuit.objects.count() \
+    drivers=M.Driver.objects.count() \
+    races=M.Race.objects.count() \
+    results=M.Result.objects.count()</code></pre><hr/><h2 id="Bulk-Update"><a class="docs-heading-anchor" href="#Bulk-Update">Bulk Update</a><a id="Bulk-Update-1"></a><a class="docs-heading-anchor-permalink" href="#Bulk-Update" title="Permalink"></a></h2><p><code>bulk_update()</code> allows you to update multiple records from a <code>DataFrame</code>. It typically uses a temporary table or a <code>values</code> join to update the database in a single transaction.</p><h3 id="Basic-Usage-2"><a class="docs-heading-anchor" href="#Basic-Usage-2">Basic Usage</a><a class="docs-heading-anchor-permalink" href="#Basic-Usage-2" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get existing data
 query = M.Result.objects
 df = query |&gt; DataFrame
 
@@ -174,4 +174,4 @@ for chunk_df in Iterators.partition(eachrow(df), 10000)
     chunk = DataFrame(chunk_df)
     # Modify chunk
     bulk_update(query, chunk, columns=[&quot;points&quot;], filters=[&quot;resultid&quot;])
-end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../delete/">« Deleting Records</a><a class="docs-footer-nextpage" href="../transaction/">Transactions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 26 March 2026 14:13">Thursday 26 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../delete/">« Deleting Records</a><a class="docs-footer-nextpage" href="../transaction/">Transactions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 26 March 2026 14:27">Thursday 26 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

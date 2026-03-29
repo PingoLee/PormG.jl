@@ -132,6 +132,19 @@ Use integration tests when the question is:
 
 Integration regressions should still use the public fluent API unless the bug only reproduces through a lower-level path.
 
+## Test Writing Standard
+
+- **Use standardized block headers for all `@testset` blocks**:
+  ```julia
+  # ─────────────────────────────────────────────────────────────────────────────
+  # [Feature/Area]: [Specific scenario being tested]
+  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
+  # and why the behavior matters to users or future maintainers]
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "..." begin
+  ```
+- Heavily comment test logic within the block
+
 ## Workflow
 
 1. Reproduce the failure with the smallest relevant query

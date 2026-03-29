@@ -1388,3 +1388,162 @@ end
 end
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION: related_objects Coverage Tests
+# Tests exercising the `related_objects` dictionary on Model_Type, which powers
+# reverse-join resolution in build_joins.jl.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "Related Objects - Second related_name (test_deletion2)" begin
+    # Just_a_test_deletion has two FKs to Result:
+    #   test_result  → related_name="test_deletion"
+    #   test_result2 → related_name="test_deletion2"
+    # This test verifies the second related_name resolves correctly.
+    q = M.Result.objects
+    q.values("resultid", "test_deletion2__name")
+    q.filter("test_deletion2__name" => "some-value")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    # The reverse relation must produce a JOIN
+    @test contains(sql, "JOIN")
+    # The just_a_test_deletion table must appear in the JOIN clause
+    @test match(r"JOIN.*?just_a_test_deletion.*?ON"s, sql) !== nothing
+    # Filter value lands in :where bucket
+    @test insp[:parameter_buckets][:where] == ["some-value"]
+end
+
+@testset "Related Objects - Chained reverse join (Result → test_deletion → nested)" begin
+    # Chain: Result ← Just_a_test_deletion (via test_deletion) ← Just_a_nested_roll_back (via auto-name)
+    # This exercises the while-loop branch at build_joins.jl:L238-L259.
+    q = M.Result.objects
+    q.values("resultid", "test_deletion__just_a_nested_roll_back__description")
+    q.filter("test_deletion__just_a_nested_roll_back__description" => "nested-value")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    # Must produce at least two JOINs (test_deletion + nested)
+    join_count = count("JOIN", sql)
+    @test join_count >= 2
+    # Both tables must appear
+    @test match(r"JOIN.*?just_a_test_deletion.*?ON"s, sql) !== nothing
+    @test match(r"JOIN.*?just_a_nested_roll_back.*?ON"s, sql) !== nothing
+    # Parameter ends up in :where
+    @test insp[:parameter_buckets][:where] == ["nested-value"]
+    # Placeholder count matches parameter count
+    @test count(==('?'), sql) == length(insp[:parameters])
+end
+
+@testset "Related Objects - on() with second related_name (test_deletion2)" begin
+    # on() against the second reverse relation must route parameters to :join bucket.
+    q = M.Result.objects
+    q.on("test_deletion2", "name" => "rev2-value")
+    q.filter("resultid__@in" => [1, 2])
+    q.values("resultid", "test_deletion2__name")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test insp[:parameter_buckets][:join] == ["rev2-value"]
+    @test insp[:parameter_buckets][:where] == [1, 2]
+    @test contains(sql, "LEFT JOIN")
+    @test match(r"JOIN.*?just_a_test_deletion.*?ON.*?name.*?WHERE"s, sql) !== nothing
+end
+
+@testset "Related Objects - on() with chained reverse path" begin
+    # on() through a chained reverse path: Result → test_deletion → nested
+    q = M.Result.objects
+    q.on("test_deletion", "just_a_nested_roll_back__description" => "chain-on-value")
+    q.filter("resultid" => 1)
+    q.values("resultid", "test_deletion__name")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test "chain-on-value" in insp[:parameter_buckets][:join]
+    @test 1 in insp[:parameter_buckets][:where]
+    @test contains(sql, "LEFT JOIN")
+end
+
+@testset "Related Objects - Error message lists related_objects keys" begin
+    # When a column is not found, the error message should list available related_objects.
+    # Result has related_objects: test_deletion, test_deletion2
+    q = M.Result.objects
+    err = nothing
+    try
+        q.values("nonexistent_reverse__name")
+        q.filter("nonexistent_reverse__name" => "x")
+        q |> inspect_query
+    catch e
+        err = e
+    end
+
+    @test err !== nothing
+    err_msg = string(err)
+    # The error should mention the available related_objects
+    @test contains(err_msg, "test_deletion") || contains(err_msg, "related")
+end
+
+@testset "Related Objects - set_models idempotency" begin
+    # Calling set_models twice should not duplicate related_objects entries.
+    # Save current state.
+    original_ro = deepcopy(M.Result.related_objects)
+
+    # Re-register models (simulates module reload)
+    PormG.Models.set_models(M, "mock_sl_path")
+
+    # related_objects should be identical (not doubled)
+    @test M.Result.related_objects == original_ro
+    @test length(M.Result.related_objects) == length(original_ro)
+
+    # Verify the expected keys still exist
+    @test haskey(M.Result.related_objects, "test_deletion")
+    @test haskey(M.Result.related_objects, "test_deletion2")
+end
+
+@testset "Related Objects - Auto-generated related_name key format" begin
+    # Just_a_nested_roll_back has a single FK to Just_a_test_deletion with no
+    # explicit related_name. The auto-generated key should be the lowercased
+    # model name of Just_a_nested_roll_back.
+    @test haskey(M.Just_a_test_deletion.related_objects, "just_a_nested_roll_back")
+
+    # Verify the tuple structure: (field_name, pk_field, related_model_name, pk_model)
+    entry = M.Just_a_test_deletion.related_objects["just_a_nested_roll_back"]
+    @test entry isa Tuple{Symbol, Symbol, Any, Symbol}
+    @test entry[1] == :test  # FK field name in Just_a_nested_roll_back
+    @test entry[2] == :id    # pk_field referenced in the FK definition
+end
+
+@testset "Related Objects - Duplicate related_name rejection" begin
+    # Creating two ForeignKeys to the same target model with the same related_name
+    # should raise an ArgumentError during set_models.
+    DupParent = PormG.Models.Model_Type(
+        name = "dup_parent",
+        fields = Dict(
+            "id" => PormG.Models.IDField()
+        ),
+        field_names = ["id"]
+    )
+
+    DupChild = PormG.Models.Model_Type(
+        name = "dup_child",
+        fields = Dict(
+            "id" => PormG.Models.IDField(),
+            "fk1" => PormG.Models.ForeignKey(DupParent, pk_field="id", on_delete="CASCADE", null=true, related_name="same_name"),
+            "fk2" => PormG.Models.ForeignKey(DupParent, pk_field="id", on_delete="CASCADE", null=true, related_name="same_name")
+        ),
+        field_names = ["id", "fk1", "fk2"]
+    )
+
+    # Create a temporary module with these models
+    dup_mod = Module(:dup_test_module)
+    Core.eval(dup_mod, :(const DupParent = $DupParent))
+    Core.eval(dup_mod, :(const DupChild = $DupChild))
+
+    # set_models should reject the duplicate related_name
+    @test_throws ArgumentError PormG.Models.set_models(dup_mod, "mock_sl_path")
+end
+
+

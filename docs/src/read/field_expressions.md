@@ -1,243 +1,310 @@
 # Field Expressions (F Objects)
 
-This page documents advanced query tools for database-side expressions and arithmetic.
+`F()` expressions enable database-side field references and arithmetic. They let you compare fields to other fields, perform calculations in SQL, and create computed columns — all without pulling data into Julia.
 
-- `F()`: Database-side field references and arithmetic.
+> [!NOTE]
+> **For Django users:** PormG's `F()` is inspired by Django but leverages Julia's operator overloading (e.g., `F("a") + F("b")`). It also allows seamless mixing with aggregate functions like `Sum()` and `Count()`, and the engine automatically detects aggregates to generate `HAVING` clauses.
 
-!!! note "Disclaimer for Django Users"
-    While PormG's `F()` is inspired by Django, there are key differences:
-    - **Native Operators**: PormG leverages Julia's operator overloading (e.g., `F("a") + F("b")`), whereas Django often requires specific methods or internal expression objects.
-    - **Aggregate Integration**: PormG allows seamless mixing of `F()` with aggregate functions like `Sum()` or `Count()` directly in arithmetic expressions (e.g., `Sum("points") / Count("id")`).
-    - **Logic Placement**: PormG's engine automatically detects when an expression involves aggregates and moves it to the `HAVING` clause, simplifying query construction.
+---
 
-## Why Field Expressions?
+## When to Use F Expressions
 
-Standard queries compare fields to constant values (e.g., `points == 10`). `F` (Field) expressions allow you to:
-1. **Compare fields to other fields** in the same row or related rows.
-2. **Perform arithmetic in the database** (e.g., incrementing values, calculating ratios).
-3. **Reference related fields** across joins without manual SQL.
-
-Use `F()` when the right-hand side is another field or a derived database expression. For plain scalar comparisons, prefer the normal filter syntax such as `"points__@gt" => 20`.
-
-### F() vs Constant Filters
-
-| Task | Preferred Form | F Expression |
+| Task | Preferred Style | F Expression |
 | :--- | :--- | :--- |
-| **Scalar comparison** | `"points__@gt" => 10` | N/A |
-| **Field-to-field comparison** | N/A | `F("points") == F("grid")` |
-| **Arithmetic** | N/A (Julia-side only) | `F("points") + 5` |
+| Compare field to a **constant** | `"points__@gt" => 10` | Avoid — use the filter suffix API |
+| Compare **field to field** | — | `F("grid") == F("positionOrder")` |
+| **Arithmetic** in SELECT | — | `F("points") * 0.1` |
+| **Aggregate ratios** | — | `Sum("points") / Count("resultId")` |
+| **Atomic updates** | — | `F("points") + 1` |
 
-!!! tip "Prefer suffix filters for scalar values"
-    `F("points") > 10` currently works, but it is not the idiomatic public style in PormG. Reserve `F()` comparisons for column-to-column or column-to-expression predicates, and use `"field__@operator" => value` for scalar filters.
+> [!TIP]
+> Reserve `F()` for column-to-column or column-to-expression operations. For scalar comparisons like `points > 10`, prefer the suffix syntax `"points__@gt" => 10` — it's clearer and idiomatic.
 
-## Core Syntax and Arithmetic
+---
+
+## Core Syntax
 
 ```julia
-using PormG.QueryBuilder: F, Count, Sum
+using PormG: F, Count, Sum
 
 # Field reference
 F("grid")
 
-# Arithmetic in the database
+# Arithmetic
 F("points") + 5                   # Addition
-F("points") * F("laps")           # Multiplication
-F("points") / 2.0                 # Division
-Sum("points") / Count("resultid") # Aggregate ratios
+F("points") - F("grid")          # Subtraction
+F("points") * F("laps")          # Multiplication
+F("points") / 2.0                # Division
+Sum("points") / Count("resultId") # Aggregate ratios
 ```
 
-Supported arithmetic operators: `+`, `-`, `*`, `/`.
+**Supported arithmetic operators:** `+`, `-`, `*`, `/`
+
+---
 
 ## Comparison Operators
 
-Left-side `F()` expressions support standard Julia comparison operators that are translated to SQL:
+`F()` expressions support standard Julia comparison operators, translated directly to SQL:
 
-| Operator | SQL Equivalent |
-| :--- | :--- |
-| `==` | `=` |
-| `!=` | `<>` |
-| `>` | `>` |
-| `<` | `<` |
-| `>=` | `>=` |
-| `<=` | `<=` |
+| Julia | SQL | Use Case |
+| :--- | :--- | :--- |
+| `==` | `=` | Field-to-field equality |
+| `!=` | `<>` | Field-to-field inequality |
+| `>` | `>` | Greater than |
+| `<` | `<` | Less than |
+| `>=` | `>=` | Greater than or equal |
+| `<=` | `<=` | Less than or equal |
 
-These operators are most useful when the comparison cannot be written cleanly with the standard suffix filter API.
+These are most useful when the comparison involves **two columns** or a **computed expression** — cases where the suffix filter API cannot help.
 
-## Using F Expressions in Filters
+---
 
-### 1. Field-to-Field Comparison
-Find records where the starting grid position was exactly the finishing position.
+## F Expressions in Filters
 
-```julia
-query = M.Result.objects
-query.filter(F("grid") == F("positionorder"))
-```
+### Field-to-Field Comparison
 
-### 2. Relationship-Aware Comparison
-Find results where the driver's birth month matches the race month.
+Find results where the starting grid position matches the finishing position:
 
 ```julia
 query = M.Result.objects
-query.filter(
-    F("driverid__dob__@month") == F("raceid__date__@month")
-)
+query.filter(F("grid") == F("positionOrder"))
+df = query |> DataFrame
 ```
 
-### 2b. Mixed F and Standard Filters
-Mix `F()` comparisons with ordinary filters when only part of the predicate needs an expression.
-
-```julia
-query = M.Result.objects
-query.filter(
-    F("driverid__dob__@day") == F("raceid__date__@day"),
-    F("driverid__dob__@month") == F("raceid__date__@month"),
-    "min_grid__@gt" => 0,
-)
+Generated SQL:
+```sql
+WHERE "Tb"."grid" = "Tb"."positionorder"
 ```
 
-### 3. Date Arithmetic
-Find results within 30 days of the driver's birthday.
+### Relationship-Aware Comparison
+
+Compare fields across joined tables. Find results where the driver's birth month matches the race month:
 
 ```julia
 query = M.Result.objects
 query.filter(
-    F("raceid__date") > F("driverid__dob"),
-    F("raceid__date") <= F("driverid__dob") + 30
+    F("driverId__dob__@month") == F("raceId__date__@month")
 )
+df = query |> DataFrame
 ```
 
-### 4. Prefer Standard Filters for Scalars
+PormG resolves the `__` paths, creates the necessary joins, and applies the `EXTRACT(MONTH FROM ...)` transform on both sides.
+
+### Mixing F and Standard Filters
+
+Combine `F()` comparisons with ordinary filter pairs when only part of the predicate needs an expression:
 
 ```julia
 query = M.Result.objects
 query.filter(
-    "points__@gt" => 20,
-    "grid" => 1,
+    F("driverId__dob__@day") == F("raceId__date__@day"),
+    F("driverId__dob__@month") == F("raceId__date__@month"),
+    "positionOrder__@lte" => 10,   # Standard scalar filter
+)
+df = query |> DataFrame
+```
+
+### Date Arithmetic
+
+Find results within 30 days of the driver's birthday:
+
+```julia
+query = M.Result.objects
+query.filter(
+    F("raceId__date") > F("driverId__dob"),
+    F("raceId__date") <= F("driverId__dob") + 30
 )
 ```
 
-This is clearer than writing `F("points") > 20` or `F("grid") == 1`, because the predicate is still just field-versus-literal filtering.
+### When NOT to Use F
+
+For plain scalar comparisons, always prefer the suffix filter API:
+
+```julia
+# ✅ Preferred
+query.filter("points__@gt" => 20, "grid" => 1)
+
+# ❌ Works but not idiomatic
+query.filter(F("points") > 20, F("grid") == 1)
+```
+
+---
 
 ## F Expressions in `values()`
 
-Use `F()` inside `values()` to create derived columns directly in the SELECT clause.
+Use `F()` inside `values()` to create **computed columns** directly in the SQL `SELECT`:
 
 ```julia
 query = M.Result.objects
-query.filter("statusid__status" => "Finished")
+query.filter("statusId__status" => "Finished")
 query.values(
-    "driverid__surname",
+    "driverId__surname",
     "points",
-    # Dynamic calculation
     "bonus" => F("points") * 0.1,
     "total" => F("points") + (F("points") * 0.1)
 )
 df = query |> DataFrame
 ```
 
+This generates:
+```sql
+SELECT
+    "Tb_1"."surname" as driverid__surname,
+    "Tb"."points" as points,
+    "Tb"."points" * 0.1 as bonus,
+    "Tb"."points" + ("Tb"."points" * 0.1) as total
+FROM ...
+```
+
+---
+
 ## Aliasing and Calculated Columns
 
-In PormG, you don't need a separate method like Django's `.annotate()`. You create new columns or rename existing ones directly within `.values()` or `.list()` using pairs.
+In PormG, you don't need a separate `.annotate()` method (like Django). Aliases and computed columns are both created in `values()` using the `"alias" => expression` pair syntax.
 
-### Simple Column Aliasing
-You can rename any field by providing a `"new_name" => "field_name"` pair.
+### Simple Column Alias (Rename)
 
 ```julia
 query = M.Driver.objects
 query.values(
-    "full_name" => "surname",  # Rename database column 'surname' to 'full_name' in results
+    "full_name" => "surname",   # Rename "surname" to "full_name"
     "code"
 )
 df = query |> DataFrame
-# Resulting DataFrame has columns: :full_name, :code
+# DataFrame columns: :full_name, :code
 ```
 
-### Calculated Columns (Expressions)
-When using `F()` for a calculation, you provide an alias to name the resulting column.
+### Calculated Column (Expression)
 
 ```julia
 query = M.Result.objects
 query.values(
-    "driverid__surname",
-    # Creates a 'bonus_pts' column calculated in the database
-    "bonus_pts" => F("points") * 0.1
+    "driverId__surname",
+    "bonus_pts" => F("points") * 0.1   # Computed in the database
 )
 df = query |> DataFrame
 ```
 
 ### Reference vs. Calculation
-- **String reference**: `"alias" => "field"` (Simple rename).
-- **F-Expression**: `"alias" => F("field") * 1.5` (Calculated value).
 
-!!! tip "Performance Note"
-    PormG's aliasing happens at the SQL level (`SELECT "surname" AS "full_name"`). This is significantly more efficient than renaming columns in a Julia DataFrame after the query finishes.
+| Syntax | What It Does | SQL |
+| :--- | :--- | :--- |
+| `"alias" => "field"` | Rename column | `SELECT "surname" AS "full_name"` |
+| `"alias" => F("field") * 1.5` | Compute value | `SELECT "points" * 1.5 AS "alias"` |
+| `"alias" => Sum("field")` | Aggregate | `SELECT SUM("points") AS "alias"` |
 
-## Aggregate Arithmetic (HAVING)
+> [!TIP]
+> Aliasing happens at the SQL level. This is significantly more efficient than renaming columns in a Julia DataFrame after the query finishes.
 
-Aggregates can participate in arithmetic. If used in a filter, PormG automatically moves the condition to the `HAVING` clause.
+---
 
-### Calculation in Projections
+## Aggregate Arithmetic
+
+Aggregate functions (`Sum`, `Count`, `Avg`, `Max`, `Min`) can participate in arithmetic. PormG automatically handles the `GROUP BY` and `HAVING` implications.
+
+### In Projections
+
 ```julia
 query = M.Result.objects
 query.values(
-    "driverid__surname",
-    "points_per_result" => Sum("points") / Count("resultid")
+    "driverId__surname",
+    "points_per_result" => Sum("points") / Count("resultId")
 )
+df = query |> DataFrame
 ```
 
-### Filtering on Aggregate Calculation (HAVING)
+### In Filters (Auto-HAVING)
+
+When a filter references an aggregate alias, PormG moves it to the `HAVING` clause:
+
 ```julia
 query = M.Result.objects
 query.values(
-    "constructorid__name",
-    "avg_perf" => Sum("points") / Count("resultid")
+    "constructorId__name",
+    "avg_perf" => Sum("points") / Count("resultId")
 )
-query.filter("avg_perf__@gt" => 5) # Filter on the calculated aggregate result
+query.filter("avg_perf__@gt" => 5)
+df = query |> DataFrame
 ```
 
-## Field Expressions in Updates (Write Side)
+PormG generates:
+```sql
+SELECT "constructorid__name", SUM("points") / COUNT("resultid") as avg_perf
+FROM ...
+GROUP BY 1
+HAVING SUM("points") / COUNT("resultid") > $1
+```
 
-F expressions are essential for performing **atomic updates** directly in the database. This prevents race conditions (read-modify-write) and is usually more performant.
+---
 
-### 1. Simple Arithmetic Updates
-Increment, decrement, or scale values based on their current state.
+## F Expressions in Updates (Write Side)
+
+F expressions are essential for **atomic updates** — modifying a column based on its current value without a read-modify-write cycle. This prevents race conditions and is usually more performant.
+
+### Simple Arithmetic
 
 ```julia
-# Increment points by 1 for a specific result
-M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 1)
+# Increment points by 1
+M.Result.objects.filter("resultId" => 1).update("points" => F("points") + 1)
 
-# Apply a 10% penalty to points
+# Apply a 10% penalty
 M.Result.objects.filter("points__@gt" => 10).update("points" => F("points") * 0.9)
 ```
 
-### 2. Copying Columns
-You can set a column's value to match another column in the same row.
+### Copy Column Values
+
+Set one column equal to another column in the same row:
 
 ```julia
-# Sync 'results' with another field
-M.Just_a_test_deletion.objects.filter("id" => 5).update("test_result2" => F("test_result"))
+M.Just_a_test_deletion.objects
+    .filter("id" => 5)
+    .update("test_result2" => F("test_result"))
 ```
 
-### 3. Complex Expressions in Updates
-PormG supports combining multiple `F()` expressions and constants in a single update.
+### Complex Expressions
+
+Combine multiple `F()` expressions in a single update:
 
 ```julia
-# Set result to (current_val * 2) + offset
 M.Just_a_test_deletion.objects.update(
     "test_result2" => (F("test_result2") * 2) + F("test_result")
 )
 ```
 
-### 4. Updates with Join Filters
-You can use join-based filters to target which rows to update, even if the update itself targets the main table.
+### Updates with Join-Based Filters
+
+Filter by joined fields while updating the main table:
 
 ```julia
-# Increase points for all British drivers in a specific result
+# Add 10 bonus points for all British drivers in result 1
 M.Result.objects.filter(
-    "driverid__nationality" => "British", 
-    "resultid" => 1
+    "driverId__nationality" => "British",
+    "resultId" => 1
 ).update("points" => F("points") + 10)
 ```
 
-!!! warning "Limitations on Joins"
-    While you can **filter** by joined fields (FK-traversal) during an update, you generally cannot update a column using a value from a joined table directly (e.g., `update("col" => F("joined__col"))`) in all dialects. Stick to expressions involving columns of the table being updated for maximum compatibility.
+> [!WARNING]
+> You can **filter** by joined fields during an update, but you generally cannot **set** a column using a value from a joined table (e.g., `update("col" => F("joined__col"))`). Stick to expressions involving columns from the table being updated for maximum cross-database compatibility.
 
+---
+
+## Summary
+
+| Feature | Example | Where |
+| :--- | :--- | :--- |
+| Field comparison | `F("grid") == F("positionOrder")` | `filter()` |
+| Cross-join comparison | `F("driverId__dob__@month") == F("raceId__date__@month")` | `filter()` |
+| Arithmetic column | `"bonus" => F("points") * 0.1` | `values()` |
+| Aggregate ratio | `Sum("points") / Count("resultId")` | `values()` |
+| Aggregate filter | `"avg__@gt" => 5` on an aggregate alias | `filter()` → HAVING |
+| Column alias | `"name" => "surname"` | `values()` |
+| Atomic update | `F("points") + 1` | `update()` |
+| Column copy | `F("other_field")` | `update()` |
+
+---
+
+## Next Steps
+
+- **[Q Objects](q_objects.md)** — Complex AND/OR logic with `Q()` and `Qor()`.
+- **[Filters and Aggregates](filters_and_aggregates.md)** — Lookup operators and grouping.
+- **[Writing: Updating Records](../write/update.md)** — Full update documentation.

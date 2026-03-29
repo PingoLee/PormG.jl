@@ -1,27 +1,36 @@
-# PormG Documentation
+# PormG.jl Documentation
 
-## Core Features
+**PormG.jl** is a Django-inspired ORM for Julia, built with an async-first architecture for high-concurrency web frameworks. It brings the expressive power of Django's query builder to Julia while leveraging Julia's performance and type system.
 
--   **Expressive Query Builder**: Django-inspired syntax using `filter`, `exclude`, `values`, `order_by`, and `annotate`.
--   **Model Management**: Define and manage database schemas with Julia structs and powerful field types.
--   **Multi-Database & Multi-Tenancy**: Built-in support for switching databases at runtime with lazy connection resolution via `.db("tenant_id")`.
--   **Async-First Execution**: Non-blocking database operations designed for high-concurrency web frameworks like Genie.jl.
--   **Cross-Database Support**: High-performance PostgreSQL integration (LibPQ) and lightweight SQLite support with automatic connection pooling.
--   **Migrations**: Automatic schema generation and evolution tool.
--   **Advisory Locks**: Safe coordination of concurrent processes using database-level distributed locks.
+---
+
+## Why PormG?
+
+| Feature | Description |
+| :--- | :--- |
+| **Django-Style Query Builder** | Familiar syntax using `filter`, `values`, `order_by`, and chainable methods. Join traversal with `__` notation. |
+| **Async-First Execution** | Non-blocking I/O via `LibPQ.async_execute`. Synchronous helpers are thin wrappers — the event loop is never blocked. |
+| **Cross-Database Support** | PostgreSQL (LibPQ.jl) and SQLite (SQLite.jl) with automatic connection pooling and dialect adaptation. |
+| **Multi-Database & Multi-Tenancy** | Switch databases at runtime with `.db("tenant_id")`. Lazy connection resolution via resolver functions. |
+| **F-Expressions & Aggregations** | Column arithmetic, field-to-field comparisons, `Count`, `Sum`, `Avg`, `Max`, `Min` with automatic `GROUP BY` / `HAVING`. |
+| **Migrations** | State-based schema reconciliation with `makemigrations` / `migrate`, destructive-operation guards, and a history table. |
+| **Transactions** | `run_in_transaction` with async context propagation, savepoint support, and automatic rollback on error. |
+| **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes. |
+| **Password Handling** | Django-compatible PBKDF2-SHA256 hashing, BCrypt, Argon2, Spring Security interop, and password validation. |
+| **Terminal Dashboard** | Optional Tachikoma-based TUI for reviewing migrations and inspecting queries. |
+
+---
 
 ## Installation
 
-PormG is currently in early development and is not yet registered in the Julia General Registry. To install the development version, you can use the Julia package manager with the GitHub repository URL.
-
-Open the Julia REPL and run the following command:
+PormG is currently in early development and is not yet registered in the Julia General Registry. Install the development version using the Julia package manager:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/PingoLee/PormG.jl")
 ```
 
-Alternatively, you can clone the repository and develop locally:
+Or develop locally:
 
 ```julia
 using Pkg
@@ -30,106 +39,236 @@ Pkg.develop(url="https://github.com/PingoLee/PormG.jl")
 
 > **Note:** Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
 
-## Usage
+---
 
-Once installed, you can use PormG in your Julia projects by importing the module:
+## Quick Start
+
+### 1. Initialize Your Project
 
 ```julia
 using PormG
+PormG.setup() # Interactive setup for database and models
 ```
 
-### Quick Start
+This creates a `db/` folder with a `connection.yml` template and a `models.jl` skeleton.
 
-1. **Initialize your project:**
-   ```julia
-   using PormG
-   PormG.setup() # Interactive setup for database and models
-   ```
+### 2. Configure the Database Connection
 
-2. **Define your models:**
-   Open `db/connection.yml` and configure your PostgreSQL connection:
-   ```yaml
-   env: dev
+Open `db/connection.yml` and configure your database:
 
-   dev:
-     adapter: PostgreSQL
-     database: your_database_name
-     host: 'localhost'  # or your database host
-     username: your_username
-     password: your_password
-     port: 5432  # default PostgreSQL port
-     config:
-       change_db: true # whether to create the database if it doesn't exist or modify it
-       change_data: true # whether to modify existing data
-       time_zone: 'America/Sao_Paulo'  # your timezone
-   ```
+```yaml
+env: dev
 
-3. **Create your models file:**
-   Create `db/models.jl` with your model definitions:
-   ```julia
-   module models
+dev:
+  adapter: PostgreSQL
+  database: your_database_name
+  host: 'localhost'
+  username: your_username
+  password: your_password
+  port: 5432
+  config:
+    change_db: true      # create the database if it doesn't exist
+    change_data: true    # allow data modifications
+    time_zone: 'America/Sao_Paulo'
+```
 
-   import PormG.Models
+For SQLite, use:
 
-   User = Models.Model(
-     id = Models.IDField(),
-     name = Models.CharField(max_length=100),
-     email = Models.EmailField(),
-     age = Models.IntegerField()
-   )
+```yaml
+env: dev
 
-   # Add more models as needed...
+dev:
+  adapter: SQLite
+  database: 'my_app.db'
+```
 
-   Models.set_models(@__MODULE__, @__DIR__)  # Required at end of file
-   end
-   ```
+### 3. Define Your Models
 
-4. **Load configuration and connect:**
-   ```julia
-   PormG.Configuration.load("db")  # Load your connection settings
-   ```
+Create `db/models.jl` with your model definitions:
 
-5. **Create and apply migrations:**
-   ```julia
-   PormG.Migrations.makemigrations("db")  # Analyze models and create migration
-   PormG.Migrations.migrate("db")         # Apply migration to database
-   ```
+```julia
+module models
+import PormG.Models
 
-6. **Create some data:**
-   ```julia
-   # Include your models first
-   include("db/models.jl")
-   import .models as M
+Driver = Models.Model("drivers",
+    driverId    = Models.IDField(),
+    forename    = Models.CharField(max_length=50),
+    surname     = Models.CharField(max_length=50),
+    nationality = Models.CharField(max_length=50),
+    dob         = Models.DateField(null=true),
+)
 
-   # Create records using the create method
-   user_query = M.User.objects
-   user_query.create("name" => "Alice", "email" => "alice@example.com", "age" => 30)
-   user_query.create("name" => "Bob", "email" => "bob@example.com", "age" => 25)
-   user_query.create("name" => "Charlie", "email" => "charlie@example.com", "age" => 35)
-   ```
+Result = Models.Model("results",
+    resultId       = Models.IDField(),
+    raceId         = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
+    driverId       = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+    positionOrder  = Models.IntegerField(),
+    points         = Models.FloatField(),
+)
 
-7. **Query your data:**
-   ```julia
-   # Create and execute queries
-   query = M.User.objects
-   query.filter("name" => "Alice")
-   results = query |> list
-   ```
+Models.set_models(@__MODULE__, @__DIR__)  # Required at end of file
+end
+```
 
-8. **Query your data with chainable methods:**
-   ```julia
-   results = M.User.objects.filter("age__gt" => 28).order_by("-age") |> list
-   ```
+### 4. Load Configuration and Import Models
 
-For more detailed usage instructions and examples, please refer to the [API documentation](api.md).
+```julia
+using PormG, DataFrames
 
-## Database example
-In addition to the basic user model, this documentation includes a comprehensive example of how to define models for a real-world racing database, based on the Formula 1 World Championship dataset (https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020). This example demonstrates how to structure complex models, handle relationships, and apply PormG's ORM features to a production-scale schema. It serves as a practical reference for users who want to model more advanced databases beyond simple user tables.
+# Load configuration — must happen BEFORE importing models
+PormG.Configuration.load("db")
+
+# Import models with hot-reload support (Revise.jl)
+PormG.@import_models "db/models.jl" models
+import .models as M
+```
+
+### 5. Create and Apply Migrations
+
+```julia
+PormG.Migrations.makemigrations("db")   # Analyze models and generate migration
+PormG.Migrations.migrate("db")          # Apply migration to database
+```
+
+### 6. Create Records
+
+```julia
+# Single record creation
+M.Driver.objects.create(
+    "forename" => "Ayrton",
+    "surname"  => "Senna",
+    "nationality" => "Brazilian"
+)
+
+# Bulk insert for multiple records
+bulk_data = DataFrame([
+    Dict("forename" => "Alain",  "surname" => "Prost",    "nationality" => "French"),
+    Dict("forename" => "Nelson", "surname" => "Piquet",   "nationality" => "Brazilian"),
+])
+bulk_insert(M.Driver, bulk_data)
+```
+
+### 7. Query Your Data
+
+```julia
+# Simple filter and list
+drivers = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname").list()
+
+# Chainable methods with DataFrame output
+df = M.Result.objects.filter(
+        "driverId__nationality" => "Brazilian",
+        "positionOrder"         => 1
+    ).values(
+        "driverId__forename",
+        "driverId__surname",
+        "raceId__year",
+    ).order_by("-raceId__year") |> DataFrame
+
+# Aggregations
+df = M.Result.objects.filter(
+        "positionOrder" => 1
+    ).values(
+        "constructorId__name",
+        "wins" => Count("resultId")
+    ).order_by("-wins") |> DataFrame
+```
+
+### 8. Update and Delete
+
+```julia
+# Update matching records
+M.Driver.objects.filter("nationality" => "Brazilian").update("nationality" => "Brazil")
+
+# Atomic update with F-expression (no read-modify-write race)
+M.Result.objects.filter("resultId" => 1).update("points" => F("points") + 10)
+
+# Delete matching records
+M.Driver.objects.filter("surname" => "TestDriver").delete()
+```
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Your Application                  │
+│  M.Driver.objects.filter(...).values(...).list()     │
+├─────────────────────────────────────────────────────┤
+│                  Query Builder (Functor API)         │
+│  filter · values · order_by · limit · cjoin · on    │
+├─────────────────────────────────────────────────────┤
+│                 Dialect Layer                         │
+│          PostgreSQL ←→ SQL Generation ←→ SQLite      │
+├─────────────────────────────────────────────────────┤
+│              Connection Pool (Async-First)            │
+│    LibPQ.async_execute  ·  SQLite.execute            │
+├─────────────────────────────────────────────────────┤
+│               Configuration & Multi-Tenancy          │
+│  load · load_many · register_connection · resolver   │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## Documentation Guide
+
+This documentation is organized into the following sections:
+
+| Section | Description |
+| :--- | :--- |
+| [Configuration](configuration.md) | Database connections, environments, multi-tenancy, and health checks. |
+| [Models](models.md) | Defining models, `@import_models`, hot-reloading, and naming conventions. |
+| [Fields](fields.md) | Comprehensive field type reference: text, numeric, date, boolean, relationships. |
+| [Migrations](migrations.md) | `makemigrations`, `migrate`, `dry_run`, history table, destructive guards. |
+| **Writing** | |
+| &nbsp;&nbsp;[Overview](write/index.md) | Async-first write philosophy and performance comparison. |
+| &nbsp;&nbsp;[Creating Records](write/create.md) | Single-record `create()` patterns. |
+| &nbsp;&nbsp;[Updating Records](write/update.md) | `update()` with filters and F-expressions. |
+| &nbsp;&nbsp;[Deleting Records](write/delete.md) | Safe record deletion with cascading. |
+| &nbsp;&nbsp;[Bulk Operations](write/bulk.md) | `bulk_insert`, `bulk_copy`, and `bulk_update`. |
+| &nbsp;&nbsp;[Transactions](write/transaction.md) | `run_in_transaction`, async context propagation, savepoints. |
+| **Reading** | |
+| &nbsp;&nbsp;[Overview](read/index.md) | Query execution, output formats, and query styles. |
+| &nbsp;&nbsp;[Values and Joins](read/values_and_joins.md) | Column selection, `__` join traversal, aliases. |
+| &nbsp;&nbsp;[Filters and Aggregates](read/filters_and_aggregates.md) | Lookup operators, grouping, and `HAVING`. |
+| &nbsp;&nbsp;[Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
+| &nbsp;&nbsp;[Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries and `With(...)` CTEs. |
+| &nbsp;&nbsp;[Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
+| &nbsp;&nbsp;[Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
+| [Import from Django](import_django.md) | Migrating models and data from Django projects. |
+| [Custom Joins](custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
+| [Passwords](passwords.md) | Hashing, verification, upgrading, validation, and cross-framework compatibility. |
+| [Advisory Locks](advisory_lock.md) | Distributed locking with `with_advisory_lock`. |
+| [Contributing](contributing.md) | Development workflow, `@pormg_debug` breakpoints, and testing conventions. |
+| [API Reference](api.md) | Full auto-generated API reference and exported function catalog. |
+
+---
+
+## Database Example: Formula 1
+
+The examples throughout this documentation use the **Formula 1 World Championship** dataset ([Kaggle](https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020)). This provides a real-world schema with multiple related tables (`Driver`, `Race`, `Circuit`, `Constructor`, `Result`, `Status`), making it ideal for demonstrating joins, aggregations, and complex queries.
+
+```julia
+# Example: Find all Brazilian race winners with circuit information
+df = M.Result.objects.filter(
+        "driverId__nationality" => "Brazilian",
+        "positionOrder"         => 1,
+    ).values(
+        "driverId__forename",
+        "driverId__surname",
+        "raceId__name",
+        "raceId__circuitId__name",
+        "raceId__year",
+    ).order_by("-raceId__year") |> DataFrame
+```
+
+---
 
 ## Contributing
 
-Contributions to PormG are welcome! If you would like to contribute, please fork the repository and submit a pull request.
+Contributions to PormG are welcome! Please see the [Contributing & Debugging](contributing.md) page for the development workflow, testing conventions, and how to use `@pormg_debug` breakpoints.
 
 ## License
 
-PormG is licensed under the MIT License. See the LICENSE file for more details.
+PormG is licensed under the MIT License. See the [LICENSE](https://github.com/PingoLee/PormG.jl/blob/main/LICENSE) file for details.

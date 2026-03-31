@@ -29,7 +29,7 @@ macro pormg_debug(ex)
 end
 export @pormg_debug
 
-import DataFrames, OrderedCollections, Distributed, Dates, Logging, Millboard, YAML
+import DataFrames, OrderedCollections, Dates, Logging, Millboard, YAML
 
 using SQLite
 using LibPQ
@@ -72,9 +72,6 @@ end
 
 include("constants.jl")
 
-include("Passwords.jl")
-using .Passwords
-
 # upper functions
 function get_constraints_pk end
 function get_constraints_unique end
@@ -112,9 +109,6 @@ export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, 
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
-export make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS # Password utilities
-export validate_password, ValidationResult, PasswordValidator  # Password validation
-
 export setup
 
 # Fallback stub for the Tachikoma TUI extension.

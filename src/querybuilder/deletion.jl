@@ -73,7 +73,7 @@ function delete(objct::SQLObjectHandler;
   deleted_counter = Dict{String, Integer}()
   
   # Collect related models that need special handling
-  collector = DeletionCollector(model, settings)
+  collector = DeletionCollector(model, settings, show_query)
   
   # Add the primary objects to delete
   add_objects_to_collector!(collector, objct |> deepcopy, model)
@@ -246,7 +246,10 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
     end
     
     @pormg_debug false
-    _query |> do_exists || continue # No related objects, skip
+    # During inspection mode, do not execute do_exists against the database —
+    # the connection may be a mock or there may be no real pool. Assume related
+    # objects exist so the full dependency graph is still built for the inspection.
+    collector.show_query === :execute && (_query |> !do_exists) && continue
      
     # @info _query |> query
 

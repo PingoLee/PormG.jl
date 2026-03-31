@@ -75,7 +75,7 @@ end
 
 @testset "F Expression Updates" begin
   query = M.Just_a_test_deletion.objects
-    query |> do_exists && query.delete(allow_delete_all = true)
+    query.exists() && query.delete(allow_delete_all = true)
   query.create("name" => "fexpr", "test_result" => 1)
   query.create("name" => "fexpr", "test_result" => 2)
   query.create("name" => "fexpr", "test_result" => 3)

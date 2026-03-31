@@ -31,7 +31,7 @@ end
     text = query |> inspect_query
     df   = query |> DataFrame
     @test query.count() == 40
-    @test query |> do_exists
+    @test query.exists()
 end
 
 
@@ -42,6 +42,7 @@ end
 @testset "cjoin" begin
     # Shared fixture: 3 New_join_position rows pointing to Result ids 1-3.
     # Recreated at the start of this block so all inner testsets see a clean state.
+    # Keep integration output quiet here; warning behavior is covered in unit tests.
     M.New_join_position.objects.delete(allow_delete_all=true, show_query=:execute)
     M.New_join_position.objects.create("result" => 1, "description" => "teste 1")
     M.New_join_position.objects.create("result" => 2, "description" => "teste 2")
@@ -50,7 +51,7 @@ end
     @testset "simple join: all rows returned, deep path resolved" begin
         # A cjoin with no ON filter attaches every matching joined row.
         query = M.New_join_position.objects
-        query.cjoin("result" => "Result")
+        query.cjoin("result" => "Result", warn=false)
         query.values("result__statusid__status", "description", "result")
         df = query |> DataFrame
 
@@ -62,17 +63,17 @@ end
         # Predicates that belong to the calling model (New_join_position) are rejected
         # by cjoin. Allowing them would silently produce WHERE semantics, not ON semantics.
         q1 = M.New_join_position.objects
-        @test_throws ArgumentError q1.cjoin("result" => "Result", filters=["description" => "teste 1"])
+        @test_throws ArgumentError q1.cjoin("result" => "Result", filters=["description" => "teste 1"], warn=false)
 
         q2 = M.New_join_position.objects
-        @test_throws ArgumentError q2.cjoin("result" => "Result", filters=["result__description" => "teste 1"])
+        @test_throws ArgumentError q2.cjoin("result" => "Result", filters=["result__description" => "teste 1"], warn=false)
     end
 
     @testset "ON filter restricts joined rows (LEFT JOIN default)" begin
         # With resultid=1 in the ON clause only the row that joins to Result 1 gets
         # populated; the other two rows still appear with missing joined columns.
         query = M.New_join_position.objects
-        query.cjoin("result" => "Result", filters=["resultid" => 1])
+        query.cjoin("result" => "Result", filters=["resultid" => 1], warn=false)
         query.values("result__statusid__status", "description", "result")
         df = query |> DataFrame
 
@@ -86,7 +87,7 @@ end
         # The field may be spelled with the joined-model prefix (result__resultid)
         # and must behave identically to the short form (resultid).
         query = M.New_join_position.objects
-        query.cjoin("result" => "Result", filters=["result__resultid" => 1])
+        query.cjoin("result" => "Result", filters=["result__resultid" => 1], warn=false)
         query.values("result__statusid__status", "description", "result")
         df = query |> DataFrame
 
@@ -99,7 +100,7 @@ end
         # cjoin ON filter restricts which joined columns are populated;
         # .filter(...) on the main query then restricts the overall result set.
         query = M.New_join_position.objects
-        query.cjoin("result" => "Result", filters=["resultid" => 1])
+        query.cjoin("result" => "Result", filters=["resultid" => 1], warn=false)
         query.filter("description" => "teste 1")
         query.values("result__statusid__status", "description", "result")
         df = query |> DataFrame
@@ -113,7 +114,7 @@ end
         # INNER drops rows whose join partner fails the ON predicate entirely,
         # instead of keeping them with missing columns (LEFT behaviour).
         query = M.New_join_position.objects
-        query.cjoin("result" => "Result", filters=["resultid" => 1], join_type="INNER")
+        query.cjoin("result" => "Result", filters=["resultid" => 1], join_type="INNER", warn=false)
         query.values("result__statusid__status", "description", "result")
         df = query |> DataFrame
 
@@ -128,7 +129,7 @@ end
         # to prevent DataFrames from crashing on duplicate column names.
         # The wildcard "*" shorthand selects all native columns of the main model.
         query = M.New_join_position.objects
-        query.cjoin("result" => "Result", filters=["resultid" => 1, "statusid" => 1], join_type="INNER")
+        query.cjoin("result" => "Result", filters=["resultid" => 1, "statusid" => 1], join_type="INNER", warn=false)
 
         # Guard: a bare DataFrame() across a multi-table cjoin is rejected
         @test_throws ArgumentError query |> DataFrame
@@ -146,8 +147,8 @@ end
         # Two cjoins on the same query LEFT-join independently.
         # Parameter bucket order must be: [cjoin1 params, cjoin2 params, WHERE params].
         query = M.Result.objects
-        query.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"])
-        query.cjoin("raceid"   => "Race",   filters=["year" => 1991])
+        query.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
+        query.cjoin("raceid"   => "Race",   filters=["year" => 1991], warn=false)
         query.filter("positionorder" => 1)
 
         # Guard: missing explicit values() is rejected
@@ -172,7 +173,8 @@ end
         # while only drivers matching either nationality get their column populated.
         query = M.Result.objects
         query.cjoin("driverid" => "Driver",
-                    filters=[Qor("nationality" => "Brazilian", "nationality" => "German")])
+                    filters=[Qor("nationality" => "Brazilian", "nationality" => "German")],
+                    warn=false)
         query.filter("positionorder" => 1)
         query.values("*", "driverid__surname", "driverid__nationality")
         df = query |> DataFrame
@@ -541,7 +543,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────
     # count() / exists() with CTEs
     # ─────────────────────────────────────────────────────────────────────────
-    # Regression: do_count and do_exists must build the CTE WITH clause
+    # Regression: .count() and .exists() must build the CTE WITH clause
     # BEFORE the main query so that:
     #   (a) PostgreSQL $N numbering is sequential (CTE params first),
     #   (b) SQLite positional ? bucket ordering matches SQL clause order,
@@ -611,7 +613,7 @@ end
 
         query = M.Result.objects
         query.with("tc" => top_const, join_field="constructorid" => "constructorid")
-        query.cjoin("driverid" => "Driver", filters=["nationality" => "German"])
+        query.cjoin("driverid" => "Driver", filters=["nationality" => "German"], warn=false)
         query.values("resultid", "tc__name", "driverid__surname")
         query.limit(10)
         df = query |> DataFrame

@@ -38,7 +38,7 @@ makedocs(
         ],
         "Import from Django" => "import_django.md",
         "Custom Joins" => "custom_joins.md",
-        "Passwords" => "passwords.md",
+
         "Advisory Locks" => "advisory_lock.md",
         "Contributing" => "contributing.md",
         "API" => "api.md"

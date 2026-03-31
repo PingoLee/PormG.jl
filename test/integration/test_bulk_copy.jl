@@ -7,7 +7,7 @@ end
     # The goal is to pin down the new strict policy: bulk operations must reject type
     # mismatches before SQL execution rather than silently coercing values.
     base_query = M.Just_a_test_deletion.objects
-    base_query |> do_exists && base_query.delete(allow_delete_all = true)
+    base_query.exists() && base_query.delete(allow_delete_all = true)
 
     @testset "bulk_insert rejects Float64 for integer-backed fields" begin
         # The `test_result` field is a ForeignKey backed by BIGINT. A Float64 like 14.0 used
@@ -62,7 +62,7 @@ end
         # 1. Setting an optional field to missing should succeed.
         # 2. Passing a Float64 into an integer-backed field should fail without partial writes.
         query = M.Just_a_test_deletion.objects
-        query |> do_exists && query.delete(allow_delete_all = true)
+        query.exists() && query.delete(allow_delete_all = true)
         query.create("name" => "update-target", "test_result" => 1, "test_result2" => 2)
 
         current = M.Just_a_test_deletion.objects.filter("name" => "update-target") |> DataFrame
@@ -155,7 +155,7 @@ end
     
     # Clean up from any previous test runs
     try
-        query |> do_exists && query.delete(allow_delete_all = true)
+        query.exists() && query.delete(allow_delete_all = true)
     catch
         # Ignore errors if table doesn't exist yet
     end
@@ -205,7 +205,7 @@ end
 
 @testset "COPY Validation and Missing Handling" begin
     query = M.Just_a_test_deletion.objects
-    query |> do_exists && query.delete(allow_delete_all = true)
+    query.exists() && query.delete(allow_delete_all = true)
 
     # This confirms COPY respects the same nullable-field policy as bulk_insert. We allow
     # missing on `test_result` because the model marks that foreign key as nullable.

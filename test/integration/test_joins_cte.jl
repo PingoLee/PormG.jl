@@ -29,7 +29,7 @@ end
     query.values("resultid", "statusid", "statusid__status", "grid", "driverid", "raceid__date__@quarter")
     query.order_by("raceid__date__quarter")
     text = query |> inspect_query
-    df   = query |> DataFrame
+    df = query |> DataFrame
     @test query.count() == 40
     @test query.exists()
 end
@@ -79,8 +79,8 @@ end
 
         @test size(df, 1) == 3
         @test "result__statusid__status" in names(df)
-        @test df[df.description .== "teste 1", :result__statusid__status][1] == "Finished"
-        @test df[df.description .== "teste 2", :result__statusid__status][1] === missing
+        @test df[df.description.=="teste 1", :result__statusid__status][1] == "Finished"
+        @test df[df.description.=="teste 2", :result__statusid__status][1] === missing
     end
 
     @testset "ON filter with table-prefixed field name" begin
@@ -92,8 +92,8 @@ end
         df = query |> DataFrame
 
         @test size(df, 1) == 3
-        @test df[df.description .== "teste 1", :result__statusid__status][1] == "Finished"
-        @test df[df.description .== "teste 2", :result__statusid__status][1] === missing
+        @test df[df.description.=="teste 1", :result__statusid__status][1] == "Finished"
+        @test df[df.description.=="teste 2", :result__statusid__status][1] === missing
     end
 
     @testset "ON filter combined with WHERE filter" begin
@@ -173,7 +173,7 @@ end
         # while only drivers matching either nationality get their column populated.
         query = M.Result.objects
         query.cjoin("driverid" => "Driver",
-                    filters=[Qor("nationality" => "Brazilian", "nationality" => "German")],
+            filters=[Qor("nationality" => "Brazilian", "nationality" => "German")],
                     warn=false)
         query.filter("positionorder" => 1)
         query.values("*", "driverid__surname", "driverid__nationality")
@@ -200,7 +200,7 @@ end
 @testset "Reverse joins" begin
     # Shared fixture: two Just_a_test_deletion rows tied to Result ids 1 and 2.
     # Cleaned up and re-created at the top so all inner testsets share the same data.
-    seed_ids   = [910001, 910002]
+    seed_ids = [910001, 910002]
     seed_names = ["reverse-join-a", "reverse-join-b"]
 
     cleanup = M.Just_a_test_deletion.objects
@@ -229,7 +229,7 @@ end
         df = query |> DataFrame
 
         @test size(df, 1) == size(df_a, 1)
-        @test all(in.(df.test_deletion__id,   Ref(df_a.id)))
+        @test all(in.(df.test_deletion__id, Ref(df_a.id)))
         @test all(in.(df.test_deletion__name, Ref(df_a.name)))
         @test sort(collect(skipmissing(df.resultid))) == [1, 2]
     end
@@ -246,10 +246,10 @@ end
 
         @test nrow(df_on) == 3
         @test sort(df_on.resultid) == [1, 2, 3]
-        @test df_on[df_on.resultid .== 1, :test_deletion__name][1] == "reverse-join-a"
-        @test df_on[df_on.resultid .== 2, :test_deletion__name][1] == "reverse-join-b"
+        @test df_on[df_on.resultid.==1, :test_deletion__name][1] == "reverse-join-a"
+        @test df_on[df_on.resultid.==2, :test_deletion__name][1] == "reverse-join-b"
         # Result row 3 has no matching reverse record → column is missing
-        @test df_on[df_on.resultid .== 3, :test_deletion__name][1] === missing
+        @test df_on[df_on.resultid.==3, :test_deletion__name][1] === missing
     end
 
     @testset "on() with join_type=INNER narrows to matched rows" begin
@@ -353,8 +353,8 @@ end
         df = main_query |> DataFrame
 
         @test nrow(df) == 100
-        @test filter(row -> row.resultid == 1,   df)[1, :tb_dup__dias] == 312
-        @test filter(row -> row.resultid == 1,   df) |> nrow == 1
+        @test filter(row -> row.resultid == 1, df)[1, :tb_dup__dias] == 312
+        @test filter(row -> row.resultid == 1, df) |> nrow == 1
         @test filter(row -> row.resultid == 100, df)[1, :driverid] == 5
     end
 
@@ -364,7 +364,7 @@ end
         stats.values(
             "driverid",
             "total_results" => Count("resultid"),
-            "avg_grid"      => Sum("grid")
+            "avg_grid" => Sum("grid")
         )
 
         query = M.Driver.objects
@@ -404,7 +404,7 @@ end
         query.order_by("driverid__surname", "resultid")
 
         insp = query |> inspect_query
-        df   = query |> DataFrame
+        df = query |> DataFrame
 
         @test !occursin("\"driverid__surname\"", insp[:sql_text])
         @test occursin(r"ORDER BY\s+\"[A-Za-z0-9_]+\"\.\"surname\" ASC", insp[:sql_text])
@@ -421,8 +421,8 @@ end
         top_drivers.values("driverid", "forename", "surname")
 
         query = M.Result.objects
-        query.with("recent" => recent_races, join_field="raceid"   => "raceid")
-        query.with("top_d"  => top_drivers,  join_field="driverid" => "driverid")
+        query.with("recent" => recent_races, join_field="raceid" => "raceid")
+        query.with("top_d" => top_drivers, join_field="driverid" => "driverid")
         query.values("resultid", "recent__name", "top_d__forename", "points")
         query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false)
         df = query |> DataFrame
@@ -460,13 +460,13 @@ end
         query.filter("id" => 910001)
 
         insp = query |> inspect_query
-        df   = query |> DataFrame
+        df = query |> DataFrame
 
         @test nrow(df) == 1
         # WITH clause is present ...
         @test occursin("WITH \"sub\"", insp[:sql_text])
         # ... but no JOIN to the CTE is emitted
-        @test !occursin("LEFT JOIN \"sub\"",  insp[:sql_text])
+        @test !occursin("LEFT JOIN \"sub\"", insp[:sql_text])
         @test !occursin("INNER JOIN \"sub\"", insp[:sql_text])
         # Both parameters (CTE filter + main filter) in order: CTE first
         @test insp[:parameters] == [1, 910001]
@@ -485,11 +485,11 @@ end
         query.values("forename", "surname", "old_guard__dob")
         df = query |> DataFrame
 
-        lewis = df[df.forename .== "Lewis", :]
+        lewis = df[df.forename.=="Lewis", :]
         @test !isempty(lewis)
         @test ismissing(lewis[1, :old_guard__dob])
 
-        david = df[df.forename .== "David", :]
+        david = df[df.forename.=="David", :]
         @test !isempty(david)
         @test !ismissing(david[1, :old_guard__dob])
         # SQLite stores dates as text; accept both representations
@@ -502,14 +502,14 @@ end
         # --- INNER JOIN ---
         query_inner = M.Driver.objects
         query_inner.with("old_guard_inner" => drivers_old,
-                         join_field="driverid" => "driverid",
-                         join_type="INNER")
+            join_field="driverid" => "driverid",
+            join_type="INNER")
         query_inner.filter("nationality" => "British")
         query_inner.values("forename", "surname", "old_guard_inner__dob")
         df_inner = query_inner |> DataFrame
 
-        @test isempty(df_inner[df_inner.forename .== "Lewis", :])
-        david_inner = df_inner[df_inner.forename .== "David", :]
+        @test isempty(df_inner[df_inner.forename.=="Lewis", :])
+        david_inner = df_inner[df_inner.forename.=="David", :]
         @test !isempty(david_inner)
         @test !ismissing(david_inner[1, :old_guard_inner__dob])
     end
@@ -520,7 +520,7 @@ end
         cte_source = M.Result.objects
         cte_source.filter(
             "raceid__circuitid__name__@icontains" => "Monaco",  # CTE param 1
-            "raceid__year__@gte"                  => 2010       # CTE param 2
+            "raceid__year__@gte" => 2010       # CTE param 2
         )
         cte_source.values("constructorid", "total_points" => Sum("points"))
 
@@ -535,7 +535,7 @@ end
         @test size(df, 1) > 0
         @test "Red Bull" in df.name
         @test !("Ferrari" in df.name)
-        row_rb = df[df.name .== "Red Bull", :]
+        row_rb = df[df.name.=="Red Bull", :]
         @test !ismissing(row_rb[1, :monaco_stats__total_points])
         @test row_rb[1, :monaco_stats__total_points] == 390
     end
@@ -762,54 +762,54 @@ end
     monaco_winners_sq = M.Result.objects.filter(
         "raceid__circuitid__name__@icontains" => "Monaco",   # subquery param 1
         "positionorder" => 1                                  # subquery param 2
-    );
-    monaco_winners_sq.values("driverid");
+    )
+    monaco_winners_sq.values("driverid")
 
     # ── CTE 1: top_constructors ───────────────────────────────────────────────
     # Restricts to constructors with id ≤ 15.
     # CTE bucket param: 15
-    top_constructors = M.Constructor.objects.filter("constructorid__@lte" => 15);     # cte param 1
-    top_constructors.values("constructorid", "name", "nationality");
+    top_constructors = M.Constructor.objects.filter("constructorid__@lte" => 15)     # cte param 1
+    top_constructors.values("constructorid", "name", "nationality")
 
     # ── CTE 2: modern_races ───────────────────────────────────────────────────
     # Races from 2000 onward at non-European circuits.
     # CTE bucket params: 2000, "Europe"
-    modern_races = M.Race.objects;
+    modern_races = M.Race.objects
     modern_races.filter(
-        "year__@gte"                          => 2000,       # cte param 2
-        "circuitid__country__@ne"             => "Europe"    # cte param 3 (placeholder; actual continents stored as country)
-    );
-    modern_races.values("raceid", "year", "circuitid__country");
+        "year__@gte" => 2000,       # cte param 2
+        "circuitid__country__@ne" => "Europe"    # cte param 3 (placeholder; actual continents stored as country)
+    )
+    modern_races.values("raceid", "year", "circuitid__country")
 
     # ── Main query: Result ────────────────────────────────────────────────────
-    query = M.Result.objects;
+    query = M.Result.objects
 
     # Attach CTE 1 – LEFT join on constructorid
-    query.with("tc"  => top_constructors, join_field="constructorid" => "constructorid");
+    query.with("tc" => top_constructors, join_field="constructorid" => "constructorid")
 
     # Attach CTE 2 – LEFT join on raceid
-    query.with("mr"  => modern_races,     join_field="raceid"        => "raceid");
+    query.with("mr" => modern_races, join_field="raceid" => "raceid")
 
     # cjoin: attach Circuit via raceid__circuitid, but only for non-null altitude circuits
     # (alt IS NOT NULL means the circuit has a recorded elevation, used as a proxy
     #  for non-street circuits).  ON filter bucket: join param 1.
     query.cjoin("raceid" => "Race",
-                filters=["circuitid__country__@ne" => "UK"],  # join param 1
-                join_type="LEFT",
-                warn=false);
+        filters=["circuitid__country__@ne" => "UK"],  # join param 1
+        join_type="LEFT",
+        warn=false)
 
     # on(): attach Driver but only for drivers born before 1985 (LEFT JOIN).
     # join bucket param 2.
-    query.on("driverid", "dob__@year__@lt" => 1985);           # join param 2
+    query.on("driverid", "dob__@year__@lt" => 1985)           # join param 2
 
     # WHERE filters:
     #   - positionorder = 1  (only race winners)                 where param 1
     #   - driverid in monaco_winners_sq  (won at Monaco)         where subquery
     #   - Qor: driver is Brazilian OR German                     where params 2, 3
-    query.filter("positionorder" => 1);                          # where param 1
-    query.filter("driverid__@in" => monaco_winners_sq);          # where: inline subquery
+    query.filter("positionorder" => 1)                          # where param 1
+    query.filter("driverid__@in" => monaco_winners_sq)          # where: inline subquery
     query.filter(Qor("driverid__nationality" => "Brazilian",
-                     "driverid__nationality" => "German"));      # where params 2, 3
+        "driverid__nationality" => "German"))      # where params 2, 3
 
     # SELECT: resultid, CTE columns, joined columns, and aggregation alias
     query.values(
@@ -823,22 +823,22 @@ end
         "driverid__surname",             # from on() → Driver (LEFT: may be missing)
         "total_points" => Sum("points"), # aggregate — will go to HAVING
         "tc__nationality"
-    );
+    )
 
     # HAVING: only groups with summed points > 5
     # having bucket param: 5
-    query.filter("total_points__@gt" => 5);                     # having param 1
+    query.filter("total_points__@gt" => 5)                     # having param 1
 
     # ORDER BY: descending total_points so the dominant pair is first
-    query.order_by("-total_points", "driverid");
+    query.order_by("-total_points", "driverid")
 
     # ── Inspect SQL structure ─────────────────────────────────────────────────
     insp = query |> inspect_query
 
     # Both CTEs must be emitted in the WITH clause
     @test occursin("WITH", insp[:sql_text])
-    @test occursin("\"tc\"",  insp[:sql_text])
-    @test occursin("\"mr\"",  insp[:sql_text])
+    @test occursin("\"tc\"", insp[:sql_text])
+    @test occursin("\"mr\"", insp[:sql_text])
 
     # cjoin (Race) and on() (Driver) produce LEFT JOINs
     @test occursin("LEFT JOIN", insp[:sql_text])
@@ -912,8 +912,7 @@ end
     # ── Scalar spot-check ─────────────────────────────────────────────────────
     # Senna (Brazilian) won more races than any other driver from this filtered set.
     # If the dataset is the canonical F1 dataset, at least one row should mention him.
-    senna_rows = df[.!ismissing.(df.driverid__surname) .&
-                    (df.driverid__surname .== "Senna"), :]
+    senna_rows = df[.!ismissing.(df.driverid__surname).&(df.driverid__surname.=="Senna"), :]
     if nrow(senna_rows) > 0
         # His total_points in this filtered set must respect the HAVING cutoff
         @test all(senna_rows.total_points .> 5)
@@ -922,9 +921,132 @@ end
         mclaren_senna = senna_rows[.!ismissing.(senna_rows.tc__name), :]
         if nrow(mclaren_senna) > 0
             @test all(mclaren_senna.tc__name .∈ Ref(["McLaren", "Williams", "Ferrari",
-                                                      "Brabham", "Lotus", "Tyrrell",
-                                                      "Benetton", "Renault"]))
+                "Brabham", "Lotus", "Tyrrell",
+                "Benetton", "Renault"]))
         end
     end
 
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# related_objects Coverage: Second related_name (test_deletion2)
+# Verifies that a second FK from the same model to the same target, using an
+# explicit related_name, resolves correctly for filter, values, and on().
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Reverse joins - second related_name (test_deletion2)" begin
+    # Shared fixture: two Just_a_test_deletion rows using the second FK (test_result2).
+    seed_ids = [920001, 920002]
+    seed_names = ["rev2-join-a", "rev2-join-b"]
+
+    cleanup = M.Just_a_test_deletion.objects
+    cleanup.filter("id__@in" => seed_ids)
+    cleanup.delete()
+
+    cleanup = M.Just_a_test_deletion.objects
+    cleanup.filter("name__@in" => seed_names)
+    cleanup.delete()
+
+    seed = M.Just_a_test_deletion.objects
+    seed.create("id" => seed_ids[1], "name" => seed_names[1], "test_result2" => 1)
+    seed.create("id" => seed_ids[2], "name" => seed_names[2], "test_result2" => 2)
+
+    @testset "filter on test_deletion2 reverse field" begin
+        # .filter("test_deletion2__name" => ...) must resolve via the second related_name.
+        query = M.Result.objects
+        query.values("test_deletion2__id", "test_deletion2__name", "resultid")
+        query.filter("test_deletion2__name__@in" => seed_names)
+        df = query |> DataFrame
+
+        @test size(df, 1) == 2
+        @test sort(collect(skipmissing(df.resultid))) == [1, 2]
+        @test all(in.(df.test_deletion2__name, Ref(seed_names)))
+    end
+
+    @testset "on() with test_deletion2 (LEFT JOIN)" begin
+        # on() places the predicate in the ON clause, preserving all base rows.
+        query_on = M.Result.objects.on("test_deletion2", "name__@in" => seed_names)
+        query_on.filter("resultid__@in" => [1, 2, 3])
+        query_on.values("resultid", "test_deletion2__name")
+        df_on = query_on |> DataFrame
+
+        # insp = query_on |> inspect_query
+        # @info insp[:sql_text]
+
+        @test nrow(df_on) == 3
+        @test sort(df_on.resultid) == [1, 2, 3]
+        @test df_on[df_on.resultid.==1, :test_deletion2__name][1] == "rev2-join-a"
+        @test df_on[df_on.resultid.==2, :test_deletion2__name][1] == "rev2-join-b"
+        # Result row 3 has no matching reverse record → column is missing
+        @test df_on[df_on.resultid.==3, :test_deletion2__name][1] === missing
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# related_objects Coverage: Chained (multi-hop) reverse joins
+# Result ← Just_a_test_deletion (via test_deletion) ← Just_a_nested_roll_back (via auto-name)
+# This exercises the while-loop branch at build_joins.jl:L238-L259.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Chained reverse joins (Result → test_deletion → nested)" begin
+    # Fixture: create a Just_a_test_deletion row tied to Result 1,
+    # then a Just_a_nested_roll_back row tied to that deletion row.
+    nested_del_id = 930001
+    nested_rb_id = 940001
+
+    # Clean up any previous test data — including rows left by earlier testsets
+    # (e.g., "Reverse joins" seeds rows with test_result => 1 and 2)
+    cleanup_rb = M.Just_a_nested_roll_back.objects
+    cleanup_rb.filter("id" => nested_rb_id)
+    cleanup_rb.delete()
+
+    cleanup_del = M.Just_a_test_deletion.objects
+    cleanup_del.filter("test_result__@in" => [1, 2])
+    cleanup_del.delete()
+
+    # Seed: Just_a_test_deletion → Result (id=1)
+    seed_del = M.Just_a_test_deletion.objects
+    seed_del.create("id" => nested_del_id, "name" => "chain-parent", "test_result" => 1)
+
+    # Seed: Just_a_nested_roll_back → Just_a_test_deletion (id=nested_del_id)
+    seed_rb = M.Just_a_nested_roll_back.objects
+    seed_rb.create("id" => nested_rb_id, "test" => nested_del_id, "description" => "chain-nested-a")
+
+    @testset "filter traversing two reverse hops" begin
+        # Result → test_deletion → just_a_nested_roll_back → description
+        query = M.Result.objects
+        query.values("resultid", "test_deletion__just_a_nested_roll_back__description")
+        query.filter("test_deletion__just_a_nested_roll_back__description" => "chain-nested-a")
+        df = query |> DataFrame
+
+        @test nrow(df) >= 1
+        @test all(df.test_deletion__just_a_nested_roll_back__description .== "chain-nested-a")
+        @test 1 in df.resultid
+    end
+
+    @testset "on() through chained reverse path" begin
+        # on() with a filter that traverses the chained reverse relation.
+        # Only Result rows whose test_deletion child has a matching nested grandchild
+        # should get the test_deletion columns populated.
+        query_on = M.Result.objects
+        query_on.on("test_deletion", "just_a_nested_roll_back__description" => "chain-nested-a")
+        query_on.filter("resultid__@in" => [1, 2])
+        query_on.values("resultid", "test_deletion__name")
+        df_on = query_on |> DataFrame
+
+        @test nrow(df_on) == 2
+        # Result 1 has the matching chain → name is populated
+        @test df_on[df_on.resultid.==1, :test_deletion__name][1] == "chain-parent"
+        # Result 2 has no matching nested record → name is missing
+        @test df_on[df_on.resultid.==2, :test_deletion__name][1] === missing
+    end
+
+    # Cleanup
+    cleanup_rb2 = M.Just_a_nested_roll_back.objects
+    cleanup_rb2.filter("id" => nested_rb_id)
+    cleanup_rb2.delete()
+
+    cleanup_del2 = M.Just_a_test_deletion.objects
+    cleanup_del2.filter("id" => nested_del_id)
+    cleanup_del2.delete()
 end

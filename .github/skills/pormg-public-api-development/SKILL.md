@@ -90,10 +90,16 @@ Add both:
 
 ## Test Writing Standard
 
-- Heavily comment test blocks
-- Explain the logic under test
-- Explain the expected SQL shape when relevant
-- Explain why the behavior matters to users or future maintainers
+- **Use standardized block headers for all `@testset` blocks**:
+  ```julia
+  # ─────────────────────────────────────────────────────────────────────────────
+  # [Feature/Area]: [Specific scenario being tested]
+  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
+  # and why the behavior matters to users or future maintainers]
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "..." begin
+  ```
+- Heavily comment test logic within the block
 - Prefer isolated setup and explicit cleanup over hidden shared state
 - Do not weaken model contracts just to accommodate dirty fixtures; normalize fixtures in the import layer instead
 

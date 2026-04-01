@@ -987,15 +987,43 @@ end
 end
 
 @testset "Alignment Verification - DELETE Inspection" begin
-    # Test DELETE operation parameters land in :where bucket
-    q = M.Result.objects.filter("resultid" => 5)
+    # Test DELETE operation parameters land in :where bucket.
+    # Use a leaf model (no inbound FKs) so delete() returns a single dict.
+    # Models with inbound FKs (e.g. Result) produce a multi-step cascade plan.
+    q = M.New_join_position.objects.filter("id" => 5)
 
-    # Use inspect_query with explicit :delete operation
-    insp = q |> inspect_query(operation=:delete)
+    insp = q.delete(show_query=:dict)
 
     @test insp[:operation] == :delete
     @test 5 in insp[:parameter_buckets][:where]
     @test contains(insp[:sql_text], "DELETE")
+end
+
+@testset "Alignment Verification - DELETE Cascade Inspection" begin
+    # Deleting a model with inbound FKs produces a multi-step cascade plan.
+    # Each step is a Dict with :operation, :sql_text, :parameter_buckets, etc.
+    # Result has inbound FKs from Just_a_test_deletion (CASCADE, SET_NULL, SET_DEFAULT)
+    # and Just_a_nested_roll_back (CASCADE through Just_a_test_deletion).
+    q = M.Result.objects.filter("resultid" => 5)
+
+    insp = q.delete(show_query=:dict)
+
+    # Cascade produces a Vector of steps (SET_DEFAULT, SET_NULL, nested DELETE, DELETE, root DELETE)
+    @test insp isa Vector
+    @test length(insp) >= 2   # at minimum: dependent handling + root delete
+
+    # The last step must be the root DELETE on the target model
+    root_step = insp[end]
+    @test root_step[:operation] == :delete
+    @test contains(root_step[:sql_text], "DELETE")
+    @test contains(lowercase(root_step[:model]), "result")
+
+    # Every step must carry valid metadata
+    for step in insp
+        @test haskey(step, :operation)
+        @test haskey(step, :sql_text)
+        @test step[:operation] in (:delete, :update)
+    end
 end
 
 @testset "Alignment Verification - INSERT Inspection" begin
@@ -1469,7 +1497,8 @@ end
 
 @testset "Related Objects - Error message lists related_objects keys" begin
     # When a column is not found, the error message should list available related_objects.
-    # Result has related_objects: test_deletion, test_deletion2
+    # Result has related_objects including test_deletion, test_deletion2,
+    # test_deletion_set_null, and test_deletion_set_default.
     q = M.Result.objects
     err = nothing
     try
@@ -1501,6 +1530,8 @@ end
     # Verify the expected keys still exist
     @test haskey(M.Result.related_objects, "test_deletion")
     @test haskey(M.Result.related_objects, "test_deletion2")
+    @test haskey(M.Result.related_objects, "test_deletion_set_null")
+    @test haskey(M.Result.related_objects, "test_deletion_set_default")
 end
 
 @testset "Related Objects - Auto-generated related_name key format" begin

@@ -128,9 +128,11 @@ function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPost
       return update(q.object, show_query=:inspection, connection=conn)
   elseif operation === :delete
       res = delete(q, show_query=:inspection, connection=conn)
-      # delete returns (count, results) when executing, but when using inspection
-      # it returns (results) or [(results)]. We want just the inspection dict.
-      return res isa Tuple ? res[2] : (res isa Vector ? res[1] : res)
+      # delete() returns (total_deleted, counter_dict) when executing.
+      # In inspection mode it returns a single Dict (simple delete) or a
+      # Vector of Dicts (cascaded delete with SET_NULL / SET_DEFAULT / CASCADE
+      # steps).  Return the result as-is so callers can inspect every step.
+      return res isa Tuple ? res[2] : res
   else
       throw(ArgumentError("Unsupported or unknown operation for inspection: $operation"))
   end

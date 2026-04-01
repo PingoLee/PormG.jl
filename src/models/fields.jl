@@ -330,7 +330,8 @@ function _get_on_delete_mode(on_delete::Nothing)
   return nothing
 end
 function _get_on_delete_mode(on_delete::AbstractString)
-  on_delete = uppercase(on_delete)
+  on_delete = uppercase(strip(on_delete))
+  on_delete = replace(on_delete, r"\s+" => "_")
   if contains(on_delete, "CASCADE")
     return CASCADE
   elseif contains(on_delete, "RESTRICT")
@@ -339,12 +340,12 @@ function _get_on_delete_mode(on_delete::AbstractString)
     return SET_NULL
   elseif contains(on_delete, "SET_DEFAULT")
     return SET_DEFAULT
+  elseif contains(on_delete, "NO_ACTION") || contains(on_delete, "DO_NOTHING")
+    return DO_NOTHING
   elseif contains(on_delete, "SET")
     return SET
   elseif contains(on_delete, "PROTECT")
     return PROTECT
-  elseif contains(on_delete, "DO_NOTHING")
-    return DO_NOTHING
   else
     throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
   end

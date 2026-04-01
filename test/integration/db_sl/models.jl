@@ -165,7 +165,9 @@ Just_a_test_deletion = Models.Model(
   id=Models.IDField(),
   name=Models.CharField(),
   test_result=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
-  test_result2=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
+  test_result2=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2"),
+  test_result_set_null=Models.ForeignKey(Result, pk_field="resultId", on_delete="SET_NULL", null=true, related_name="test_deletion_set_null"),
+  test_result_set_default=Models.ForeignKey(Result, pk_field="resultId", on_delete="SET_DEFAULT", default=1, null=true, related_name="test_deletion_set_default")
 )
 
 Just_a_nested_roll_back = Models.Model(

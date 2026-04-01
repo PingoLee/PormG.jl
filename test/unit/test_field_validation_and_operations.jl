@@ -1,11 +1,11 @@
 """
-Comprehensive validation test suite for all PormG field types and write operations.
+Targeted validation test suite for the field types and write-operation contracts exercised in this file.
 
 This file tests:
-- Each field type defined in `src/models/fields.jl` with proper constraints
-- Data type enforcement, nullability, unique-ness, defaults
-- User-facing API patterns (.objects.create(), .objects.update(), etc.)
-- Query inspection via show_query=:inspection
+- Core scalar, temporal, and relationship field contracts used by these regressions
+- Data type enforcement, nullability, uniqueness metadata, defaults, and formatter coercion
+- User-facing API patterns (.objects.create(), .objects.update(), inspect_query(), etc.)
+- Query inspection payloads, including parameter ordering and temporal normalization
 - Bulk operations (bulk_insert, bulk_update)
 - Field validation functions
 - Write operation metadata (auto_now_add, auto_now, defaults, formatters)
@@ -32,10 +32,7 @@ MockSettings = PormG.Configuration.Settings(
 )
 PormG.config["default"] = MockSettings
 
-@testset "Comprehensive Field Validation & Write Operations" begin
-
-    # --- SECTION 1: FIELD TYPE VALIDATION ---
-    
+@testset "SECTION 1: Field type validation" begin    
     @testset "Integer Fields (IDField, IntegerField, BigIntegerField)" begin
         mock_int_model = Models.Model_Type(
             name = "int_test",
@@ -307,8 +304,12 @@ PormG.config["default"] = MockSettings
             "event_time" => DateTime(2024, 6, 15, 10, 30, 0),
             show_query=:inspection
         )
+        expected_event_time = string(ZonedDateTime(DateTime(2024, 6, 15, 10, 30, 0), TimeZone("UTC")))
         @test create_with_auto[:operation] === :insert
+        @test create_with_auto[:parameter_count] == 3
         @test contains(create_with_auto[:sql_text], "created_at")  # Should be in SQL
+        @test any(==(expected_event_time), create_with_auto[:parameters])
+        @test count(param -> param isa AbstractString, create_with_auto[:parameters]) == 3
         
         # Test 15: Update with auto_now field (should be in SQL)
         update_auto_q = DateTimeModel.objects
@@ -317,8 +318,13 @@ PormG.config["default"] = MockSettings
             "event_time" => DateTime(2024, 7, 20, 15, 45, 30),
             show_query=:dict
         )
+        expected_updated_event_time = string(ZonedDateTime(DateTime(2024, 7, 20, 15, 45, 30), TimeZone("UTC")))
         @test update_with_auto[:operation] === :update
         @test contains(update_with_auto[:sql_text], "updated_at") || contains(update_with_auto[:sql_text], "UPDATE")
+        @test update_with_auto[:parameter_count] == 3
+        @test update_with_auto[:parameters][1] == 1
+        @test any(==(expected_updated_event_time), update_with_auto[:parameters][2:end])
+        @test count(param -> param isa AbstractString, update_with_auto[:parameters][2:end]) == 2
         
         # --- BULK OPERATIONS WITH DATETIMES ---
         
@@ -455,9 +461,9 @@ PormG.config["default"] = MockSettings
         @test bulk_update_date[:operation] === :update
         @test contains(bulk_update_date[:sql_text], "race_day") || contains(bulk_update_date[:sql_text], "UPDATE")
     end
+end
 
-    # --- SECTION 2: EXTENSIVE DATA TYPE VALIDATION WITH COMBINATIONS ---
-    
+@testset "SECTION 2: Field validation with complex combinations & constraints" begin    
     @testset "Extensive Field Combinations & Constraints" begin
         ExtensiveModel = Models.Model_Type(
             name = "comprehensive_table",
@@ -681,8 +687,9 @@ PormG.config["default"] = MockSettings
         @test contains(res_bulk_update_boundary[:sql_text], "UPDATE")
     end
 
-    # --- SECTION 3: USER-FACING API INTEGRATION ---
-    
+end
+
+@testset "SECTION 3: User-Facing API Integration" begin    
     @testset "User API Integration: .objects.create() with complex models" begin
         ComplexModel = Models.Model_Type(
             name = "complex_test",
@@ -865,9 +872,9 @@ PormG.config["default"] = MockSettings
             show_query=:dict
         )
     end
+end
 
-    # --- SECTION 4: BULK OPERATIONS & QUERY INSPECTION ---
-    
+@testset "SECTION 4 & 5: Bulk Operations & Query Inspection" begin    
     @testset "Bulk Operations Validation via Inspection" begin
         BulkModel = Models.Model_Type(
             name = "bulk_test",
@@ -908,8 +915,9 @@ PormG.config["default"] = MockSettings
         @test (contains(res_bulk_upd[:sql_text], "WHERE name") || contains(res_bulk_upd[:sql_text], "WHERE \"Tb\".\"name\"") || contains(res_bulk_upd[:sql_text], "WHERE") && contains(res_bulk_upd[:sql_text], "name"))
     end
 
-    # --- SECTION 5: QUERY INSPECTION FOR FIELD OPERATIONS ---
-    
+end
+
+@testset "SECTION 5: Query Inspection for Field Operations" begin    
     @testset "Query Inspection for Select/Update/Delete Operations" begin
         InspectModel = Models.Model_Type(
             name = "inspect_test",
@@ -946,10 +954,27 @@ PormG.config["default"] = MockSettings
         @test contains(res_update[:sql_text], "UPDATE") && (contains(res_update[:sql_text], "inspect_test") || contains(res_update[:sql_text], "\"inspect_test\""))
         @test contains(res_update[:sql_text], "is_active") || contains(res_update[:sql_text], "\"is_active\"")
         @test res_update[:parameters] == [1, false]  # filter value first, then update value
+
+        # Direct validator coverage and public API coverage should both reject PK mutations.
+        @test_throws ErrorException validate_field_data(InspectModel, "id", 2, "update"; allow_primary_key=false)
+
+        pk_update_q = InspectModel.objects
+        pk_update_q.filter("id" => 1)
+        @test_throws ErrorException pk_update_q.update("id" => 2, show_query=:dict)
+
+        # inspect_query has a dedicated delete branch that unwraps the inspection payload.
+        q_delete = InspectModel.objects
+        q_delete.filter("id" => 1)
+        inspection_delete = inspect_query(q_delete; operation=:delete)
+
+        @test inspection_delete[:operation] === :delete
+        @test contains(inspection_delete[:sql_text], "DELETE")
+        @test inspection_delete[:parameters] == [1]
     end
 
-    # --- SECTION 6: TEMPORAL FIELD GAPS ---
+end
 
+@testset "SECTION 6: Temporal Field Gaps" begin
     @testset "TimeField (Time-Only Values)" begin
         # TimeField represents time without a specific date (HHμ:MM:SS format)
         TimeModel = Models.Model_Type(
@@ -1105,8 +1130,11 @@ PormG.config["default"] = MockSettings
             "naive_timestamp" => DateTime(2024, 6, 15, 14, 30, 0),
             show_query=:inspection
         )
+        expected_naive_timestamp = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
         @test create_naive[:operation] === :insert
         @test contains(create_naive[:sql_text], "naive_timestamp")
+        @test create_naive[:parameter_count] == 1
+        @test create_naive[:parameters] == [expected_naive_timestamp]
 
         # Test 8: Create with ZonedDateTime (aware timestamp)
         create_aware = TzModel.objects.create(
@@ -1114,8 +1142,12 @@ PormG.config["default"] = MockSettings
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")),
             show_query=:inspection
         )
+        expected_aware_utc = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
         @test create_aware[:operation] === :insert
         @test contains(create_aware[:sql_text], "aware_timestamp")
+        @test create_aware[:parameter_count] == 2
+        @test any(==(expected_naive_timestamp), create_aware[:parameters])
+        @test any(==(expected_aware_utc), create_aware[:parameters])
 
         # Test 9: Create with non-UTC timezone (should preserve timezone info in round-trip)
         create_tz_sp = TzModel.objects.create(
@@ -1123,7 +1155,11 @@ PormG.config["default"] = MockSettings
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")),
             show_query=:inspection
         )
+        expected_aware_sao_paulo = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")))
         @test create_tz_sp[:operation] === :insert
+        @test create_tz_sp[:parameter_count] == 2
+        @test any(==(expected_naive_timestamp), create_tz_sp[:parameters])
+        @test any(==(expected_aware_sao_paulo), create_tz_sp[:parameters])
 
         # Test 10: Update with timezone-aware timestamp
         update_tz_q = TzModel.objects
@@ -1132,8 +1168,10 @@ PormG.config["default"] = MockSettings
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")),
             show_query=:dict
         )
+        expected_updated_aware_timestamp = string(ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")))
         @test update_tz[:operation] === :update
         @test contains(update_tz[:sql_text], "UPDATE")
+        @test update_tz[:parameters] == [1, expected_updated_aware_timestamp]
 
         # Test 11: Bulk operations with mixed naive and aware timestamps
         df_tz = DataFrame(
@@ -1148,8 +1186,20 @@ PormG.config["default"] = MockSettings
             scheduled_at = [nothing, nothing]
         )
         res_bulk_tz = bulk_insert(TzModel.objects, df_tz, show_query=:dict)
+        expected_bulk_naive = [
+            string(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
+            string(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("UTC")))
+        ]
+        expected_bulk_aware = [
+            string(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
+            string(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("America/Toronto")))
+        ]
         @test res_bulk_tz[:operation] === :insert
         @test res_bulk_tz[:parameter_count] == 6  # 2 rows * 3 columns (naive_timestamp, aware_timestamp, scheduled_at)
+        @test count(param -> param isa AbstractString, res_bulk_tz[:parameters]) == 4
+        @test count(ismissing, res_bulk_tz[:parameters]) == 2
+        @test all(expected -> any(==(expected), res_bulk_tz[:parameters]), expected_bulk_naive)
+        @test all(expected -> any(==(expected), res_bulk_tz[:parameters]), expected_bulk_aware)
 
         # Test 12: DST edge case - Spring forward (2024-03-10 in America/New_York)
         spring_forward_dt = DateTime(2024, 3, 10, 2, 30, 0)  # This time doesn't exist (clocks jump from 2:00 to 3:00)
@@ -1330,9 +1380,9 @@ PormG.config["default"] = MockSettings
             show_query=:inspection
         )
     end
+end
 
-    # --- SECTION 7: RELATIONSHIP FIELD VALIDATION ---
-
+@testset "SECTION 7: Relationship Field Validation" begin
     @testset "Relationship Fields: ForeignKey & OneToOneField" begin
         # Test ForeignKey field initialization and validation
         UserModel = Models.Model_Type(
@@ -1379,6 +1429,15 @@ PormG.config["default"] = MockSettings
         @test string(author_field.on_delete) == "CASCADE"
         editor_field = PostModel.fields["editor"]
         @test string(editor_field.on_delete) == "SET_NULL"
+
+        # Test 5b: SQL-style on_delete strings from schema introspection normalize
+        # back into the ORM's internal tokens.
+        sql_style_set_null = Models.ForeignKey("User", null=true, on_delete="SET NULL")
+        sql_style_set_default = Models.ForeignKey("User", null=true, default=1, on_delete="SET DEFAULT")
+        sql_style_no_action = Models.ForeignKey("User", null=true, on_delete="NO ACTION")
+        @test string(sql_style_set_null.on_delete) == "SET_NULL"
+        @test string(sql_style_set_default.on_delete) == "SET_DEFAULT"
+        @test string(sql_style_no_action.on_delete) == "DO_NOTHING"
 
         # Test 6: ForeignKey field contains related_name when specified
         @test editor_field.related_name == "edited_posts"
@@ -1441,8 +1500,9 @@ PormG.config["default"] = MockSettings
         @test bulk_profiles[:operation] === :insert
     end
 
-    # --- SECTION 8: UNIQUE CONSTRAINT VALIDATION ---
+end
 
+@testset "SECTION 8: Unique Constraint Validation" begin
     @testset "Unique Constraint Validation" begin
         # Test unique=true field enforcement
         UniqueModel = Models.Model_Type(
@@ -1524,9 +1584,9 @@ PormG.config["default"] = MockSettings
         bulk_unique_null = bulk_insert(UniqueModel.objects, df_unique_nullable, show_query=:dict)
         @test bulk_unique_null[:operation] === :insert
     end
+end
 
-    # --- SECTION 9: STRING FIELD BOUNDARIES ---
-
+@testset "SECTION 9: String Field Boundaries" begin
     @testset "String Field Boundaries: CharField & TextField" begin
         # Test CharField max_length enforcement
         StringModel = Models.Model_Type(
@@ -1638,8 +1698,9 @@ PormG.config["default"] = MockSettings
         @test_throws ErrorException validate_field_data(StringModel, "code", "你好世界中国", "insert")
     end
 
-    # --- SECTION 10: BOOLEAN FIELD EDGE CASES ---
+end
 
+@testset "SECTION 10: Boolean Field Edge Cases" begin
     @testset "Boolean Field Edge Cases & Truthiness" begin
         # Test BooleanField with various input values
         BoolModel = Models.Model_Type(

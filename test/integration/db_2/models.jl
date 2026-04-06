@@ -183,4 +183,12 @@ New_join_position = Models.Model(
   boolean_field=Models.BooleanField(null=true)
 )
 
+Field_validation_scratch = Models.Model("field_validation_scratch",
+  id=Models.IDField(),
+  uuid_token=Models.UUIDField(unique=true),
+  canonical_url=Models.URLField(max_length=500),
+  slug=Models.SlugField(max_length=120, unique=true),
+  payload=Models.JSONField(null=true)
+)
+
 end

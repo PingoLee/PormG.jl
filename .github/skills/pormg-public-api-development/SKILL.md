@@ -51,7 +51,8 @@ count = query.count()
 
 Use internal or function-style helpers only when the test is explicitly about internals or when no fluent equivalent exists:
 
-- `inspect_query(q)` for query inspection
+- `inspect_query(q)` for query inspection of SELECT queries (its heuristic automatically detects SELECT, but requires explicit hints for DELETEs).
+- `show_query=:dict` on terminal methods (e.g. `query.delete(show_query=:dict)`, `query.update(show_query=:dict)`) for inspecting mutation and bulk operations.
 - `bulk_insert`, `bulk_update`, `bulk_copy` for bulk APIs
 - direct `PormG.QueryBuilder` imports in unit tests targeting builders, buckets, or planner behavior
 

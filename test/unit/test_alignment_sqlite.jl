@@ -463,6 +463,35 @@ end
     @test length(insp_select[:parameter_buckets][:update]) == 0  # SELECT has no UPDATE params
 end
 
+@testset "Alignment Verification - DELETE Inspection" begin
+    # Test that DELETE operations bucket parameters correctly for positional logic
+    q = M.Result.objects.filter("resultid" => 999)
+
+    # Preferred mutation inspection pattern: show_query=:dict
+    insp_raw = q.delete(show_query=:dict)
+
+    # If cascaded deletes are present, find the one for "results"
+    insp = if insp_raw isa Vector
+        idx = findfirst(i -> i[:model] == "result", insp_raw)
+        insp_raw[idx]
+    else
+        insp_raw
+    end
+
+    @test insp[:operation] == :delete
+    @test insp[:dialect] == :sqlite
+    @test insp[:bucketing] == :positional
+
+    # Parameters should go into the :where bucket
+    @test 999 in insp[:parameter_buckets][:where]
+    @test insp[:parameters] == [999]
+
+    # Verify SQL shape
+    @test contains(insp[:sql_text], "DELETE FROM")
+    @test contains(insp[:sql_text], "WHERE")
+    @test count(==('?'), insp[:sql_text]) == 1
+end
+
 @testset "Alignment Verification - F() Expression in Filter" begin
     # Test F() (field reference) for field-to-field comparisons in filters
     # F expressions inject column references (no parameters) alongside scalar params

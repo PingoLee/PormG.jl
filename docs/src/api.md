@@ -479,50 +479,6 @@ See [Advisory Locks](advisory_lock.md) for the full reference.
 
 ---
 
-## Password Utilities
-
-### `make_password(raw_password)`
-
-Hashes a password using the default algorithm (PBKDF2-SHA256, 720,000 iterations):
-
-```julia
-hash = make_password("Champion_1988!")
-# "pbkdf2_sha256$720000$salt$hash..."
-```
-
-### `check_password(raw_password, encoded_hash)`
-
-Verifies a password against its stored hash with constant-time comparison:
-
-```julia
-if check_password("Champion_1988!", stored_hash)
-    println("Welcome!")
-end
-```
-
-### `password_needs_upgrade(encoded_hash)`
-
-Returns `true` if the hash should be re-calculated with stronger settings:
-
-```julia
-if password_needs_upgrade(stored_hash)
-    new_hash = make_password(raw_password)
-end
-```
-
-### `validate_password(password; kwargs...)`
-
-Validates password complexity. Returns a `ValidationResult` with `.valid` and `.errors`.
-
-```julia
-result = validate_password("weak", min_length=10)
-if !result.valid
-    println(result.errors)
-end
-```
-
-See [Passwords](passwords.md) for algorithms, custom encoders, i18n, and Django/Spring compatibility.
-
 ---
 
 ## Terminal Dashboard
@@ -588,9 +544,6 @@ The following symbols are exported by `PormG` and available after `using PormG`:
 
 ### Locking
 `with_advisory_lock`
-
-### Passwords
-`make_password`, `check_password`, `password_needs_upgrade`, `validate_password`, `ValidationResult`, `PasswordValidator`
 
 ### Utilities
 `setup`, `tui`, `@import_models`, `@models_module`

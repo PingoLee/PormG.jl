@@ -120,13 +120,6 @@ function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MIN($(column))"
 end
 
-# Same that function CAST in django ORM
-# # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
-# # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
-# # 					When(**{ f'{data}__month__lte': 8 }, then=Value('2')),
-# # 					When(**{ f'{data}__month__lte': 12 }, then=Value('3')),
-# # 					output_field=CharField()
-# # 				)))
 function VALUE(value::Nothing, conn::PormGPostgres)
   return "NULL"
 end
@@ -375,25 +368,10 @@ function F(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,P
   return column
 end
 
-
-# postgresql query synopsis
-# CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] table_name ( [
-#   { column_name data_type [ STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN | DEFAULT } ] [ COMPRESSION compression_method ] [ COLLATE collation ] [ column_constraint [ ... ] ]
-#     | table_constraint
-#     | LIKE source_table [ like_option ... ] }
-#     [, ... ]
-# ] )
-# [ INHERITS ( parent_table [, ... ] ) ]
-# [ PARTITION BY { RANGE | LIST | HASH } ( { column_name | ( expression ) } [ COLLATE collation ] [ opclass ] [, ... ] ) ]
-# [ USING method ]
-# [ WITH ( storage_parameter [= value] [, ... ] ) | WITHOUT OIDS ]
-# [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
-# [ TABLESPACE tablespace_name ]
-
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sUUIDField, sURLField, sSlugField, sJSONField
 
 function _format_default_sql_value(default_value)
   if default_value isa AbstractString
@@ -455,6 +433,16 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa sForeignKey
     return type_map[field.type]
+  elseif field isa sUUIDField
+    return type_map[field.type]
+  elseif field isa sJSONField
+    return type_map[field.type]
+  elseif field isa sURLField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 200
+    return "$(type_map[field.type])($max_len)"
+  elseif field isa sSlugField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 50
+    return "$(type_map[field.type])($max_len)"
   else
     return "TEXT"
   end
@@ -490,6 +478,16 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sForeignKey
     return sql_type
+  elseif field isa sUUIDField
+    return sql_type
+  elseif field isa sJSONField
+    return sql_type
+  elseif field isa sURLField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 200
+    return "$(sql_type)($max_len)"
+  elseif field isa sSlugField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 50
+    return "$(sql_type)($max_len)"
   else
     return "TEXT"
   end

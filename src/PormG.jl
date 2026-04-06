@@ -109,7 +109,7 @@ export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, 
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
-export setup
+export setup, install_ai_skills
 
 # Fallback stub for the Tachikoma TUI extension.
 # When `using Tachikoma`, PormGTachikomaExt overrides this with the real implementation.

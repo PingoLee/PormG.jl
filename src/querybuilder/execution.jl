@@ -398,6 +398,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
         real_obj.insert[field] = model.fields[field].formater(now(), settings.time_zone)
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
         real_obj.insert[field] = model.fields[field].formater(today())
+      elseif model.fields[field].type == "UUID" && model.fields[field].auto_add
+        real_obj.insert[field] = model.fields[field].formater(UUIDs.uuid4())
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else

@@ -34,6 +34,7 @@ end
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
+    @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     # include("unit/test_migration_planner.jl")
 end
 

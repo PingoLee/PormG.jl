@@ -16,7 +16,6 @@
 | **Migrations** | State-based schema reconciliation with `makemigrations` / `migrate`, destructive-operation guards, and a history table. |
 | **Transactions** | `run_in_transaction` with async context propagation, savepoint support, and automatic rollback on error. |
 | **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes. |
-| **Password Handling** | Django-compatible PBKDF2-SHA256 hashing, BCrypt, Argon2, Spring Security interop, and password validation. |
 | **Terminal Dashboard** | Optional Tachikoma-based TUI for reviewing migrations and inspecting queries. |
 
 ---
@@ -238,7 +237,6 @@ This documentation is organized into the following sections:
 | &nbsp;&nbsp;[Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |
 | [Custom Joins](custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
-| [Passwords](passwords.md) | Hashing, verification, upgrading, validation, and cross-framework compatibility. |
 | [Advisory Locks](advisory_lock.md) | Distributed locking with `with_advisory_lock`. |
 | [Contributing](contributing.md) | Development workflow, `@pormg_debug` breakpoints, and testing conventions. |
 | [API Reference](api.md) | Full auto-generated API reference and exported function catalog. |

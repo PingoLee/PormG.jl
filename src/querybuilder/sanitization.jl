@@ -114,6 +114,14 @@ function _is_datetime_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("TIMESTAMPTZ", "TIMESTAMP")
 end
 
+function _is_uuid_field(f_meta)::Bool
+    return getproperty(f_meta, :type) == "UUID"
+end
+
+function _is_json_field(f_meta)::Bool
+    return getproperty(f_meta, :type) in ("JSON", "JSONB")
+end
+
 function _string_uses_scientific_notation(value::AbstractString)::Bool
     return occursin(r"^[+-]?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+$", strip(value))
 end
@@ -311,6 +319,36 @@ function _validate_datetime_value(model::PormGModel, field::String, value::Any, 
     end
 end
 
+function _validate_uuid_value(model::PormGModel, field::String, value::Any, operation::String)
+    if value isa UUIDs.UUID
+        return true
+    elseif value isa AbstractString
+        try
+            Models.format_uuid_sql(value)
+            return true
+        catch e
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+        end
+    else
+        _type_mismatch_error(operation, model, field, value, "a UUID or UUID-formatted string"; suggestion="use UUIDs.uuid4() or a string like \"550e8400-e29b-41d4-a716-446655440000\"")
+    end
+end
+
+function _validate_json_value(model::PormGModel, field::String, value::Any, operation::String)
+    if value isa Union{AbstractDict, AbstractVector, NamedTuple, Bool, Integer, AbstractFloat}
+        return true
+    elseif value isa AbstractString
+        try
+            Models.format_json_sql(value)
+            return true
+        catch e
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a valid JSON string, Dict, Vector, or scalar value")
+        end
+    else
+        _type_mismatch_error(operation, model, field, value, "a valid JSON value (Dict, Vector, String, Number, Bool)"; suggestion="serialize to a JSON string or use a Dict/Vector")
+    end
+end
+
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
     # 1. Field existence
     if !(field in model.field_names)
@@ -353,6 +391,10 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
         _validate_datetime_value(model, field, value, operation)
     elseif _is_decimal_like_field(f_meta)
         _validate_decimal_value(model, field, value, operation)
+    elseif _is_uuid_field(f_meta)
+        _validate_uuid_value(model, field, value, operation)
+    elseif _is_json_field(f_meta)
+        _validate_json_value(model, field, value, operation)
     end
     
     # 6. Max length validation (Strings)

@@ -74,6 +74,10 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       elseif operation == :update && f_meta.auto_now
         return true, today()
       end
+    elseif f_meta.type == "UUID" && f_meta.auto_add
+      if operation in [:insert, :copy]
+        return true, UUIDs.uuid4()
+      end
     end
 
     return false, nothing

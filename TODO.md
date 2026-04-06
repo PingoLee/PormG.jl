@@ -4,11 +4,6 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🚀 High Priority: Core ORM Parity
 
-- [x] **SQLite Migration Improvements**
-  - [x] Use PRAGMA for introspection (reliable schema reading).
-  - [x] Support multiple dispatch for Dialect (Postgres vs SQLite separation).
-  - [x] Consistent type mapping using `type_map`.
-
 - [ ] **Bulk Operation API Refactoring**
   - **Context**: Currently, `bulk_update(filters=...)` handles both DataFrame column mapping and static SQL filters. While flexible, this leads to ambiguity and potential breaking changes if column names overlap with model fields.
   - **Goal**: Introduce a clearer separation (e.g., `mapping` vs `filters` or explicitly typed objects) to improve type safety and readability without breaking legacy support.
@@ -142,33 +137,24 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🛠 Project Infrastructure & Quality
 
-- [x] **Field Validation Test Coverage Gaps - Unit Tests** (COMPLETED: 358 tests passing)
-  - **Focus**: Validation logic in `validate_field_data()` without database round-trips.
-  - [x] **Relationship Fields**: ForeignKey & OneToOneField validation in `sanitization.jl`.
-  - [x] **Unique Constraint Validation**: `unique=true` enforcement in validator.
-  - [x] **String Field Boundaries**: CharField/TextField max_length with Unicode edge cases.
-  - [x] **Boolean Edge Cases**: BooleanField truthiness and coercion handling.
-  - [x] **Temporal Field Gaps**: TimeField, DateTimeField (timezone-aware), DateField (string formats, boundary times, bulk operations).
-  - [x] **Numeric Validation**: FloatField, DecimalField (finite-ness, scale/precision checks).
-
-- [ ] **Field Validation Test Coverage Gaps - Integration Tests**
+- [x] **Field Validation Test Coverage Gaps - Integration Tests**
   - **Focus**: Database write/read validation (complementary to unit tests), missing field types, delete operations.
-  - [ ] **Field DB Round-Trip Tests**: Verify all field types persist and retrieve correctly from PostgreSQL/SQLite.
+  - [x] **Field DB Round-Trip Tests**: Verify all field types persist and retrieve correctly from PostgreSQL/SQLite.
     - Test that ORM-written values match their database representation when read back.
     - Validate type coerccion during write and type recovery during read for each field type.
-  - [ ] **Missing Field Types DB Tests**: Integration tests for:
-    - `TimeField`: Persist time-only values, verify no date contamination.
-    - `UUIDField`: Native UUID support, UUID string parsing and round-trip.
-    - `URLField`: URL validation at model level and database storage.
-    - `SlugField`: Slug validation (alphanumeric + hyphens/underscores) and storage.
-    - `JSONField`: JSON serialization, query support (`@>`, `?` operators), round-trip integrity.
-  - [ ] **Delete Operations with Constraints**: Test cascading deletes and FK relationship cleanup.
-    - Verify `on_delete=CASCADE` removes related records atomically.
-    - Verify `on_delete=SET_NULL` nullifies FK fields in related records.
-    - Verify `on_delete=PROTECT` prevents deletion when related records exist.
-    - Test nested cascade scenarios (3+ levels deep).
-  - [ ] **DELETE Inspection**: Test query inspection for DELETE operations (currently only SELECT/UPDATE inspected).
-    - Verify `inspect_query(:delete)` returns correct SQL and metadata.
+  - [x] **Missing Field Types DB Tests**: Integration tests for:
+    - [x] `TimeField`: Persist time-only values, verify no date contamination.
+    - [x] `UUIDField`: Native UUID support, UUID string parsing and round-trip.
+    - [x] `URLField`: URL validation at model level and database storage.
+    - [x] `SlugField`: Slug validation (alphanumeric + hyphens/underscores) and storage.
+    - [/] `JSONField`: JSON serialization and round-trip integrity. (Query support `@>`, `?` operators still missing).
+  - [x] **Delete Operations with Constraints**: Test cascading deletes and FK relationship cleanup.
+    - [x] Verify `on_delete=CASCADE` removes related records atomically.
+    - [x] Verify `on_delete=SET_NULL` nullifies FK fields in related records.
+    - [x] Verify `on_delete=PROTECT` prevents deletion when related records exist.
+    - [x] Test nested cascade scenarios (3+ levels deep).
+  - [x] **DELETE Inspection**: Test query inspection for DELETE operations (currently only SELECT/UPDATE inspected).
+    - [x] Verify `query.delete(show_query=:dict)` returns correct SQL and metadata.
 
 - [ ] **SQLite Parity**: Carry over PostgreSQL improvements to the SQLite adapter where possible.
 - [ ] **Performance Benchmarking**: Establish a baseline for query generation and execution overhead.
@@ -182,9 +168,9 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Add a "PostgreSQL Power User" guide.
 - [ ] **Thread Safety**: Audit connection pool for concurrent `Async` safety.
 
-## 🔍 Review Findings (March 2026)
+## 🔍 Review possible issues
 
-Issues identified during the code review of recent main changes. Ordered by priority.
+Issues identified during the code review of recent main changes
 
 - [ ] **`do_exists` silently swallows database errors**
   - **Location**: `src/querybuilder/execution.jl`, `do_exists` catch block.
@@ -219,6 +205,6 @@ Issues identified during the code review of recent main changes. Ordered by prio
   - **Context**: Currently, `LIMIT` and `OFFSET` are rendered as literal integers in the SQL string. This is safe (Julia enforces `Int` types), but parameterizing them would enable prepared statement caching across different page sizes and improve consistency with the bucket strategy.
   - **Task**: Add a `:limit` bucket to `PormGPositionalParam`, render `LIMIT ?` / `OFFSET ?`, and append values at the tail of `get_final_parameters` (after `:having`).
   
-# melhor que echo """
+# Better then echo """
 Write-Output @'
 '@ 

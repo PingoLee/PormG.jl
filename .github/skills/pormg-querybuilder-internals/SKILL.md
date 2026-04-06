@@ -97,9 +97,9 @@ Focus on:
 
 Useful internal tools:
 
-- `inspect_query(q)`
-- `show_query=:sql`
-- `show_query=:dict`
+- `show_query=:sql` on terminal methods (returns just the query string)
+- `show_query=:dict` on terminal methods (returns comprehensive metadata; e.g. `query.delete(show_query=:dict)`)
+- `inspect_query(q)` (used internally before execution; prefer `show_query` in integration/public API testing)
 - direct builder inspection when debugging parameter state
 
 ### Maintenance checklist

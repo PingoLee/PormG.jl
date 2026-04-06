@@ -2,6 +2,8 @@
 module Models
 using Dates, TimeZones
 using Base64
+using UUIDs
+import JSON
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
 import PormG: SQLConn, config, Configuration
@@ -604,6 +606,59 @@ end
 
 function format_duration_sql(value)
   throw(ArgumentError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UUID formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+const _UUID_REGEX = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+
+function format_uuid_sql(value::UUID)
+  return string(value)
+end
+
+function format_uuid_sql(value::Union{Missing, Nothing})
+  return missing
+end
+
+function format_uuid_sql(value::AbstractString)
+  s = strip(string(value))
+  occursin(_UUID_REGEX, s) || throw(ArgumentError("Invalid UUID format: '$s'. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+  return lowercase(s)
+end
+
+function format_uuid_sql(value)
+  throw(ArgumentError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JSON formatting
+# ─────────────────────────────────────────────────────────────────────────────
+
+function format_json_sql(value::Union{Missing, Nothing})
+  return missing
+end
+
+function format_json_sql(value::AbstractString)
+  try
+    JSON.parse(value)
+  catch e
+    throw(ArgumentError("Invalid JSON string: $(sprint(showerror, e))"))
+  end
+  return value
+end
+
+function format_json_sql(value::Union{AbstractDict, AbstractVector, NamedTuple})
+  return JSON.json(value)
+end
+
+function format_json_sql(value::Union{Bool, Integer, AbstractFloat})
+  return JSON.json(value)
+end
+
+function format_json_sql(value)
+  throw(ArgumentError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
 end
 
 function format_number_sql(value::Integer)

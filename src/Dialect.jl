@@ -120,13 +120,6 @@ function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MIN($(column))"
 end
 
-# Same that function CAST in django ORM
-# # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
-# # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
-# # 					When(**{ f'{data}__month__lte': 8 }, then=Value('2')),
-# # 					When(**{ f'{data}__month__lte': 12 }, then=Value('3')),
-# # 					output_field=CharField()
-# # 				)))
 function VALUE(value::Nothing, conn::PormGPostgres)
   return "NULL"
 end
@@ -375,25 +368,10 @@ function F(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,P
   return column
 end
 
-
-# postgresql query synopsis
-# CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] table_name ( [
-#   { column_name data_type [ STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN | DEFAULT } ] [ COMPRESSION compression_method ] [ COLLATE collation ] [ column_constraint [ ... ] ]
-#     | table_constraint
-#     | LIKE source_table [ like_option ... ] }
-#     [, ... ]
-# ] )
-# [ INHERITS ( parent_table [, ... ] ) ]
-# [ PARTITION BY { RANGE | LIST | HASH } ( { column_name | ( expression ) } [ COLLATE collation ] [ opclass ] [, ... ] ) ]
-# [ USING method ]
-# [ WITH ( storage_parameter [= value] [, ... ] ) | WITHOUT OIDS ]
-# [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
-# [ TABLESPACE tablespace_name ]
-
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sUUIDField, sURLField, sSlugField, sJSONField
 
 function _format_default_sql_value(default_value)
   if default_value isa AbstractString
@@ -455,6 +433,16 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa sForeignKey
     return type_map[field.type]
+  elseif field isa sUUIDField
+    return type_map[field.type]
+  elseif field isa sJSONField
+    return type_map[field.type]
+  elseif field isa sURLField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 200
+    return "$(type_map[field.type])($max_len)"
+  elseif field isa sSlugField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 50
+    return "$(type_map[field.type])($max_len)"
   else
     return "TEXT"
   end
@@ -490,6 +478,16 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sForeignKey
     return sql_type
+  elseif field isa sUUIDField
+    return sql_type
+  elseif field isa sJSONField
+    return sql_type
+  elseif field isa sURLField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 200
+    return "$(sql_type)($max_len)"
+  elseif field isa sSlugField
+    max_len = hasproperty(field, :max_length) ? field.max_length : 50
+    return "$(sql_type)($max_len)"
   else
     return "TEXT"
   end
@@ -582,6 +580,27 @@ function create_table(conn::PormGSQLite, table_name::String, columns::Vector{Str
     );"""
 end
 
+function _foreign_key_on_delete_sql(on_delete::Nothing)::String
+  return "NO ACTION"
+end
+
+function _foreign_key_on_delete_sql(on_delete)::String
+  action = string(on_delete) |> x -> split(x, ".")[end] |> uppercase |> strip
+  action = replace(action, " " => "_")
+
+  if action == "SET_NULL"
+    return "SET NULL"
+  elseif action == "SET_DEFAULT"
+    return "SET DEFAULT"
+  elseif action == "DO_NOTHING"
+    return "NO ACTION"
+  elseif action == "PROTECT"
+    return "RESTRICT"
+  else
+    return replace(action, "_" => " ")
+  end
+end
+
 function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
   for (field_name, field) in model.fields
@@ -600,7 +619,7 @@ function create_table(conn::PormGSQLite, model::PormGModel)
   # Add foreign key constraints for SQLite during CREATE TABLE
   for (field_name, field) in model.fields
     if field isa sForeignKey && field.db_constraint
-      on_delete_str = isnothing(field.on_delete) ? "NO ACTION" : (string(field.on_delete) |> x -> split(x, ".")[end] |> uppercase)
+      on_delete_str = _foreign_key_on_delete_sql(field.on_delete)
       target_pk = isnothing(field.pk_field) ? "id" : field.pk_field
       push!(columns, "FOREIGN KEY (\"$field_name\") REFERENCES \"$(field.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
@@ -784,7 +803,7 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   # Add foreign key constraints
   for (f_name, f) in model.fields
     if f isa sForeignKey && f.db_constraint
-      on_delete_str = isnothing(f.on_delete) ? "NO ACTION" : (string(f.on_delete) |> x -> split(x, ".")[end] |> uppercase)
+      on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
       target_pk = isnothing(f.pk_field) ? "id" : f.pk_field
       push!(columns_defs, "FOREIGN KEY (\"$f_name\") REFERENCES \"$(f.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
@@ -902,11 +921,13 @@ end
 # Function to deal with operators
 #
 
+_like_escape_clause() = " ESCAPE '\\'"
+
 function contains(conn::PormGPostgres, column::String, value::String)::String
-  return "$(column) LIKE $(value)"
+  return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function contains(conn::PormGSQLite, column::String, value::String)::String
-  return "$(column) LIKE $(value)"
+  return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function contains(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -914,10 +935,10 @@ function contains(conn::PormGAbstractType, column::String, value)
 end
 
 function icontains(conn::PormGPostgres, column::String, value::String)::String
-  return "$(column) ILIKE $(value)"
+  return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
 function icontains(conn::PormGSQLite, column::String, value::String)::String
-  return "LOWER($(column)) LIKE LOWER($(value))"
+  return "LOWER($(column)) LIKE LOWER($(value))$(_like_escape_clause())"
 end
 function icontains(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -925,10 +946,10 @@ function icontains(conn::PormGAbstractType, column::String, value)
 end
 
 function startswith(conn::PormGPostgres, column::String, value::String)::String
-  return "$(column) LIKE $(value)"
+  return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function startswith(conn::PormGSQLite, column::String, value::String)::String
-  return "$(column) LIKE $(value)"
+  return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function startswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -936,10 +957,10 @@ function startswith(conn::PormGAbstractType, column::String, value)
 end
 
 function istartswith(conn::PormGPostgres, column::String, value::String)::String
-  return "$(column) ILIKE $(value)"
+  return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
 function istartswith(conn::PormGSQLite, column::String, value::String)::String
-  return "LOWER($(column)) LIKE LOWER($(value))"
+  return "LOWER($(column)) LIKE LOWER($(value))$(_like_escape_clause())"
 end
 function istartswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -947,10 +968,10 @@ function istartswith(conn::PormGAbstractType, column::String, value)
 end
 
 function endswith(conn::PormGPostgres, column::String, value::String)::String
-  return "$(column) LIKE $(value)"
+  return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function endswith(conn::PormGSQLite, column::String, value::String)::String
-  return "$(column) LIKE $(value)"
+  return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function endswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -958,10 +979,10 @@ function endswith(conn::PormGAbstractType, column::String, value)
 end
 
 function iendswith(conn::PormGPostgres, column::String, value::String)::String
-  return "$(column) ILIKE $(value)"
+  return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
 function iendswith(conn::PormGSQLite, column::String, value::String)::String
-  return "LOWER($(column)) LIKE LOWER($(value))"
+  return "LOWER($(column)) LIKE LOWER($(value))$(_like_escape_clause())"
 end
 function iendswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))

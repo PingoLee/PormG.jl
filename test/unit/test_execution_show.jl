@@ -1,5 +1,5 @@
 using Test
-using PormG: object, Q, list, update
+using PormG: object, Q
 using PormG.Models: Model, CharField, IDField
 import PormG
 import DataFrames

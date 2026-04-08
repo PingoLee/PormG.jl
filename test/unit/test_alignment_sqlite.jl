@@ -40,7 +40,7 @@ end
     # Using cjoin (custom join) to inject parameters directly into ON clause
     q = M.Result.objects.filter("positionorder" => 1) # This goes to :where
 
-    cjoin(q, "raceid" => "Race", filters=["year" => 2000])
+    cjoin(q, "raceid" => "Race", filters=["year" => 2000], warn=false)
 
     # Trigger the join by accessing a field from the related model
     q.values("raceid__name", "points")
@@ -62,7 +62,7 @@ end
     q = M.Result.objects
 
     @test_throws ArgumentError begin
-        cjoin(q, "raceid" => "Race", filters=["points" => 10])
+        cjoin(q, "raceid" => "Race", filters=["points" => 10], warn=false)
     end
 end
 
@@ -331,7 +331,7 @@ end
     q = M.Result.objects.filter("raceid__year" => 2000)
 
     # Apply custom join to Result -> Race with 2 conditions
-    cjoin(q, "raceid" => "Race", filters=["raceid__year" => 2000, "raceid__round" => 1])
+    cjoin(q, "raceid" => "Race", filters=["raceid__year" => 2000, "raceid__round" => 1], warn=false)
     q.values("raceid__name")
 
     insp = q |> inspect_query
@@ -461,6 +461,35 @@ end
 
     @test 1990 in insp_select[:parameter_buckets][:where]
     @test length(insp_select[:parameter_buckets][:update]) == 0  # SELECT has no UPDATE params
+end
+
+@testset "Alignment Verification - DELETE Inspection" begin
+    # Test that DELETE operations bucket parameters correctly for positional logic
+    q = M.Result.objects.filter("resultid" => 999)
+
+    # Preferred mutation inspection pattern: show_query=:dict
+    insp_raw = q.delete(show_query=:dict)
+
+    # If cascaded deletes are present, find the one for "results"
+    insp = if insp_raw isa Vector
+        idx = findfirst(i -> i[:model] == "result", insp_raw)
+        insp_raw[idx]
+    else
+        insp_raw
+    end
+
+    @test insp[:operation] == :delete
+    @test insp[:dialect] == :sqlite
+    @test insp[:bucketing] == :positional
+
+    # Parameters should go into the :where bucket
+    @test 999 in insp[:parameter_buckets][:where]
+    @test insp[:parameters] == [999]
+
+    # Verify SQL shape
+    @test contains(insp[:sql_text], "DELETE FROM")
+    @test contains(insp[:sql_text], "WHERE")
+    @test count(==('?'), insp[:sql_text]) == 1
 end
 
 @testset "Alignment Verification - F() Expression in Filter" begin
@@ -611,7 +640,7 @@ end
     q = M.Result.objects
     With(q, "races_1991", races_91, join_field="raceid" => "raceid")
 
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
     q.filter("points" => 10)
     q.values("raceid__name", "driverid__surname", "points")
 
@@ -794,7 +823,7 @@ end
     # Passing Q and Qor with plain fields that should be prefixed
     cjoin(q, "driverid" => "Driver", filters=[
         Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))
-    ])
+    ], warn=false)
 
     q.filter("points" => 10)
     q.values("driverid__surname")
@@ -823,7 +852,7 @@ end
 @testset "Alignment Verification - set_context! Stability (Join Context)" begin
     # Verify that build_row_join_sql_text sets :join context properly
     q = M.Result.objects
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "German"])
+    cjoin(q, "driverid" => "Driver", filters=["nationality" => "German"], warn=false)
     q.filter("points" => 5)
     q.values("driverid__surname")
 
@@ -852,7 +881,7 @@ end
 
     # This should succeed because we use the correct target (Driver)
     q2 = M.Result.objects
-    cjoin(q2, "driverid" => "Driver", filters=["nationality" => "Italian"])
+    cjoin(q2, "driverid" => "Driver", filters=["nationality" => "Italian"], warn=false)
     q2.values("driverid__surname")
 
     insp = q2 |> inspect_query
@@ -907,7 +936,7 @@ end
 
     q = M.Result.objects
     With(q, "r91", races_91, join_field="raceid" => "raceid")
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
     q.filter("points" => 10)
     q.values("driverid__surname")
 
@@ -987,15 +1016,43 @@ end
 end
 
 @testset "Alignment Verification - DELETE Inspection" begin
-    # Test DELETE operation parameters land in :where bucket
-    q = M.Result.objects.filter("resultid" => 5)
+    # Test DELETE operation parameters land in :where bucket.
+    # Use a leaf model (no inbound FKs) so delete() returns a single dict.
+    # Models with inbound FKs (e.g. Result) produce a multi-step cascade plan.
+    q = M.New_join_position.objects.filter("id" => 5)
 
-    # Use inspect_query with explicit :delete operation
-    insp = q |> inspect_query(operation=:delete)
+    insp = q.delete(show_query=:dict)
 
     @test insp[:operation] == :delete
     @test 5 in insp[:parameter_buckets][:where]
     @test contains(insp[:sql_text], "DELETE")
+end
+
+@testset "Alignment Verification - DELETE Cascade Inspection" begin
+    # Deleting a model with inbound FKs produces a multi-step cascade plan.
+    # Each step is a Dict with :operation, :sql_text, :parameter_buckets, etc.
+    # Result has inbound FKs from Just_a_test_deletion (CASCADE, SET_NULL, SET_DEFAULT)
+    # and Just_a_nested_roll_back (CASCADE through Just_a_test_deletion).
+    q = M.Result.objects.filter("resultid" => 5)
+
+    insp = q.delete(show_query=:dict)
+
+    # Cascade produces a Vector of steps (SET_DEFAULT, SET_NULL, nested DELETE, DELETE, root DELETE)
+    @test insp isa Vector
+    @test length(insp) >= 2   # at minimum: dependent handling + root delete
+
+    # The last step must be the root DELETE on the target model
+    root_step = insp[end]
+    @test root_step[:operation] == :delete
+    @test contains(root_step[:sql_text], "DELETE")
+    @test contains(lowercase(root_step[:model]), "result")
+
+    # Every step must carry valid metadata
+    for step in insp
+        @test haskey(step, :operation)
+        @test haskey(step, :sql_text)
+        @test step[:operation] in (:delete, :update)
+    end
 end
 
 @testset "Alignment Verification - INSERT Inspection" begin
@@ -1031,7 +1088,7 @@ end
     q = M.Result.objects.filter("raceid__year" => 1990)
 
     # Add a custom join with a filter (lands in :join bucket)
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
 
     # Run UPDATE inspection
     insp = q.update("points" => 25, show_query=:inspection)
@@ -1059,7 +1116,7 @@ end
     With(q, "r91", races_91, join_field="raceid" => "raceid")
 
     # 2. Provide JOIN parameter (should go to :join)
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"])
+    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
 
     # 3. Provide WHERE parameter (should go to :where)
     q.filter("points__@gt" => 5)
@@ -1107,7 +1164,7 @@ end
     # `then=2` and `default=3` are rendered as SQL literals (THEN 2, ELSE 3).
     races_91.values("raceid", "points_avg" => Avg("round"), "cat" => Case([When("round__@gt" => 1, then=2)], default=3))
     # CTE-internal JOIN: param "Monza" → goes to PARENT's :join bucket
-    cjoin(races_91, "circuitid" => "Circuit", filters=["name" => "Monza"])
+    cjoin(races_91, "circuitid" => "Circuit", filters=["name" => "Monza"], warn=false)
     # CTE-internal WHERE: param 1991 → stays in :cte bucket
     races_91.filter("year" => 1991)
     # CTE-internal HAVING: param 5 → goes to PARENT's :having bucket
@@ -1123,7 +1180,7 @@ end
     cjoin(q, "driverid" => "Driver", filters=[
         "nationality" => "Italian",
         "code__@in" => ["VET", "MSC"]
-    ])
+    ], warn=false)
 
     # 3. Outer WHERE Elements (Order: 10 -> 20 -> 5 -> 5)
     q.filter(
@@ -1385,6 +1442,168 @@ end
     # Final order: CTE first, then WHERE (depth-first: Italy, then 1)
     @test insp[:parameters] == [1991, "Italy", 1]
     @test count(==('?'), insp[:sql_text]) == 3
+end
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION: related_objects Coverage Tests
+# Tests exercising the `related_objects` dictionary on Model_Type, which powers
+# reverse-join resolution in build_joins.jl.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "Related Objects - Second related_name (test_deletion2)" begin
+    # Just_a_test_deletion has two FKs to Result:
+    #   test_result  → related_name="test_deletion"
+    #   test_result2 → related_name="test_deletion2"
+    # This test verifies the second related_name resolves correctly.
+    q = M.Result.objects
+    q.values("resultid", "test_deletion2__name")
+    q.filter("test_deletion2__name" => "some-value")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    # The reverse relation must produce a JOIN
+    @test contains(sql, "JOIN")
+    # The just_a_test_deletion table must appear in the JOIN clause
+    @test match(r"JOIN.*?just_a_test_deletion.*?ON"s, sql) !== nothing
+    # Filter value lands in :where bucket
+    @test insp[:parameter_buckets][:where] == ["some-value"]
+end
+
+@testset "Related Objects - Chained reverse join (Result → test_deletion → nested)" begin
+    # Chain: Result ← Just_a_test_deletion (via test_deletion) ← Just_a_nested_roll_back (via auto-name)
+    # This exercises the while-loop branch at build_joins.jl:L238-L259.
+    q = M.Result.objects
+    q.values("resultid", "test_deletion__just_a_nested_roll_back__description")
+    q.filter("test_deletion__just_a_nested_roll_back__description" => "nested-value")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    # Must produce at least two JOINs (test_deletion + nested)
+    join_count = count("JOIN", sql)
+    @test join_count >= 2
+    # Both tables must appear
+    @test match(r"JOIN.*?just_a_test_deletion.*?ON"s, sql) !== nothing
+    @test match(r"JOIN.*?just_a_nested_roll_back.*?ON"s, sql) !== nothing
+    # Parameter ends up in :where
+    @test insp[:parameter_buckets][:where] == ["nested-value"]
+    # Placeholder count matches parameter count
+    @test count(==('?'), sql) == length(insp[:parameters])
+end
+
+@testset "Related Objects - on() with second related_name (test_deletion2)" begin
+    # on() against the second reverse relation must route parameters to :join bucket.
+    q = M.Result.objects
+    q.on("test_deletion2", "name" => "rev2-value")
+    q.filter("resultid__@in" => [1, 2])
+    q.values("resultid", "test_deletion2__name")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test insp[:parameter_buckets][:join] == ["rev2-value"]
+    @test insp[:parameter_buckets][:where] == [1, 2]
+    @test contains(sql, "LEFT JOIN")
+    @test match(r"JOIN.*?just_a_test_deletion.*?ON.*?name.*?WHERE"s, sql) !== nothing
+end
+
+@testset "Related Objects - on() with chained reverse path" begin
+    # on() through a chained reverse path: Result → test_deletion → nested
+    q = M.Result.objects
+    q.on("test_deletion", "just_a_nested_roll_back__description" => "chain-on-value")
+    q.filter("resultid" => 1)
+    q.values("resultid", "test_deletion__name")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test "chain-on-value" in insp[:parameter_buckets][:join]
+    @test 1 in insp[:parameter_buckets][:where]
+    @test contains(sql, "LEFT JOIN")
+end
+
+@testset "Related Objects - Error message lists related_objects keys" begin
+    # When a column is not found, the error message should list available related_objects.
+    # Result has related_objects including test_deletion, test_deletion2,
+    # test_deletion_set_null, and test_deletion_set_default.
+    q = M.Result.objects
+    err = nothing
+    try
+        q.values("nonexistent_reverse__name")
+        q.filter("nonexistent_reverse__name" => "x")
+        q |> inspect_query
+    catch e
+        err = e
+    end
+
+    @test err !== nothing
+    err_msg = string(err)
+    # The error should mention the available related_objects
+    @test contains(err_msg, "test_deletion") || contains(err_msg, "related")
+end
+
+@testset "Related Objects - set_models idempotency" begin
+    # Calling set_models twice should not duplicate related_objects entries.
+    # Save current state.
+    original_ro = deepcopy(M.Result.related_objects)
+
+    # Re-register models (simulates module reload)
+    PormG.Models.set_models(M, "mock_sl_path")
+
+    # related_objects should be identical (not doubled)
+    @test M.Result.related_objects == original_ro
+    @test length(M.Result.related_objects) == length(original_ro)
+
+    # Verify the expected keys still exist
+    @test haskey(M.Result.related_objects, "test_deletion")
+    @test haskey(M.Result.related_objects, "test_deletion2")
+    @test haskey(M.Result.related_objects, "test_deletion_set_null")
+    @test haskey(M.Result.related_objects, "test_deletion_set_default")
+end
+
+@testset "Related Objects - Auto-generated related_name key format" begin
+    # Just_a_nested_roll_back has a single FK to Just_a_test_deletion with no
+    # explicit related_name. The auto-generated key should be the lowercased
+    # model name of Just_a_nested_roll_back.
+    @test haskey(M.Just_a_test_deletion.related_objects, "just_a_nested_roll_back")
+
+    # Verify the tuple structure: (field_name, pk_field, related_model_name, pk_model)
+    entry = M.Just_a_test_deletion.related_objects["just_a_nested_roll_back"]
+    @test entry isa Tuple{Symbol, Symbol, Any, Symbol}
+    @test entry[1] == :test  # FK field name in Just_a_nested_roll_back
+    @test entry[2] == :id    # pk_field referenced in the FK definition
+end
+
+@testset "Related Objects - Duplicate related_name rejection" begin
+    # Creating two ForeignKeys to the same target model with the same related_name
+    # should raise an ArgumentError during set_models.
+    DupParent = PormG.Models.Model_Type(
+        name = "dup_parent",
+        fields = Dict(
+            "id" => PormG.Models.IDField()
+        ),
+        field_names = ["id"]
+    )
+
+    DupChild = PormG.Models.Model_Type(
+        name = "dup_child",
+        fields = Dict(
+            "id" => PormG.Models.IDField(),
+            "fk1" => PormG.Models.ForeignKey(DupParent, pk_field="id", on_delete="CASCADE", null=true, related_name="same_name"),
+            "fk2" => PormG.Models.ForeignKey(DupParent, pk_field="id", on_delete="CASCADE", null=true, related_name="same_name")
+        ),
+        field_names = ["id", "fk1", "fk2"]
+    )
+
+    # Create a temporary module with these models
+    dup_mod = Module(:dup_test_module)
+    Core.eval(dup_mod, :(const DupParent = $DupParent))
+    Core.eval(dup_mod, :(const DupChild = $DupChild))
+
+    # set_models should reject the duplicate related_name
+    @test_throws ArgumentError PormG.Models.set_models(dup_mod, "mock_sl_path")
 end
 
 

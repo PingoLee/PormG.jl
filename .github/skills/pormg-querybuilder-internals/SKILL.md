@@ -97,9 +97,9 @@ Focus on:
 
 Useful internal tools:
 
-- `inspect_query(q)`
-- `show_query=:sql`
-- `show_query=:dict`
+- `show_query=:sql` on terminal methods (returns just the query string)
+- `show_query=:dict` on terminal methods (returns comprehensive metadata; e.g. `query.delete(show_query=:dict)`)
+- `inspect_query(q)` (used internally before execution; prefer `show_query` in integration/public API testing)
 - direct builder inspection when debugging parameter state
 
 ### Maintenance checklist
@@ -131,6 +131,19 @@ Use integration tests when the question is:
 - Did update/delete/join semantics behave correctly end to end?
 
 Integration regressions should still use the public fluent API unless the bug only reproduces through a lower-level path.
+
+## Test Writing Standard
+
+- **Use standardized block headers for all `@testset` blocks**:
+  ```julia
+  # ─────────────────────────────────────────────────────────────────────────────
+  # [Feature/Area]: [Specific scenario being tested]
+  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
+  # and why the behavior matters to users or future maintainers]
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "..." begin
+  ```
+- Heavily comment test logic within the block
 
 ## Workflow
 

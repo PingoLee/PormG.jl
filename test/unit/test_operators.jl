@@ -129,6 +129,7 @@ const _R = _OperTestRace
     q_c = _D.objects.filter("forename__@contains" => "lew")
     r_c = q_c.list(show_query=:dict)
     @test contains(r_c[:sql_text], "LIKE") || contains(r_c[:sql_text], "ILIKE")
+    @test contains(r_c[:sql_text], "ESCAPE")
     @test r_c[:parameters] == ["%lew%"]
 
     # icontains → ILIKE '%val%' (Postgres) or LIKE with LOWER (SQLite)
@@ -136,18 +137,21 @@ const _R = _OperTestRace
     q_ic = _D.objects.filter("forename__@icontains" => "LEW")
     r_ic = q_ic.list(show_query=:dict)
     @test contains(r_ic[:sql_text], "ILIKE") || contains(r_ic[:sql_text], "LIKE")
+    @test contains(r_ic[:sql_text], "ESCAPE")
     @test r_ic[:parameters] == ["%LEW%"] 
 
     # startswith → LIKE 'val%'
     q_sw = _D.objects.filter("nationality__@startswith" => "Brit")
     r_sw = q_sw.list(show_query=:dict)
     @test contains(r_sw[:sql_text], "LIKE") || contains(r_sw[:sql_text], "ILIKE")
+    @test contains(r_sw[:sql_text], "ESCAPE")
     @test r_sw[:parameters] == ["Brit%"]
 
     # endswith → LIKE '%val'
     q_ew = _D.objects.filter("forename__@endswith" => "wis")
     r_ew = q_ew.list(show_query=:dict)
     @test contains(r_ew[:sql_text], "LIKE") || contains(r_ew[:sql_text], "ILIKE")
+    @test contains(r_ew[:sql_text], "ESCAPE")
     @test r_ew[:parameters] == ["%wis"]
   end
 

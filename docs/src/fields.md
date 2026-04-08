@@ -126,6 +126,42 @@ Status = Models.Model(
 
 ---
 
+## UUID Fields
+
+### UUIDField()
+
+**Purpose**: For storing Universally Unique Identifiers (UUIDs).
+
+**Database Type**: 
+- **PostgreSQL**: `UUID` (Native type)
+- **SQLite**: `TEXT`
+
+**Use Cases**: Distributed systems, secure primary keys, session tokens, unique object identifiers.
+
+```julia
+# UUID as a primary key
+Session = Models.Model(
+  _id = Models.UUIDField(primary_key=true, auto_add=true),
+  user_id = Models.ForeignKey("User")
+)
+
+# UUID as a unique token
+Password_reset = Models.Model(
+  _id = Models.IDField(),
+  user = Models.ForeignKey("User"),
+  token = Models.UUIDField(unique=true, auto_add=true),
+  created_at = Models.DateTimeField(auto_now_add=true)
+)
+```
+
+**Key Parameters**:
+- `auto_add::Bool = false`: If true, automatically generates a `uuid4()` on the application side when creating a new record without a provided value.
+- `primary_key::Bool = false`: Can be used as a primary key.
+- `default::Union{String, Nothing} = nothing`: A default UUID string.
+- `unique::Bool = false`: Enforce uniqueness.
+
+---
+
 ## Text Fields
 
 ### CharField(max_length)
@@ -221,6 +257,40 @@ Contact = Models.Model(
     name = Models.CharField(max_length=100),
     email = Models.EmailField(),
     message = Models.TextField()
+)
+```
+
+### URLField(max_length=200)
+
+**Purpose**: For storing website addresses and URIs with character length validation.
+
+**Database Type**: `VARCHAR(max_length)`
+
+**Use Cases**: Profile links, social media URLs, external references.
+
+```julia
+Profile = Models.Model(
+    _id = Models.IDField(),
+    website = Models.URLField(max_length=500, null=true, blank=true),
+    github_profile = Models.URLField(unique=true)
+)
+```
+
+### SlugField(max_length=50)
+
+**Purpose**: Compressed strings typically used to build SEO-friendly URLs.
+
+**Database Type**: `VARCHAR(max_length)`
+
+**Use Cases**: Article slugs, product identifiers in URLs.
+
+**Best Practice**: `SlugField` defaults to `db_index=true` as it is almost always used in `filter()` operations for routing.
+
+```julia
+Post = Models.Model(
+    _id = Models.IDField(),
+    title = Models.CharField(max_length=200),
+    slug = Models.SlugField(unique=true)
 )
 ```
 
@@ -531,6 +601,7 @@ Invoice = Models.Model(
 - Passing `ZonedDateTime` preserves the instant and is the recommended path for shared Django/PostgreSQL tables.
 - Passing a plain Julia `DateTime` through the standard formatter path currently interprets that value as `UTC`.
 - Internal `auto_now` and `auto_now_add` paths attach `settings.time_zone` to generated timestamps before serialization.
+- The same semantics are exercised on both PostgreSQL and SQLite integration backends, including `bulk_insert` and `bulk_update` paths for `DateTimeField` values.
 - If your Django app uses `USE_TZ=True` with a non-UTC active timezone, you should treat plain `DateTime` as a deliberate UTC input and use `ZonedDateTime` for local civil times.
 
 #### TIMESTAMPTZ vs TIMESTAMP
@@ -542,6 +613,7 @@ By default, `DateTimeField` uses `TIMESTAMPTZ`.
 - **Aware input**: `ZonedDateTime(2026, 3, 13, 9, 0, tz"America/Sao_Paulo")` keeps the source timezone semantics explicit.
 - **Naive input**: `DateTime(2026, 3, 13, 9, 0)` is currently serialized as `UTC`, not as `settings.time_zone`.
 - **Interop rule**: if the upstream system thinks in a local timezone, convert to `ZonedDateTime` before `create`, `update`, `bulk_insert`, or `bulk_update`.
+- **SQLite note**: SQLite stores datetime values as text, but PormG reconstructs `ZonedDateTime` / `DateTime` values on read so the high-level contract matches PostgreSQL.
 
 ```julia
 # Audit and logging
@@ -738,6 +810,33 @@ SecureData = Models.Model(
     encrypted_content = Models.BinaryField(),
     encryption_key_hash = Models.CharField(max_length=64)
 )
+```
+
+---
+
+## Structured Data Fields
+
+### JSONField()
+
+**Purpose**: Storing semi-structured data using JSON formatting.
+
+**Database Type**: 
+- **PostgreSQL**: `JSONB` (binary storage, fast querying, allows indexing)
+- **SQLite**: `TEXT` (stores as a JSON string)
+
+**Use Cases**: Configuration settings, variable data payloads, complex metadata.
+
+**Handling**: In Julia, this field accepts and returns `Dict` or `Vector` types, automatically handling the serialization/deserialization.
+
+```julia
+Config = Models.Model(
+    _id = Models.IDField(),
+    settings = Models.JSONField(),
+    metadata = Models.JSONField(null=true, blank=true)
+)
+
+# Example usage:
+# Config.objects.create(settings=Dict("theme"=>"dark", "notifications"=>true))
 ```
 
 ---
@@ -986,6 +1085,8 @@ User = Models.Model(
 3. **Consider nullable fields** for optional data
 4. **Use choices** for enumerated values instead of separate tables
 5. **Avoid BinaryField** for large files; use file paths instead
+6. **Use UUIDField for distributed identity** to avoid primary key collisions across systems
+7. **Use JSONField for flexible metadata** that does not require a rigid relational schema
 
 
 ---

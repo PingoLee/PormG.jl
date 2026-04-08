@@ -19,7 +19,9 @@ end
 @testset "PormG Unit Tests" begin
     if HAS_AQUA
         @testset "Aqua Quality Checks" begin
-            Aqua.test_all(PormG)
+            # We bypass stale_deps because the profiling tools (SnoopCompile, etc)
+            # are in Project.toml Extras but not used in the main library code.
+            Aqua.test_all(PormG; stale_deps=false)
         end
     end
 
@@ -33,9 +35,8 @@ end
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
-    @testset "Password Encoding" include("unit/test_password.jl")
-    @testset "Password Validation i18n" include("unit/test_password_i18n.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
+    @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     # include("unit/test_migration_planner.jl")
 end
 

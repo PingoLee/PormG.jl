@@ -99,6 +99,32 @@ PormG.config["default"] = MockSettings
     # Test: inspect_query(operation=:delete) returns :operation => :delete (explicitly requested)
     res_inspect_delete = inspect_query(q, operation=:delete)
     @test res_inspect_delete[:operation] === :delete
+
+    
+  end
+
+  # Test: DELETE Inspection: Verify SQL and Metadata
+  @testset "DELETE Inspection: Detailed Verification" begin
+      q_del = DriverModel.objects;
+      q_del.filter("id" => 880001);
+
+      # Using show_query=:dict as it's the preferred pattern for mutations.
+      # Deletion may return a Vector for cascaded operations; pick the drivers entry.
+      inspection_raw = q_del.delete(show_query=:dict)
+
+      inspection = if inspection_raw isa Vector
+          idx = findfirst(i -> i[:model] == "drivers", inspection_raw)
+          inspection_raw[idx]
+      else
+          inspection_raw
+      end
+
+      @test inspection[:operation] === :delete
+      @test contains(inspection[:sql_text], "DELETE FROM")
+      @test occursin("drivers", lowercase(inspection[:sql_text]))
+      @test inspection[:parameter_count] == 1
+      @test inspection[:parameters] == [880001]
+      @test inspection[:dialect] === :postgresql
   end
 
   # ===== Section 3: Operation Auto-Detection Heuristic =====

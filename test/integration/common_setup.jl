@@ -29,7 +29,7 @@ end
 import PormG: with_transaction, Models, Dialect
 import PormG.Configuration: with_tx_context, get_tx_connection
 import PormG.ConnectionPool: fetch_async, await_result
-import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, do_count, do_exists, Max, Min, With, Value, Round
+import PormG.QueryBuilder: Sum, Avg, Case, When, Count, Q, Qor, F, page, Max, Min, With, Value, Round
 import PormG.QueryBuilder: quote_identifier, safe_table_identifier, escape_like_pattern
 import PormG.QueryBuilder: cjoin
 
@@ -64,7 +64,7 @@ adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
 # julia -t auto --project=. -i test/integration/common_setup.jl
 # julia -t auto --project=. test/integration/test_database_setup.jl
 # julia -t auto --project=. test/integration/test_bulk_copy.jl
-# julia -t auto --project=. test/integration/test_migration_bootstrap.jl
+# julia -t auto --project=. test/integration/test_field_validation_db_roundtrip.jl
 # julia -t auto --project=. test/integration/runtests.jl
 # $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
-# include("test_bulk_copy.jl")
+# 2>&1 | Tee-Object -FilePath "test_sf_out.txt"

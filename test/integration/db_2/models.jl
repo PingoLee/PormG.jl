@@ -165,7 +165,9 @@ Just_a_test_deletion = Models.Model(
   id=Models.IDField(),
   name=Models.CharField(),
   test_result=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
-  test_result2=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
+  test_result2=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2"),
+  test_result_set_null=Models.ForeignKey(Result, pk_field="resultId", on_delete="SET_NULL", null=true, related_name="test_deletion_set_null"),
+  test_result_set_default=Models.ForeignKey(Result, pk_field="resultId", on_delete="SET_DEFAULT", default=1, null=true, related_name="test_deletion_set_default")
 )
 
 Just_a_nested_roll_back = Models.Model(
@@ -179,6 +181,27 @@ New_join_position = Models.Model(
   description=Models.CharField(),
   result=Models.IntegerField(null=true),
   boolean_field=Models.BooleanField(null=true)
+)
+
+Field_validation_scratch = Models.Model("field_validation_scratch",
+  id=Models.IDField(),
+  uuid_token=Models.UUIDField(unique=true),
+  canonical_url=Models.URLField(max_length=500),
+  slug=Models.SlugField(max_length=120, unique=true),
+  payload=Models.JSONField(null=true)
+)
+
+# Mirrors the column types Django generates for DateTimeField/DateField/DecimalField.
+# Used to validate PormG's wire-format compatibility with Django-managed PostgreSQL schemas
+# without requiring Python or Django as a test dependency.
+Django_contract_scratch = Models.Model("django_contract_scratch",
+  id          = Models.IDField(),
+  label       = Models.CharField(max_length=100, unique=true),
+  created_at  = Models.DateTimeField(auto_now_add=true),    # Django: DateTimeField(auto_now_add=True)
+  updated_at  = Models.DateTimeField(auto_now=true),        # Django: DateTimeField(auto_now=True)
+  event_time  = Models.DateTimeField(null=true),            # Django: DateTimeField(null=True)
+  event_date  = Models.DateField(null=true),                # Django: DateField(null=True)
+  price       = Models.DecimalField(max_digits=10, decimal_places=2, null=true) # Django: DecimalField(max_digits=10, decimal_places=2)
 )
 
 end

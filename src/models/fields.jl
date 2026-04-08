@@ -330,7 +330,8 @@ function _get_on_delete_mode(on_delete::Nothing)
   return nothing
 end
 function _get_on_delete_mode(on_delete::AbstractString)
-  on_delete = uppercase(on_delete)
+  on_delete = uppercase(strip(on_delete))
+  on_delete = replace(on_delete, r"\s+" => "_")
   if contains(on_delete, "CASCADE")
     return CASCADE
   elseif contains(on_delete, "RESTRICT")
@@ -339,12 +340,12 @@ function _get_on_delete_mode(on_delete::AbstractString)
     return SET_NULL
   elseif contains(on_delete, "SET_DEFAULT")
     return SET_DEFAULT
+  elseif contains(on_delete, "NO_ACTION") || contains(on_delete, "DO_NOTHING")
+    return DO_NOTHING
   elseif contains(on_delete, "SET")
     return SET
   elseif contains(on_delete, "PROTECT")
     return PROTECT
-  elseif contains(on_delete, "DO_NOTHING")
-    return DO_NOTHING
   else
     throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
   end
@@ -2424,6 +2425,398 @@ function DurationField(; kwargs...)
     editable,
     "INTERVAL",
     format_duration_sql
+  )
+end
+
+# ============================================================================
+# UUID Field
+# ============================================================================
+
+mutable struct sUUIDField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+  auto_add::Bool
+end
+
+"""
+    UUIDField(; kwargs...)
+
+A field for storing universally unique identifiers (UUIDs).
+
+Maps to PostgreSQL's native `UUID` type and stores as `TEXT` in SQLite.
+Values are validated against the standard UUID format (8-4-4-4-12 hex digits).
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `primary_key::Bool = false`: Whether this field is the primary key for the table
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{String, Nothing} = nothing`: Default UUID value as a string
+- `editable::Bool = true`: Whether the field should be editable in forms
+- `auto_add::Bool = false`: If true, automatically generates a UUID (`uuid4()`) when creating a new record without a provided value.
+
+# Database Mapping
+- **PostgreSQL Type**: UUID
+- **SQLite Type**: TEXT
+
+# Examples
+```julia
+using UUIDs
+
+Session = Models.Model(
+    _id = IDField(),
+    session_token = UUIDField(unique=true, db_index=true),
+    user_id = ForeignKey("User")
+)
+```
+"""
+function UUIDField(; kwargs...)
+  accepted = Set([
+      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :default, :editable, :auto_add
+  ])
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for UUIDField. It will be ignored." field="UUIDField" param=k value=v
+      end
+  end
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  primary_key = get(kwargs, :primary_key, false)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, true)
+  auto_add = get(kwargs, :auto_add, false)
+
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(auto_add isa Bool) && throw(ArgumentError("The 'auto_add' must be a Boolean"))
+
+  # Validate UUID format for string defaults (validate_default won't invoke the
+  # converter when the value already matches Union{String, Nothing})
+  if default isa AbstractString
+    default = format_uuid_sql(default)
+  else
+    default = validate_default(default, Union{String, Nothing}, "UUIDField", x -> format_uuid_sql(x))
+  end
+
+  return sUUIDField(
+    verbose_name,
+    primary_key,
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "UUID",
+    format_uuid_sql,
+    auto_add
+  )
+end
+
+# ============================================================================
+# URL Field
+# ============================================================================
+
+mutable struct sURLField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  max_length::Int
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+end
+
+"""
+    URLField(; kwargs...)
+
+A field for storing URLs, validated against a basic URL pattern.
+
+Maps to `VARCHAR(max_length)` in the database. Values are validated to start
+with `http://`, `https://`, or `ftp://`.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `max_length::Int = 200`: Maximum number of characters allowed
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{String, Nothing} = nothing`: Default URL value
+- `editable::Bool = true`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: VARCHAR(max_length)
+- **SQLite Type**: TEXT(max_length)
+
+# Examples
+```julia
+Circuit = Models.Model(
+    _id = IDField(),
+    name = CharField(max_length=200),
+    wiki_url = URLField(null=true, blank=true, verbose_name="Wikipedia Link")
+)
+```
+"""
+function URLField(; kwargs...)
+  accepted = Set([
+      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for URLField. It will be ignored." field="URLField" param=k value=v
+      end
+  end
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  max_length = get(kwargs, :max_length, 200)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, true)
+
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  max_length isa AbstractString && (max_length = parse(Int, max_length))
+  max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
+  max_length < 1 && throw(ArgumentError("The max_length must be greater than 0"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+
+  default = validate_default(default, Union{String, Nothing}, "URLField", x -> string(x))
+
+  return sURLField(
+    verbose_name,
+    false, # primary_key
+    max_length,
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "VARCHAR",
+    format_text_sql
+  )
+end
+
+# ============================================================================
+# Slug Field
+# ============================================================================
+
+mutable struct sSlugField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  max_length::Int
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+end
+
+"""
+    SlugField(; kwargs...)
+
+A field for storing URL-friendly slug strings.
+
+Slugs may contain only lowercase letters, numbers, hyphens, and underscores.
+Maps to `VARCHAR(max_length)` in the database. Typically used for
+human-readable URL fragments derived from titles or names.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `max_length::Int = 50`: Maximum number of characters allowed
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = true`: Whether to create a database index on this field (true by default for slugs)
+- `default::Union{String, Nothing} = nothing`: Default slug value
+- `editable::Bool = true`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: VARCHAR(max_length)
+- **SQLite Type**: TEXT(max_length)
+
+# Examples
+```julia
+Race = Models.Model(
+    _id = IDField(),
+    name = CharField(max_length=200),
+    slug = SlugField(unique=true, verbose_name="URL Slug")
+)
+```
+"""
+function SlugField(; kwargs...)
+  accepted = Set([
+      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for SlugField. It will be ignored." field="SlugField" param=k value=v
+      end
+  end
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  max_length = get(kwargs, :max_length, 50)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, true)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, true)
+
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  max_length isa AbstractString && (max_length = parse(Int, max_length))
+  max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
+  max_length > 255 && throw(ArgumentError("The max_length must be less than or equal to 255"))
+  max_length < 1 && throw(ArgumentError("The max_length must be greater than 0"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+
+  default = validate_default(default, Union{String, Nothing}, "SlugField", x -> string(x))
+
+  return sSlugField(
+    verbose_name,
+    false, # primary_key
+    max_length,
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "VARCHAR",
+    format_text_sql
+  )
+end
+
+# ============================================================================
+# JSON Field
+# ============================================================================
+
+mutable struct sJSONField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+end
+
+"""
+    JSONField(; kwargs...)
+
+A field for storing JSON-encoded data.
+
+Maps to PostgreSQL's native `JSONB` type (binary JSON with indexing support)
+and stores as `TEXT` in SQLite. Values are validated as parseable JSON before
+being sent to the database.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{String, Nothing} = nothing`: Default JSON value as a string
+- `editable::Bool = true`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: JSONB
+- **SQLite Type**: TEXT
+
+# Examples
+```julia
+Race = Models.Model(
+    _id = IDField(),
+    name = CharField(max_length=200),
+    metadata = JSONField(null=true, blank=true, verbose_name="Extra Data")
+)
+```
+
+# Notes
+- Values must be valid JSON strings when passed as strings.
+- Dict and Vector values are automatically serialized to JSON strings.
+- PostgreSQL JSONB supports GIN indexing for efficient key/value lookups.
+"""
+function JSONField(; kwargs...)
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for JSONField. It will be ignored." field="JSONField" param=k value=v
+      end
+  end
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, true)
+
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+
+  # Validate JSON format for string defaults (validate_default won't invoke the
+  # converter when the value already matches Union{String, Nothing})
+  if default isa AbstractString
+    default = format_json_sql(default)
+  else
+    default = validate_default(default, Union{String, Nothing}, "JSONField", x -> format_json_sql(x))
+  end
+
+  return sJSONField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "JSONB",
+    format_json_sql
   )
 end
 

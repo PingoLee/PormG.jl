@@ -429,7 +429,7 @@ end
 
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
-  column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor} where {N<:SQLTypeFunction,T}
+  column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
   agregate::Bool = false
   formater::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing
@@ -491,6 +491,10 @@ Wraps a PormGModel into an ObjectHandler on which you can call:
 - .create(...) for single-row DML
 - .update(...) for single-row DML
 - .limit(...), .offset(...), .page(...) for pagination
+- .count(), .exists() for quick checks without fetching data
+- .on(...) to specify joins with other models
+- .cjoin(...) for complex joins with custom conditions
+- .with(...) to define CTEs
 - plus bulk_insert, bulk_update, do_count, do_exists, list, etc.
 ```
 
@@ -549,8 +553,9 @@ mutable struct DeletionCollector{T}
   field_updates::Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,T}}}  # Field updates for SET_NULL etc.
   fast_deletes::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
+  show_query::Symbol  # Controls whether to execute or inspect; skips do_exists during inspection
 
-  DeletionCollector(model, settings) = new{Union{String,SQLObjectHandler}}(
+  DeletionCollector(model, settings, show_query=:execute) = new{Union{String,SQLObjectHandler}}(
     model,
     settings,
     settings.connections,
@@ -558,6 +563,7 @@ mutable struct DeletionCollector{T}
     Dict{PormGModel,Set{PormGModel}}(),
     Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,String}}}(),
     Dict{PormGModel,Dict{Symbol,String}}(),
-    Vector{PormGModel}()
+    Vector{PormGModel}(),
+    show_query
   )
 end

@@ -734,11 +734,19 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
   
   if use_tx_context
     # Reuse the transaction connection — COPY is part of the open transaction
-    res = LibPQ.execute(tx_conn, LibPQ.CopyIn(sql, data_itr))
     try
-      close(res)
-    finally
-      _drain_postgres_connection!(tx_conn)
+      res = LibPQ.execute(tx_conn, LibPQ.CopyIn(sql, data_itr))
+      try
+        close(res)
+      finally
+        _drain_postgres_connection!(tx_conn)
+      end
+    catch e
+      try
+        _drain_postgres_connection!(tx_conn)
+      catch
+      end
+      rethrow(e)
     end
   else
     # Acquire a pool connection for the duration of the COPY stream.
@@ -746,14 +754,20 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
     # so we must not release it until execute() returns.
     conn = acquire_connection(connection)
     try
-      res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
       try
-        close(res)
-      finally
-        _drain_postgres_connection!(conn)
+        res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
+        try
+          close(res)
+        finally
+          _drain_postgres_connection!(conn)
+        end
+      catch e
+        try
+          _drain_postgres_connection!(conn)
+        catch
+        end
+        rethrow(e)
       end
-    catch e
-      rethrow(e)
     finally
       release_connection(connection, conn)
     end

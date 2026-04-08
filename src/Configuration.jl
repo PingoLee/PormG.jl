@@ -267,7 +267,9 @@ function read_db_connection_data(path::String, settings::SQLConn) :: Dict{String
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME) 
 
   endswith(db_settings_file, ".yml") || throw("Unknow configuration file type - expecting .yml")
-  db_conn_data::Dict =  YAML.load(open(db_settings_file))
+  db_conn_data::Dict = open(db_settings_file) do io
+    YAML.load(io)
+  end
 
   # println(db_conn_data)
 

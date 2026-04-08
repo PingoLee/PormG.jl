@@ -23,12 +23,16 @@ include("common_setup.jl")
     @testset "SQL Functions"                begin include("test_sql_functions.jl")      end  
 
     # ── Phase 3: Advanced Features ───────────────────────────────────
-    @testset "Joins and CTEs"               begin include("test_joins_cte.jl")          end
+    @testset "Reverse Joins & on()"         begin include("test_reverse_joins.jl")      end
+    @testset "CTEs (with)"                  begin include("test_cte.jl")                end
+    @testset "Subqueries"                   begin include("test_subqueries.jl")         end
+    @testset "Custom Joins (cjoin)"         begin include("test_cjoin.jl")              end    
     @testset "Cached Joins"                 begin include("test_cache_join.jl")         end
     @testset "Transactions"                 begin include("test_transactions.jl")       end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end # TODO: extend this test
+    @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")                end
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 

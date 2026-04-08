@@ -1,11 +1,11 @@
 """
-Comprehensive validation test suite for all PormG field types and write operations.
+Targeted validation test suite for the field types and write-operation contracts exercised in this file.
 
 This file tests:
-- Each field type defined in `src/models/fields.jl` with proper constraints
-- Data type enforcement, nullability, unique-ness, defaults
-- User-facing API patterns (.objects.create(), .objects.update(), etc.)
-- Query inspection via show_query=:inspection
+- Core scalar, temporal, and relationship field contracts used by these regressions
+- Data type enforcement, nullability, uniqueness metadata, defaults, and formatter coercion
+- User-facing API patterns (.objects.create(), .objects.update(), inspect_query(), etc.)
+- Query inspection payloads, including parameter ordering and temporal normalization
 - Bulk operations (bulk_insert, bulk_update)
 - Field validation functions
 - Write operation metadata (auto_now_add, auto_now, defaults, formatters)
@@ -32,10 +32,7 @@ MockSettings = PormG.Configuration.Settings(
 )
 PormG.config["default"] = MockSettings
 
-@testset "Comprehensive Field Validation & Write Operations" begin
-
-    # --- SECTION 1: FIELD TYPE VALIDATION ---
-    
+@testset "SECTION 1: Field type validation" begin    
     @testset "Integer Fields (IDField, IntegerField, BigIntegerField)" begin
         mock_int_model = Models.Model_Type(
             name = "int_test",
@@ -307,8 +304,12 @@ PormG.config["default"] = MockSettings
             "event_time" => DateTime(2024, 6, 15, 10, 30, 0),
             show_query=:inspection
         )
+        expected_event_time = string(ZonedDateTime(DateTime(2024, 6, 15, 10, 30, 0), TimeZone("UTC")))
         @test create_with_auto[:operation] === :insert
+        @test create_with_auto[:parameter_count] == 3
         @test contains(create_with_auto[:sql_text], "created_at")  # Should be in SQL
+        @test any(==(expected_event_time), create_with_auto[:parameters])
+        @test count(param -> param isa AbstractString, create_with_auto[:parameters]) == 3
         
         # Test 15: Update with auto_now field (should be in SQL)
         update_auto_q = DateTimeModel.objects
@@ -317,8 +318,13 @@ PormG.config["default"] = MockSettings
             "event_time" => DateTime(2024, 7, 20, 15, 45, 30),
             show_query=:dict
         )
+        expected_updated_event_time = string(ZonedDateTime(DateTime(2024, 7, 20, 15, 45, 30), TimeZone("UTC")))
         @test update_with_auto[:operation] === :update
         @test contains(update_with_auto[:sql_text], "updated_at") || contains(update_with_auto[:sql_text], "UPDATE")
+        @test update_with_auto[:parameter_count] == 3
+        @test update_with_auto[:parameters][1] == 1
+        @test any(==(expected_updated_event_time), update_with_auto[:parameters][2:end])
+        @test count(param -> param isa AbstractString, update_with_auto[:parameters][2:end]) == 2
         
         # --- BULK OPERATIONS WITH DATETIMES ---
         
@@ -455,9 +461,9 @@ PormG.config["default"] = MockSettings
         @test bulk_update_date[:operation] === :update
         @test contains(bulk_update_date[:sql_text], "race_day") || contains(bulk_update_date[:sql_text], "UPDATE")
     end
+end
 
-    # --- SECTION 2: EXTENSIVE DATA TYPE VALIDATION WITH COMBINATIONS ---
-    
+@testset "SECTION 2: Field validation with complex combinations & constraints" begin    
     @testset "Extensive Field Combinations & Constraints" begin
         ExtensiveModel = Models.Model_Type(
             name = "comprehensive_table",
@@ -681,8 +687,9 @@ PormG.config["default"] = MockSettings
         @test contains(res_bulk_update_boundary[:sql_text], "UPDATE")
     end
 
-    # --- SECTION 3: USER-FACING API INTEGRATION ---
-    
+end
+
+@testset "SECTION 3: User-Facing API Integration" begin    
     @testset "User API Integration: .objects.create() with complex models" begin
         ComplexModel = Models.Model_Type(
             name = "complex_test",
@@ -865,9 +872,9 @@ PormG.config["default"] = MockSettings
             show_query=:dict
         )
     end
+end
 
-    # --- SECTION 4: BULK OPERATIONS & QUERY INSPECTION ---
-    
+@testset "SECTION 4 & 5: Bulk Operations & Query Inspection" begin    
     @testset "Bulk Operations Validation via Inspection" begin
         BulkModel = Models.Model_Type(
             name = "bulk_test",
@@ -908,8 +915,9 @@ PormG.config["default"] = MockSettings
         @test (contains(res_bulk_upd[:sql_text], "WHERE name") || contains(res_bulk_upd[:sql_text], "WHERE \"Tb\".\"name\"") || contains(res_bulk_upd[:sql_text], "WHERE") && contains(res_bulk_upd[:sql_text], "name"))
     end
 
-    # --- SECTION 5: QUERY INSPECTION FOR FIELD OPERATIONS ---
-    
+end
+
+@testset "SECTION 5: Query Inspection for Field Operations" begin    
     @testset "Query Inspection for Select/Update/Delete Operations" begin
         InspectModel = Models.Model_Type(
             name = "inspect_test",
@@ -946,10 +954,27 @@ PormG.config["default"] = MockSettings
         @test contains(res_update[:sql_text], "UPDATE") && (contains(res_update[:sql_text], "inspect_test") || contains(res_update[:sql_text], "\"inspect_test\""))
         @test contains(res_update[:sql_text], "is_active") || contains(res_update[:sql_text], "\"is_active\"")
         @test res_update[:parameters] == [1, false]  # filter value first, then update value
+
+        # Direct validator coverage and public API coverage should both reject PK mutations.
+        @test_throws ErrorException validate_field_data(InspectModel, "id", 2, "update"; allow_primary_key=false)
+
+        pk_update_q = InspectModel.objects
+        pk_update_q.filter("id" => 1)
+        @test_throws ErrorException pk_update_q.update("id" => 2, show_query=:dict)
+
+        # inspect_query has a dedicated delete branch that unwraps the inspection payload.
+        q_delete = InspectModel.objects
+        q_delete.filter("id" => 1)
+        inspection_delete = inspect_query(q_delete; operation=:delete)
+
+        @test inspection_delete[:operation] === :delete
+        @test contains(inspection_delete[:sql_text], "DELETE")
+        @test inspection_delete[:parameters] == [1]
     end
 
-    # --- SECTION 6: TEMPORAL FIELD GAPS ---
+end
 
+@testset "SECTION 6: Temporal Field Gaps" begin
     @testset "TimeField (Time-Only Values)" begin
         # TimeField represents time without a specific date (HHμ:MM:SS format)
         TimeModel = Models.Model_Type(
@@ -1105,8 +1130,11 @@ PormG.config["default"] = MockSettings
             "naive_timestamp" => DateTime(2024, 6, 15, 14, 30, 0),
             show_query=:inspection
         )
+        expected_naive_timestamp = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
         @test create_naive[:operation] === :insert
         @test contains(create_naive[:sql_text], "naive_timestamp")
+        @test create_naive[:parameter_count] == 1
+        @test create_naive[:parameters] == [expected_naive_timestamp]
 
         # Test 8: Create with ZonedDateTime (aware timestamp)
         create_aware = TzModel.objects.create(
@@ -1114,8 +1142,12 @@ PormG.config["default"] = MockSettings
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")),
             show_query=:inspection
         )
+        expected_aware_utc = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
         @test create_aware[:operation] === :insert
         @test contains(create_aware[:sql_text], "aware_timestamp")
+        @test create_aware[:parameter_count] == 2
+        @test any(==(expected_naive_timestamp), create_aware[:parameters])
+        @test any(==(expected_aware_utc), create_aware[:parameters])
 
         # Test 9: Create with non-UTC timezone (should preserve timezone info in round-trip)
         create_tz_sp = TzModel.objects.create(
@@ -1123,7 +1155,11 @@ PormG.config["default"] = MockSettings
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")),
             show_query=:inspection
         )
+        expected_aware_sao_paulo = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")))
         @test create_tz_sp[:operation] === :insert
+        @test create_tz_sp[:parameter_count] == 2
+        @test any(==(expected_naive_timestamp), create_tz_sp[:parameters])
+        @test any(==(expected_aware_sao_paulo), create_tz_sp[:parameters])
 
         # Test 10: Update with timezone-aware timestamp
         update_tz_q = TzModel.objects
@@ -1132,8 +1168,10 @@ PormG.config["default"] = MockSettings
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")),
             show_query=:dict
         )
+        expected_updated_aware_timestamp = string(ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")))
         @test update_tz[:operation] === :update
         @test contains(update_tz[:sql_text], "UPDATE")
+        @test update_tz[:parameters] == [1, expected_updated_aware_timestamp]
 
         # Test 11: Bulk operations with mixed naive and aware timestamps
         df_tz = DataFrame(
@@ -1148,8 +1186,20 @@ PormG.config["default"] = MockSettings
             scheduled_at = [nothing, nothing]
         )
         res_bulk_tz = bulk_insert(TzModel.objects, df_tz, show_query=:dict)
+        expected_bulk_naive = [
+            string(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
+            string(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("UTC")))
+        ]
+        expected_bulk_aware = [
+            string(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
+            string(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("America/Toronto")))
+        ]
         @test res_bulk_tz[:operation] === :insert
         @test res_bulk_tz[:parameter_count] == 6  # 2 rows * 3 columns (naive_timestamp, aware_timestamp, scheduled_at)
+        @test count(param -> param isa AbstractString, res_bulk_tz[:parameters]) == 4
+        @test count(ismissing, res_bulk_tz[:parameters]) == 2
+        @test all(expected -> any(==(expected), res_bulk_tz[:parameters]), expected_bulk_naive)
+        @test all(expected -> any(==(expected), res_bulk_tz[:parameters]), expected_bulk_aware)
 
         # Test 12: DST edge case - Spring forward (2024-03-10 in America/New_York)
         spring_forward_dt = DateTime(2024, 3, 10, 2, 30, 0)  # This time doesn't exist (clocks jump from 2:00 to 3:00)
@@ -1330,9 +1380,9 @@ PormG.config["default"] = MockSettings
             show_query=:inspection
         )
     end
+end
 
-    # --- SECTION 7: RELATIONSHIP FIELD VALIDATION ---
-
+@testset "SECTION 7: Relationship Field Validation" begin
     @testset "Relationship Fields: ForeignKey & OneToOneField" begin
         # Test ForeignKey field initialization and validation
         UserModel = Models.Model_Type(
@@ -1379,6 +1429,15 @@ PormG.config["default"] = MockSettings
         @test string(author_field.on_delete) == "CASCADE"
         editor_field = PostModel.fields["editor"]
         @test string(editor_field.on_delete) == "SET_NULL"
+
+        # Test 5b: SQL-style on_delete strings from schema introspection normalize
+        # back into the ORM's internal tokens.
+        sql_style_set_null = Models.ForeignKey("User", null=true, on_delete="SET NULL")
+        sql_style_set_default = Models.ForeignKey("User", null=true, default=1, on_delete="SET DEFAULT")
+        sql_style_no_action = Models.ForeignKey("User", null=true, on_delete="NO ACTION")
+        @test string(sql_style_set_null.on_delete) == "SET_NULL"
+        @test string(sql_style_set_default.on_delete) == "SET_DEFAULT"
+        @test string(sql_style_no_action.on_delete) == "DO_NOTHING"
 
         # Test 6: ForeignKey field contains related_name when specified
         @test editor_field.related_name == "edited_posts"
@@ -1441,8 +1500,9 @@ PormG.config["default"] = MockSettings
         @test bulk_profiles[:operation] === :insert
     end
 
-    # --- SECTION 8: UNIQUE CONSTRAINT VALIDATION ---
+end
 
+@testset "SECTION 8: Unique Constraint Validation" begin
     @testset "Unique Constraint Validation" begin
         # Test unique=true field enforcement
         UniqueModel = Models.Model_Type(
@@ -1524,9 +1584,9 @@ PormG.config["default"] = MockSettings
         bulk_unique_null = bulk_insert(UniqueModel.objects, df_unique_nullable, show_query=:dict)
         @test bulk_unique_null[:operation] === :insert
     end
+end
 
-    # --- SECTION 9: STRING FIELD BOUNDARIES ---
-
+@testset "SECTION 9: String Field Boundaries" begin
     @testset "String Field Boundaries: CharField & TextField" begin
         # Test CharField max_length enforcement
         StringModel = Models.Model_Type(
@@ -1638,8 +1698,9 @@ PormG.config["default"] = MockSettings
         @test_throws ErrorException validate_field_data(StringModel, "code", "你好世界中国", "insert")
     end
 
-    # --- SECTION 10: BOOLEAN FIELD EDGE CASES ---
+end
 
+@testset "SECTION 10: Boolean Field Edge Cases" begin
     @testset "Boolean Field Edge Cases & Truthiness" begin
         # Test BooleanField with various input values
         BoolModel = Models.Model_Type(
@@ -1765,3 +1826,244 @@ PormG.config["default"] = MockSettings
 
 end
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: Django Compatibility Contracts (Pure Julia, No DB)
+#
+# Validates PormG's ability to target Django-managed tables and match Django's
+# field semantics — without any Python or Django dependency.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SECTION: Django Compatibility Contracts" begin
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Table Prefix Contract
+    # Django uses app_label naming (e.g. `myapp_driver`).
+    # 1. The explicit table string passed to Model() remains verbatim for SQL queries.
+    # 2. If `django_prefix` is set in Configuration.Settings, PormG strips it
+    #    when generating internal relationship names (e.g., related_objects) 
+    #    so you don't get double-prefixed property names.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Table Prefix: Configuration parameter strips prefixes from relationships" begin
+        # Setup a configuration WITH a django_prefix
+        django_cfg = PormG.Configuration.Settings(
+            connections = MockPostgres(),
+            django_prefix = "prefix"
+        )
+        PormG.config["django_cfg_test"] = django_cfg
+
+        # Mimics what PormG Generator creates when it reads a Django DB:
+        # Django model `Dim_municipio` and `Dim_feriados` with prefix `prefix`
+        Dim_municipio = Models.Model("prefix_dim_municipio", 
+            id = Models.IDField()
+        )
+        Dim_feriados = Models.Model("prefix_dim_feriados",
+            ibge_id = Models.ForeignKey(Dim_municipio, pk_field="id", on_delete="RESTRICT"),
+            nome    = Models.CharField(),
+            ativo   = Models.BooleanField(default=true)
+        )
+        Dim_municipio.connect_key = "django_cfg_test"
+        Dim_feriados.connect_key  = "django_cfg_test"
+        Dim_municipio._module = @__MODULE__
+        Dim_feriados._module  = @__MODULE__
+
+        # 1. Prove the underlying table name used in SQL remains EXACTLY the explicit string
+        @test Dim_feriados.name == "prefix_dim_feriados"
+
+        q = Dim_feriados.objects
+        # PormG mirrors Django's relationship querying syntax:
+        # even though the literal field is `ibge_id`, you must drop the `_id`
+        # when traversing the join (using `ibge__`).
+        q.filter("ibge__id" => 1)
+        insp = inspect_query(q)
+        @test contains(insp[:sql_text], "prefix_dim_feriados")
+        @test !contains(insp[:sql_text], "prefix_prefix_dim_feriados")
+        
+        # Ensures that in the actual generated SQL, `ibge_id` is used because
+        # that is the literal definition of the physical column.
+        @test contains(insp[:sql_text], "\"ibge_id\"")
+
+        # 2. Prove the Configuration parameter strips the prefix for internal relationship naming
+        # This is where the `django_prefix` setting is actually used by PormG internally
+        feriado_logical_name = Models.get_model_name(Dim_feriados, django_cfg, false)
+        @test feriado_logical_name == "dim_feriados"  # "prefix_" was stripped!
+
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # DateField Truncation Contract (unit-level, SQL inspection only)
+    # Django silently truncates datetime to date. PormG must do the same.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "DateField: DateTime input truncates to Date (no error)" begin
+        DateContractModel = Models.Model_Type(
+            name = "django_date_contract",
+            fields = Dict(
+                "id"         => Models.IDField(),
+                "event_date" => Models.DateField(null=true),
+            ),
+            field_names = ["id", "event_date"],
+            connect_key = "default"
+        )
+
+        dt_with_time = DateTime(2024, 7, 14, 22, 30, 45)
+        plain_date   = Date(2024, 7, 14)
+
+        # Must NOT throw — truncation is a contract, not an error
+        @test validate_field_data(DateContractModel, "event_date", dt_with_time, "insert") === true
+        @test validate_field_data(DateContractModel, "event_date", plain_date,   "insert") === true
+
+        # SQL parameter must contain the date portion
+        insp = DateContractModel.objects.create(
+            "event_date" => dt_with_time,
+            show_query = :inspection
+        )
+        date_param = findfirst(p -> contains(string(p), "2024-07-14"), insp[:parameters])
+        @test !isnothing(date_param)
+        @test !any(p -> contains(string(p), "22:30"), insp[:parameters])
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # DecimalField Precision (unit-level)
+    # Validates that NUMERIC(10,2) precision constraints are enforced at ORM
+    # layer before any DB round-trip occurs.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "DecimalField: NUMERIC(10,2) precision enforced before DB" begin
+        PriceModel = Models.Model_Type(
+            name        = "django_decimal_contract",
+            fields      = Dict(
+                "id"    => Models.IDField(),
+                "price" => Models.DecimalField(max_digits=10, decimal_places=2)
+            ),
+            field_names = ["id", "price"],
+            connect_key = "default"
+        )
+
+        @test validate_field_data(PriceModel, "price", "99.99",    "insert") === true
+        @test validate_field_data(PriceModel, "price", "0.01",     "insert") === true
+        @test validate_field_data(PriceModel, "price", "-1234.56", "insert") === true
+        @test validate_field_data(PriceModel, "price", 3.14,       "insert") === true
+
+        @test_throws ErrorException validate_field_data(PriceModel, "price", "99.999",       "insert")
+        @test_throws ErrorException validate_field_data(PriceModel, "price", 9.141,          "insert")
+        @test_throws ErrorException validate_field_data(PriceModel, "price", "12345678901",  "insert")
+    end
+
+    @testset "SQL function helpers preserve advanced constructor inputs" begin
+        # These regressions protect the public helper boundary from becoming narrower
+        # than FObject itself. Advanced callers and internal builder paths may already
+        # hold a SQLField, so helpers like Lower/Round/Cast must continue to accept it.
+        @test hasmethod(QB.Lower, Tuple{QB.SQLField})
+        @test hasmethod(QB.Round, Tuple{QB.SQLField, Int})
+        @test hasmethod(QB.Cast, Tuple{QB.SQLField, String})
+
+        FunctionContractModel = Models.Model_Type(
+            name = "function_contract_model",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "forename" => Models.CharField(max_length=100),
+                "points" => Models.FloatField(null=true),
+            ),
+            field_names = ["id", "forename", "points"],
+            connect_key = "default"
+        )
+
+        q = FunctionContractModel.objects
+        q.values(
+            "lower_name" => QB.Lower(QB.SQLField("forename")),
+            "trimmed_name" => QB.Trim(QB.SQLField("forename")),
+            "name_len" => QB.Length(QB.SQLField("forename")),
+            "rounded_pts" => QB.Round(QB.SQLField("points"), 2),
+            "absolute_pts" => QB.Abs(QB.SQLField("points")),
+            "floored_pts" => QB.Floor(QB.SQLField("points")),
+            "sqrt_pts" => QB.Sqrt(QB.SQLField("points")),
+            "casted_pts" => QB.Cast(QB.SQLField("points"), "text")
+        )
+
+        insp = inspect_query(q)
+        sql = insp[:sql_text]
+
+        @test contains(sql, "LOWER")
+        @test contains(sql, "TRIM")
+        @test contains(sql, "LENGTH")
+        @test contains(sql, "ROUND")
+        @test contains(sql, "ABS")
+        @test contains(sql, "FLOOR")
+        @test contains(sql, "SQRT")
+        @test contains(sql, "::text") || contains(sql, "CAST(")
+        @test contains(sql, "\"forename\"")
+        @test contains(sql, "\"points\"")
+        @test 2 in insp[:parameters]
+    end
+
+    @testset "Aggregate-wrapped Round stays aggregate in inspection" begin
+        # Wrapping an aggregate FExpression in Round must not demote it to a non-aggregate
+        # select item, otherwise the builder incorrectly pushes it into GROUP BY.
+        AggregateContractModel = Models.Model_Type(
+            name = "aggregate_contract_model",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "team" => Models.CharField(max_length=100),
+                "points" => Models.FloatField(null=true),
+            ),
+            field_names = ["id", "team", "points"],
+            connect_key = "default"
+        )
+
+        q = AggregateContractModel.objects
+        q.values(
+            "team",
+            "avg_points_round" => QB.Round(QB.Sum("points") / QB.Count("id"), 1)
+        )
+        q.order_by("team")
+
+        insp = inspect_query(q)
+        sql = insp[:sql_text]
+
+        @test contains(sql, "ROUND")
+        @test contains(sql, "SUM")
+        @test contains(sql, "COUNT")
+        @test contains(sql, "GROUP BY 1")
+        @test !contains(sql, "GROUP BY ROUND")
+        @test !contains(sql, "GROUP BY SUM")
+        @test 1 in insp[:parameters]
+
+        wrapped_avg = QB.Round(QB.Sum("points") / QB.Count("id"), 1)
+        @test wrapped_avg.agregate === true
+    end
+
+    @testset "Extract and To_char preserve helper surface consistency" begin
+        # These helpers should accept the same advanced field wrappers as the rest of the
+        # SQL helper family: direct SQLField objects and F expressions.
+        @test hasmethod(QB.Extract, Tuple{QB.SQLField, String})
+        @test hasmethod(QB.Extract, Tuple{QB.FExpression, String})
+        @test hasmethod(QB.To_char, Tuple{QB.SQLField, String})
+        @test hasmethod(QB.To_char, Tuple{QB.FExpression, String})
+
+        DateHelperModel = Models.Model_Type(
+            name = "date_helper_model",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "created_at" => Models.DateTimeField(null=true),
+            ),
+            field_names = ["id", "created_at"],
+            connect_key = "default"
+        )
+
+        q = DateHelperModel.objects
+        q.values(
+            "year_from_sqlfield" => QB.Extract(QB.SQLField("created_at"), "YEAR"),
+            "year_from_f" => QB.Extract(QB.F("created_at"), "YEAR"),
+            "text_from_sqlfield" => QB.To_char(QB.SQLField("created_at"), "YYYY-MM-DD"),
+            "text_from_f" => QB.To_char(QB.F("created_at"), "YYYY-MM-DD")
+        )
+
+        insp = inspect_query(q)
+        sql = insp[:sql_text]
+
+        @test contains(sql, "EXTRACT") || contains(sql, "strftime")
+        @test contains(sql, "created_at")
+        @test contains(sql, "YYYY") || contains(sql, "%Y")
+    end
+
+end

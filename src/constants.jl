@@ -78,7 +78,10 @@ const sqlite_type_map = Dict{String, Symbol}(
   "INTERVAL" => :DurationField,
   "DATE" => :DateField,
   "BLOB" => :BinaryField,
-  "BOOLEAN" => :BooleanField
+  "BOOLEAN" => :BooleanField,
+  "UUID" => :UUIDField,
+  "JSON" => :JSONField,
+  "JSONB" => :JSONField
 )
 
 const postgres_type_map = Dict{String, Symbol}(
@@ -97,6 +100,9 @@ const postgres_type_map = Dict{String, Symbol}(
   "interval" => :DurationField,
   "blob" => :BinaryField,
   "double_precision" => :FloatField,
+  "uuid" => :UUIDField,
+  "json" => :JSONField,
+  "jsonb" => :JSONField,
 )
 
 # const postgres_map_type_to_cast = Dict{String, String}(
@@ -127,7 +133,10 @@ const sqlite_type_map_reverse = Dict{String, String}(
   "INTERVAL" => "INTERVAL",
   "DATE" => "DATE",
   "BLOB" => "BLOB",
-  "BOOLEAN" => "BOOLEAN"
+  "BOOLEAN" => "BOOLEAN",
+  "UUID" => "TEXT",
+  "JSONB" => "TEXT",
+  "JSON" => "TEXT"
 )
 
 const postgres_type_map_reverse = Dict{String, String}(

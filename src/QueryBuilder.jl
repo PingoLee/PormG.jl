@@ -1,7 +1,7 @@
 module QueryBuilder
 
 import DataFrames, Tables, JSON, CSV
-using Dates, TimeZones, Intervals, Decimals
+using Dates, TimeZones, Intervals, Decimals, UUIDs
 using SQLite, LibPQ
 
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey

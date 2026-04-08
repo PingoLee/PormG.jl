@@ -1,83 +1,124 @@
 # Subqueries and CTEs
 
-This page covers nested queries with `IN` and `WITH`-style common table expressions.
+This page covers nested queries with `IN (SELECT ...)`, Common Table Expressions (`WITH`), CTE join types, deep join paths, and mixing CTEs with custom joins.
+
+---
 
 ## Subqueries in Filters
 
+Pass a query object to `@in` to create a server-side `IN (SELECT ...)` predicate:
+
 ```julia
+# Build the subquery
 subquery = M.Status.objects
 subquery.filter("status" => "Engine")
-subquery.values("statusid")
+subquery.values("statusId")
 
+# Use it in the main query
 query = M.Result.objects
-query.filter("statusid__@in" => subquery)
-query.values("resultid", "statusid", "statusid__status", "grid", "driverid")
+query.filter("statusId__@in" => subquery)
+query.values("resultId", "statusId", "statusId__status", "grid", "driverId")
 df = query |> DataFrame
 ```
 
-This produces an `IN (SELECT ...)` predicate rather than materializing the subquery in Julia.
+This generates:
 
-## Subqueries with Additional Main-Query Filters
+```sql
+SELECT ... FROM "result" as "Tb" ...
+WHERE "Tb"."statusid" IN (SELECT "Tb"."statusid" FROM "status" as "Tb" WHERE "Tb"."status" = $1)
+```
+
+> [!TIP]
+> Subqueries run entirely on the server — PormG does not materialize the subquery in Julia. This is much more efficient for large datasets.
+
+---
+
+## Subqueries with Additional Filters
+
+Combine subquery `@in` with other filter conditions:
 
 ```julia
 subquery = M.Status.objects
 subquery.filter("status" => "Engine")
-subquery.values("statusid")
+subquery.values("statusId")
 
 query = M.Result.objects
-query.filter("statusid__@in" => subquery, "driverid__@lte" => 7)
+query.filter("statusId__@in" => subquery, "driverId__@lte" => 7)
 query.values(
-    "resultid",
-    "statusid",
-    "statusid__status",
+    "resultId",
+    "statusId",
+    "statusId__status",
     "grid",
-    "driverid",
-    "raceid__date__@quarter"
+    "driverId",
+    "raceId__date__@quarter"
 )
-query.order_by("raceid__date__quarter")
+query.order_by("raceId__date__quarter")
 df = query |> DataFrame
 ```
 
-## Common Table Expressions
+---
 
-CTEs are useful when the query becomes easier to reason about in stages.
+## Common Table Expressions (CTEs)
+
+CTEs (SQL `WITH` clauses) are useful when a query becomes easier to reason about in stages. PormG supports CTEs through the `.with()` method.
+
+### Why Use CTEs?
+
+- **Readability** — Break complex queries into named stages.
+- **Aggregation** — Pre-compute aggregates and join them back to the main query.
+- **Reuse** — Reference the same subquery multiple times without duplication.
+
+---
 
 ## Basic CTE with JOIN
 
+Define a subquery, give it a name, and join it to the main query via `join_field`:
+
 ```julia
-using PormG.QueryBuilder: Count
+using PormG: Count
 
-duplicates = M.Result.objects
-duplicates.filter("statusid" => 1)
-duplicates.values("driverid", "dias" => Count("resultid"))
+# Define the CTE: count results per driver (where status = 1)
+driver_stats = M.Result.objects
+driver_stats.filter("statusId" => 1)
+driver_stats.values("driverId", "total_results" => Count("resultId"))
 
+# Main query: join the CTE to Result via driverId
 main_query = M.Result.objects
-main_query.with("tb_dup" => duplicates, join_field="driverid" => "driverid")
+main_query.with("stats" => driver_stats, join_field="driverId" => "driverId")
 
-main_query.filter("resultid__@lte" => 100)
-main_query.values("resultid", "driverid", "tb_dup__dias")
+main_query.filter("resultId__@lte" => 100)
+main_query.values("resultId", "driverId", "stats__total_results")
 df = main_query |> DataFrame
 ```
+
+The `.with()` method:
+1. Emits the subquery as a `WITH stats AS (SELECT ...)` clause.
+2. Creates a `LEFT JOIN stats ON result.driverid = stats.driverid`.
+3. Makes `stats__total_results` available for selection via `values()`.
+
+---
 
 ## CTE with Multiple Aggregated Fields
 
 ```julia
-using PormG.QueryBuilder: Count, Sum
+using PormG: Count, Sum
 
+# CTE with multiple aggregates
 stats = M.Result.objects
-stats.filter("raceid__@lte" => 100)
+stats.filter("raceId__@lte" => 100)
 stats.values(
-    "driverid",
-    "total_results" => Count("resultid"),
-    "total_grid_positions" => Sum("grid")
+    "driverId",
+    "total_results"         => Count("resultId"),
+    "total_grid_positions"  => Sum("grid")
 )
 
+# Join CTE to Driver model
 query = M.Driver.objects
-query.with("driver_stats" => stats, join_field="driverid" => "driverid")
+query.with("driver_stats" => stats, join_field="driverId" => "driverId")
 
-query.filter("driverid__@lte" => 50)
+query.filter("driverId__@lte" => 50)
 query.values(
-    "driverid",
+    "driverId",
     "forename",
     "surname",
     "driver_stats__total_results",
@@ -86,131 +127,178 @@ query.values(
 df = query |> DataFrame
 ```
 
+---
+
 ## Multiple CTEs
 
+Attach multiple CTEs to the same query:
+
 ```julia
+# CTE 1: Recent races
 recent_races = M.Race.objects
 recent_races.filter("year__@gte" => 2020)
-recent_races.values("raceid", "name", "year")
+recent_races.values("raceId", "name", "year")
 
+# CTE 2: Top drivers
 top_drivers = M.Driver.objects
-top_drivers.filter("driverid__@lte" => 100)
-top_drivers.values("driverid", "forename", "surname")
+top_drivers.filter("driverId__@lte" => 100)
+top_drivers.values("driverId", "forename", "surname")
 
+# Main query with both CTEs
 query = M.Result.objects
-query.with("recent" => recent_races, join_field="raceid" => "raceid")
-query.with("top_d" => top_drivers, join_field="driverid" => "driverid")
+query.with("recent" => recent_races, join_field="raceId" => "raceId")
+query.with("top_d" => top_drivers, join_field="driverId" => "driverId")
 
-query.values("resultid", "recent__name", "top_d__forename", "points")
+query.values("resultId", "recent__name", "top_d__forename", "points")
 query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false)
 df = query |> DataFrame
 ```
 
+Each `.with()` call adds another `WITH` clause and `JOIN` to the final SQL.
+
+---
+
 ## Choosing Join Types for CTEs
 
+By default, CTEs use `LEFT JOIN`. Use `join_type="INNER"` to filter out non-matching rows:
+
 ```julia
-using PormG.QueryBuilder: Sum
+using PormG: Sum
 
 high_scorers = M.Result.objects
 high_scorers.filter("points__@gte" => 10)
-high_scorers.values("driverid", "max_points" => Sum("points"))
+high_scorers.values("driverId", "max_points" => Sum("points"))
 
 query = M.Driver.objects
 query.with(
     "high_scorers" => high_scorers,
-    join_field="driverid" => "driverid",
-    join_type="INNER"
+    join_field="driverId" => "driverId",
+    join_type="INNER"   # Only include drivers who have high scores
 )
 
-query.values("driverid", "forename", "max_points" => "high_scorers__max_points")
-query.filter("driverid__@lte" => 100)
+query.values("driverId", "forename", "max_points" => "high_scorers__max_points")
+query.filter("driverId__@lte" => 100)
 df = query |> DataFrame
 ```
 
-Available join types:
+### Available CTE Join Types
 
-- `"LEFT"` (default)
-- `"INNER"`
+| Join Type | Behavior |
+| :--- | :--- |
+| `"LEFT"` | Default. All main-table rows are kept; unmatched CTE columns are `missing`. |
+| `"INNER"` | Only rows that match the CTE are returned. |
 
-The SQL builder can also render other join keywords such as `"RIGHT"` and `"FULL"`, but those paths are more backend-dependent and are not the primary documented workflow on this page.
+The SQL builder can also render `"RIGHT"` and `"FULL"` join keywords, but these are not the primary documented workflow.
+
+---
 
 ## Deep Join Paths in CTE Links
 
+The `join_field` can contain a multi-level path with `__`. PormG builds the intermediate joins needed to connect the main query to the CTE:
+
 ```julia
-using PormG.QueryBuilder: Count
+using PormG: Count
 
+# CTE: count drivers per nationality
 nat_stats = M.Driver.objects
-nat_stats.values("nationality", "driver_count" => Count("driverid"))
+nat_stats.values("nationality", "driver_count" => Count("driverId"))
 
+# Main query: join CTE via a deep path (Result → Driver → nationality)
 query = M.Result.objects
-query.with("stats" => nat_stats, join_field="driverid__nationality" => "nationality")
+query.with("stats" => nat_stats, join_field="driverId__nationality" => "nationality")
 
-query.filter("raceid__year" => 2023)
-query.values("raceid__name", "driverid__surname", "stats__driver_count")
+query.filter("raceId__year" => 2023)
+query.values("raceId__name", "driverId__surname", "stats__driver_count")
 df = query |> DataFrame
 ```
-When `join_field` contains a path like `driverid__nationality`, PormG builds the intermediate joins needed to connect the main query to the CTE.
 
-## Omitting `join_field` — CTE Without a JOIN
+PormG automatically:
+1. Joins `Result → Driver` (via the `driverId` ForeignKey).
+2. Links `Driver.nationality` to `stats.nationality` (the CTE join column).
 
-If you call `.with("name" => subq)` without providing a `join_field`, PormG still emits the CTE in the `WITH` clause, but it does **not** produce any `JOIN` between the main table and the CTE. The CTE floats unattached.
+---
+
+## CTE Without a JOIN
+
+If you call `.with("name" => subq)` without providing `join_field`, PormG still emits the CTE in the `WITH` clause but does **not** join it to the main table:
 
 ```julia
-subq = M.Status.objects.filter("status" => "Engine").values("statusid")
+subq = M.Status.objects.filter("status" => "Engine").values("statusId")
 
 query = M.Result.objects
-# No join_field — CTE is declared in WITH but NOT joined to the main table
-query.with("engine_statuses" => subq)
+query.with("engine_statuses" => subq)   # Declared but not joined
 ```
 
-This is valid SQL, but in the high-level ORM API it mainly means the CTE is emitted into SQL scope without being attached to the main query tree:
+This is valid SQL, but the CTE data won't be accessible through `values()`. The main use case is combining a CTE declaration with a subquery filter:
 
 ```julia
 query = M.Result.objects
 query.with("sub" => subq)
-# You can still reuse the original subquery object in later filters:
-query.filter("statusid__@in" => subq)
+query.filter("statusId__@in" => subq)   # Reuse the subquery in a filter
 ```
 
 > [!TIP]
-> Always provide `join_field` when you want CTE data accessible in `.values()`. Without it, the CTE is available in SQL scope but produces no additional columns you can directly project.
+> Always provide `join_field` when you want CTE data accessible via `.values()`. Without it, the CTE is emitted but produces no additional projectable columns.
 
-## Advanced Custom Joins (`cjoin`)
+---
 
-For straightforward additions of models to the query tree without using full-blown CTE logic, you can use `.cjoin()`.
+## Mixing CTEs and Custom Joins
 
-### Chaining Multiple Joins with Multiple Filters
-
-You can chain multiple `cjoin`s and even specify multiple conditions directly inside the join's `filters` array.
+PormG allows CTEs and custom joins (`cjoin`) in the same query. Parameter ordering is deterministic across these combinations:
 
 ```julia
-query = M.Result.objects
-query.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian", "forename" => "Ayrton"])
-query.cjoin("raceid" => "Race", filters=["year" => 1991])
+using PormG: cjoin
 
-query.filter("positionorder" => 1)
-query.values("resultid", "driverid__surname", "raceid__name")
-df = query |> DataFrame
-```
-
-### Mixing `with` (CTEs) and `cjoin`
-
-PormG allows you to mix CTEs and Custom Joins in the same query. Parameter ordering is deterministic across these combinations:
-
-```julia
 # 1. Define the CTE
-top_const = M.Constructor.objects.filter("constructorid__@lte" => 5).values("constructorid", "name")
+top_const = M.Constructor.objects
+    .filter("constructorId__@lte" => 5)
+    .values("constructorId", "name")
 
 query = M.Result.objects
 
-# 2. Inject the CTE
-query.with("tc" => top_const, join_field="constructorid" => "constructorid")
+# 2. Attach the CTE
+query.with("tc" => top_const, join_field="constructorId" => "constructorId")
 
-# 3. Inject a standard Custom Join
-query.cjoin("driverid" => "Driver", filters=["nationality" => "German"])
+# 3. Add a custom join
+query.cjoin("driverId" => "Driver", filters=["nationality" => "German"])
 
-# 4. Filter and select seamlessly across physical tables, custom joins, and CTEs
-query.filter("positionorder" => 1)
-query.values("resultid", "tc__name", "driverid__surname")
+# 4. Filter and select across physical tables, custom joins, and CTEs
+query.filter("positionOrder" => 1)
+query.values("resultId", "tc__name", "driverId__surname")
 df = query |> DataFrame
 ```
+
+### Chaining Multiple Custom Joins
+
+```julia
+query = M.Result.objects
+query.cjoin("driverId" => "Driver", filters=["nationality" => "Brazilian", "forename" => "Ayrton"])
+query.cjoin("raceId" => "Race", filters=["year" => 1991])
+
+query.filter("positionOrder" => 1)
+query.values("resultId", "driverId__surname", "raceId__name")
+df = query |> DataFrame
+```
+
+See [Custom Joins](../custom_joins.md) for the full `cjoin()` and `on()` documentation.
+
+---
+
+## Summary
+
+| Feature | Syntax | Use Case |
+| :--- | :--- | :--- |
+| Subquery `IN` | `"field__@in" => subquery` | Filter by a set computed on the server. |
+| CTE with JOIN | `.with("name" => subq, join_field=...)` | Pre-aggregate data and join it. |
+| CTE without JOIN | `.with("name" => subq)` | Declare for use in filters only. |
+| CTE INNER JOIN | `join_type="INNER"` | Only keep matching rows. |
+| Deep join path | `join_field="a__b" => "field"` | Link CTE via multi-level relationships. |
+| CTE + cjoin | `.with(...)` + `.cjoin(...)` | Combine all join strategies. |
+
+---
+
+## Next Steps
+
+- **[Custom Joins](../custom_joins.md)** — Full `cjoin()` and `on()` documentation.
+- **[Field Expressions](field_expressions.md)** — Use `F()` for arithmetic and computed columns.
+- **[Q Objects](q_objects.md)** — Complex boolean logic in filters.

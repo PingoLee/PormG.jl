@@ -51,6 +51,36 @@ struct MockSQLite <: PormGSQLite end
         @test any(info -> occursin("AUTOINCREMENT", info), values(plan[:sqlite_table]))
     end
 
+    @testset "SQLite foreign-key actions use SQL keywords" begin
+        old_models = PormGModel[]
+        parent_model = Models.Model("parent_table",
+            id = Models.IDField(primary_key=true)
+        )
+        child_model = Models.Model("child_table",
+            id = Models.IDField(primary_key=true),
+            parent_set_null = Models.ForeignKey("parent_table", pk_field="id", on_delete="SET_NULL", null=true),
+            parent_set_default = Models.ForeignKey("parent_table", pk_field="id", on_delete="SET_DEFAULT", default=1, null=true),
+            parent_protect = Models.ForeignKey("parent_table", pk_field="id", on_delete="PROTECT", null=true),
+            parent_do_nothing = Models.ForeignKey("parent_table", pk_field="id", on_delete="DO_NOTHING", null=true)
+        )
+        current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+            :parent_table => Dict{Symbol, Union{Bool, PormGModel}}(:model => parent_model, :exist => false),
+            :child_table => Dict{Symbol, Union{Bool, PormGModel}}(:model => child_model, :exist => false)
+        )
+
+        plan = Migrations.get_migration_plan(old_models, current_schema, mock_conn_sl, settings)
+        child_sql = join(collect(values(plan[:child_table])), "\n")
+
+        @test occursin("ON DELETE SET NULL", child_sql)
+        @test occursin("ON DELETE SET DEFAULT", child_sql)
+        @test occursin("ON DELETE RESTRICT", child_sql)
+        @test occursin("ON DELETE NO ACTION", child_sql)
+        @test !occursin("SET_NULL", child_sql)
+        @test !occursin("SET_DEFAULT", child_sql)
+        @test !occursin("DO_NOTHING", child_sql)
+        @test !occursin("PROTECT", child_sql)
+    end
+
     @testset "Add Field Detection (Postgres)" begin
         old_table = Models.Model("test_table",
             id = Models.IDField(primary_key=true)

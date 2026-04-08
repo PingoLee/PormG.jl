@@ -216,6 +216,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     prev_b = row_join["b"]
     row_join = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
 
+    # Track whether the reverse-join branch already advanced vector
+    _reverse_advanced = false
+
     if first_column in new_object.field_names
       first_field = new_object.fields[first_column]
       !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
@@ -257,7 +260,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
       row_join["key_a"] = new_object.related_objects[vector[1]][2] |> String
       row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
+      foreign_table_name = s_model |> string
       vector = vector[2:end]
+      _reverse_advanced = true
 
     else
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
@@ -274,7 +279,11 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     
     tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
 
-    vector = vector[2:end]
+    # Only advance vector for forward-FK joins; reverse joins already advanced above
+    if !_reverse_advanced
+      vector = vector[2:end]
+    end
+
   end
 
   # tb_alias is the last table alias in the join ex. tb_1

@@ -80,9 +80,20 @@ Use unit tests when validating:
 ### Isolation discipline
 
 - Use isolated migration environments for destructive tests
-- Avoid mutating the main Formula 1 integration schema when a throwaway environment is available
 - Prefer `db_test_migration_pg/` or equivalent dedicated fixtures for PostgreSQL migration cycling
 
+### Test Writing Standard
+
+- **Use standardized block headers for all `@testset` blocks**:
+  ```julia
+  # ─────────────────────────────────────────────────────────────────────────────
+  # [Feature/Area]: [Specific scenario being tested]
+  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
+  # and why the behavior matters to users or future maintainers]
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "..." begin
+  ```
+- Heavily comment test logic within the block
 ## Documentation Rules
 
 - Keep migration docs synchronized with implementation in the same change when practical

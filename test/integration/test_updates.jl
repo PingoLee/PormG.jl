@@ -343,6 +343,36 @@ end
         @test res1[:name] == "row1"
     end
 
+      @testset "Bulk Update rejects duplicate dynamic filter keys" begin
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+        M.Just_a_test_deletion.objects.create("name" => "dup-key-row-1", "test_result" => 1)
+        M.Just_a_test_deletion.objects.create("name" => "dup-key-row-2", "test_result" => 2)
+
+        seeded = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
+        duplicate_id = seeded[1, :id]
+
+        dup_df = DataFrame(
+          id = [duplicate_id, duplicate_id],
+          name = ["dup-target-a", "dup-target-b"]
+        )
+
+        err = try
+          bulk_update(M.Just_a_test_deletion.objects, dup_df, columns = ["name"], filters = ["id"])
+          nothing
+        catch e
+          e
+        end
+
+        @test err !== nothing
+        @test occursin("duplicate dynamic filter key", lowercase(string(err)))
+
+        row1 = M.Just_a_test_deletion.objects.filter("name" => "dup-key-row-1").list() |> first
+        row2 = M.Just_a_test_deletion.objects.filter("name" => "dup-key-row-2").list() |> first
+        @test row1[:id] == duplicate_id
+        @test row1[:name] == "dup-key-row-1"
+        @test row2[:name] == "dup-key-row-2"
+      end
+
     @testset "Bulk Operations Mapping Adaptor" begin
         # This test ensures that the 'Adaptor' strategy correctly maps DataFrame columns
         # to Model fields without renaming the original DataFrame columns.

@@ -429,7 +429,7 @@ end
 
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
-  column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor} where {N<:SQLTypeFunction,T}
+  column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
   agregate::Bool = false
   formater::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing

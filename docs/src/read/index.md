@@ -205,7 +205,7 @@ q = M.Driver.objects.db("staging").filter("code" => "SEN")
 results = M.Result.objects.db("client_42").filter("positionOrder" => 1).list()
 ```
 
-See [Configuration: Dynamic Multi-Tenancy](../configuration.md) for setting up connection resolvers.
+See [Configuration: Dynamic Multi-Tenancy](../configuration/dynamic.md) for setting up connection resolvers.
 
 ---
 

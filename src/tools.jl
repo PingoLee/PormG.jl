@@ -59,6 +59,12 @@ function setup(path::String = DB_PATH)
         time_zone = time_zone
     )
 
+    print("Models file name [Default: models.jl]: ")
+    models_filename = readline() |> strip
+    if isempty(models_filename); models_filename = "models.jl"; end
+
+    Generator.create_models_jl(path, models_filename)
+
     println("\e[32mConfiguration saved successfully to $(joinpath(path, "connection.yml"))\e[0m")
     println("You can now load it using: \e[36mPormG.Configuration.load(\"$path\")\e[0m")
 

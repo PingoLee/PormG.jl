@@ -153,5 +153,43 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
   nothing
 end
 
+"""
+    create_models_jl(path::String, filename::String = "models.jl")::Nothing
+
+Creates a boilerplate models file in the specified configuration folder with a matching module name.
+"""
+function create_models_jl(path::String, filename::String = "models.jl")::Nothing
+    models_file = joinpath(path, filename)
+    module_name = replace(filename, ".jl" => "")
+    
+    # Don't overwrite if it already exists
+    if isfile(models_file)
+        return nothing
+    end
+
+    open(models_file, "w") do f
+        write(f, """
+module $module_name
+
+import PormG.Models
+import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
+
+# Define your models here
+# Example:
+# Driver = Models.Model("drivers",
+#     id        = Models.IDField(),
+#     forename  = Models.CharField(max_length=255),
+#     surname   = Models.CharField(max_length=255),
+# )
+
+Models.set_models(@__MODULE__, @__DIR__)
+
+end
+""")
+    end
+    nothing
+end
+
+
   
 end

@@ -19,7 +19,9 @@ end
 @testset "PormG Unit Tests" begin
     if HAS_AQUA
         @testset "Aqua Quality Checks" begin
-            Aqua.test_all(PormG)
+            # We bypass stale_deps because the profiling tools (SnoopCompile, etc)
+            # are in Project.toml Extras but not used in the main library code.
+            Aqua.test_all(PormG; stale_deps=false)
         end
     end
 

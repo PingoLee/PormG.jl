@@ -152,14 +152,9 @@ end
         @test _normalize_duration_value(pit_row[:duration]) == "00:00:26.898"
     end
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # DateTimeField timezone coverage is intentionally skipped here because the
-    # current integration schema exposes no DateTimeField-backed model/table.
-    # This should move from skipped to real coverage once seeded schema support exists.
-    # ─────────────────────────────────────────────────────────────────────────
-    @testset "Temporal Fields: DateTime with Timezone" begin
-        @test_skip false
-    end
+    # DateTimeField timezone round-trips now live in test_django_contract.jl via
+    # Django_contract_scratch, which provides dedicated DateTimeField coverage on
+    # real adapters without leaving a placeholder broken test here.
 
     # ─────────────────────────────────────────────────────────────────────────
     # DateField: update a real Race row, read it back, and restore the original
@@ -362,6 +357,79 @@ end
             _cleanup_field_validation_scratch_rows!([scratch_slug])
         end
     end
+
+    @testset "Scratch Fields: Unique Create Failure Leaves State Unchanged" begin
+        scratch_slug = "slug-unique-create-990505"
+        duplicate_uuid = string(uuid4())
+
+        try
+            _seed_field_validation_scratch!(
+                uuid_token=string(uuid4()),
+                canonical_url="https://example.com/f1/slug-unique-create",
+                slug=scratch_slug,
+                payload=Dict("kind" => "seed")
+            )
+
+            err = try
+                M.Field_validation_scratch.objects.create(
+                    "uuid_token" => duplicate_uuid,
+                    "canonical_url" => "https://example.com/f1/slug-unique-create/duplicate",
+                    "slug" => scratch_slug,
+                    "payload" => Dict("kind" => "duplicate")
+                )
+                nothing
+            catch e
+                e
+            end
+
+            @test err !== nothing
+            @test any(token -> occursin(token, lowercase(string(err))), ["unique", "duplicate", "constraint"])
+            @test M.Field_validation_scratch.objects.filter("slug" => scratch_slug).count() == 1
+            @test M.Field_validation_scratch.objects.filter("uuid_token" => duplicate_uuid).count() == 0
+        finally
+            _cleanup_field_validation_scratch_rows!([scratch_slug])
+        end
+    end
+
+    @testset "Scratch Fields: Unique Update Failure Leaves Rows Unchanged" begin
+        original_slug = "slug-unique-update-a-990506"
+        conflicting_slug = "slug-unique-update-b-990506"
+
+        try
+            _seed_field_validation_scratch!(
+                uuid_token=string(uuid4()),
+                canonical_url="https://example.com/f1/slug-unique-update/a",
+                slug=original_slug,
+                payload=Dict("kind" => "original")
+            )
+            _seed_field_validation_scratch!(
+                uuid_token=string(uuid4()),
+                canonical_url="https://example.com/f1/slug-unique-update/b",
+                slug=conflicting_slug,
+                payload=Dict("kind" => "conflicting")
+            )
+
+            update_query = M.Field_validation_scratch.objects
+            update_query.filter("slug" => conflicting_slug)
+
+            err = try
+                update_query.update("slug" => original_slug)
+                nothing
+            catch e
+                e
+            end
+
+            @test err !== nothing
+            @test any(token -> occursin(token, lowercase(string(err))), ["unique", "duplicate", "constraint"])
+            @test M.Field_validation_scratch.objects.filter("slug" => original_slug).count() == 1
+            @test M.Field_validation_scratch.objects.filter("slug" => conflicting_slug).count() == 1
+
+            persisted_row = M.Field_validation_scratch.objects.filter("slug" => conflicting_slug).values("slug").list() |> first
+            @test persisted_row[:slug] == conflicting_slug
+        finally
+            _cleanup_field_validation_scratch_rows!([original_slug, conflicting_slug])
+        end
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -370,6 +438,57 @@ end
 # These tests verify behaviour that unit SQL inspection cannot prove.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Delete Operations with FK Constraints" begin
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public delete should refuse unfiltered destructive operations unless the
+    # caller explicitly opts in. This keeps the guard covered by an executing
+    # integration test instead of only by indirect cleanup call sites.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete Guard: Unfiltered Delete is Rejected" begin
+        scratch_slug = "delete-guard-990507"
+
+        try
+            _seed_field_validation_scratch!(
+                uuid_token=string(uuid4()),
+                canonical_url="https://example.com/f1/delete-guard",
+                slug=scratch_slug,
+                payload=Dict("kind" => "guard")
+            )
+
+            err = try
+                M.Field_validation_scratch.objects.delete()
+                nothing
+            catch e
+                e
+            end
+
+            @test err !== nothing
+            @test occursin("delete must have a filter", lowercase(string(err)))
+            @test M.Field_validation_scratch.objects.filter("slug" => scratch_slug).count() == 1
+        finally
+            _cleanup_field_validation_scratch_rows!([scratch_slug])
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Keyless fixture tables have a dedicated delete path: filtered execution is
+    # intentionally rejected, while delete-all inspection must still emit a
+    # direct table DELETE for maintenance workflows.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete on Keyless Models: Guard and Direct SQL" begin
+        lap_query = M.Lap_times.objects
+        lap_query.filter("raceid" => 841, "driverid" => 20, "lap" => 1)
+
+        @test lap_query.count() == 1
+        @test_throws ArgumentError lap_query.delete()
+        @test lap_query.count() == 1
+
+        inspection = M.Lap_times.objects.delete(allow_delete_all = true, show_query = :dict)
+        @test inspection[:operation] === :delete
+        @test inspection[:parameter_count] == 0
+        @test isempty(inspection[:parameters])
+        @test occursin("delete from lap_times", lowercase(inspection[:sql_text]))
+    end
+
     # ─────────────────────────────────────────────────────────────────────────
     # CASCADE: deleting a scratch Result should remove the Just_a_test_deletion
     # children that reference it through the public delete API.

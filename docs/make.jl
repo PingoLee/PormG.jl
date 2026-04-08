@@ -15,10 +15,21 @@ makedocs(
     
     pages = [
         "Home" => "index.md",
-        "Configuration" => "configuration.md",
         "Models" => "models.md",
         "Fields" => "fields.md",
-        "Migrations" => "migrations.md",
+        "Configuration" => [
+            "Overview" => "configuration/index.md",
+            "Setup" => "configuration/setup.md",
+            "Server Patterns" => "configuration/server.md",
+            "Dynamic & Multi-Tenancy" => "configuration/dynamic.md",
+            "Advanced" => "configuration/advanced.md",
+        ],        
+        "Migrations" => [
+            "Overview" => "migrations/index.md",
+            "Workflow" => "migrations/workflow.md",
+            "Advanced" => "migrations/advanced.md",
+            "Tachikoma Dashboard" => "migrations/tachikoma.md",
+        ],
         "Writing" => [
             "Overview" => "write/index.md",
             "Creating Records" => "write/create.md",
@@ -53,6 +64,7 @@ makedocs(
         canonical = "https://pingolee.github.io/PormG.jl",
         
         assets = String[],
+        size_threshold = 400 * 1024, # 400 KiB
     ),
     checkdocs = :none,
 )

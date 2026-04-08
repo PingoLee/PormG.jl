@@ -9,13 +9,45 @@ end
     base_query = M.Just_a_test_deletion.objects
     base_query.exists() && base_query.delete(allow_delete_all = true)
 
+    @testset "empty bulk_insert and bulk_update are no-ops" begin
+        query = M.Just_a_test_deletion.objects
+        query.exists() && query.delete(allow_delete_all = true)
+        try
+            query.create("name" => "empty-bulk-sentinel", "test_result" => 1)
+
+            initial_count = query.count()
+
+            empty_insert = DataFrames.DataFrame(
+                name = String[],
+                test_result = Int64[]
+            )
+            @test isnothing(bulk_insert(query, empty_insert))
+            @test M.Just_a_test_deletion.objects.count() == initial_count
+
+            empty_update = DataFrames.DataFrame(
+                id = Int64[],
+                name = String[]
+            )
+            @test isnothing(bulk_update(query, empty_update, columns = ["name"], filters = ["id"]))
+
+            persisted = M.Just_a_test_deletion.objects.filter("name" => "empty-bulk-sentinel").list() |> first
+            @test persisted[:name] == "empty-bulk-sentinel"
+            @test M.Just_a_test_deletion.objects.count() == initial_count
+        finally
+            query = M.Just_a_test_deletion.objects
+            query.exists() && query.delete(allow_delete_all = true)
+        end
+    end
+
     @testset "bulk_insert rejects Float64 for integer-backed fields" begin
         # The `test_result` field is a ForeignKey backed by BIGINT. A Float64 like 14.0 used
         # to be silently coerced in the bulk DataFrame preparation path. We now require the
         # caller to provide an actual integer representation so row intent stays explicit.
+        query = M.Just_a_test_deletion.objects
+        query.exists() && query.delete(allow_delete_all = true)
+
         df_bad = DataFrames.DataFrame(name = ["bad-float"], test_result = [14.0])
 
-        query = M.Just_a_test_deletion.objects
         err = try
             bulk_insert(query, df_bad)
             nothing
@@ -34,6 +66,7 @@ end
         # `test_result` is nullable, so a missing value should survive validation and round-trip.
         # This matters for fixture imports where optional foreign keys are intentionally absent.
         query = M.Just_a_test_deletion.objects
+        query.exists() && query.delete(allow_delete_all = true)
         df_nullable = DataFrames.DataFrame(name = ["nullable-ok"], test_result = [missing])
         bulk_insert(query, df_nullable)
 
@@ -145,6 +178,56 @@ else
     new_row = query.create("name" => "Sequence check", "test_result" => 999)
     @test new_row[:id] > last_id
 
+end
+
+@testset "bulk_copy: empty DataFrame is a no-op" begin
+    query = M.Just_a_test_deletion.objects
+    query.exists() && query.delete(allow_delete_all = true)
+    query.create("name" => "copy-empty-sentinel", "test_result" => 1)
+
+    initial_count = query.count()
+    empty_copy = DataFrames.DataFrame(
+        name = String[],
+        test_result = Int64[]
+    )
+
+    @test isnothing(bulk_copy(query, empty_copy))
+    @test query.count() == initial_count
+    @test query.filter("name" => "copy-empty-sentinel").count() == 1
+end
+
+@testset "bulk_copy: duplicate-key failure rolls back the whole batch" begin
+    query = M.Status.objects
+    scratch_ids = collect(310001:320000)
+    duplicate_id = first(scratch_ids)
+
+    cleanup = M.Status.objects
+    cleanup.filter("statusid__@in" => scratch_ids)
+    cleanup.exists() && cleanup.delete()
+
+    try
+        df_duplicate = DataFrames.DataFrame(
+            statusid = vcat(scratch_ids, duplicate_id),
+            status = vcat(["copy-batch-$(id)" for id in scratch_ids], ["copy-batch-duplicate"])
+        )
+
+        err = try
+            Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+                bulk_copy(query, df_duplicate)
+            end
+            nothing
+        catch e
+            e
+        end
+
+        @test err !== nothing
+        @test any(token -> occursin(token, lowercase(string(err))), ["unique", "duplicate", "constraint"])
+        @test M.Status.objects.filter("statusid__@in" => scratch_ids).count() == 0
+    finally
+        cleanup = M.Status.objects
+        cleanup.filter("statusid__@in" => scratch_ids)
+        cleanup.exists() && cleanup.delete()
+    end
 end
 
 @testset "SQL Injection Protection (bulk_copy)" begin

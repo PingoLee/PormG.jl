@@ -216,10 +216,10 @@ This documentation is organized into the following sections:
 
 | Section | Description |
 | :--- | :--- |
-| [Configuration](configuration.md) | Database connections, environments, multi-tenancy, and health checks. |
+| [Configuration](configuration/index.md) | Database connections, environments, multi-tenancy, and health checks. |
 | [Models](models.md) | Defining models, `@import_models`, hot-reloading, and naming conventions. |
 | [Fields](fields.md) | Comprehensive field type reference: text, numeric, date, boolean, relationships. |
-| [Migrations](migrations.md) | `makemigrations`, `migrate`, `dry_run`, history table, destructive guards. |
+| [Migrations](migrations/index.md) | `makemigrations`, `migrate`, `dry_run`, history table, destructive guards. |
 | **Writing** | |
 | &nbsp;&nbsp;[Overview](write/index.md) | Async-first write philosophy and performance comparison. |
 | &nbsp;&nbsp;[Creating Records](write/create.md) | Single-record `create()` patterns. |

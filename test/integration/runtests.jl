@@ -32,6 +32,7 @@ include("common_setup.jl")
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end # TODO: extend this test
+    @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")                end
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 

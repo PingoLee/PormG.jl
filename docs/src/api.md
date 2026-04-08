@@ -452,7 +452,7 @@ s = PormG.Configuration.status("db")
 # (key="db", loaded=true, reachable=true, adapter="PostgreSQL", app_env="prod")
 ```
 
-For the full configuration guide, see [Configuration](configuration.md).
+For the full configuration guide, see [Configuration](configuration/index.md).
 
 ---
 
@@ -492,7 +492,7 @@ using Tachikoma
 PormG.tui("db"; models_module=M)
 ```
 
-See [Migrations: Terminal Dashboard](migrations.md#Terminal-Dashboard) for details.
+See [Migrations: Terminal Dashboard](migrations/tachikoma.md) for details.
 
 ---
 

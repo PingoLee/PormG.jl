@@ -205,6 +205,25 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   return mapping, final_fields, pk_exist, pk_field
 end
 
+function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
+  mapping::Dict{String, String},
+  dynamic_filters::Vector{String})
+
+  isempty(dynamic_filters) && return nothing
+
+  seen_keys = Dict{Tuple, Int}()
+  for (index, row) in enumerate(eachrow(df))
+    key = Tuple(row[mapping[field]] for field in dynamic_filters)
+    if haskey(seen_keys, key)
+      filters_text = join(dynamic_filters, ", ")
+      throw(ArgumentError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index): $(collect(key))"))
+    end
+    seen_keys[key] = index
+  end
+
+  return nothing
+end
+
 
 """
 Inserts multiple rows into the database in bulk from a DataFrame.
@@ -388,8 +407,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Process in chunks
   chunk_size = 10000
   total_rows = size(df, 1)
-  
-  try
+
+  copy_loop = () -> begin
     for i in 1:chunk_size:total_rows
       end_idx = min(i + chunk_size - 1, total_rows)
 
@@ -417,9 +436,18 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       
       fetch_copy(settings, sql, [csv_data])
     end
-    
+
     # Update sequence if PK was provided
     pk_exist && _update_sequence(model, connection, pk_field, settings)
+  end
+
+  try
+    has_active_tx = transaction_connection_for(settings) !== nothing
+    if has_active_tx
+      copy_loop()
+    else
+      run_in_transaction(copy_loop, settings)
+    end
   catch e
     @error "Error in bulk_copy" exception=e sql=sql
     rethrow(e)
@@ -610,6 +638,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         end
     end
   end  
+
+  _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
 
   objct.object.filter = [] # clear the filters
   if size(static_filters, 1) > 0

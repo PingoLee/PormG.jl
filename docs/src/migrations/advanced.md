@@ -1,0 +1,66 @@
+# Advanced Migrations
+
+Beyond schema changes, PormG supports custom SQL migrations, repair operations, and data migrations using transactions.
+
+## Manual SQL in Pending Migrations
+
+If you need to perform custom SQL (e.g., creating views, adding initial data, or complex indexing), you can manually edit the generated `pending_migrations.jl` file. Add your SQL as `OrderedDict` entries after the auto-generated ones:
+
+```julia
+# Inside pending_migrations.jl
+custom_entries = OrderedDict{String, String}(
+    "Normalize nationality" =>
+    \"\"\"UPDATE drivers SET nationality = 'Unknown' WHERE nationality IS NULL;\"\"\"
+)
+```
+
+!!! warning "Manual Editing"
+    Always keep the `OrderedDict` structure. PormG will compute checksums for your custom entries and record them in the history table.
+
+---
+
+## Repair Operations
+
+If a migration fails or requires manual intervention, you can use repair commands to update the history table without re-running SQL:
+
+```julia
+# Mark a version as manually applied
+PormG.Migrations.mark_applied("db", "20260310120000", "manual_fix")
+
+# Mark a version as failed
+PormG.Migrations.mark_failed("db", "20260310120000")
+
+# Remove a migration record entirely (use with caution)
+PormG.Migrations.remove_migration_record("db", "20260310120000")
+```
+
+---
+
+## Data Migrations with Transactions
+
+For complex logic that requires Julia-side data processing, use `run_in_transaction` to ensure atomicity:
+
+```julia
+using PormG
+
+PormG.run_in_transaction("db") do
+    # Fetch data
+    drivers = M.Driver.objects.filter("code__isnull" => true).list()
+    
+    # Process and Update
+    for d in drivers
+        code = uppercase(substring(d[:surname], 1, 3))
+        M.Driver.objects.filter("driverid" => d[:driverid]).update("code" => code)
+    end
+end
+```
+
+---
+
+## Best Practices
+
+- **Incremental Changes:** Run migrations frequently for small updates rather than one large update.
+- **Review Plans:** Use `dry_run()` before applying to catch any accidental drops.
+- **Version Control:** Commit your `applied_migrations/` folder.
+- **Backups:** Always back up production databases before running schema changes.
+- **Destructive Guard:** Never bypass the destructive guard in CI/CD without manual approval of the migration plan.

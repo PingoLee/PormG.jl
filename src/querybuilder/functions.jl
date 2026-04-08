@@ -96,10 +96,10 @@ end
 
 Casts a column or expression to a specific SQL type.
 """
-function Cast(x::Union{String, SQLTypeText, SQLTypeFunction}, type::String)
+function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF}, type::String)
   return FObject(function_name = "CAST", column = x, kwargs = Dict{String, Any}("type" => type))
 end
-function Cast(x::Union{String, SQLTypeText, SQLTypeFunction}, type::PormGField)
+function Cast(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF}, type::PormGField)
   return Cast(x, type.type)
 end
 
@@ -120,12 +120,12 @@ end
 
 Extracts a component (YEAR, MONTH, DAY, etc.) from a date/time column.
 """
-function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String; formater::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, part::String; formater::Union{Nothing, Function, PormGField} = nothing)
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part))
 end
 
-function Extract(x::Union{String, SQLTypeFunction, Vector{String}}, part::String, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
+function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, part::String, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
@@ -153,7 +153,7 @@ function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::
   end  
   return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
 end
-function To_char(x::Union{String, SQLTypeFunction, Vector{String}}, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
+function To_char(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT_DATE", column = x, formater = formater, kwargs = Dict{String, Any}("format" => format))
 end
@@ -205,7 +205,7 @@ end
 
 Converts a string to lowercase.
 """
-function Lower(x)
+function Lower(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
   return FObject(function_name = "LOWER", column = x)
 end
 
@@ -214,7 +214,7 @@ end
 
 Converts a string to uppercase.
 """
-function Upper(x)
+function Upper(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
   return FObject(function_name = "UPPER", column = x)
 end
 
@@ -223,7 +223,7 @@ end
 
 Returns the length of a string.
 """
-function Length(x)
+function Length(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
   return FObject(function_name = "LENGTH", column = x, formater = Models.format_number_sql)
 end
 
@@ -232,8 +232,8 @@ end
 
 Returns the absolute value of a number.
 """
-function Abs(x)
-  return FObject(function_name = "ABS", column = x, formater = Models.format_number_sql)
+function Abs(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
+  return FObject(function_name = "ABS", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
 end
 
 """
@@ -241,8 +241,8 @@ end
 
 Rounds a number to the specified precision.
 """
-function Round(x, precision::Integer = 0)
-  return FObject(function_name = "ROUND", column = x, kwargs = Dict{String, Any}("precision" => precision), formater = Models.format_number_sql)
+function Round(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF}, precision::Integer = 0)
+  return FObject(function_name = "ROUND", column = x, agregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formater = Models.format_number_sql)
 end
 
 """
@@ -273,7 +273,7 @@ end
 
 Removes leading and trailing whitespace from a string.
 """
-function Trim(x)
+function Trim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
   return FObject(function_name = "TRIM", column = x)
 end
 
@@ -282,7 +282,7 @@ end
 
 Removes leading whitespace from a string.
 """
-function LTrim(x)
+function LTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
   return FObject(function_name = "LTRIM", column = x)
 end
 
@@ -291,7 +291,7 @@ end
 
 Removes trailing whitespace from a string.
 """
-function RTrim(x)
+function RTrim(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
   return FObject(function_name = "RTRIM", column = x)
 end
 
@@ -300,8 +300,8 @@ end
 
 Returns the largest integer less than or equal to a number.
 """
-function Floor(x)
-  return FObject(function_name = "FLOOR", column = x, formater = Models.format_number_sql)
+function Floor(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
+  return FObject(function_name = "FLOOR", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
 end
 
 """
@@ -309,8 +309,8 @@ end
 
 Returns the smallest integer greater than or equal to a number.
 """
-function Ceil(x)
-  return FObject(function_name = "CEIL", column = x, formater = Models.format_number_sql)
+function Ceil(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
+  return FObject(function_name = "CEIL", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
 end
 
 
@@ -320,8 +320,8 @@ end
 
 Returns the square root of a number.
 """
-function Sqrt(x)
-  return FObject(function_name = "SQRT", column = x, formater = Models.format_number_sql)
+function Sqrt(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
+  return FObject(function_name = "SQRT", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
 end
 
 """
@@ -329,8 +329,8 @@ end
 
 Returns the exponential value (e^x) of a number.
 """
-function Exp(x)
-  return FObject(function_name = "EXP", column = x, formater = Models.format_number_sql)
+function Exp(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
+  return FObject(function_name = "EXP", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
 end
 
 """
@@ -338,8 +338,8 @@ end
 
 Returns the natural logarithm of a number.
 """
-function Ln(x)
-  return FObject(function_name = "LN", column = x, formater = Models.format_number_sql)
+function Ln(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
+  return FObject(function_name = "LN", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
 end
 
 """

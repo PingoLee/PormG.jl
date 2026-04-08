@@ -108,11 +108,10 @@ PormG.config["default"] = MockSettings
       q_del = DriverModel.objects;
       q_del.filter("id" => 880001);
 
-      # Using show_query=:dict as it's the preferred pattern for mutations
-      inspection = q_del.delete(show_query=:dict)
-      
-      # Deletion might return a Vector if there are cascaded operations.
-      # We find the one corresponding to our main model.
+      # Using show_query=:dict as it's the preferred pattern for mutations.
+      # Deletion may return a Vector for cascaded operations; pick the drivers entry.
+      inspection_raw = q_del.delete(show_query=:dict)
+
       inspection = if inspection_raw isa Vector
           idx = findfirst(i -> i[:model] == "drivers", inspection_raw)
           inspection_raw[idx]

@@ -601,6 +601,7 @@ Invoice = Models.Model(
 - Passing `ZonedDateTime` preserves the instant and is the recommended path for shared Django/PostgreSQL tables.
 - Passing a plain Julia `DateTime` through the standard formatter path currently interprets that value as `UTC`.
 - Internal `auto_now` and `auto_now_add` paths attach `settings.time_zone` to generated timestamps before serialization.
+- The same semantics are exercised on both PostgreSQL and SQLite integration backends, including `bulk_insert` and `bulk_update` paths for `DateTimeField` values.
 - If your Django app uses `USE_TZ=True` with a non-UTC active timezone, you should treat plain `DateTime` as a deliberate UTC input and use `ZonedDateTime` for local civil times.
 
 #### TIMESTAMPTZ vs TIMESTAMP
@@ -612,6 +613,7 @@ By default, `DateTimeField` uses `TIMESTAMPTZ`.
 - **Aware input**: `ZonedDateTime(2026, 3, 13, 9, 0, tz"America/Sao_Paulo")` keeps the source timezone semantics explicit.
 - **Naive input**: `DateTime(2026, 3, 13, 9, 0)` is currently serialized as `UTC`, not as `settings.time_zone`.
 - **Interop rule**: if the upstream system thinks in a local timezone, convert to `ZonedDateTime` before `create`, `update`, `bulk_insert`, or `bulk_update`.
+- **SQLite note**: SQLite stores datetime values as text, but PormG reconstructs `ZonedDateTime` / `DateTime` values on read so the high-level contract matches PostgreSQL.
 
 ```julia
 # Audit and logging

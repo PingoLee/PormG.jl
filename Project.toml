@@ -26,8 +26,15 @@ TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
+[weakdeps]
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+Tachikoma = "468859d6-42d8-48b7-8ad9-1d312e0e3b0a"
+
+[extensions]
+PormGReviseExt = "Revise"
+PormGTachikomaExt = "Tachikoma"
+
 [compat]
-julia = "1.12"
 Aqua = "0.8"
 Base64 = "1"
 BenchmarkTools = "1"
@@ -35,8 +42,9 @@ CSV = "0.10"
 DataFrames = "1"
 Dates = "1"
 Decimals = "0.4"
-Inflector = "1"
+FlameGraphs = "1.1.0"
 Infiltrator = "1"
+Inflector = "1"
 Intervals = "1"
 JSON = "1"
 LibPQ = "1"
@@ -45,32 +53,32 @@ Millboard = "0.2"
 OrderedCollections = "1"
 PrecompileTools = "1"
 Printf = "1"
+ProfileView = "1.10.3"
 Random = "1"
 Revise = "3"
-SafeTestsets = "0.1"
 SHA = "0.7, 1"
 SQLite = "1"
+SafeTestsets = "0.1"
+SnoopCompile = "3.2.5"
+SnoopCompileCore = "3.1.1"
 Tables = "1"
 Tachikoma = "1"
 Test = "1"
 TimeZones = "1"
 UUIDs = "1"
 YAML = "0.4"
+julia = "1.12"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+FlameGraphs = "08572546-2f56-4bcf-ba4e-bab62c3a3f89"
 Infiltrator = "5903a43b-9cc3-4c30-8d17-598619ec4e9b"
+ProfileView = "c46f51b8-102a-5cf2-8d2c-8597cb0e0da7"
 SafeTestsets = "1bc83da4-3b8d-516f-aca4-4fe02f6d838f"
+SnoopCompile = "aa65fe97-06da-5843-b5b1-d5d13cad87d2"
+SnoopCompileCore = "e2b509da-e806-4183-be48-004708413034"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Aqua", "BenchmarkTools", "Infiltrator", "SafeTestsets", "Test"]
-
-[weakdeps]
-Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
-Tachikoma = "468859d6-42d8-48b7-8ad9-1d312e0e3b0a"
-
-[extensions]
-PormGReviseExt = "Revise"
-PormGTachikomaExt = "Tachikoma"

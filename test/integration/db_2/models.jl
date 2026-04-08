@@ -191,4 +191,17 @@ Field_validation_scratch = Models.Model("field_validation_scratch",
   payload=Models.JSONField(null=true)
 )
 
+# Mirrors the column types Django generates for DateTimeField/DateField/DecimalField.
+# Used to validate PormG's wire-format compatibility with Django-managed PostgreSQL schemas
+# without requiring Python or Django as a test dependency.
+Django_contract_scratch = Models.Model("django_contract_scratch",
+  id          = Models.IDField(),
+  label       = Models.CharField(max_length=100, unique=true),
+  created_at  = Models.DateTimeField(auto_now_add=true),    # Django: DateTimeField(auto_now_add=True)
+  updated_at  = Models.DateTimeField(auto_now=true),        # Django: DateTimeField(auto_now=True)
+  event_time  = Models.DateTimeField(null=true),            # Django: DateTimeField(null=True)
+  event_date  = Models.DateField(null=true),                # Django: DateField(null=True)
+  price       = Models.DecimalField(max_digits=10, decimal_places=2, null=true) # Django: DecimalField(max_digits=10, decimal_places=2)
+)
+
 end

@@ -67,4 +67,4 @@ adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
 # julia -t auto --project=. test/integration/test_field_validation_db_roundtrip.jl
 # julia -t auto --project=. test/integration/runtests.jl
 # $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
-# include("test_bulk_copy.jl")
+# 2>&1 | Tee-Object -FilePath "test_sf_out.txt"

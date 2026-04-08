@@ -811,3 +811,231 @@ end
     end
 end
 
+@testset "SQL Functions wrapping F() arithmetic expressions" begin
+    # This test set covers the feature gap where FExpression (SQLTypeF) could not be
+    # used as the column argument of SQL functions like Round, Abs, Floor, Ceil, etc.
+    #
+    # Root cause fixed: FObject.column union type now includes SQLTypeF so any arithmetic
+    # expression produced by F() operators is accepted as a function argument.
+    #
+    # Pattern being tested: Round(F("field") * scalar, precision)
+    #                        Abs(F("field") - scalar)
+    #                        Floor / Ceil wrapping F arithmetic
+    #                        Aggregate function wrapping FExpression (e.g. Round(Sum("x") / Count("y"), n))
+    #                        Nesting: Round(Abs(F("field") - scalar), precision)
+
+    @testset "Round wrapping F arithmetic" begin
+        # Scenario: Project a rounded 10% bonus on race points.
+        # Expected SQL shape: ROUND((T."points" * ?), ?)
+        # The raw arithmetic value F("points") * 1.1 and its rounded counterpart are
+        # both projected so we can verify the relationship in Julia.
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "points",
+            "raw_bonus"    => F("points") * 1.1,
+            "round_bonus2" => Round(F("points") * 1.1, 2),
+            "round_bonus0" => Round(F("points") * 1.1)
+        )
+        q.filter("points__@gt" => 0.0)
+        q.order_by("resultid")
+        q.limit(10)
+
+        insp = q |> inspect_query
+        # @info insp[:sql_text]
+
+        df = q |> DataFrame
+        @test size(df, 1) == 10
+        @test "round_bonus2" in names(df)
+        @test "round_bonus0" in names(df)
+
+        # Round to 2 decimal places must equal Julia-side rounding of the raw value.
+        @test all(eachrow(df)) do row
+            expected2 = round(row.raw_bonus, digits=2)
+            expected0 = round(row.raw_bonus, digits=0)
+            isapprox(Float64(row.round_bonus2), expected2; atol=1e-6) &&
+            isapprox(Float64(row.round_bonus0), expected0; atol=1e-6)
+        end
+    end
+
+    @testset "Abs wrapping F arithmetic" begin
+        # Scenario: Compute absolute deviation from 10 points for every scored result.
+        # Expected SQL shape: ABS((T."points" - ?))
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "points",
+            "deviation" => Abs(F("points") - 10.0)
+        )
+        q.filter("points__@gt" => 0.0)
+        q.order_by("resultid")
+        q.limit(10)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 10
+        @test "deviation" in names(df)
+
+        @test all(eachrow(df)) do row
+            isapprox(Float64(row.deviation), abs(row.points - 10.0); atol=1e-6)
+        end
+    end
+
+    @testset "Floor and Ceil wrapping F arithmetic" begin
+        # Scenario: Floor / Ceil the halved grid position so we can bucket drivers per lap.
+        # Expected SQL shape: FLOOR((T."grid" / ?))  and  CEIL((T."grid" / ?))
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "grid",
+            "floor_half" => Floor(F("grid") / 2.0),
+            "ceil_half"  => Ceil(F("grid") / 2.0)
+        )
+        q.filter("grid__@gt" => 0)
+        q.order_by("resultid")
+        q.limit(10)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 10
+        @test "floor_half" in names(df)
+        @test "ceil_half"  in names(df)
+
+        @test all(eachrow(df)) do row
+            Float64(row.floor_half) == floor(row.grid / 2.0) &&
+            Float64(row.ceil_half)  == ceil(row.grid / 2.0)
+        end
+    end
+
+    @testset "Aggregate expression wrapped in Round" begin
+        # Scenario: Average points per result, rounded to 1 decimal place.
+        # Sum("points") / Count("resultid") produces an FExpression (field_name=FObject, ...),
+        # and Round(that_expression, 1) must now accept it via the fixed FObject.column type.
+        #
+        # Expected SQL shape: ROUND((SUM(T."points") / COUNT(T."resultid")), ?)
+        q = M.Driver_standings.objects
+        q.values(
+            "driverid",
+            "total_points"  => Sum("points"),
+            "total_entries" => Count("driverstandingsid"),
+            "avg_pts_round" => Round(Sum("points") / Count("driverstandingsid"), 1)
+        )
+        q.filter("raceid__year" => 2021)
+        q.order_by("-total_points")
+        q.limit(5)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 5
+        @test "avg_pts_round" in names(df)
+
+        @test all(eachrow(df)) do row
+            expected = round(row.total_points / row.total_entries, digits=1)
+            isapprox(Float64(row.avg_pts_round), expected; atol=0.05)
+        end
+    end
+
+    @testset "Nested: Round wrapping Abs wrapping F arithmetic" begin
+        # Scenario: Compound nesting — first take the absolute deviation from 12.5, then round it.
+        # This validates that FExpression flows through multiple layers of FObject.column.
+        # Expected SQL shape: ROUND(ABS((T."points" - ?)), ?)
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "points",
+            "rounded_dev" => Round(Abs(F("points") - 12.5), 1)
+        )
+        q.filter("points__@gt" => 0.0)
+        q.order_by("resultid")
+        q.limit(10)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 10
+        @test "rounded_dev" in names(df)
+
+        @test all(eachrow(df)) do row
+            expected = round(abs(row.points - 12.5), digits=1)
+            isapprox(Float64(row.rounded_dev), expected; atol=0.1)
+        end
+    end
+
+    @testset "F expression as column of Lower / Upper (string coercion path)" begin
+        # Scenario: Lower / Upper must also accept FExpression for completeness, even though
+        # calling string functions on numeric fields is not typical usage. We verify the
+        # type acceptance by wrapping a Cast-produced expression.
+        # Expected SQL shape: LOWER(CAST((T."driverid")::text AS text))  (PostgreSQL)
+        #                      LOWER(CAST(T."driverid" AS text))          (SQLite)
+        q = M.Driver.objects
+        q.values(
+            "driverid",
+            "lower_cast" => Lower(Cast(F("driverid"), "text"))
+        )
+        q.filter("driverid__@lte" => 3)
+        q.order_by("driverid")
+
+        df = q |> DataFrame
+        @test size(df, 1) == 3
+        @test "lower_cast" in names(df)
+        # driverid 1, 2, 3 cast to text and lowercased
+        @test df[1, :lower_cast] == "1"
+        @test df[2, :lower_cast] == "2"
+        @test df[3, :lower_cast] == "3"
+    end
+
+    @testset "Joined-path SQLField inputs remain accepted by helpers" begin
+        # Scenario: helper constructors should still accept SQLField carrying joined paths,
+        # not just direct field names or F expressions. This protects against narrowing the
+        # helper signatures beyond what the query builder already knows how to render.
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "surname_raw" => "driverid__surname",
+            "code_raw" => "driverid__code",
+            "year_raw" => "raceid__year",
+            "surname_lower" => Lower(PormG.QueryBuilder.SQLField("driverid__surname")),
+            "code_trimmed" => Trim(PormG.QueryBuilder.SQLField("driverid__code")),
+            "year_text" => Cast(PormG.QueryBuilder.SQLField("raceid__year"), "text")
+        )
+        q.filter("driverid__code__@isnull" => false)
+        q.order_by("resultid")
+        q.limit(10)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 10
+        @test "surname_lower" in names(df)
+        @test "code_trimmed" in names(df)
+        @test "year_text" in names(df)
+
+        @test all(eachrow(df)) do row
+            row.surname_lower == lowercase(row.surname_raw) &&
+            row.code_trimmed == strip(row.code_raw) &&
+            row.year_text == string(row.year_raw)
+        end
+    end
+
+    @testset "Extract and To_char accept SQLField and F inputs" begin
+        # Scenario: Extract/To_char should be consistent with the other helper constructors
+        # and accept both SQLField(joined path) and F(date_field) inputs.
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "race_date_raw" => "raceid__date",
+            "race_year_from_field" => Extract(PormG.QueryBuilder.SQLField("raceid__date"), "YEAR"),
+            "race_date_fmt_field" => To_char(PormG.QueryBuilder.SQLField("raceid__date"), "YYYY-MM-DD"),
+            "race_year_from_f" => Extract(F("raceid__date"), "YEAR"),
+            "race_date_fmt_f" => To_char(F("raceid__date"), "YYYY-MM-DD")
+        )
+        q.order_by("resultid")
+        q.limit(10)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 10
+
+        @test all(eachrow(df)) do row
+            date_str = string(row.race_date_raw)[1:10]
+            expected_year = parse(Int, date_str[1:4])
+            row.race_year_from_field == expected_year &&
+            row.race_year_from_f == expected_year &&
+            row.race_date_fmt_field == date_str &&
+            row.race_date_fmt_f == date_str
+        end
+    end
+end
+

@@ -604,18 +604,13 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
       if contains(v.operand, "__") || v.operand in instruc.object.model.field_names
         _set_update_query(FExpression(field_name = v.operand, function_name = "F", column = v.operand), instruc)
       else
-        # SECURITY: Use parameterized query for literal values
-        placeholder = add_parameter!(instruc.parameters, v.operand)
-        # For string literals that might be used in date operations, add explicit casting
-        if v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
-          instruc.connection isa PormGSQLite ? placeholder : "$placeholder::text"
-        else
-          placeholder
-        end
+        # Keep scalar literals parameterized with an explicit SQL type on PostgreSQL so
+        # expressions like integer_column / 2.0 don't get inferred back to integer.
+        add_parameter!(instruc, v.operand; sql_type=_infer_parameter_sql_type(v.operand, instruc))
       end
     elseif isa(v.operand, Integer)
       # SECURITY: Handle integer operands for date arithmetic
-      placeholder = add_parameter!(instruc.parameters, v.operand)
+      placeholder = add_parameter!(instruc, v.operand; sql_type=_infer_parameter_sql_type(v.operand, instruc))
       if v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
         if instruc.connection isa PormGSQLite
           # SQLite handles date arithmetic via functions, but for the infix expression
@@ -630,7 +625,7 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
       end
     else
       # SECURITY: Use parameterized query for other numeric values
-      add_parameter!(instruc.parameters, v.operand)
+      add_parameter!(instruc, v.operand; sql_type=_infer_parameter_sql_type(v.operand, instruc))
     end
     
     if instruc.connection isa PormGSQLite && v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
@@ -842,6 +837,69 @@ function DataFrames.DataFrame(objct::SQLObjectHandler)
   return query_list(objct) |> DataFrames.DataFrame
 end
 
+
+"""
+    _sqlite_datetime_aliases(objct::SQLObjectHandler) → Set{Symbol}
+
+Return the set of result-row column keys that map to a `DateTimeField` on the primary
+model.  Only direct (non-joined) field projections are resolved; joined columns
+(containing `__`) are skipped so no cross-model traversal is needed.
+
+Used on the SQLite backend to normalise string datetime values in `list()` results into
+proper Julia temporal types, giving the same contract as the PostgreSQL backend.
+"""
+function _sqlite_datetime_aliases(objct::SQLObjectHandler)::Set{Symbol}
+    model = objct.object.model
+    col_set = Set{Symbol}()
+
+    if isempty(objct.object.values)
+        # No .values() projection — all direct model fields appear in the result
+        for (fname, fmeta) in model.fields
+            fmeta isa Models.sDateTimeField && push!(col_set, Symbol(fname))
+        end
+    else
+        for v in objct.object.values
+            v isa SQLTypeField || continue
+            # The effective alias is how the column appears in the result dict
+            effective_alias = v.custom_as !== nothing ? v.custom_as : v._as
+            effective_alias === nothing && continue
+            # The field reference must be a plain string to look up in model.fields.
+            # Expressions or function objects are skipped.
+            field_ref = v.field isa String ? v.field : nothing
+            field_ref === nothing && continue
+            # Skip joined columns — their source model is not tracked here
+            occursin("__", field_ref) && continue
+            if haskey(model.fields, field_ref) && model.fields[field_ref] isa Models.sDateTimeField
+                push!(col_set, Symbol(effective_alias))
+            end
+        end
+    end
+    return col_set
+end
+
+"""
+    _parse_sqlite_datetime(v) → Union{ZonedDateTime, DateTime, typeof(v)}
+
+Parse a raw string value read from a SQLite DATETIME column into a Julia temporal type.
+
+SQLite stores datetime values as TEXT.  PormG serialises `DateTimeField` values (including
+`auto_now` / `auto_now_add`) as ZonedDateTime strings, e.g. `"2026-04-07T18:30:23.741-03:00"`.
+This function converts those strings back into proper Julia types so that the SQLite backend
+returns the same high-level types as the PostgreSQL backend (which returns `ZonedDateTime`
+natively via LibPQ).
+
+- Strings containing a timezone offset → `ZonedDateTime`
+- Naive ISO 8601 strings → `DateTime`
+- Non-string values or unparseable strings → returned unchanged
+"""
+function _parse_sqlite_datetime(v::Any)
+    v isa AbstractString || return v
+    # Try timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00")
+    try; return ZonedDateTime(v); catch; end
+    # Fall back to naive datetime (e.g. "2026-04-07T21:30:23")
+    try; return DateTime(v[1:min(19, length(v))], dateformat"yyyy-mm-ddTHH:MM:SS"); catch; end
+    return v
+end
 """
 Fetches a list of records from the database and returns them as an array of dictionaries.
 
@@ -867,7 +925,19 @@ function list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   if show_query !== :execute
     return result
   end
-  return Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
+  rows = Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
+  # SQLite returns DATETIME columns as raw strings. Normalise columns that correspond to a
+  # DateTimeField in the primary model into ZonedDateTime / DateTime so the return type
+  # matches what the PostgreSQL backend produces natively.
+  _, connection, _ = get_settings(objct)
+  if connection isa PormGSQLite
+    dt_cols = _sqlite_datetime_aliases(objct)
+    if !isempty(dt_cols)
+      rows = [Dict(k => (k in dt_cols && v isa AbstractString ? _parse_sqlite_datetime(v) : v)
+                   for (k, v) in row) for row in rows]
+    end
+  end
+  return rows
 end
 list(; kwargs...) = (objct) -> list(objct; kwargs...)
 

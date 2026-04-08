@@ -1826,3 +1826,244 @@ end
 
 end
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: Django Compatibility Contracts (Pure Julia, No DB)
+#
+# Validates PormG's ability to target Django-managed tables and match Django's
+# field semantics — without any Python or Django dependency.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SECTION: Django Compatibility Contracts" begin
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Table Prefix Contract
+    # Django uses app_label naming (e.g. `myapp_driver`).
+    # 1. The explicit table string passed to Model() remains verbatim for SQL queries.
+    # 2. If `django_prefix` is set in Configuration.Settings, PormG strips it
+    #    when generating internal relationship names (e.g., related_objects) 
+    #    so you don't get double-prefixed property names.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Table Prefix: Configuration parameter strips prefixes from relationships" begin
+        # Setup a configuration WITH a django_prefix
+        django_cfg = PormG.Configuration.Settings(
+            connections = MockPostgres(),
+            django_prefix = "prefix"
+        )
+        PormG.config["django_cfg_test"] = django_cfg
+
+        # Mimics what PormG Generator creates when it reads a Django DB:
+        # Django model `Dim_municipio` and `Dim_feriados` with prefix `prefix`
+        Dim_municipio = Models.Model("prefix_dim_municipio", 
+            id = Models.IDField()
+        )
+        Dim_feriados = Models.Model("prefix_dim_feriados",
+            ibge_id = Models.ForeignKey(Dim_municipio, pk_field="id", on_delete="RESTRICT"),
+            nome    = Models.CharField(),
+            ativo   = Models.BooleanField(default=true)
+        )
+        Dim_municipio.connect_key = "django_cfg_test"
+        Dim_feriados.connect_key  = "django_cfg_test"
+        Dim_municipio._module = @__MODULE__
+        Dim_feriados._module  = @__MODULE__
+
+        # 1. Prove the underlying table name used in SQL remains EXACTLY the explicit string
+        @test Dim_feriados.name == "prefix_dim_feriados"
+
+        q = Dim_feriados.objects
+        # PormG mirrors Django's relationship querying syntax:
+        # even though the literal field is `ibge_id`, you must drop the `_id`
+        # when traversing the join (using `ibge__`).
+        q.filter("ibge__id" => 1)
+        insp = inspect_query(q)
+        @test contains(insp[:sql_text], "prefix_dim_feriados")
+        @test !contains(insp[:sql_text], "prefix_prefix_dim_feriados")
+        
+        # Ensures that in the actual generated SQL, `ibge_id` is used because
+        # that is the literal definition of the physical column.
+        @test contains(insp[:sql_text], "\"ibge_id\"")
+
+        # 2. Prove the Configuration parameter strips the prefix for internal relationship naming
+        # This is where the `django_prefix` setting is actually used by PormG internally
+        feriado_logical_name = Models.get_model_name(Dim_feriados, django_cfg, false)
+        @test feriado_logical_name == "dim_feriados"  # "prefix_" was stripped!
+
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # DateField Truncation Contract (unit-level, SQL inspection only)
+    # Django silently truncates datetime to date. PormG must do the same.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "DateField: DateTime input truncates to Date (no error)" begin
+        DateContractModel = Models.Model_Type(
+            name = "django_date_contract",
+            fields = Dict(
+                "id"         => Models.IDField(),
+                "event_date" => Models.DateField(null=true),
+            ),
+            field_names = ["id", "event_date"],
+            connect_key = "default"
+        )
+
+        dt_with_time = DateTime(2024, 7, 14, 22, 30, 45)
+        plain_date   = Date(2024, 7, 14)
+
+        # Must NOT throw — truncation is a contract, not an error
+        @test validate_field_data(DateContractModel, "event_date", dt_with_time, "insert") === true
+        @test validate_field_data(DateContractModel, "event_date", plain_date,   "insert") === true
+
+        # SQL parameter must contain the date portion
+        insp = DateContractModel.objects.create(
+            "event_date" => dt_with_time,
+            show_query = :inspection
+        )
+        date_param = findfirst(p -> contains(string(p), "2024-07-14"), insp[:parameters])
+        @test !isnothing(date_param)
+        @test !any(p -> contains(string(p), "22:30"), insp[:parameters])
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # DecimalField Precision (unit-level)
+    # Validates that NUMERIC(10,2) precision constraints are enforced at ORM
+    # layer before any DB round-trip occurs.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "DecimalField: NUMERIC(10,2) precision enforced before DB" begin
+        PriceModel = Models.Model_Type(
+            name        = "django_decimal_contract",
+            fields      = Dict(
+                "id"    => Models.IDField(),
+                "price" => Models.DecimalField(max_digits=10, decimal_places=2)
+            ),
+            field_names = ["id", "price"],
+            connect_key = "default"
+        )
+
+        @test validate_field_data(PriceModel, "price", "99.99",    "insert") === true
+        @test validate_field_data(PriceModel, "price", "0.01",     "insert") === true
+        @test validate_field_data(PriceModel, "price", "-1234.56", "insert") === true
+        @test validate_field_data(PriceModel, "price", 3.14,       "insert") === true
+
+        @test_throws ErrorException validate_field_data(PriceModel, "price", "99.999",       "insert")
+        @test_throws ErrorException validate_field_data(PriceModel, "price", 9.141,          "insert")
+        @test_throws ErrorException validate_field_data(PriceModel, "price", "12345678901",  "insert")
+    end
+
+    @testset "SQL function helpers preserve advanced constructor inputs" begin
+        # These regressions protect the public helper boundary from becoming narrower
+        # than FObject itself. Advanced callers and internal builder paths may already
+        # hold a SQLField, so helpers like Lower/Round/Cast must continue to accept it.
+        @test hasmethod(QB.Lower, Tuple{QB.SQLField})
+        @test hasmethod(QB.Round, Tuple{QB.SQLField, Int})
+        @test hasmethod(QB.Cast, Tuple{QB.SQLField, String})
+
+        FunctionContractModel = Models.Model_Type(
+            name = "function_contract_model",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "forename" => Models.CharField(max_length=100),
+                "points" => Models.FloatField(null=true),
+            ),
+            field_names = ["id", "forename", "points"],
+            connect_key = "default"
+        )
+
+        q = FunctionContractModel.objects
+        q.values(
+            "lower_name" => QB.Lower(QB.SQLField("forename")),
+            "trimmed_name" => QB.Trim(QB.SQLField("forename")),
+            "name_len" => QB.Length(QB.SQLField("forename")),
+            "rounded_pts" => QB.Round(QB.SQLField("points"), 2),
+            "absolute_pts" => QB.Abs(QB.SQLField("points")),
+            "floored_pts" => QB.Floor(QB.SQLField("points")),
+            "sqrt_pts" => QB.Sqrt(QB.SQLField("points")),
+            "casted_pts" => QB.Cast(QB.SQLField("points"), "text")
+        )
+
+        insp = inspect_query(q)
+        sql = insp[:sql_text]
+
+        @test contains(sql, "LOWER")
+        @test contains(sql, "TRIM")
+        @test contains(sql, "LENGTH")
+        @test contains(sql, "ROUND")
+        @test contains(sql, "ABS")
+        @test contains(sql, "FLOOR")
+        @test contains(sql, "SQRT")
+        @test contains(sql, "::text") || contains(sql, "CAST(")
+        @test contains(sql, "\"forename\"")
+        @test contains(sql, "\"points\"")
+        @test 2 in insp[:parameters]
+    end
+
+    @testset "Aggregate-wrapped Round stays aggregate in inspection" begin
+        # Wrapping an aggregate FExpression in Round must not demote it to a non-aggregate
+        # select item, otherwise the builder incorrectly pushes it into GROUP BY.
+        AggregateContractModel = Models.Model_Type(
+            name = "aggregate_contract_model",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "team" => Models.CharField(max_length=100),
+                "points" => Models.FloatField(null=true),
+            ),
+            field_names = ["id", "team", "points"],
+            connect_key = "default"
+        )
+
+        q = AggregateContractModel.objects
+        q.values(
+            "team",
+            "avg_points_round" => QB.Round(QB.Sum("points") / QB.Count("id"), 1)
+        )
+        q.order_by("team")
+
+        insp = inspect_query(q)
+        sql = insp[:sql_text]
+
+        @test contains(sql, "ROUND")
+        @test contains(sql, "SUM")
+        @test contains(sql, "COUNT")
+        @test contains(sql, "GROUP BY 1")
+        @test !contains(sql, "GROUP BY ROUND")
+        @test !contains(sql, "GROUP BY SUM")
+        @test 1 in insp[:parameters]
+
+        wrapped_avg = QB.Round(QB.Sum("points") / QB.Count("id"), 1)
+        @test wrapped_avg.agregate === true
+    end
+
+    @testset "Extract and To_char preserve helper surface consistency" begin
+        # These helpers should accept the same advanced field wrappers as the rest of the
+        # SQL helper family: direct SQLField objects and F expressions.
+        @test hasmethod(QB.Extract, Tuple{QB.SQLField, String})
+        @test hasmethod(QB.Extract, Tuple{QB.FExpression, String})
+        @test hasmethod(QB.To_char, Tuple{QB.SQLField, String})
+        @test hasmethod(QB.To_char, Tuple{QB.FExpression, String})
+
+        DateHelperModel = Models.Model_Type(
+            name = "date_helper_model",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "created_at" => Models.DateTimeField(null=true),
+            ),
+            field_names = ["id", "created_at"],
+            connect_key = "default"
+        )
+
+        q = DateHelperModel.objects
+        q.values(
+            "year_from_sqlfield" => QB.Extract(QB.SQLField("created_at"), "YEAR"),
+            "year_from_f" => QB.Extract(QB.F("created_at"), "YEAR"),
+            "text_from_sqlfield" => QB.To_char(QB.SQLField("created_at"), "YYYY-MM-DD"),
+            "text_from_f" => QB.To_char(QB.F("created_at"), "YYYY-MM-DD")
+        )
+
+        insp = inspect_query(q)
+        sql = insp[:sql_text]
+
+        @test contains(sql, "EXTRACT") || contains(sql, "strftime")
+        @test contains(sql, "created_at")
+        @test contains(sql, "YYYY") || contains(sql, "%Y")
+    end
+
+end

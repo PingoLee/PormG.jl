@@ -21,6 +21,208 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+# Guard against Revise re-include: module re-definition + const rebinding would error,
+# and set_models re-registration would duplicate related_objects entries.
+if !@isdefined(ProtectM)
+    module delete_protect_scratch_models
+    import PormG.Models
+
+    Delete_protect_parent_scratch = Models.Model("delete_protect_parent_scratch",
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+
+    Delete_protect_child_scratch = Models.Model("delete_protect_child_scratch",
+        id = Models.IDField(),
+        parent_id = Models.ForeignKey(Delete_protect_parent_scratch, pk_field = "id", on_delete = "PROTECT", null = true, related_name = "protect_children"),
+        label = Models.CharField(null = true)
+    )
+
+    end
+
+    Models.set_models(delete_protect_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const ProtectM = delete_protect_scratch_models
+end
+
+if !@isdefined(KeylessM)
+    module keyless_delete_scratch_models
+    import PormG.Models
+
+    Keyless_delete_scratch = Models.Model("keyless_delete_scratch",
+        bucket = Models.CharField(),
+        label = Models.CharField(null = true)
+    )
+
+    end
+
+    Models.set_models(keyless_delete_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const KeylessM = keyless_delete_scratch_models
+end
+
+if !@isdefined(DoNothingM)
+    module do_nothing_delete_scratch_models
+    import PormG.Models
+
+    Do_nothing_parent_scratch = Models.Model("do_nothing_parent_scratch",
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+
+    Do_nothing_child_scratch = Models.Model("do_nothing_child_scratch",
+        id = Models.IDField(),
+        parent_id = Models.ForeignKey(Do_nothing_parent_scratch, pk_field = "id", on_delete = "DO_NOTHING", null = false, related_name = "do_nothing_children"),
+        label = Models.CharField(null = true)
+    )
+
+    end
+
+    Models.set_models(do_nothing_delete_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const DoNothingM = do_nothing_delete_scratch_models
+end
+
+if !@isdefined(SetNullGuardM)
+    module set_null_guard_scratch_models
+    import PormG.Models
+
+    Set_null_guard_parent_scratch = Models.Model("set_null_guard_parent_scratch",
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+
+    # Intentionally invalid: SET_NULL on a non-null field. set_models will log a warning;
+    # this model exists only to exercise the delete guard that rejects this configuration.
+    Set_null_guard_child_scratch = Models.Model("set_null_guard_child_scratch",
+        id = Models.IDField(),
+        parent_id = Models.ForeignKey(Set_null_guard_parent_scratch, pk_field = "id", on_delete = "SET_NULL", null = false, related_name = "nonnull_children"),
+        label = Models.CharField(null = true)
+    )
+
+    end
+
+    Models.set_models(set_null_guard_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const SetNullGuardM = set_null_guard_scratch_models
+end
+
+_strip_ansi(text::AbstractString) = replace(String(text), r"\e\[[0-9;]*m" => "")
+
+_scratch_id_type(pool) = pool isa PormG.PormGPostgres ? "SERIAL" : "INTEGER"
+
+function _drop_delete_protect_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"delete_protect_child_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"delete_protect_parent_scratch\";")
+    return nothing
+end
+
+function _reset_delete_protect_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_delete_protect_scratch_schema!()
+
+    # PostgreSQL needs SERIAL so that PormG's _update_sequence can find the backing sequence
+    # after inserting explicit IDs. SQLite uses INTEGER PRIMARY KEY (maps to ROWID, no sequence).
+    id_type = _scratch_id_type(pool)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"delete_protect_parent_scratch\" (
+        \"id\" $id_type PRIMARY KEY,
+        \"name\" TEXT NOT NULL
+    );
+    """)
+
+    # Inline REFERENCES is valid on both SQLite and PostgreSQL.
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"delete_protect_child_scratch\" (
+        \"id\" $id_type PRIMARY KEY,
+        \"parent_id\" INTEGER REFERENCES \"delete_protect_parent_scratch\" (\"id\"),
+        \"label\" TEXT
+    );
+    """)
+
+    return nothing
+end
+
+function _drop_keyless_delete_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"keyless_delete_scratch\";")
+    return nothing
+end
+
+function _reset_keyless_delete_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_keyless_delete_scratch_schema!()
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"keyless_delete_scratch\" (
+        \"bucket\" TEXT NOT NULL,
+        \"label\" TEXT
+    );
+    """)
+
+    return nothing
+end
+
+function _drop_do_nothing_delete_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"do_nothing_child_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"do_nothing_parent_scratch\";")
+    return nothing
+end
+
+function _reset_do_nothing_delete_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_do_nothing_delete_scratch_schema!()
+
+    id_type = _scratch_id_type(pool)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"do_nothing_parent_scratch\" (
+        \"id\" $id_type PRIMARY KEY,
+        \"name\" TEXT NOT NULL
+    );
+    """)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"do_nothing_child_scratch\" (
+        \"id\" $id_type PRIMARY KEY,
+        \"parent_id\" INTEGER NOT NULL REFERENCES \"do_nothing_parent_scratch\" (\"id\"),
+        \"label\" TEXT
+    );
+    """)
+
+    return nothing
+end
+
+function _drop_set_null_guard_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_null_guard_child_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_null_guard_parent_scratch\";")
+    return nothing
+end
+
+function _reset_set_null_guard_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_set_null_guard_scratch_schema!()
+
+    id_type = _scratch_id_type(pool)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"set_null_guard_parent_scratch\" (
+        \"id\" $id_type PRIMARY KEY,
+        \"name\" TEXT NOT NULL
+    );
+    """)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE \"set_null_guard_child_scratch\" (
+        \"id\" $id_type PRIMARY KEY,
+        \"parent_id\" INTEGER NOT NULL REFERENCES \"set_null_guard_parent_scratch\" (\"id\"),
+        \"label\" TEXT
+    );
+    """)
+
+    return nothing
+end
+
 function _normalize_date_value(value)
     value isa Date && return value
     return Date(string(value))
@@ -439,6 +641,26 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Delete Operations with FK Constraints" begin
     # ─────────────────────────────────────────────────────────────────────────
+    # A filtered delete that matches no rows should short-circuit cleanly and
+    # report zero work instead of warning, mutating state, or building a bogus
+    # deletion plan. This covers the execute-time do_exists early return.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with No Matches: Returns Empty Count" begin
+        missing_slug = "delete-missing-990508"
+
+        _cleanup_field_validation_scratch_rows!([missing_slug])
+
+        delete_query = M.Field_validation_scratch.objects
+        delete_query.filter("slug" => missing_slug)
+
+        total_deleted, deleted_counter = delete_query.delete()
+
+        @test total_deleted == 0
+        @test isempty(deleted_counter)
+        @test !M.Field_validation_scratch.objects.filter("slug" => missing_slug).exists()
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Public delete should refuse unfiltered destructive operations unless the
     # caller explicitly opts in. This keeps the guard covered by an executing
     # integration test instead of only by indirect cleanup call sites.
@@ -487,6 +709,79 @@ end
         @test inspection[:parameter_count] == 0
         @test isempty(inspection[:parameters])
         @test occursin("delete from lap_times", lowercase(inspection[:sql_text]))
+
+        _reset_keyless_delete_scratch_schema!()
+
+        try
+            KeylessM.Keyless_delete_scratch.objects.create("bucket" => "alpha", "label" => "row-a")
+            KeylessM.Keyless_delete_scratch.objects.create("bucket" => "beta", "label" => "row-b")
+
+            @test KeylessM.Keyless_delete_scratch.objects.count() == 2
+
+            total_deleted, deleted_counter = KeylessM.Keyless_delete_scratch.objects.delete(allow_delete_all = true)
+
+            @test total_deleted == 2
+            @test deleted_counter == Dict("keyless_delete_scratch" => 2)
+            @test !KeylessM.Keyless_delete_scratch.objects.exists()
+        finally
+            _drop_keyless_delete_scratch_schema!()
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # DO_NOTHING should not be preemptively handled by the collector. The ORM
+    # attempts the parent delete directly and defers the final outcome to the
+    # backend: PostgreSQL rejects the FK violation, while SQLite may allow the
+    # delete if foreign-key enforcement is not active for the scratch schema.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with DO_NOTHING: ORM Defers to Database" begin
+        parent_id = 920001
+        child_id = 920101
+
+        _reset_do_nothing_delete_scratch_schema!()
+
+        try
+            DoNothingM.Do_nothing_parent_scratch.objects.create(
+                "id" => parent_id,
+                "name" => "do-nothing-parent"
+            )
+            DoNothingM.Do_nothing_child_scratch.objects.create(
+                "id" => child_id,
+                "parent_id" => parent_id,
+                "label" => "db-protected-child"
+            )
+
+            inspect_query = DoNothingM.Do_nothing_parent_scratch.objects
+            inspect_query.filter("id" => parent_id)
+            inspection = inspect_query.delete(show_query = :dict)
+
+            @test inspection isa Dict
+            @test inspection[:operation] == :delete
+            @test occursin("delete from do_nothing_parent_scratch", lowercase(inspection[:sql_text]))
+
+            pool = PormG.config[PORMG_DB_FOLDER].connections
+            delete_query = DoNothingM.Do_nothing_parent_scratch.objects
+            delete_query.filter("id" => parent_id)
+
+            delete_result = try
+                delete_query.delete()
+            catch e
+                e
+            end
+
+            if pool isa PormG.PormGPostgres
+                @test delete_result !== nothing
+                @test !(delete_result isa Tuple)
+                @test DoNothingM.Do_nothing_parent_scratch.objects.filter("id" => parent_id).exists()
+            else
+                @test delete_result == (1, Dict("do_nothing_parent_scratch" => 1))
+                @test !DoNothingM.Do_nothing_parent_scratch.objects.filter("id" => parent_id).exists()
+            end
+
+            @test DoNothingM.Do_nothing_child_scratch.objects.filter("id" => child_id).exists()
+        finally
+            _drop_do_nothing_delete_scratch_schema!()
+        end
     end
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -573,6 +868,49 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────
+    # SET_NULL requires a nullable FK. If a model declares SET_NULL on a non-null
+    # field, delete must fail before any SQL mutation so the schema contract is
+    # not silently violated.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with SET_NULL: Non-null FK is Rejected" begin
+        parent_id = 930001
+        child_id = 930101
+
+        _reset_set_null_guard_scratch_schema!()
+
+        try
+            SetNullGuardM.Set_null_guard_parent_scratch.objects.create(
+                "id" => parent_id,
+                "name" => "set-null-guard-parent"
+            )
+            SetNullGuardM.Set_null_guard_child_scratch.objects.create(
+                "id" => child_id,
+                "parent_id" => parent_id,
+                "label" => "nonnull-child"
+            )
+
+            delete_query = SetNullGuardM.Set_null_guard_parent_scratch.objects
+            delete_query.filter("id" => parent_id)
+
+            err = try
+                delete_query.delete()
+                nothing
+            catch e
+                e
+            end
+
+            @test err isa ArgumentError
+            msg = _strip_ansi(lowercase(sprint(showerror, err)))
+            @test occursin("parent_id", msg)
+            @test occursin("not allow null", msg)
+            @test SetNullGuardM.Set_null_guard_parent_scratch.objects.filter("id" => parent_id).exists()
+            @test SetNullGuardM.Set_null_guard_child_scratch.objects.filter("id" => child_id).exists()
+        finally
+            _drop_set_null_guard_scratch_schema!()
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
     # SET_DEFAULT uses a dedicated scratch FK with a stable default of Result 1.
     # Deleting the scratch parent should preserve the child row and repoint the
     # FK to that default value through the public delete API.
@@ -625,13 +963,93 @@ end
     # RESTRICT uses existing seeded Driver relationships, so attempting to delete
     # a referenced driver should be rejected before any mutation happens.
     # ─────────────────────────────────────────────────────────────────────────
-    @testset "Delete with PROTECT: Verify Deletion is Blocked" begin
-        protected_query = M.Driver.objects
-        protected_query.filter("driverid" => 1)
+    @testset "Delete with RESTRICT: Verify Deletion is Blocked" begin
+        restricted_query = M.Driver.objects
+        restricted_query.filter("driverid" => 1)
 
-        @test protected_query.count() == 1
-        @test_throws ArgumentError protected_query.delete()
+        @test restricted_query.count() == 1
+
+        err = try
+            restricted_query.delete()
+            nothing
+        catch e
+            e
+        end
+
+        @test err isa ArgumentError
+        msg = _strip_ansi(lowercase(sprint(showerror, err)))
+        @test occursin("cannot delete driver", msg)
+        @test occursin("on delete restrict", msg)
+        @test occursin(".driverid", msg)
         @test M.Driver.objects.filter("driverid" => 1).count() == 1
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PROTECT should only block delete when matching child rows exist.
+    # This guards the public delete API against false positives during
+    # show_query=:dict inspection while still proving the user-facing error
+    # points at the deleted parent and the referencing child field.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with PROTECT: Empty reverse relation does not block inspection" begin
+        orphan_parent_id = 910001
+        protected_parent_id = 910002
+        child_id = 910101
+
+        _reset_delete_protect_scratch_schema!()
+
+        try
+            ProtectM.Delete_protect_parent_scratch.objects.create(
+                "id" => orphan_parent_id,
+                "name" => "orphan-parent"
+            )
+
+            @test !ProtectM.Delete_protect_child_scratch.objects.filter("parent_id" => orphan_parent_id).exists()
+
+            inspect_query = ProtectM.Delete_protect_parent_scratch.objects
+            inspect_query.filter("id" => orphan_parent_id)
+            inspection = inspect_query.delete(show_query = :dict)
+
+            @test inspection isa Dict
+            @test inspection[:operation] == :delete
+            @test occursin("delete from delete_protect_parent_scratch", lowercase(inspection[:sql_text]))
+
+            delete_query = ProtectM.Delete_protect_parent_scratch.objects
+            delete_query.filter("id" => orphan_parent_id)
+            total_deleted, deleted_counter = delete_query.delete()
+
+            @test total_deleted == 1
+            @test deleted_counter == Dict("delete_protect_parent_scratch" => 1)
+            @test !ProtectM.Delete_protect_parent_scratch.objects.filter("id" => orphan_parent_id).exists()
+
+            ProtectM.Delete_protect_parent_scratch.objects.create(
+                "id" => protected_parent_id,
+                "name" => "protected-parent"
+            )
+            ProtectM.Delete_protect_child_scratch.objects.create(
+                "id" => child_id,
+                "parent_id" => protected_parent_id,
+                "label" => "blocking-child"
+            )
+
+            protected_query = ProtectM.Delete_protect_parent_scratch.objects
+            protected_query.filter("id" => protected_parent_id)
+
+            err = try
+                protected_query.delete()
+                nothing
+            catch e
+                e
+            end
+
+            @test err isa ArgumentError
+            msg = _strip_ansi(sprint(showerror, err))
+            @test occursin("Cannot delete delete_protect_parent_scratch", msg)
+            @test occursin("delete_protect_child_scratch.parent_id", msg)
+            @test occursin("ON DELETE PROTECT", msg)
+            @test ProtectM.Delete_protect_parent_scratch.objects.filter("id" => protected_parent_id).exists()
+        finally
+            _drop_delete_protect_scratch_schema!()
+        end
     end
 
     # ─────────────────────────────────────────────────────────────────────────

@@ -60,10 +60,11 @@ adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
 
 
 # $env:PORMG_DB="db_sl"; 
+# export PORMG_DB=db_sl
 # Sqlite doesn't work well with -t auto, so we can run it without threads for now
 # julia -t auto --project=. -i test/integration/common_setup.jl
 # julia -t auto --project=. test/integration/test_database_setup.jl
-# julia -t auto --project=. test/integration/test_bulk_copy.jl
+# julia -t auto --project=. test/integration/test_migration_bootstrap.jl
 # julia -t auto --project=. test/integration/test_field_validation_db_roundtrip.jl
 # julia -t auto --project=. test/integration/runtests.jl
 # $env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl

@@ -102,8 +102,8 @@ end
 # database so they do not interfere with the main integration DB.
 #
 # SQLite: creates a disposable db_test_migration/ folder (deleted after).
-# PostgreSQL: uses db_test_migration_pg/ with a committed connection.yml,
-#             resetting the public schema between runs.
+# PostgreSQL: uses db_test_migration_pg/ when present, otherwise creates a
+#             temporary fixture on demand, resetting the public schema between runs.
 #
 # All introspection is done through adapter-neutral helpers defined in
 # common_migration_setup.jl (table_exists, column_names, column_nullable,
@@ -118,6 +118,7 @@ end
 # Determine the temp DB folder based on the adapter
 edge_db_name = adapter_name == "SQLite" ? "db_test_migration" : "db_test_migration_pg"
 const edge_db_reuses_selected_db = Ref(false)
+const edge_db_fixture_generated = Ref(false)
 
 function postgres_connection_identity(settings)
   cfg = settings.db_config_settings
@@ -153,8 +154,10 @@ end
     yml_content = replace(yml_content, "database: database.sqlite" => "database: migration_test.sqlite")
     open(yml_path, "w") do f; write(f, yml_content); end
   else
-    # PostgreSQL: use the committed connection.yml in db_test_migration_pg/
+    # PostgreSQL: use the committed connection.yml when available, otherwise
+    # generate a blank fixture and hydrate it from the selected DB settings.
     selected_settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
+    edge_db_fixture_generated[] = ensure_postgres_test_config!(joinpath(@__DIR__, edge_db_name))
     hydrate_postgres_test_config!(joinpath(@__DIR__, edge_db_name), selected_settings)
 
     # Detect whether the edge-case database actually points at the same
@@ -438,11 +441,16 @@ end
     # SQLite: remove the entire disposable folder
     ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
   else
-    # PostgreSQL: remove only generated artifacts, keep connection.yml
-    mig_dir = joinpath(@__DIR__, edge_db_name, "migrations")
-    ispath(mig_dir) && rm(mig_dir, recursive=true)
-    models_path = joinpath(@__DIR__, edge_db_name, "models.jl")
-    isfile(models_path) && rm(models_path)
+    if edge_db_fixture_generated[]
+      # Remove the entire temporary fixture if this test had to create it.
+      ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
+    else
+      # PostgreSQL: remove only generated artifacts, keep the committed fixture.
+      mig_dir = joinpath(@__DIR__, edge_db_name, "migrations")
+      ispath(mig_dir) && rm(mig_dir, recursive=true)
+      models_path = joinpath(@__DIR__, edge_db_name, "models.jl")
+      isfile(models_path) && rm(models_path)
+    end
   end
 end  # @testset "Migration Engine Edge Cases"
 

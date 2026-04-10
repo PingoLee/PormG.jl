@@ -1,10 +1,11 @@
 ## SnoopCompile profiling script for PormG
 ##
-## Usage (from the repo root):
+## Usage on Ubuntu / bash (from the repo root):
 ##
-##   $env:PORMG_DB = "db_sl"
-##   $env:PORMG_PROFILEVIEW = "1"  # (optional) open flamegraph after profiling
-##   julia --project=. test/performance/snoop_compile.jl
+##   export PORMG_DB=db_sl
+##   export PORMG_SNOOP_MODE=light   # optional: faster representative subset
+##   export PORMG_PROFILEVIEW=1      # optional: open flamegraph after profiling
+##   julia -t auto --project=. test/performance/snoop_compile.jl
 ##    
 ## Output
 ##   snoop_out/PormG.jl  — raw precompile directives inferred from the workload
@@ -15,94 +16,139 @@
 ##   3. Parcel and write directives, then print a top-10 inference-time summary.
 ##   4. Optionally open a flamegraph with ProfileView.
 ##
-## NOTE: SnoopCompile and SnoopCompileCore are dev-only profiling deps.
-##       This script can add them to the active environment on first run.
-
-using Pkg
-
-# ── install snoop deps into the active project layer if not present ────────────
-for pkg in ("SnoopCompile", "SnoopCompileCore", "ProfileView")
-    if !haskey(Pkg.project().dependencies, pkg)
-        @info "Adding $pkg to current environment (dev-only)"
-        Pkg.add(pkg)
-    end
-end
+## NOTE: SnoopCompile and related tooling are dev-only profiling deps kept in
+##       [extras]. Install them with `Pkg.instantiate()` from the repo root.
 
 # ── Step 1: load the profiling packages BEFORE any workload ───────────────────
 using SnoopCompile
 using SnoopCompileCore
 using PormG
-using DataFrames
 
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, Qor, F, Q, Case, When, Value, Round
+
+const PORMG_DB_FOLDER = get(ENV, "PORMG_DB", "db_sl")
+const INTEGRATION_DIR = joinpath(@__DIR__, "..", "integration")
+const SNOOP_MODE = get(ENV, "PORMG_SNOOP_MODE", "full")
+const SHOW_PROGRESS = get(ENV, "PORMG_SNOOP_PROGRESS", "1") == "1"
+
+function progress(message)
+    if SHOW_PROGRESS
+        println("[snoop] ", message)
+    end
+    nothing
+end
 
 # ── Step 2: profile the full ORM workload ─────────────────────────────────────
 #
 # @snoop_inference captures every method inference triggered inside the block.
 # We mirror the integration test suite so the directives reflect real usage.
 
-const PORMG_DB_FOLDER = get(ENV, "PORMG_DB", "db_sl")
-@info "Starting inference profiling workload..." folder = PORMG_DB_FOLDER
+ENV["PORMG_ENV"] = "dev"
+cd(INTEGRATION_DIR)
+PormG.Configuration.load(PORMG_DB_FOLDER)
+
+if PORMG_DB_FOLDER == "db_sl"
+    PormG.@import_models "../integration/db_sl/models.jl" models
+elseif PORMG_DB_FOLDER == "db_2"
+    PormG.@import_models "../integration/db_2/models.jl" models
+else
+    error("Unsupported PORMG_DB folder for snoop workload: $PORMG_DB_FOLDER")
+end
+
+const M = models
+
+@info "Starting inference profiling workload..." folder = PORMG_DB_FOLDER mode = SNOOP_MODE
+
+# ── Warm up ALL execution paths BEFORE @snoop_inference ────────────────────────
+# SnoopCompile's @snoop_inference hooks into the C-level type inference engine
+# (jl_set_newly_inferred) and captures inference events from ALL tasks globally —
+# including the persistent SQLite async worker (Threads.@spawn while-true loop).
+#
+# When .list() runs inside @snoop_inference, the worker's sqlite_execute() call
+# triggers new method inference that gets recorded. After the block ends,
+# timingtree/addchildren! hangs processing those records because the worker's
+# inference graph is deeply entangled with Channel/Dict internals.
+#
+# Fix: run every query that will appear in the snoop block ONCE beforehand.
+# This compiles all execution-path methods so .list() inside the block triggers
+# zero new inference in the worker. Query-building inference IS still captured.
+progress("warm-up: pre-compiling execution paths")
+M.Circuit.objects.filter("country" => "Italy").values("name", "location").list()
 
 tinf = @snoop_inference begin
-
-    ENV["PORMG_ENV"] = "dev"
-    db_folder = PORMG_DB_FOLDER
-
-    cd(joinpath(@__DIR__, "..", "integration"))
-
-    PormG.Configuration.load(db_folder)
-
-    PormG.@import_models "C:/Sistemas/PormG-new-features/test/integration/db_sl/models.jl" models
-    import .models as M
+    if SNOOP_MODE == "light"
+        progress("phase 1/3: simple filters and ordering")
+    else
+        progress("phase 1/8: simple filters and ordering")
+    end
 
     # ── simple filters & ordering ──────────────────────────────────────────────
     M.Driver.objects.filter("nationality" => "British").order_by("-driverid").limit(10).list()
     M.Driver.objects.filter("surname__@startswith" => "Sc").list()
     M.Circuit.objects.filter("country" => "Italy").values("name", "location").list()
 
-    # ── FK join traversal (double-underscore) ──────────────────────────────────
-    M.Race.objects.filter("circuitid__country" => "Monaco").order_by("-year").values("*").limit(5).list()
-    M.Driver_standings.objects.filter("raceid__year__@gte" => 2020
-      ).filter("points__@gt" => 0.0
-      ).order_by("-points"
-      ).limit(20).values("*").list()
+    if SNOOP_MODE == "full"
+        progress("phase 2/8: foreign key joins")
 
-    # ── aggregates + values ────────────────────────────────────────────────────
-    M.Driver_standings.objects.filter("raceid__year" => 2021
-      ).values(
-            "driverid__forename",
-            "driverid__surname",
-            "total_points" => Sum("points"),
-            "wins" => Sum("wins")
-        ).order_by("-total_points"
+        # ── FK join traversal (double-underscore) ──────────────────────────────
+        M.Race.objects.filter("circuitid__country" => "Monaco").order_by("-year").values("*").limit(5).list()
+        M.Driver_standings.objects.filter("raceid__year__@gte" => 2020
+          ).filter("points__@gt" => 0.0
+          ).order_by("-points"
+          ).limit(20).values("*").list()
+
+        progress("phase 3/8: aggregates")
+
+        # ── aggregates + values ────────────────────────────────────────────────
+        M.Driver_standings.objects.filter("raceid__year" => 2021
+          ).values(
+                "driverid__forename",
+                "driverid__surname",
+                "total_points" => Sum("points"),
+                "wins" => Sum("wins")
+            ).order_by("-total_points"
+            ).list()
+
+        M.Constructor_standings.objects.filter("raceid__year__@gte" => 2019
+          ).values(
+                "constructorid__name",
+                "seasons_top3" => Count("constructorstandingsid")
+            ).filter("position__@lte" => 3
+            ).order_by("-seasons_top3"
+            ).list()
+
+        progress("phase 4/8: Qor logic")
+
+        # ── Qor logic ─────────────────────────────────────────────────────────
+        M.Race.objects.filter(
+            Qor("year" => 2021, "year" => 2022)
+        ).order_by("year", "round"
+        ).values("year", "round", "name"
         ).list()
 
-    M.Constructor_standings.objects.filter("raceid__year__@gte" => 2019
-      ).values(
-            "constructorid__name",
-            "seasons_top3" => Count("constructorstandingsid")
-        ).filter("position__@lte" => 3
-        ).order_by("-seasons_top3"
-        ).list()
+        progress("phase 5/8: count and exists")
+    else
+        progress("phase 2/3: count and exists")
+    end
 
-    # ── Qor logic ─────────────────────────────────────────────────────────────
-    M.Race.objects.filter(
-        Qor("year" => 2021, "year" => 2022)
-    ).order_by("year", "round"
-    ).values("year", "round", "name"
-    ).list()
-
-    # ── count / exists ─────────────────────────────────────────────────────────
+    # # ── count / exists ─────────────────────────────────────────────────────────
     M.Lap_times.objects.filter("raceid__year" => 2021).count()
     M.Pit_stops.objects.filter("stop__@ne" => 1).exists()
 
-    # ── list_json ──────────────────────────────────────────────────────────────
-    M.Qualifying.objects.filter("raceid__year" => 2022
-        ).filter("position__@lte" => 3
-        ).values("driverid__code", "raceid__name", "position"
-        ).order_by("raceid__round", "position"
-        ).list_json()
+    if SNOOP_MODE == "full"
+        progress("phase 6/8: json output")
+
+        # ── list_json ──────────────────────────────────────────────────────────
+        M.Qualifying.objects.filter("raceid__year" => 2022
+            ).filter("position__@lte" => 3
+            ).values("driverid__code", "raceid__name", "position"
+            ).order_by("raceid__round", "position"
+            ).list_json()
+
+        progress("phase 7/8: F expressions")
+    else
+        progress("phase 3/3: F expressions and deep joins")
+    end
 
     # ── F() field references ───────────────────────────────────────────────────
     M.Result.objects.filter("points__@gte" => 0.0
@@ -112,8 +158,12 @@ tinf = @snoop_inference begin
             "adjusted" => F("points") * 1.1
         ).limit(10).list()
 
-    # ── offset / pagination ────────────────────────────────────────────────────
-    M.Driver.objects.order_by("surname").limit(25).offset(50).list()
+    if SNOOP_MODE == "full"
+        progress("phase 8/8: pagination and deep joins")
+
+        # ── offset / pagination ────────────────────────────────────────────────
+        M.Driver.objects.order_by("surname").limit(25).offset(50).list()
+    end
 
     # ── deep join (3-level) ────────────────────────────────────────────────────
     M.Result.objects.filter("raceid__circuitid__country" => "Brazil"
@@ -138,15 +188,19 @@ SnoopCompile.write(outdir, pcs)
 #
 # These are the methods worth adding to src/precompile.jl @compile_workload.
 println("\n── Top-10 inference hotspots (inclusive time) ────────────────────────────")
-triggers = inference_triggers(tinf)
+try
+    triggers = inference_triggers(tinf)
 
-if !isempty(triggers)
-    sorted = sort(triggers; by = x -> SnoopCompileCore.inclusive(x), rev = true)
-    for (i, t) in enumerate(first(sorted, 10))
-        println("$i. ", t)
+    if !isempty(triggers)
+        sorted = sort(triggers; by = x -> SnoopCompileCore.inclusive(x), rev = true)
+        for (i, t) in enumerate(first(sorted, 10))
+            println("$i. ", t)
+        end
+    else
+        println("(no triggers recorded — workload may have already been fully precompiled)")
     end
-else
-    println("(no triggers recorded — workload may have already been fully precompiled)")
+catch e
+    @warn "inference_triggers failed (common when warm-up pre-compiles execution paths)" exception=e
 end
 
 # ── Step 5: Visual Analysis (Optional) ────────────────────────────────────────

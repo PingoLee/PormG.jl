@@ -29,6 +29,7 @@ docs/site/
 
 test/integration/db_sl/migrations/*
 test/integration/db_sl/f1.sqlite*
+test/performance/snoop_out/*
 
 # Migration edge-case test artifacts (generated at runtime, never committed)
 test/integration/db_test_migration/

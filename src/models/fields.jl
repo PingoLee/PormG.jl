@@ -2149,6 +2149,52 @@ function ImageField(; kwargs...)
   )  
 end
 
+"""
+    FileField(; kwargs...)
+
+Django-compatibility alias for storing file upload paths. Behaves identically to `ImageField`.
+Accepted kwargs: `verbose_name`, `unique`, `blank`, `null`, `db_index`, `default`, `editable`, `upload_to`, `max_length`.
+"""
+function FileField(; kwargs...)
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable,
+      :upload_to, :max_length
+  ])
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for FileField. It will be ignored." field="FileField" param=k value=v
+      end
+  end
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique       = get(kwargs, :unique, false)
+  blank        = get(kwargs, :blank, false)
+  null         = get(kwargs, :null, false)
+  db_index     = get(kwargs, :db_index, false)
+  default      = get(kwargs, :default, nothing)
+  editable     = get(kwargs, :editable, true)
+
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  default = validate_default(default, Union{String, Nothing}, "FileField", x -> parse(String, x))
+  !(unique   isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
+  !(blank    isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
+  !(null     isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+
+  return sImageField(
+    verbose_name,
+    false,
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "BLOB",
+    format_text_sql
+  )
+end
+
 mutable struct sTextField <: PormGField
   verbose_name::Union{String, Nothing}
   primary_key::Bool

@@ -56,6 +56,22 @@ function _reset_postgres!(pool::PormG.PormGPostgres)
 end
 
 """
+    ensure_postgres_test_config!(edge_db_path::String) -> Bool
+
+Ensure the PostgreSQL edge-case migration fixture folder contains a
+`connection.yml`. Returns `true` when the fixture had to be created on demand.
+"""
+function ensure_postgres_test_config!(edge_db_path::String)::Bool
+  config_path = joinpath(edge_db_path, "connection.yml")
+  if isdir(edge_db_path) && isfile(config_path)
+    return false
+  end
+
+  PormG.Generator.create_db_folder_and_yml(path=edge_db_path, adapter="PostgreSQL")
+  return true
+end
+
+"""
     hydrate_postgres_test_config!(edge_db_path::String, source_settings::PormG.SQLConn)
 
 Populate blank PostgreSQL connection.yml values in the edge-case migration DB folder

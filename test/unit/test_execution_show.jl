@@ -58,3 +58,26 @@ PormG.config["default"] = MockSettings
   # We just care if it returns the dict and some params
   @test !isempty(res_update[:parameters])
 end
+
+@testset "Delete respects change_data guard" begin
+  # TestDriver.connect_key is explicitly set to "default" (line 13 above), which matches
+  # the MockSettings registered under PormG.config["default"] in this file's setup block.
+  previous_change_data = PormG.config["default"].change_data
+
+  try
+    PormG.config["default"].change_data = false
+
+    q = TestDriver.objects.filter("id" => 1)
+    err = try
+      q.delete()
+      nothing
+    catch e
+      e
+    end
+
+    @test err isa ArgumentError
+    @test occursin("not allowed to delete", lowercase(sprint(showerror, err)))
+  finally
+    PormG.config["default"].change_data = previous_change_data
+  end
+end

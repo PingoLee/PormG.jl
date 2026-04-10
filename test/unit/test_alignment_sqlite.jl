@@ -1606,4 +1606,39 @@ end
     @test_throws ArgumentError PormG.Models.set_models(dup_mod, "mock_sl_path")
 end
 
+@testset "Delete Graph - Circular dependency detection" begin
+    # The delete planner topologically sorts model dependencies before execution.
+    # A cycle must raise immediately rather than producing an invalid delete order.
+    CycleA = PormG.Models.Model("cycle_delete_a",
+        id = PormG.Models.IDField(),
+        name = PormG.Models.CharField()
+    )
+    CycleB = PormG.Models.Model("cycle_delete_b",
+        id = PormG.Models.IDField(),
+        name = PormG.Models.CharField()
+    )
+
+    deps = Dict{PormG.PormGModel, Set{PormG.PormGModel}}(
+        CycleA => Set{PormG.PormGModel}([CycleB]),
+        CycleB => Set{PormG.PormGModel}([CycleA]),
+    )
+
+    err = try
+        PormG.QueryBuilder.topological_sort(deps)
+        nothing
+    catch e
+        e
+    end
+
+    @test err isa ArgumentError
+    @test occursin("circular dependency", lowercase(sprint(showerror, err)))
+
+    # Pin the dispatch contract: Julia infers Dict{Model_Type,...} (concrete) when keys are
+    # constructed without an explicit type annotation. topological_sort must NOT have a method
+    # for the concrete type — callers must supply the abstract-typed dict or get a MethodError.
+    @test_throws MethodError PormG.QueryBuilder.topological_sort(
+        Dict(CycleA => Set([CycleB]), CycleB => Set([CycleA]))
+    )
+end
+
 

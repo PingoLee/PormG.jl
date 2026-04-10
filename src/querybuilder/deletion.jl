@@ -221,6 +221,12 @@ function process_collector!(collector::DeletionCollector)
   collector.sorted_models = topological_sort(collector.dependencies)
 end
 
+function should_check_related_existence(collector::DeletionCollector)::Bool
+  pool = collector.settings.connections
+  connection_pool = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  return pool isa connection_pool.PostgresConnectionPool || pool isa connection_pool.SQLiteConnectionPool
+end
+
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
   # For each foreign key in the model (model has FK -> related_model)
   @pormg_debug false
@@ -246,10 +252,11 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
     end
     
     @pormg_debug false
-    # During inspection mode, do not execute do_exists against the database —
-    # the connection may be a mock or there may be no real pool. Assume related
-    # objects exist so the full dependency graph is still built for the inspection.
-    collector.show_query === :execute && (_query |> !do_exists) && continue
+    # For live pools, inspection should still reflect actual reverse-row presence so
+    # PROTECT/RESTRICT do not raise false positives. Mock/unit-test connections keep
+    # the previous behavior and assume related rows exist because no database is available.
+    should_check_existence = collector.show_query === :execute || should_check_related_existence(collector)
+    should_check_existence && (_query |> !do_exists) && continue
      
     # @info _query |> query
 
@@ -282,7 +289,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
   elseif field.on_delete in [PROTECT, RESTRICT]    
     # More descriptive error with field name, constraint type, and sample IDs
     constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
-    throw(ArgumentError("Cannot delete \e[4m\e[31m$(related_model.name)\e[0m because it is referenced by \e[4m\e[31m$(model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
+    throw(ArgumentError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
     @pormg_debug false

@@ -28,7 +28,9 @@ Use `pormg-querybuilder-internals` instead when the task centers on `src/QueryBu
 
 ### Preferred query style
 
-Use the fluent surface exposed by `ObjectHandler` and `model.objects`:
+Use the fluent surface exposed by `ObjectHandler` and `model.objects`.
+
+**Accumulate steps on a named variable** (preferred for multi-step queries and test setup):
 
 ```julia
 query = M.Result.objects
@@ -38,6 +40,28 @@ query.values("raceid__year", "raceid__name", "constructorid__name")
 rows = query.list()
 exists = query.exists()
 count = query.count()
+```
+
+**Inline chain with multi-line argument style** (preferred for one-off reads where a named query variable adds no clarity):
+
+Place each argument list on its own indented line inside the call parentheses. The closing `)` sits at the same column as the start of the call, immediately followed by the next `.method(` with no line break in between:
+
+```julia
+row = M.Result.objects.filter(
+    "driverid__surname" => "Senna",
+    "positionorder" => 1
+).values(
+    "raceid__year", "raceid__name"
+).list() |> first
+```
+
+Do **not** break the chain by starting a new line with a leading `.`:
+
+```julia
+# ✗ avoid — Julia requires a trailing operator to continue across lines
+row = M.Result.objects
+          .filter("driverid__surname" => "Senna")  # leading dot — parse error risk
+          .list() |> first
 ```
 
 ### For terminal operations, prefer fluent methods

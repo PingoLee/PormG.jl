@@ -20,71 +20,9 @@ end
 
 # conn = PormG.Configuration.acquire_connection(PormG.config["db_2"].connections)
 @testset "Database Setup Insert" begin
-  @testset "Schema Evolution and Error Recovery" begin
-    # 1. Schema Evolution: Reordered columns and extra columns
-    query = M.Status.objects
-    query.delete(allow_delete_all=true)
-    
-    # Create DF with extra column and different order
-    df_evolved = DataFrame(
-      extra_col = ["ignore me", "me too"],
-      status = ["Evolved 1", "Evolved 2"],
-      statusid = [999, 1000]
-    )
-    
-    # Should work because 'extra_col' is not in model fields and others are mapped by name
-    bulk_insert(query, df_evolved)
-    query.filter("statusid" => 999)
-    @test query.count() == 1
-    query = M.Status.objects
-    query.filter("statusid" => 1000)
-    @test query.count() == 1
-    
-    # 2. Error Recovery: Atomicity on failure
-    query = M.Status.objects
-    initial_count = query.count()
-    df_bad = DataFrame(
-        statusid = [1001, 999, 1002], # 999 is a duplicate
-        status = ["Good", "Bad (Duplicate)", "Good"]
-    )
-    
-    got_error = false
-    try
-      Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-        bulk_insert(query, df_bad)
-      end
-    catch e
-      got_error = true  # bulk_insert now rethrows the underlying DB error (e.g., duplicate key)
-    end
-
-    @test got_error
-    # Verify atomicity: 1001 and 1002 should NOT be there
-    query = M.Status.objects
-    @test query.count() == initial_count
-    query.filter("statusid" => 1001)
-    @test query.count() == 0
-
-    # 3. Multi-chunk Error Recovery: Atomicity across chunks
-    M.Status.objects.delete(allow_delete_all=true)
-    df_multi = DataFrame(
-        statusid = [2001, 2002, 2001, 2003], # 2001 is repeated in the 3rd row
-        status = ["Chunk 1", "Chunk 1", "Chunk 2 (Fail)", "Chunk 2"]
-    )
-    
-    query = M.Status.objects;
-    got_error = false
-    try
-      Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-        bulk_insert(query, df_multi, chunk_size=2)
-      end
-    catch e
-      got_error = true  # async task failure is unwrapped, so catch sees the real constraint error
-    end
-
-    @test got_error
-    # Verify that even the first chunk (2001, 2002) was rolled back
-    @test query.count() == 0
-  end
+  # Insert-specific behavioral tests (Schema Evolution, Error Recovery) have been
+  # extracted to test_inserts.jl, which runs before this file in the suite.
+  # This file now acts purely as a fixture seeder for the remaining test phases.
 
   # Clear all tables
   M.Driver_standings.objects.delete(allow_delete_all = true)

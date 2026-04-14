@@ -503,23 +503,180 @@ end
               @test row4[:name] == "lookup_test_4"
             end
 
-            @testset "delete by dynamically collected ID list" begin
-              # Delete is a write-path terminal method, so keep this with the DML
-              # coverage rather than in a generic production-pattern file.
-              M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    end
+end
 
-              M.Just_a_test_deletion.objects.create("name" => "del_1", "test_result" => 1)
-              M.Just_a_test_deletion.objects.create("name" => "del_2", "test_result" => 2)
-              M.Just_a_test_deletion.objects.create("name" => "del_3", "test_result" => 3)
-              M.Just_a_test_deletion.objects.create("name" => "del_keep", "test_result" => 4)
 
-              df = M.Just_a_test_deletion.objects.filter("name__@icontains" => "del_").order_by("id") |> DataFrame
-              ids = df.id[1:3] |> collect |> unique |> sort
+# ─────────────────────────────────────────────────────────────────────────────
+# JSONField Updates
+#
+# Field_validation_scratch.payload is a JSONField(null=true). This testset
+# verifies that:
+#   1. A null payload can be updated to a full JSON object
+#   2. A subsequent update fully replaces the stored object (no partial merge)
+#   3. A payload can be set back to null
+#
+# JSON is serialised to a string before passing to update() because both
+# PostgreSQL (jsonb) and SQLite (TEXT) accept a JSON string as the wire format.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "JSONField Updates" begin
+    slug     = "json-update-9901"
+    uuid_val = string(uuid4())
 
-              M.Just_a_test_deletion.objects.filter("id__@in" => ids).delete()
+    M.Field_validation_scratch.objects.filter("slug" => slug).exists() &&
+        M.Field_validation_scratch.objects.filter("slug" => slug).delete()
 
-              @test M.Just_a_test_deletion.objects.filter("id__@in" => ids).count() == 0
-              @test M.Just_a_test_deletion.objects.filter("name" => "del_keep").count() == 1
-            end
+    try
+        # Insert with null payload — the field is nullable so this must succeed.
+        result = M.Field_validation_scratch.objects.create(
+            "uuid_token"    => uuid_val,
+            "canonical_url" => "https://example.com/f1/json-update",
+            "slug"          => slug
+        )
+        @test result[:payload] === nothing || ismissing(result[:payload])
+
+        # Update 1: null → dict (serialised as a JSON string)
+        first_payload = Dict("race" => "Monaco GP", "year" => 2024)
+        M.Field_validation_scratch.objects.filter("slug" => slug).update(
+            "payload" => JSON.json(first_payload)
+        )
+        row1 = M.Field_validation_scratch.objects.filter(
+            "slug" => slug
+        ).values(
+            "payload"
+        ).list() |> first
+        # Adapters may return the JSON as a Dict (PostgreSQL jsonb) or a String (SQLite TEXT).
+        stored1 = row1[:payload] isa AbstractDict ?
+                      row1[:payload] :
+                      JSON.parse(string(row1[:payload]))
+        @test stored1["race"] == "Monaco GP"
+        @test stored1["year"] == 2024
+
+        # Update 2: replace with a completely different dict — must be a full replacement.
+        # The key "year" that existed in the first payload must NOT survive.
+        second_payload = Dict("race" => "Silverstone", "lap" => 52)
+        M.Field_validation_scratch.objects.filter("slug" => slug).update(
+            "payload" => JSON.json(second_payload)
+        )
+        row2 = M.Field_validation_scratch.objects.filter(
+            "slug" => slug
+        ).values(
+            "payload"
+        ).list() |> first
+        stored2 = row2[:payload] isa AbstractDict ?
+                      row2[:payload] :
+                      JSON.parse(string(row2[:payload]))
+        @test stored2["race"] == "Silverstone"
+        @test stored2["lap"]  == 52
+        @test !haskey(stored2, "year")  # evicted by full replacement — not a merge
+
+        # Update 3: dict → null
+        M.Field_validation_scratch.objects.filter("slug" => slug).update("payload" => nothing)
+        row3 = M.Field_validation_scratch.objects.filter(
+            "slug" => slug
+        ).values(
+            "payload"
+        ).list() |> first
+        @test row3[:payload] === nothing || ismissing(row3[:payload])
+
+    finally
+        M.Field_validation_scratch.objects.filter("slug" => slug).exists() &&
+            M.Field_validation_scratch.objects.filter("slug" => slug).delete()
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update Constraint: JOINs Rejected
+#
+# execution_bulk.jl line 744 explicitly throws when the source query already
+# has JOIN conditions attached. This is the correct limitation: the VALUES (…)
+# bulk approach generates its own CTE/subquery and cannot also carry an outer
+# JOIN that was baked into the query object.
+#
+# The test documents this guard so a silent regression cannot slip through.
+# If PormG ever lifts the restriction, this test will fail and the developer
+# will know to update both the guard and this test.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update Constraint: JOINs Rejected" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    M.Just_a_test_deletion.objects.create("name" => "join-guard-row", "test_result" => 1)
+
+    df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
+    df[1, :name] = "should-not-land"
+
+    err = try
+      # The JOIN-producing predicate has to be passed through the bulk_update
+      # filters= API because bulk_update clears any pre-applied query filters
+      # before rebuilding its instruction object.
+      bulk_update(
+        M.Just_a_test_deletion.objects,
+        df,
+        columns=["name"],
+        filters=["id", "test_result__positionorder" => 1]
+      )
+        nothing
+    catch e
+        e
+    end
+
+    # The guard must have fired — error must be non-null.
+    @test err !== nothing
+    # The error message must mention "join" (case-insensitive) so the caller
+    # understands why the operation was rejected rather than seeing a cryptic failure.
+    @test occursin("join", lowercase(string(err)))
+
+    # The row must NOT have been mutated during the failed attempt.
+    row = M.Just_a_test_deletion.objects.filter("name" => "join-guard-row").list() |> first
+    @test row[:name] == "join-guard-row"
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Decimal Precision in F-expressions
+#
+# Django_contract_scratch.price is a DecimalField(max_digits=10, decimal_places=2),
+# which maps to NUMERIC(10,2) on both PostgreSQL and SQLite.
+#
+# The key assertion is that F-expression arithmetic on a NUMERIC column does NOT
+# introduce floating-point drift: 10.50 * 2 must come back as exactly 21.0
+# (or the string equivalent), not 20.999999... or 21.000000001.
+#
+# The comparison is done by parsing the stored value via string to avoid any
+# implicit float widening in the Julia comparison layer.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Decimal Precision in F-expressions" begin
+    label = "decimal-f-expr-9902"
+
+    M.Django_contract_scratch.objects.filter("label" => label).exists() &&
+        M.Django_contract_scratch.objects.filter("label" => label).delete()
+
+    try
+        M.Django_contract_scratch.objects.create("label" => label, "price" => "10.50")
+
+        # Multiply the stored NUMERIC value by 2 using an F-expression.
+        # Integer multiplier avoids introducing a floating-point literal into the SQL.
+        # Expected result: 10.50 * 2 = 21.00 exactly.
+        M.Django_contract_scratch.objects.filter("label" => label).update(
+            "price" => F("price") * 2
+        )
+
+        row = M.Django_contract_scratch.objects.filter(
+            "label" => label
+        ).values(
+            "price"
+        ).list() |> first
+
+        # parse via string → Float64 to avoid adapter-specific Decimal/String types.
+        # 21.0 is exactly representable in Float64, so == is appropriate here.
+        stored = parse(Float64, string(row[:price]))
+        @test stored == 21.0
+
+    finally
+        M.Django_contract_scratch.objects.filter("label" => label).exists() &&
+            M.Django_contract_scratch.objects.filter("label" => label).delete()
     end
 end

@@ -2,6 +2,10 @@
 # julia -t auto  --project=. test/integration/runtests.jl
 include("common_setup.jl")
 
+# 1b. Load delete scratch modules at top level (module expressions are forbidden
+#     inside @testset / macro-wrapped bodies in Julia).
+include("common_delete_setup.jl")
+
 # 2. Include individual test files
 # Each file now focuses only on test logic, without setup
 @testset "PormG Test Suite ($(PORMG_DB_FOLDER))" begin
@@ -12,13 +16,19 @@ include("common_setup.jl")
     # @testset "Migration Bootstrap"          begin include("test_migration_bootstrap.jl") end
 
     # ── Phase 1: Fixture Seeding ─────────────────────────────────────
-    # Deletes any residual rows and loads the F1 CSV fixtures.
-    @testset "Inserts and Schema"           begin include("test_database_setup.jl")     end
+    # test_inserts.jl runs first: it exercises insert-specific behavioral
+    # logic (schema evolution, error recovery, create() return semantics)
+    # before test_database_setup.jl clears all tables and seeds the F1 data.
+    @testset "Inserts and Schema"           begin
+        include("test_inserts.jl")
+        include("test_database_setup.jl")
+    end
 
     # ── Phase 2: Behavioral Tests (reads, filters, expressions) ──────
     @testset "Selection and Filters"        begin include("test_selection.jl")          end # TODO: split this into multiple files (selection, filters, expressions)
     @testset "Field Expressions"            begin include("test_field_expressions.jl")  end
     @testset "Updates"                      begin include("test_updates.jl")            end
+    @testset "Deletes"                      begin include("test_deletes.jl")            end
     @testset "Bulk copy"                    begin include("test_bulk_copy.jl")          end
     @testset "SQL Functions"                begin include("test_sql_functions.jl")      end  
 
@@ -31,8 +41,8 @@ include("common_setup.jl")
     @testset "Transactions"                 begin include("test_transactions.jl")       end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
-    @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end # TODO: extend this test
-    @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")                end
+    @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end
+    @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")    end
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 

@@ -729,8 +729,12 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
         fetch(settings, sql, parameters)
       catch e
         if occursin("duplicate key value violates unique constraint", e |> string)
-          _update_sequence(model, connection, pk_field, settings, ignore_tx=true)
-          throw("Error in bulk_insert, the row has a duplicate key value; try again")
+          if !isempty(pk_field)
+            _update_sequence(model, connection, pk_field, settings, ignore_tx=true)
+            fetch(settings, sql, parameters; ignore_tx=true)
+          else
+            throw("Error in bulk_insert, the row has a duplicate key value and no primary key sequence can be synchronized")
+          end
         elseif occursin("violates foreign key constraint", e |> string)
           throw("Error in bulk_insert, the row has a foreign key constraint")
         else

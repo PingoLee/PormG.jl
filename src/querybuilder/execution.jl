@@ -465,51 +465,49 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
 
 end
 
+function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)
+  sequence_df = fetch(
+    connection,
+    "SELECT pg_get_serial_sequence('$(string(model.name))', '$(field)');";
+    ignore_tx=ignore_tx,
+  ) |> DataFrames.DataFrame
+
+  if size(sequence_df, 1) == 0 || !("pg_get_serial_sequence" in names(sequence_df))
+    return nothing
+  end
+
+  sequence_name = sequence_df[1, :pg_get_serial_sequence]
+  return ismissing(sequence_name) || isnothing(sequence_name) ? nothing : sequence_name
+end
+
 function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::SQLConn; ignore_tx::Bool = false)
-  @pormg_debug false
+  @pormg_debug true
+
+  !(settings.change_db || settings.django_prefix !== nothing) && return nothing
+
   for field in pk_field
-    if settings.change_db
-      try
-        safe_field_name = quote_identifier(field, connection)
-        safe_table_name = safe_table_identifier(string(model.name), connection)
-        fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($(safe_field_name)) + 1 FROM $(safe_table_name)), true)"; ignore_tx=ignore_tx)
-      catch e
-        if occursin("does not exist", e |> string)        
-          _fix_sequence_name(connection, model, ignore_tx=ignore_tx)
-          safe_table_name = safe_table_identifier(string(model.name), connection)
-          safe_field_name = quote_identifier(field, connection)
-          fetch(connection, "SELECT setval('$(string(model.name))_$(field)_seq', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true)"; ignore_tx=ignore_tx)
-        end
-      end
-    elseif settings.django_prefix !== nothing
-      @pormg_debug false
-      try
-        # For Django prefixed tables, try with django prefix pattern
-        sequence_name = "$(model.name)_$(field)_seq"
-        safe_table_name = safe_table_identifier(model.name, connection)
-        safe_field_name = quote_identifier(field, connection)
-        fetch(connection, "SELECT setval('$sequence_name', (SELECT MAX($safe_field_name) + 1 FROM $safe_table_name), true)"; ignore_tx=ignore_tx)
-      catch e
-        if occursin("does not exist", e |> string)
-          # # Try to find the actual sequence name
-          # sequences = fetch(connection, """
-          #   SELECT sequence_name 
-          #   FROM information_schema.sequences 
-          #   WHERE sequence_name LIKE '%$(settings.django_prefix)_$(model.name |> lowercase)%'
-          #   AND sequence_schema = 'public';
-          # """) |> DataFrames.DataFrame
-          
-          # if size(sequences, 1) > 0
-          #   sequence_name = sequences[1, :sequence_name]
-          #   fetch(connection, "SELECT setval('$(sequence_name)', (SELECT MAX($(field)) + 1 FROM $(settings.django_prefix)_$(model.name |> lowercase)), true);")
-          # else
-          #   @warn "Could not find sequence for $(settings.django_prefix)_$(model.name |> lowercase).$(field)"
-          # end
-        else
-          rethrow(e)
-        end
-      end
+    sequence_name = _get_owned_sequence_name(connection, model, field; ignore_tx=ignore_tx)
+
+    if isnothing(sequence_name)
+      # Fallback for Django-managed tables where sequence ownership is not set:
+      # scan pg_sequences for any sequence whose name starts with the table name.
+      seqs_df = fetch(
+        connection,
+        "SELECT sequencename FROM pg_sequences WHERE sequencename LIKE '$(string(model.name) |> lowercase)%'";
+        ignore_tx=ignore_tx,
+      ) |> DataFrames.DataFrame
+      
+      size(seqs_df, 1) == 0 && continue
+      sequence_name = seqs_df[1, :sequencename]
     end
+
+    safe_field_name = quote_identifier(field, connection)
+    safe_table_name = safe_table_identifier(string(model.name), connection)
+    fetch(
+      connection,
+      "SELECT setval('$sequence_name', COALESCE((SELECT MAX($safe_field_name) FROM $safe_table_name), 0) + 1, false)";
+      ignore_tx=ignore_tx,
+    )
   end
 end
 

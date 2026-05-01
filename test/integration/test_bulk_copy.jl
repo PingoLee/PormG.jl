@@ -180,6 +180,61 @@ else
 
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL COPY: Blank Auto PK Columns
+#
+# COPY should follow the same contract as bulk_insert for auto-generated
+# primary keys. A DataFrame that carries an all-blank id column should still
+# let PostgreSQL allocate ids, and the sequence must remain usable for the
+# next create() call.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_copy omits blank auto-generated primary keys" begin
+    cleanup_names = [
+        "copy-blank-pk-a",
+        "copy-blank-pk-b",
+        "copy-blank-pk-c"
+    ]
+
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label__@in" => cleanup_names)
+    cleanup.exists() && cleanup.delete()
+
+    try
+        df_blank_pk = DataFrames.DataFrame(
+            id = Union{Missing, Int64}[missing, missing],
+            label = ["copy-blank-pk-a", "copy-blank-pk-b"]
+        )
+
+        @test all(ismissing, df_blank_pk.id)
+
+        bulk_copy(M.Django_contract_scratch.objects, df_blank_pk)
+
+        inserted = M.Django_contract_scratch.objects.filter(
+            "label__@in" => ["copy-blank-pk-a", "copy-blank-pk-b"]
+        ).order_by(
+            "label"
+        ).values(
+            "id", "label"
+        ).list()
+
+        inserted_ids = [row[:id] for row in inserted]
+
+        @test length(inserted) == 2
+        @test all(id -> id isa Integer && id > 0, inserted_ids)
+        @test length(unique(inserted_ids)) == 2
+        @test all(ismissing, df_blank_pk.id)
+
+        next_row = M.Django_contract_scratch.objects.create(
+            "label" => "copy-blank-pk-c"
+        )
+        @test next_row[:id] > maximum(inserted_ids)
+    finally
+        cleanup = M.Django_contract_scratch.objects
+        cleanup.filter("label__@in" => cleanup_names)
+        cleanup.exists() && cleanup.delete()
+    end
+end
+
 @testset "bulk_copy: empty DataFrame is a no-op" begin
     query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)

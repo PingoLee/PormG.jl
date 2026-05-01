@@ -10,7 +10,9 @@ import PormG: config
 import PormG: SQLType, SQLConn, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtransform, run_in_transaction
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, current_task
-import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for, get_settings as get_configuration_settings
+import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for,
+	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
+	get_settings as get_configuration_settings
 import PormG: @pormg_debug
 import Base: first
 
@@ -80,7 +82,7 @@ export page
 export query
 export update
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
-export bulk_insert, bulk_update, bulk_copy
+export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 
 include("documentation/querybuilder.jl")
 

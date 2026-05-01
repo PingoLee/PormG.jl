@@ -60,8 +60,9 @@ mutable struct TransactionContext
   conn::Union{Nothing, LibPQ.Connection, SQLite.DB}
   pool::Union{Nothing, PormGPostgres, PormGSQLite}
   depth::Int  # Track nested transaction contexts
+  sqlite_reserved_primary_keys::Dict{Tuple{String, String}, Int64}
   
-  TransactionContext() = new(nothing, nothing, 0)
+  TransactionContext() = new(nothing, nothing, 0, Dict{Tuple{String, String}, Int64}())
 end
 
 # Task-local storage for transaction context; TODO i need study this more
@@ -103,6 +104,9 @@ function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, c
   new_ctx.conn = conn
   new_ctx.pool = pool
   new_ctx.depth = old_ctx.depth + 1
+  new_ctx.sqlite_reserved_primary_keys = old_ctx.depth > 0 ?
+    old_ctx.sqlite_reserved_primary_keys :
+    Dict{Tuple{String, String}, Int64}()
   
   return with(_tx_context => new_ctx) do
     f()
@@ -135,6 +139,23 @@ function transaction_connection_for(settings::SQLConn)
   tx_pool = get_tx_pool()
   tx_conn = get_tx_connection()
   return tx_conn !== nothing && tx_pool === settings.connections ? tx_conn : nothing
+end
+
+function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String)
+  ctx = _tx_context[]
+  ctx.depth > 0 || return nothing
+  return get(ctx.sqlite_reserved_primary_keys, (string(model.name |> lowercase), pk_field), nothing)
+end
+
+function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer)
+  ctx = _tx_context[]
+  ctx.depth > 0 || return Int64(max_id)
+
+  key = (string(model.name |> lowercase), pk_field)
+  current_max = get(ctx.sqlite_reserved_primary_keys, key, typemin(Int64))
+  new_max = max(current_max, Int64(max_id))
+  ctx.sqlite_reserved_primary_keys[key] = new_max
+  return new_max
 end
 
 """

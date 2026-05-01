@@ -62,6 +62,32 @@ if !@isdefined(KeylessM)
     const KeylessM = keyless_delete_scratch_models
 end
 
+module keyless_related_delete_scratch_models
+import PormG.Models
+
+Keyless_related_parent_scratch = Models.Model("keyless_related_parent_scratch",
+    id   = Models.IDField(),
+    name = Models.CharField()
+)
+
+# No IDField: the deletion collector must fall back to parent_id when this
+# keyless child is reached through the parent's CASCADE graph.
+Keyless_related_child_scratch = Models.Model("keyless_related_child_scratch",
+    parent_id = Models.ForeignKey(Keyless_related_parent_scratch,
+                    pk_field     = "id",
+                    on_delete    = "CASCADE",
+                    null         = false,
+                    related_name = "keyless_children"),
+    label     = Models.CharField()
+)
+
+end
+
+if !@isdefined(KeylessRelatedM)
+    Models.set_models(keyless_related_delete_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    const KeylessRelatedM = keyless_related_delete_scratch_models
+end
+
 module do_nothing_delete_scratch_models
 import PormG.Models
 

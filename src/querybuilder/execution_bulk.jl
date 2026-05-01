@@ -50,6 +50,235 @@ function _normalize_bulk_filters(filters)
   return _filters
 end
 
+function _is_blank_bulk_primary_key_value(value)
+  if value === nothing || ismissing(value)
+    return true
+  end
+
+  return value isa AbstractString && isempty(strip(value))
+end
+
+function _is_auto_generated_bulk_primary_key(field_meta)
+  return field_meta.primary_key &&
+    hasfield(typeof(field_meta), :auto_increment) &&
+    getfield(field_meta, :auto_increment)
+end
+
+function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
+  model::PormGModel,
+  fields_df::Vector{String},
+  mapping::Dict{String, String},
+  operation::Symbol)
+
+  operation in (:insert, :copy) || return nothing
+
+  for field in copy(fields_df)
+    haskey(mapping, field) || continue
+
+    f_meta = model.fields[field]
+    _is_auto_generated_bulk_primary_key(f_meta) || continue
+
+    col_name = mapping[field]
+    blank_mask = map(_is_blank_bulk_primary_key_value, df[!, col_name])
+
+    if all(blank_mask)
+      delete!(mapping, field)
+      filter!(mapped_field -> mapped_field != field, fields_df)
+    elseif any(blank_mask)
+      throw(ArgumentError("Error in bulk_$(operation), the auto-generated primary key field \e[4m\e[31m$(field)\e[0m has mixed blank and explicit values; either remove the column or provide a value for every row"))
+    end
+  end
+
+  return nothing
+end
+
+"""
+    allocate_primary_keys(objct::SQLObjectHandler, df::DataFrame; clone=true) -> DataFrame
+
+Pre-allocate sequential primary key values for rows in `df` that are missing an
+auto-generated primary key, and return the DataFrame with the pk column populated.
+
+Use this when you need the assigned ids **before** inserting—for example, to wire up
+foreign key columns in related tables that must be bulk-inserted in the same transaction.
+
+If `df` already contains the primary key column with at least one non-blank value it is
+returned unchanged and no ids are reserved. If the column is absent, or **every** value in
+it is blank (`missing`, `nothing`, or an empty string), ids are reserved from the database.
+
+If the column contains **mixed** values—some rows have explicit pk values and some are
+blank—a `@warn` is emitted and the DataFrame is still returned unchanged. The blank rows
+are left as-is and will raise an `ArgumentError` when `bulk_insert` is called. To resolve
+this you can: (1) provide a pk value for every row, (2) remove the pk column so all ids
+are allocated automatically, or (3) pre-fill the blank rows before calling this function.
+
+# PostgreSQL
+Uses `nextval(pg_get_serial_sequence(...))` to atomically consume N values from the
+identity/serial sequence. The reserved ids are guaranteed not to collide with concurrent
+inserts. Note that if the subsequent bulk insert is never executed (e.g. the transaction
+is rolled back), the consumed sequence values are **not** returned—this is normal
+PostgreSQL sequence behaviour; gaps are harmless.
+
+# SQLite
+Reads the starting point from `max(MAX(pk), sqlite_sequence.seq)`, assigns the next
+`N` ids from there, and bumps the table's `sqlite_sequence` counter to the end of the
+reserved range. That keeps both later autoincrement inserts and later
+`allocate_primary_keys()` calls from reusing ids that were reserved but not yet
+inserted. Wrap the whole pre-allocation + insert workflow in `run_in_transaction` so
+no concurrent writer can claim the same range in between.
+
+# Arguments
+- `objct`: A `SQLObjectHandler` (typically `M.Model.objects`). Only the underlying model
+  is consulted — any filters, ordering, or annotations attached to the handler are
+  **ignored**, since pk allocation is a table-level operation independent of any query.
+- `df`: The `DataFrame` that will be bulk-inserted.
+- `clone::Bool = true`: When `true` (default) the returned DataFrame is a fresh shallow
+  copy and the caller's DataFrame is left untouched. Set to `false` to write the new pk
+  column in place and avoid the extra allocation.
+
+# Notes
+- The returned pk column is a plain `Vector{Int}`. If the input DataFrame had a
+  `Vector{Union{Missing,Int}}` pk column, the missing-able element type is dropped after
+  allocation.
+- The PostgreSQL backend currently assumes the model lives in the default search path
+  (typically `public`). Models in other schemas are not supported by this helper — the
+  same limitation applies to `_update_sequence`.
+
+# Example
+```julia
+# Allocate driver ids before building the results table
+drivers_df = CSV.File("f1/drivers.csv") |> DataFrame
+
+PormG.run_in_transaction("db_2") do
+    drivers_df = allocate_primary_keys(M.Driver.objects, drivers_df)
+
+    results_df = DataFrame(
+        driverid  = repeat(drivers_df.driverid, inner=10),
+        raceid    = ...,
+        ...
+    )
+
+    bulk_insert(M.Driver.objects, drivers_df)
+    bulk_insert(M.Result.objects, results_df)
+end
+```
+"""
+function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; clone::Bool=true)
+  model = objct.object.model
+  settings, connection, conn_key = get_settings(objct)
+  !settings.change_data && throw(ArgumentError("Error in allocate_primary_keys, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+
+  df = clone ? Base.copy(df_o) : df_o
+  n = DataFrames.nrow(df)
+  n == 0 && return df
+
+  # Find the single auto-generated primary key for this model
+  pk_fields = [f for f in model.field_names
+               if _is_auto_generated_bulk_primary_key(model.fields[f])]
+
+  isempty(pk_fields) && return df
+
+  if length(pk_fields) > 1
+    throw(ArgumentError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
+  end
+
+  pk_field = pk_fields[1]
+
+  # Already has explicit values — return unchanged
+  if pk_field in DataFrames.names(df)
+    col = df[!, pk_field]
+    has_any = any(!_is_blank_bulk_primary_key_value(v) for v in col)
+    if has_any
+      has_blank = any(_is_blank_bulk_primary_key_value(v) for v in col)
+      if has_blank
+        n_blank = count(_is_blank_bulk_primary_key_value, col)
+        @warn "allocate_primary_keys: column '$pk_field' in model $(model.name) has mixed values — $n_blank blank row(s) alongside explicit pk values. " *
+              "The DataFrame is returned unchanged. Those blank rows will raise an ArgumentError at bulk_insert time. " *
+              "Options: (1) supply a pk value for every row, (2) remove the column so all ids are allocated automatically, " *
+              "or (3) pre-fill the blank rows before calling allocate_primary_keys."
+      end
+      return df
+    end
+  end
+
+  ids = if connection isa PormGPostgres
+    _allocate_pg_ids(model, connection, pk_field, n)
+  elseif connection isa PormGSQLite
+    _allocate_sqlite_ids(model, connection, pk_field, n, settings)
+  else
+    throw(ArgumentError("allocate_primary_keys: unsupported connection type $(typeof(connection))"))
+  end
+
+  df[!, pk_field] = ids
+  return df
+end
+
+allocate_primary_keys(model::PormGModel, df::DataFrames.DataFrame; kwargs...) =
+  allocate_primary_keys(model |> object, df; kwargs...)
+
+function _single_auto_generated_primary_key(model::PormGModel)
+  pk_fields = [field for field in model.field_names if _is_auto_generated_bulk_primary_key(model.fields[field])]
+  isempty(pk_fields) && return nothing
+
+  if length(pk_fields) > 1
+    throw(ArgumentError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
+  end
+
+  return pk_fields[1]
+end
+
+# Reserves n ids from the PostgreSQL sequence associated with pk_field.
+# Uses nextval() inside generate_series so the allocation is a single atomic roundtrip.
+function _allocate_pg_ids(model::PormGModel, connection::PormGPostgres, pk_field::String, n::Int)
+  safe_table = string(model.name |> lowercase)
+  parameters = get_parameter(connection)
+  set_context!(parameters, :select)
+  table_placeholder = add_parameter!(parameters, safe_table)
+  field_placeholder = add_parameter!(parameters, pk_field)
+  count_placeholder = add_parameter!(parameters, n)
+  sql = """
+  SELECT nextval(pg_get_serial_sequence($(table_placeholder), $(field_placeholder))) AS reserved_id
+  FROM generate_series(1, $(count_placeholder))
+  ORDER BY 1
+  """
+  result = fetch(connection, sql, parameters) |> DataFrames.DataFrame
+  return result[!, :reserved_id]
+end
+
+# Reads the starting point for SQLite allocation from the larger of:
+#   1. MAX(pk) already present in the table
+#   2. sqlite_sequence.seq, which may already reflect a previously reserved range
+#      that has not been inserted yet.
+# This prevents a second allocate_primary_keys() call from reusing ids that were
+# already handed out. INSERT OR REPLACE handles the case where the sqlite_sequence
+# row does not yet exist (empty AUTOINCREMENT table). Caller should be inside
+# run_in_transaction to avoid concurrent races.
+function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::SQLConn)
+  safe_table = string(model.name |> lowercase)
+  safe_table_name = safe_table_identifier(safe_table, connection)
+  safe_table_literal = replace(safe_table, "'" => "''")
+  safe_field = quote_identifier(pk_field, connection)
+  sql = """
+  SELECT MAX(candidate) AS max_id
+  FROM (
+    SELECT COALESCE(MAX($(safe_field)), 0) AS candidate FROM $(safe_table_name)
+    UNION ALL
+    SELECT COALESCE(seq, 0) AS candidate FROM sqlite_sequence WHERE name = '$(safe_table_literal)'
+  ) AS allocation_state
+  """
+  result = fetch(settings, sql) |> DataFrames.DataFrame
+  max_id = result[1, :max_id]
+  max_id = (ismissing(max_id) || isnothing(max_id)) ? Int64(0) : Int64(max_id)
+  reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field)
+  max_id = max(max_id, something(reserved_max, Int64(0)))
+  new_max = max_id + n
+
+  bump_sql = "INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES('$(safe_table_literal)', $(new_max));"
+  fetch(settings, bump_sql)
+  register_sqlite_reserved_primary_key_max!(model, pk_field, new_max)
+
+  return collect((max_id + 1):new_max)
+end
+
 function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
                           normalized_columns::Vector, operation::Symbol,
                           settings=nothing)
@@ -126,6 +355,8 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       end
     end    
   end
+
+  _drop_blank_auto_primary_keys!(df, model, fields_df, mapping, operation)
 
   # 2. Defaults, auto-population and basic constraints
   pk_exist = false

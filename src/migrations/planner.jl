@@ -126,7 +126,17 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value))
   _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
   if temporary_default_value !== nothing
-    _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name", Dialect.alter_field(conn, model_name, field_name, field, nothing, [:default]))
+    # SQLite requires a full table recreation to drop the temporary default.
+    # Use the same stable "Alter table:" key so multiple datetime fields being
+    # added at once don't produce duplicate recreation statements.
+    alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name"
+    # Delete existing recreation entry so re-insertion moves it to the END of
+    # the OrderedDict — after ALL ADD COLUMNs.  Without this, the recreation
+    # keeps its original position and later ADD COLUMNs hit "duplicate column".
+    if conn isa PormGSQLite && haskey(migration_plan, model_name) && haskey(migration_plan[model_name], alter_key)
+      delete!(migration_plan[model_name], alter_key)
+    end
+    _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, Dialect.alter_field(conn, model, field_name, field, nothing, [:default]))
   end
   return nothing
 end
@@ -209,7 +219,12 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         
         _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field)
         
-        _configure_order_dict_migration_plan(migration_plan, model_name, "Alter field: $field_name_stripped",
+        # For SQLite every field alteration requires a full table recreation. Use a
+        # single stable key ("Alter table: <model>") so repeated calls for the same
+        # table overwrite each other, producing exactly one recreation statement
+        # instead of one per changed field.
+        alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
+        _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
         Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal))
 
         # Check if the field is a foreign key
@@ -431,7 +446,7 @@ end
 # Main function to simulate makemigrations
 function makemigrations(connection::PormGPostgres, settings::SQLConn; path::String = "db/models.jl", interactive::Bool = true)
 if !settings.change_db
-  @warn("The database is not set to change_db, so the migration plan will not be applied.")
+  @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
   return
 end
 @pormg_debug false
@@ -478,7 +493,7 @@ end
 
 function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String = "db/models.jl", interactive::Bool = true)
   if !settings.change_db
-    @warn("The database is not set to change_db, so the migration plan will not be applied.")
+    @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
     return
   end
   

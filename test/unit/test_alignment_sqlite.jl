@@ -1524,6 +1524,91 @@ end
     @test contains(sql, "LEFT JOIN")
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE anti-join alignment: reverse LEFT JOIN + IS NULL must not collapse into
+# an impossible implicit-inner-join WHERE clause during UPDATE rendering.
+# The SQL should target base-table primary keys through a subquery so the same
+# anti-join semantics seen by count()/list() are preserved for updates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - UPDATE reverse anti-join uses PK subquery" begin
+    q = M.Result.objects
+    q.filter("resultid__@in" => [1, 2, 3], "test_deletion__id__@isnull" => true)
+
+    insp = q.update("points" => 25, show_query=:inspection)
+    sql = insp[:sql_text]
+
+    @test contains(sql, "UPDATE \"result\" AS \"Tb\"")
+    @test contains(sql, "SET \"points\" = ?")
+    @test contains(sql, "WHERE \"Tb\".\"resultid\" IN (")
+    @test contains(sql, "SELECT DISTINCT \"Tb\".\"resultid\"")
+    @test contains(sql, "LEFT JOIN \"just_a_test_deletion\" AS \"Tb_1\"")
+    @test contains(sql, "\"Tb_1\".\"id\" IS NULL")
+    @test !contains(sql, "FROM \"just_a_test_deletion\" AS \"Tb_1\"\n      WHERE \"Tb\".\"resultid\" = \"Tb_1\".\"test_result\"")
+
+    @test insp[:parameter_buckets][:update] == [25]
+    @test insp[:parameter_buckets][:where] == [1, 2, 3]
+    @test insp[:parameters] == [25, 1, 2, 3]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE forward-FK anti-join alignment: base FK is present, joined target row
+# is missing, and the update clears the base FK. This mirrors the production
+# co_agendado_id / co_agendado__id__@isnull repair query.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - UPDATE forward FK anti-join clears base FK" begin
+    q = M.Just_a_test_deletion.objects
+    q.filter(
+        "id__@in" => [1, 2, 3],
+        "test_result__@isnull" => false,
+        "test_result__resultid__@isnull" => true,
+    )
+
+    insp = q.update("test_result" => nothing, show_query=:inspection)
+    sql = insp[:sql_text]
+
+    @test contains(sql, "UPDATE \"just_a_test_deletion\" AS \"Tb\"")
+    @test contains(sql, "SET \"test_result\" = ?")
+    @test contains(sql, "WHERE \"Tb\".\"id\" IN (")
+    @test contains(sql, "SELECT DISTINCT \"Tb\".\"id\"")
+    @test contains(sql, "LEFT JOIN \"result\" AS \"Tb_1\"")
+    @test contains(sql, "\"Tb\".\"test_result\" = \"Tb_1\".\"resultid\"")
+    @test contains(sql, "\"Tb\".\"test_result\" IS NOT NULL")
+    @test contains(sql, "\"Tb_1\".\"resultid\" IS NULL")
+    @test !contains(sql, "FROM \"result\" AS \"Tb_1\"\n      WHERE \"Tb\".\"test_result\" = \"Tb_1\".\"resultid\"")
+
+    @test length(insp[:parameter_buckets][:update]) == 1
+    @test ismissing(insp[:parameter_buckets][:update][1])
+    @test insp[:parameter_buckets][:where] == [1, 2, 3]
+    @test length(insp[:parameters]) == 4
+    @test ismissing(insp[:parameters][1])
+    @test insp[:parameters][2:4] == [1, 2, 3]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE joined SET expressions: keep UPDATE FROM
+# When SET reads a joined-table column, the joined alias must remain visible in
+# the UPDATE statement. The PK-subquery path is only safe for base-table SET
+# values, so this protects cross-table update expressions from regressing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - UPDATE joined SET keeps FROM path" begin
+    q = M.Just_a_test_deletion.objects
+    q.filter("id" => 1)
+
+    insp = q.update("name" => F("test_result__driverid__forename"), show_query=:inspection)
+    sql = insp[:sql_text]
+
+    @test contains(sql, "UPDATE \"just_a_test_deletion\" AS \"Tb\"")
+    @test contains(sql, "SET \"name\" = \"Tb_2\".\"forename\"")
+    @test contains(sql, "FROM \"result\" AS \"Tb_1\", \"driver\" AS \"Tb_2\"")
+    @test contains(sql, "\"Tb\".\"test_result\" = \"Tb_1\".\"resultid\"")
+    @test contains(sql, "\"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\"")
+    @test !contains(sql, "WHERE \"Tb\".\"id\" IN (")
+
+    @test insp[:parameter_buckets][:update] == []
+    @test insp[:parameter_buckets][:where] == [1]
+    @test insp[:parameters] == [1]
+end
+
 @testset "Related Objects - Error message lists related_objects keys" begin
     # When a column is not found, the error message should list available related_objects.
     # Result has related_objects including test_deletion, test_deletion2,

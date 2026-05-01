@@ -319,6 +319,10 @@ end
   # ── Phase 8: Additional field types ───────────────────────────────
   @testset "Phase 8: Add More Types" begin
     write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        fullname = Models.CharField(null=true)
+    )
     TypesTable = Models.Model(
         id = Models.IDField(),
         is_active = Models.BooleanField(default=true),
@@ -333,6 +337,314 @@ end
     @test "is_active" in cols
     @test "score" in cols
     @test "created_at" in cols
+  end
+
+  # ── Phase 8b: Add DateTimeField / DateField to existing table ──────
+  # Regression test for the bug where `_add_new_field` called
+  # `Dialect.alter_field(conn, model_name::Symbol, ...)` instead of
+  # `Dialect.alter_field(conn, model::PormGModel, ...)` when a
+  # temporary default value was needed (DateTimeField / DateField added
+  # to a table that already exists in the database).  SQLite has no
+  # `alter_field` overload for the Symbol path, so the call raised a
+  # MethodError before the fix was applied.
+  @testset "Phase 8b: Add DateTimeField to existing table" begin
+    # Baseline: MigrationTest table exists from earlier phases
+    # (fullname column from phase 7). Confirm the starting state.
+    @assert table_exists(pool, "migrationtest") "Phase 8b requires migrationtest from earlier phases"
+
+    # Add a DateTimeField to an already-migrated table.
+    # _add_new_field will call _get_temporary_default_value, which returns
+    # a non-nothing timestamp, triggering the alter_field path that was
+    # broken (MethodError on SQLite before the fix).
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        fullname = Models.CharField(null=true),
+        updated_at = Models.DateTimeField()
+    )
+    TypesTable = Models.Model(
+        id = Models.IDField(),
+        is_active = Models.BooleanField(default=true),
+        score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+        created_at = Models.DateTimeField(null=true)
+    )
+    """)
+    # This must not throw a MethodError on either SQLite or PostgreSQL.
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "migrationtest")
+    @test "updated_at" in cols
+  end
+
+  # ── Phase 8c: SQLite recreation deduplication ─────────────────────
+  # Regression test: when multiple temporal fields (DateTimeField /
+  # DateField) are added to the SAME existing table in a single
+  # makemigrations call, SQLite must emit exactly ONE table-recreation
+  # statement, not one per field. Before the fix the stable "Alter table:"
+  # key was missing and each field produced its own identical recreation.
+  #
+  # We use dry_run to inspect the plan before touching the database, so
+  # the assertion is purely on the migration plan output.
+  # PostgreSQL uses ALTER COLUMN and never needs recreation, so the
+  # destructive-count assertion is skipped there.
+  @testset "Phase 8c: SQLite single recreation per table (deduplication)" begin
+    # Add TWO temporal fields simultaneously to MigrationTest (one DateField
+    # + one DateTimeField).  Each one that needs a temporary default would
+    # have triggered its own table recreation prior to the fix.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        fullname = Models.CharField(null=true),
+        updated_at = Models.DateTimeField(),
+        created_date = Models.DateField(),
+        activated_at = Models.DateTimeField()
+    )
+    TypesTable = Models.Model(
+        id = Models.IDField(),
+        is_active = Models.BooleanField(default=true),
+        score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+        created_at = Models.DateTimeField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
+
+    result = Migrations.dry_run(pool, edge_settings)
+
+    if adapter_name == "SQLite"
+      # Count statements that look like SQLite table recreations for "migrationtest".
+      # Each recreation starts with DROP TABLE IF EXISTS "migrationtest_new".
+      recreation_count = count(
+        s -> occursin("DROP TABLE IF EXISTS", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),
+        result.statements
+      )
+      # Before the fix this was 2 (one per added temporal field). Must be exactly 1.
+      @test recreation_count == 1
+      @test Migrations.is_destructive(result) == true
+      # Count only MigrationTest-related destructive statements; other tables
+      # (e.g. TypesTable) may also be recreated due to schema drift.
+      mt_destructive = count(s -> occursin("migrationtest", lowercase(s)), result.destructive_statements)
+      @test mt_destructive == 1
+    end
+
+    # Apply the plan so the table is in a consistent state for later phases.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    cols = column_names(pool, "migrationtest")
+    @test "activated_at" in cols
+  end
+
+  # ── Phase 8d: Rename a column (non-interactive = add+drop path) ───
+  # Verifies that renaming a column in the model definition (e.g.
+  # `fullname` → `display_name`) is handled correctly when
+  # `interactive=false`.
+  #
+  # In non-interactive mode PormG cannot ask the user whether the new
+  # field is a rename of an old one, so it falls back to the safe
+  # add+drop path: ADD the new column, DROP the old column.
+  # Because DROP is destructive, `migrate(..., destructive=true)` is
+  # required — exactly as Django would require an explicit confirmation.
+  #
+  # We use a CharField rename (not a DateField rename) because the
+  # non-interactive path for a non-null temporal field on SQLite triggers
+  # a table recreation that also removes the old column, making the
+  # subsequent DROP fail — a separate known issue.
+  #
+  # The interactive rename path (user answers "1" at the prompt) is
+  # covered by Phase 8e using a mocked stdin.
+  @testset "Phase 8d: Rename column (non-interactive add+drop)" begin
+    # Baseline: fullname exists from earlier phases
+    @assert "fullname" in column_names(pool, "migrationtest") "Phase 8d requires 'fullname' column from earlier phases"
+
+    # Rename fullname → display_name in the model definition.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        display_name = Models.CharField(null=true),
+        updated_at = Models.DateTimeField(),
+        created_date = Models.DateField(),
+        activated_at = Models.DateTimeField()
+    )
+    TypesTable = Models.Model(
+        id = Models.IDField(),
+        is_active = Models.BooleanField(default=true),
+        score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+        created_at = Models.DateTimeField(null=true)
+    )
+    """)
+
+    # Non-interactive: planner sees `display_name` as a new field and
+    # `fullname` as a removed field → ADD + DROP (destructive).
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    result = Migrations.dry_run(pool, edge_settings)
+    # The plan must include an ADD for the new name …
+    @test any(occursin("display_name", lowercase(s)) for s in result.statements)
+    # … and a DROP for the old name.
+    @test any(occursin("fullname", lowercase(s)) for s in result.statements)
+    # Overall the plan is destructive because of the DROP.
+    @test Migrations.is_destructive(result)
+
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "migrationtest")
+    @test "display_name" in cols
+    @test !("fullname" in cols)
+  end
+
+  # ── Phase 8e: Rename column (interactive RENAME via mocked stdin) ──
+  # This exercises the same code path a user hits when they answer "1"
+  # at the interactive rename prompt — but fully automated by redirecting
+  # stdin through a Pipe pre-loaded with the expected response.
+  #
+  # Unlike Phase 8d (non-interactive → ADD + DROP), the interactive path
+  # produces a single RENAME COLUMN statement which is non-destructive.
+  # Django's equivalent is `RenameField`.
+  #
+  # Both SQLite (3.25+) and PostgreSQL support ALTER TABLE … RENAME
+  # COLUMN, so this test runs on both adapters.
+  @testset "Phase 8e: Rename column (interactive RENAME via mocked stdin)" begin
+    # After Phase 8d, MigrationTest has: id, display_name, updated_at, created_date, activated_at
+    @assert "display_name" in column_names(pool, "migrationtest") "Phase 8e requires 'display_name' from Phase 8d"
+
+    # Rename display_name → full_name in the model definition.
+    # The planner will detect one addition (full_name) and one deletion
+    # (display_name) and prompt the user to confirm the rename.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        full_name = Models.CharField(null=true),
+        updated_at = Models.DateTimeField(),
+        created_date = Models.DateField(),
+        activated_at = Models.DateTimeField()
+    )
+    TypesTable = Models.Model(
+        id = Models.IDField(),
+        is_active = Models.BooleanField(default=true),
+        score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+        created_at = Models.DateTimeField(null=true)
+    )
+    """)
+
+    # Mock stdin: feed "1\n" so the planner maps full_name → display_name
+    # (option 1 in the numbered list of deletion candidates).
+    mock_input = Pipe()
+    Base.link_pipe!(mock_input)
+    write(mock_input.in, "1\n")
+    close(mock_input.in)
+    redirect_stdin(mock_input.out) do
+      makemigrations(joinpath(@__DIR__, edge_db_name), interactive=true)
+    end
+
+    # Inspect the plan via dry_run BEFORE applying.
+    result = Migrations.dry_run(pool, edge_settings)
+
+    # The plan must contain a RENAME COLUMN statement for full_name.
+    @test any(s -> occursin("rename", lowercase(s)) && occursin("full_name", lowercase(s)), result.statements)
+
+    # The RENAME COLUMN itself is non-destructive.  The overall plan may be
+    # flagged destructive if the planner also regenerates other tables
+    # (e.g. TypesTable schema drift), so we check just the rename statement.
+    rename_stmts = filter(s -> occursin("RENAME COLUMN", uppercase(s)), result.statements)
+    @test !isempty(rename_stmts) && !any(Migrations.is_destructive, rename_stmts)
+
+    # Apply — use destructive=true because the plan may include unrelated
+    # table recreations alongside the rename.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "migrationtest")
+    @test "full_name" in cols
+    @test !("display_name" in cols)
+  end
+
+  # ── Phase 8f: Data survival when adding NOT NULL temporal to table with rows ──
+  #
+  # Regression test for the bug where alter_field(conn::PormGSQLite, model::PormGModel, ...)
+  # called get_columns() at PLANNING TIME to build the INSERT column list for the
+  # table-recreation step. Because get_columns() reads the live database, it could
+  # not see columns that were queued via ADD COLUMN but had not yet executed.
+  #
+  # Consequently the generated SQL was:
+  #   INSERT INTO "migrationtest_new" ("id", "full_name", ...) -- missing "last_seen"!
+  #     SELECT "id", "full_name", ... FROM "migrationtest";
+  #
+  # While the new table's CREATE defined "last_seen" as NOT NULL. With even a single
+  # existing row SQLite raises "NOT NULL constraint failed: migrationtest_new.last_seen"
+  # and the entire migration is rolled back.
+  #
+  # The fix: use model.fields directly instead of get_columns(). ADD COLUMN statements
+  # are always queued BEFORE the recreation in the migration plan, so at execution time
+  # every model field is present in the old table.
+  #
+  # Assertion strategy:
+  #   1. dry_run: the INSERT statement in the plan must reference "last_seen"
+  #      (pure SQL-text inspection, no DB writes, adapter-neutral)
+  #   2. Data-survival: a row inserted before the migration is still present after it
+  #      (the migration must not blow up and not silently discard existing rows)
+  @testset "Phase 8f: Data survival adding NOT NULL DateField to table with rows" begin
+    @assert "full_name" in column_names(pool, "migrationtest") "Phase 8f requires 'full_name' column from Phase 8e"
+    @assert "activated_at" in column_names(pool, "migrationtest") "Phase 8f requires 'activated_at' column from Phase 8c"
+
+    # Seed one row so that a buggy INSERT SELECT (missing the new NOT NULL column)
+    # will fail with a NOT NULL constraint instead of succeeding vacuously on an
+    # empty table.
+    PormG.ConnectionPool.fetch(pool,
+      """INSERT INTO "migrationtest" ("full_name", "updated_at", "created_date", "activated_at")
+         VALUES ('survivor-8f', '2024-01-01 00:00:00', '2024-01-01', '2024-01-01 00:00:00')""")
+
+    # Add a new NOT NULL DateField. _add_new_field will:
+    #   (a) queue ADD COLUMN "last_seen" DATE NOT NULL DEFAULT '<today>'
+    #   (b) queue a table-recreation that must include "last_seen" in the INSERT.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        full_name = Models.CharField(null=true),
+        updated_at = Models.DateTimeField(),
+        created_date = Models.DateField(),
+        activated_at = Models.DateTimeField(),
+        last_seen = Models.DateField()
+    )
+    TypesTable = Models.Model(
+        id = Models.IDField(),
+        is_active = Models.BooleanField(default=true),
+        score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+        created_at = Models.DateTimeField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
+
+    result = Migrations.dry_run(pool, edge_settings)
+
+    # ── SQL-text assertion (both adapters) ──────────────────────────────
+    # The INSERT statement in the recreation block must reference "last_seen".
+    # Before the fix it was generated from get_columns() (live DB at planning
+    # time) and would only list columns that existed before the ADD COLUMN ran.
+    if adapter_name == "SQLite"
+      insert_stmts = filter(
+        s -> occursin("INSERT INTO", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),
+        result.statements
+      )
+      @test !isempty(insert_stmts)
+      # "last_seen" must appear in the INSERT column list, not just in CREATE TABLE.
+      @test all(s -> occursin("last_seen", lowercase(s)), insert_stmts)
+    end
+
+    # ── Data-survival assertion ──────────────────────────────────────────
+    # migrate() must not throw. If the bug is present the INSERT will violate
+    # the NOT NULL constraint and the whole migration will fail.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # Column must exist in the live schema after migration.
+    cols = column_names(pool, "migrationtest")
+    @test "last_seen" in cols
+
+    # The survivor row inserted before the migration must still be present.
+    # A failed INSERT SELECT leaves the old table intact (SQLite rolls back the
+    # whole recreation block), but migrate() would also have thrown above.
+    survivors = PormG.ConnectionPool.fetch(pool,
+      """SELECT "full_name" FROM "migrationtest" WHERE "full_name" = 'survivor-8f'""") |> DataFrame
+    @test DataFrames.nrow(survivors) == 1
   end
 
   # ==================================================================

@@ -186,10 +186,12 @@ println(inspection[:operation])  # => :select
 | `show_query` Mode | Returns |
 | :--- | :--- |
 | `:execute` | Default — executes the query and returns results. |
-| `:sql` | SQL string only. |
-| `:dict` | Full metadata dictionary. |
+| `:sql` | SQL string only (`String`). |
+| `:dict` | Full metadata dictionary (`Dict`) with keys `:sql_text` (the SQL string), `:parameters` (the bound values array), `:dialect`, and `:operation`. |
 | `:params` | Parameters array only. |
 | `:none` | `nothing` (zero-overhead benchmarking). |
+
+`show_query` is supported on all terminal methods: `list()`, `list_json()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
 
 ---
 

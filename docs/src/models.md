@@ -116,9 +116,6 @@ Just_a_test_deletion = Models.Model(
   test_result2 = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
 )
 
-
-Models.set_models(@__MODULE__, @__DIR__) # That is important to set the models in the module, otherwise it will not work, that need stay at the end of the file
-
 end
 ```
 
@@ -183,29 +180,22 @@ end
 4. **Injects `__init__()`** to re-register models after package precompilation
 5. **Enables hot-reloading**: Edit your `models.jl`, save, and model changes appear instantly in the REPL
 
-### Manual Registration (Inline Models)
-If you define models directly in code instead of a separate file:
+### Inline Models (without a separate file)
+If you define models directly in code rather than a separate file, use the `@models_module` macro:
 
 ```julia
-module my_models
+PormG.@models_module my_models "db" begin
     import PormG.Models as M
-    
+
     Driver = M.Model("drivers",
         driverId = M.IDField(),
         forename = M.CharField()
     )
-    
-    # REQUIRED: Register the module so PormG can find it for queries and migrations
-    M.set_models(@__MODULE__, @__DIR__)
 end
+import .my_models as M
 ```
 
-### Legacy: Direct `set_models()` Call
-At the end of your `db/models.jl` file, you **no longer need** to call `Models.set_models()` manually if using `@import_models`. However, if loading the model module directly, include this line at the end:
-
-```julia
-Models.set_models(@__MODULE__, @__DIR__)
-```
+`@models_module` handles registration automatically — no manual `set_models()` call is needed.
 
 
 ## Hot-Reloading Model Definitions

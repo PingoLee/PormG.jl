@@ -891,7 +891,7 @@ Task = Models.Model(
 function CharField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :choices, :editable
+      :verbose_name, :primary_key, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :choices, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -901,6 +901,7 @@ function CharField(; kwargs...)
   end
   # Extract parameters with defaults
   verbose_name = get(kwargs, :verbose_name, nothing)
+  primary_key = get(kwargs, :primary_key, false)
   max_length = get(kwargs, :max_length, 250)
   unique = get(kwargs, :unique, false)
   blank = get(kwargs, :blank, false)
@@ -912,6 +913,7 @@ function CharField(; kwargs...)
   editable = get(kwargs, :editable, true)
 
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
   max_length > 255 && throw(ArgumentError("The max_length must be less than or equal to 255"))
@@ -952,7 +954,7 @@ function CharField(; kwargs...)
       end
     end
   end
-  return sCharField(verbose_name, false, max_length, unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices)
+  return sCharField(verbose_name, primary_key, max_length, unique, blank, null, db_index, db_column, default, editable, "VARCHAR", format_text_sql, choices)
 end
 
 

@@ -33,3 +33,50 @@ end
     @test query.count() == 40
     @test query.exists()
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subqueries: missing projection should fail before database execution
+# A field__@in subquery must project exactly one key. Forgetting .values(...)
+# used to leak a raw SQL backend error; now it should raise a clear fix-oriented
+# ArgumentError at the PormG boundary.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subqueries require a single projected field for IN filters" begin
+    subquery = M.Status.objects
+    subquery.filter("status" => "Engine")
+
+    query = M.Result.objects
+    query.filter("statusid__@in" => subquery)
+
+    err = try
+        query |> DataFrame
+        nothing
+    catch e
+        e
+    end
+
+    @test err isa ArgumentError
+
+    message = sprint(showerror, err)
+    @test occursin("'statusid__@in' requires a subquery that returns exactly one column", message)
+    @test occursin("selects all columns from 'status' because .values(...) was not called", message)
+    @test occursin("call .values(\"field_name\") on the subquery", message)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subqueries: a single SQL-function projection is still a valid IN subquery
+# The validator should accept a one-column aggregate subquery and let the query
+# execute end to end instead of crashing while inspecting the projection type.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subqueries accept single SQL-function projections" begin
+    max_id_subquery = M.Result.objects
+    max_id_subquery.values("max_resultid" => Max("resultid"))
+
+    expected_max = maximum((M.Result.objects.values("resultid") |> DataFrame).resultid)
+
+    query = M.Result.objects
+    query.filter("resultid__@in" => max_id_subquery)
+    rows = query.values("resultid").list()
+
+    @test length(rows) == 1
+    @test rows[1][:resultid] == expected_max
+end

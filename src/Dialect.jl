@@ -813,11 +813,16 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   $(join(columns_defs, ",\n  "))
 );"""
 
-  # 2. Get common columns between old and new to preserve data
-  old_cols = get_columns(conn, string(table_name))
+  # 2. Build the INSERT column list from model.fields.
+  # At execution time every ADD COLUMN statement queued before this recreation
+  # has already run, so all model fields are present in the old table.
+  # Using get_columns() at planning time would omit columns that were just
+  # queued via ADD COLUMN (they are not in the live DB yet), causing a NOT NULL
+  # constraint failure when the INSERT tries to populate the new table from the
+  # old one — the new table's CREATE has the column as NOT NULL but the INSERT
+  # simply doesn't mention it.
   model_cols = [string(k) for k in keys(model.fields)]
-  common_cols = intersect(old_cols, model_cols)
-  cols_joined = join(["\"$c\"" for c in common_cols], ", ")
+  cols_joined = join(["\"$c\"" for c in model_cols], ", ")
 
   insert_sql = """INSERT INTO "$new_table_name" ($cols_joined) SELECT $cols_joined FROM "$table_name";"""
 

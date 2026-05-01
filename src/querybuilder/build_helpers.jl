@@ -14,6 +14,15 @@ Otherwise, it returns the default connection from the resolved settings.
 function get_settings(obj::Union{SQLObject,SQLObjectHandler}; connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing)
   q = obj isa SQLObjectHandler ? obj.object : obj
   conn_key = q.connect_key !== nothing ? q.connect_key : q.model.connect_key
+  if conn_key === nothing
+    # Fall back to the only loaded config when unambiguous; otherwise give a clear error.
+    if length(config) == 1
+      conn_key = first(keys(config))
+    else
+      throw(ArgumentError("Model '$(q.model.name)' is not bound to a database connection key. " *
+        "Call `set_models()` or `PormG.@import_models` to bind the model before querying."))
+    end
+  end
   settings = get_configuration_settings(conn_key)
 
   final_connection = connection === nothing ? settings.connections : connection
@@ -105,17 +114,17 @@ end
   - `OperObject`: An OperObject with the corresponding operator and values.
 
 """
-function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   if haskey(PormGsuffix, x.first[end])
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
   end
 end
-function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{String,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+function _get_pair_to_oper(x::Pair{String,T}) where T<:Union{AbstractString,Number,Bool,Dates.Date,Dates.DateTime,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
-function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
 end
 # Store SQLObject, to use __@in operator
@@ -134,7 +143,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
-function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
+function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   if x.first[end] in ["in", "nin"]
     @pormg_debug false
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
@@ -160,15 +169,98 @@ end
 
 
 
+# Normalize filter values at the public boundary so _get_pair_to_oper and
+# OperObject always receive concrete String (not SubString or other AbstractString
+# subtypes that fail the Union constraint and hold parent-string references).
+function _normalize_filter_pair(value::AbstractString)
+  return String(value)
+end
+function _normalize_filter_pair(values::AbstractVector)
+  return [v isa AbstractString ? String(v) : v for v in values]
+end
+_normalize_filter_pair(value) = value
+
+function _is_wildcard_projection(value)
+  return false
+end
+
+function _is_wildcard_projection(value::Union{SQLTypeText,SQLTypeField})
+  value isa SQLTypeText && return false
+  if value.custom_as == "*" || value._as == "*"
+    return true
+  end
+  return value.field isa String && (value.field == "*" || endswith(value.field, ".*"))
+end
+
+function _subquery_projection_labels(subquery::SQLObjectHandler)
+  if isempty(subquery.object.values)
+    return subquery.object.model.field_names
+  end
+
+  labels = String[]
+  for value in subquery.object.values
+    if _is_wildcard_projection(value)
+      append!(labels, subquery.object.model.field_names)
+      continue
+    end
+
+    alias = value.custom_as !== nothing ? value.custom_as : value._as
+
+    if alias !== nothing && !isempty(alias)
+      push!(labels, alias)
+    elseif value isa SQLTypeField && value.field isa String
+      push!(labels, value.field)
+    else
+      push!(labels, "<expression>")
+    end
+  end
+  return labels
+end
+
+function _summarize_projection_labels(labels::Vector{String}; max_items::Integer=4)
+  shown = labels[1:min(length(labels), max_items)]
+  summary = join(shown, ", ")
+  if length(labels) > max_items
+    summary *= ", ..."
+  end
+  return summary
+end
+
+function _validate_membership_subquery(v::SQLTypeOper)
+  v.values isa SQLObjectHandler || return nothing
+  v.operator in ["IN", "NOT IN"] || return nothing
+
+  subquery = v.values
+  projection_labels = _subquery_projection_labels(subquery)
+  projection_count = length(projection_labels)
+  projection_count == 1 && return nothing
+
+  filter_field = v.column isa SQLTypeField && v.column.field isa String ? v.column.field : "field"
+  operator_suffix = v.operator == "IN" ? "in" : "nin"
+  lookup = string(filter_field, "__@", operator_suffix)
+  detail = if isempty(subquery.object.values)
+    "The subquery currently selects all columns from '$(subquery.object.model.name)' because .values(...) was not called."
+  else
+    "The subquery currently selects $(projection_count) columns: $(_summarize_projection_labels(projection_labels))."
+  end
+
+  throw(ArgumentError(
+    "PormG: '$lookup' requires a subquery that returns exactly one column. " *
+    detail * " Fix: call .values(\"field_name\") on the subquery so it projects only the key used by the filter."
+  ))
+end
+
 function _check_filter(x::Pair)
-  if isa(x.first, String)
-    check = String.(split(x.first, "__@"))
+  if isa(x.first, AbstractString)
+    key = String(x.first)
+    check = String.(split(key, "__@"))
+    normalized_value = _normalize_filter_pair(x.second)
     try
       # @pormg_debug
-      return _get_pair_to_oper(check => x.second)
+      return _get_pair_to_oper(check => normalized_value)
     catch e
       @pormg_debug false
-      @error "Error in filter processing '$(x.first)'" exception = (e, catch_backtrace())
+      @error "Error in filter processing '$(key)'" exception = (e, catch_backtrace())
       rethrow(e)
     end
   else
@@ -565,6 +657,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       @pormg_debug
       throw("Error in values, $(v.column.field) in filter is not a object")
     end
+    _validate_membership_subquery(v)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
   else

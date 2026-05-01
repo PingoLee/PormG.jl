@@ -59,6 +59,88 @@ PormG.config["default"] = MockSettings
   @test !isempty(res_update[:parameters])
 end
 
+@testset "Filter accepts SubString request values" begin
+  exact_value = split("forename=Lewis", "=")[2]
+  @test exact_value isa SubString{String}
+
+  exact_query = TestDriver.objects.filter("forename" => exact_value)
+  exact_result = exact_query.list(show_query=:dict)
+
+  @test exact_result[:parameters] == ["Lewis"]
+
+  in_values = split("Lewis,Max", ",")
+  @test all(value -> value isa SubString{String}, in_values)
+
+  in_query = TestDriver.objects.filter("forename__@in" => in_values)
+  in_result = in_query.list(show_query=:dict)
+
+  @test in_result[:parameters] == [["Lewis", "Max"]]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery validation: reject multi-column IN subqueries during dry-run
+# This guards the builder boundary before SQL execution so callers get a
+# fix-oriented ArgumentError instead of a backend syntax failure.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "IN subqueries require exactly one projected column" begin
+  subquery = TestDriver.objects.values("id", "forename")
+  query = TestDriver.objects.filter("id__@in" => subquery)
+
+  err = try
+    query.list(show_query=:dict)
+    nothing
+  catch e
+    e
+  end
+
+  @test err isa ArgumentError
+
+  message = sprint(showerror, err)
+  @test occursin("'id__@in' requires a subquery that returns exactly one column", message)
+  @test occursin("currently selects 2 columns: id, forename", message)
+  @test occursin("call .values(\"field_name\") on the subquery", message)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery validation: single SQL-function projections stay valid
+# The projection validator must treat SQL functions as ordinary one-column
+# projections instead of throwing a MethodError while introspecting them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "IN subqueries accept single SQL-function projections" begin
+  # A single aliased SQL-function projection counts as one column — must pass validation.
+  subquery = TestDriver.objects.values("max_id" => PormG.Max("id"))
+  query = TestDriver.objects.filter("id__@in" => subquery)
+
+  result = query.list(show_query=:dict)
+
+  @test contains(result[:sql_text], "MAX")
+  @test contains(result[:sql_text], "IN (")
+  # Max("id") compiles to inline SQL with no bind parameters
+  @test result[:parameters] == []
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery validation: two SQL-function projections must still be rejected
+# The column-count validator must count SQL-function entries the same way it
+# counts plain string entries — a pair-keyed function is still one column, so
+# two such pairs must trigger the same ArgumentError as two plain strings.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "IN subqueries reject two SQL-function projections" begin
+  subquery = TestDriver.objects.values("max_id" => PormG.Max("id"), "min_id" => PormG.Min("id"))
+  query = TestDriver.objects.filter("id__@in" => subquery)
+
+  err = try
+    query.list(show_query=:dict)
+    nothing
+  catch e
+    e
+  end
+
+  @test err isa ArgumentError
+  message = sprint(showerror, err)
+  @test occursin("'id__@in' requires a subquery that returns exactly one column", message)
+end
+
 @testset "Delete respects change_data guard" begin
   # TestDriver.connect_key is explicitly set to "default" (line 13 above), which matches
   # the MockSettings registered under PormG.config["default"] in this file's setup block.
@@ -77,6 +159,141 @@ end
 
     @test err isa ArgumentError
     @test occursin("not allowed to delete", lowercase(sprint(showerror, err)))
+  finally
+    PormG.config["default"].change_data = previous_change_data
+  end
+end
+
+@testset "Update respects change_data guard" begin
+  previous_change_data = PormG.config["default"].change_data
+
+  try
+    PormG.config["default"].change_data = false
+
+    q = TestDriver.objects.filter("id" => 1)
+    err = try
+      q.update("forename" => "Blocked")
+      nothing
+    catch e
+      e
+    end
+
+    @test err isa ArgumentError
+    @test occursin("not allowed to update", lowercase(sprint(showerror, err)))
+
+    inspect_err = try
+      q.update("forename" => "Blocked", show_query=:dict)
+      nothing
+    catch e
+      e
+    end
+
+    @test inspect_err isa ArgumentError
+    @test occursin("not allowed to update", lowercase(sprint(showerror, inspect_err)))
+  finally
+    PormG.config["default"].change_data = previous_change_data
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pagination guard on update():
+# Standard SQL UPDATE does not support LIMIT, OFFSET, or ORDER BY. If a user
+# chains these on a query and then calls .update(), PormG must throw an
+# ArgumentError immediately — before any SQL is sent to the database —
+# so that the developer gets a clear, actionable error rather than silently
+# mutating all matching rows.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Update rejects queries with limit, offset, or order_by" begin
+  # All three variants must be caught regardless of whether show_query is used,
+  # because the guard fires before SQL is built or dispatched.
+  #
+  # IMPORTANT: each sub-test creates a fresh handler via TestDriver.objects.filter(...).
+  # limit(), offset(), and order_by() mutate the handler in place (last-call model), so
+  # a shared q_base would accumulate state across sub-tests — the offset and order_by
+  # guards would never be exercised in isolation because the residual limit from the
+  # first sub-test would always fire first.
+
+  # limit() must be rejected
+  err_limit = try
+    TestDriver.objects.filter("id__@gt" => 0).limit(5).update("forename" => "X")
+    nothing
+  catch e
+    e
+  end
+  @test err_limit isa ArgumentError
+  @test occursin("limit", lowercase(sprint(showerror, err_limit)))
+
+  # offset() must be rejected — fresh handler, no prior limit
+  err_offset = try
+    TestDriver.objects.filter("id__@gt" => 0).offset(2).update("forename" => "X")
+    nothing
+  catch e
+    e
+  end
+  @test err_offset isa ArgumentError
+  @test occursin("offset", lowercase(sprint(showerror, err_offset)))
+
+  # order_by() must be rejected — fresh handler, no prior limit or offset
+  err_order = try
+    TestDriver.objects.filter("id__@gt" => 0).order_by("id").update("forename" => "X")
+    nothing
+  catch e
+    e
+  end
+  @test err_order isa ArgumentError
+  @test occursin("order_by", lowercase(sprint(showerror, err_order)))
+
+  # show_query=:dict must also be rejected (the guard fires before SQL dispatch)
+  err_dry = try
+    TestDriver.objects.filter("id__@gt" => 0).limit(3).update("forename" => "X", show_query=:dict)
+    nothing
+  catch e
+    e
+  end
+  @test err_dry isa ArgumentError
+  @test occursin("limit", lowercase(sprint(showerror, err_dry)))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# allocate_primary_keys change_data guard
+#
+# allocate_primary_keys() is a write-like operation: it permanently advances a
+# PostgreSQL sequence (nextval) or bumps the SQLite sqlite_sequence counter.
+# Those sequence slots are consumed even if the subsequent bulk_insert never
+# runs, so the function must honour the same change_data=false guard as every
+# other write path (insert, update, bulk_insert, bulk_copy, bulk_update).
+#
+# Without the guard the call falls through to _allocate_pg_ids or
+# _allocate_sqlite_ids and either silently consumes sequence slots or raises a
+# low-level connection error — neither of which is the correct behaviour.
+# The correct behaviour is an ArgumentError at the ORM layer, raised before any
+# DB round-trip takes place.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "allocate_primary_keys respects change_data guard" begin
+  previous_change_data = PormG.config["default"].change_data
+
+  try
+    PormG.config["default"].change_data = false
+
+    # A plain DataFrame without an :id column — allocate_primary_keys would
+    # normally fill that column from the database sequence.
+    df = DataFrames.DataFrame(forename=["Lewis", "Max"], surname=["Hamilton", "Verstappen"])
+
+    err = try
+      PormG.allocate_primary_keys(TestDriver.objects, df)
+      nothing
+    catch e
+      e
+    end
+
+    # Must raise an ArgumentError with a message about not being allowed to
+    # insert (sequence allocation is an insert-class operation).
+    @test err isa ArgumentError
+    @test occursin("not allowed", lowercase(sprint(showerror, err)))
+
+    # The DataFrame must not have been mutated: no :id column should be present
+    # because the guard must fire before any allocation or clone takes place.
+    @test !(:id in Symbol.(DataFrames.names(df)))
   finally
     PormG.config["default"].change_data = previous_change_data
   end

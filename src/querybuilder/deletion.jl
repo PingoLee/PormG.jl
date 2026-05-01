@@ -61,6 +61,15 @@ function delete(objct::SQLObjectHandler;
   # check if is allowed to delete
   !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$conn_key\e[0m not allowed to delete"))
 
+  if objct.object.limit > 0 || objct.object.offset > 0 || !isempty(objct.object.order)
+    throw(ArgumentError(
+      "Cannot call delete() on a query that has limit(), offset(), or order_by() set. " *
+      "The deletion collector operates on complete filtered object sets so counts, cascades, " *
+      "and constraint handling stay deterministic. Filter by primary key explicitly to delete " *
+      "a bounded set."
+    ))
+  end
+
   # don't allow to delete without filter
   !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")
   

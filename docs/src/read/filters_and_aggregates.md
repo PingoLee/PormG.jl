@@ -144,7 +144,21 @@ query = M.Result.objects
 query.filter("statusId__@in" => engine_statuses)
 ```
 
-See [Subqueries and CTEs](subqueries_and_ctes.md) for more details.
+The subquery must project exactly one column — see [Subqueries and CTEs](subqueries_and_ctes.md) for the full column-count rule and SQL-function projection examples.
+
+### Filter Values from Web Frameworks
+
+PormG accepts `SubString{String}` wherever a `String` filter value is expected, so values parsed directly from HTTP query strings (e.g. via `split`, `HTTP.URIs`, or Genie parameters) can be passed without an explicit `String(...)` conversion:
+
+```julia
+# SubString from a query-string parser — no conversion needed
+nationality = split("nationality=British", "=")[2]  # SubString{String}
+query = M.Driver.objects.filter("nationality" => nationality)
+
+# @in with a split list also works
+codes = split("hamilton,vettel,alonso", ",")  # Vector{SubString{String}}
+query = M.Driver.objects.filter("driverref__@in" => codes)
+```
 
 ---
 

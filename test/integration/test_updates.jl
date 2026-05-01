@@ -8,9 +8,9 @@ end
   query = M.Just_a_test_deletion.objects;
     query.exists() && query.delete(allow_delete_all = true);
   # Seed the table with a few rows so updates have targets
-  query.create("name" => "test", "test_result" => 1)
-  query.create("name" => "test", "test_result" => 2)
-  query.create("name" => "test", "test_result" => 3)
+  query.create("name" => "test", "test_result" => 1, "test_result_set_default" => nothing)
+  query.create("name" => "test", "test_result" => 2, "test_result_set_default" => nothing)
+  query.create("name" => "test", "test_result" => 3, "test_result_set_default" => nothing)
   @test query.count() == 3
 
   # Update a single row and ensure the filtered row is the only one affected
@@ -76,9 +76,9 @@ end
 @testset "F Expression Updates" begin
   query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)
-  query.create("name" => "fexpr", "test_result" => 1)
-  query.create("name" => "fexpr", "test_result" => 2)
-  query.create("name" => "fexpr", "test_result" => 3)
+  query.create("name" => "fexpr", "test_result" => 1, "test_result_set_default" => nothing)
+  query.create("name" => "fexpr", "test_result" => 2, "test_result_set_default" => nothing)
+  query.create("name" => "fexpr", "test_result" => 3, "test_result_set_default" => nothing)
 
   query.filter("test_result" => 1)
 
@@ -120,37 +120,43 @@ end
 end
 
 @testset "F Expression Updates with Joins" begin
-  # These are just to test F expressions with joins, even if not meaningful
-  query = M.Just_a_test_deletion.objects
-  query.filter("test_result" => 1)
-  try
-    # Attempt to reference a joined field via F to see if the validator rejects it
-    query.update("test_result2" => F("test_result__statusid"))
-  catch e
-    @info "Expected error or no-op for join F expression (statusid)" error=e
-  end
-  query2 = M.Just_a_test_deletion.objects;
-  query2.order_by("test_result");
-  df = query2 |> DataFrame
-  @test df[1, :test_result2] == 1  # No update should have occurred
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 
-  query = M.Just_a_test_deletion.objects
-  query.filter("test_result" => 1)
-  try
-    # Another join-based F expression to ensure errors remain informative
-    query.update("test_result2" => F("test_result__driverid__number"))
-  catch e
-    @info "Expected error or no-op for join F expression (driverid__number)" error=e
-  end
-  df = query2 |> DataFrame
-  @test df[1, :test_result2] == 44
+    source_result = M.Result.objects.filter("resultid" => 1).values("resultid", "statusid", "driverid").list() |> first
+    source_driver = M.Driver.objects.filter("driverid" => source_result[:driverid]).values("number").list() |> first
+
+    try
+        M.Just_a_test_deletion.objects.create(
+            "name" => "joined-fexpr",
+            "test_result" => source_result[:resultid],
+            "test_result_set_default" => nothing
+        )
+
+        # Joined F expressions are a supported cross-table UPDATE path: the SET
+        # clause may read from joined aliases while the WHERE still scopes the base row.
+        M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").update(
+            "test_result2" => F("test_result__statusid")
+        )
+        row_after_status = M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").list() |> first
+        @test row_after_status[:test_result2] == source_result[:statusid]
+
+        M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").update(
+            "test_result2" => F("test_result__driverid__number")
+        )
+        row_after_driver_number = M.Just_a_test_deletion.objects.filter("name" => "joined-fexpr").list() |> first
+        @test row_after_driver_number[:test_result2] == source_driver[:number]
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
 end
 
 @testset "Complex Join Updates and Date Arithmetic" begin
   # 1. Update using a value from a joined table (Cross-table update)
   query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)
-  query.create("name" => "temp", "test_result" => 1) # Result 1 driver is Lewis Hamilton
+  query.create("name" => "temp", "test_result" => 1, "test_result_set_default" => nothing) # Result 1 driver is Lewis Hamilton
   
   # Join from Just_a_test_deletion -> Result -> Driver
   query.filter("id__@gt" => 0)
@@ -187,7 +193,7 @@ end
 @testset "Null and Missing handling in Updates" begin
   query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)
-  query.create("name" => "null_test", "test_result" => 1, "test_result2" => 1)
+  query.create("name" => "null_test", "test_result" => 1, "test_result2" => 1, "test_result_set_default" => nothing)
   
   # Update to nothing (NULL)
   query.filter("name" => "null_test").update("test_result2" => nothing)
@@ -204,7 +210,21 @@ end
 @testset "Update Validation and Constraints" begin
     query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)
-    query.create("name" => "valid", "test_result" => 1)
+    query.create("name" => "valid", "test_result" => 1, "test_result_set_default" => nothing)
+
+    # Updates must be scoped by a WHERE clause. This protects callers from
+    # accidentally mutating an entire table by forgetting a filter.
+    err = try
+        M.Just_a_test_deletion.objects.update("name" => "should_not_update_everything")
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing
+    @test occursin("must have a filter", lowercase(string(err)))
+
+    row_after_unfiltered_attempt = M.Just_a_test_deletion.objects.filter("name" => "valid").list() |> first
+    @test row_after_unfiltered_attempt[:name] == "valid"
     
     # 1. Primary Key Protection: Attempting to update the ID field should throw
     @test_throws ErrorException query.filter("name" => "valid").update("id" => 999)
@@ -217,10 +237,62 @@ end
     @test_throws ErrorException query.filter("name" => "valid").update("non_existent" => "foo")
 end
 
+@testset "Update inspection modes do not execute" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    M.Just_a_test_deletion.objects.create("name" => "inspect-update", "test_result" => 1, "test_result_set_default" => nothing)
+
+    try
+        inspection = M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
+            "name" => "should-not-land",
+            show_query = :dict
+        )
+
+        @test inspection[:operation] == :update
+        @test inspection[:model] == "just_a_test_deletion"
+        @test occursin("update", lowercase(inspection[:sql_text]))
+        @test inspection[:parameter_count] >= 2
+        @test M.Just_a_test_deletion.objects.filter("name" => "inspect-update").count() == 1
+        @test M.Just_a_test_deletion.objects.filter("name" => "should-not-land").count() == 0
+
+        sql_text = M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
+            "test_result" => 12,
+            show_query = :sql
+        )
+        @test sql_text isa String
+        @test occursin("set", lowercase(sql_text))
+        @test M.Just_a_test_deletion.objects.filter("test_result" => 12).count() == 0
+
+        params = M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
+            "test_result" => 12,
+            show_query = :params
+        )
+        @test params isa Vector
+        @test 12 in params
+        @test "inspect-update" in params
+
+        none_result = M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
+            "name" => "still-not-landed",
+            show_query = :none # useful for benchmarking the overhead of building an UPDATE without executing
+        )
+        @test isnothing(none_result)
+        @test M.Just_a_test_deletion.objects.filter("name" => "still-not-landed").count() == 0
+
+        @test_throws ArgumentError M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
+            "name" => "bad-mode",
+            show_query = :bogus
+        )
+        @test M.Just_a_test_deletion.objects.filter("name" => "bad-mode").count() == 0
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
 @testset "Update Edge Cases: Zero matches and Multi-F" begin
     # Use fresh query objects for each step to avoid filter accumulation
     M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
-    M.Just_a_test_deletion.objects.create("name" => "multi_f", "test_result" => 10, "test_result2" => 20)
+    M.Just_a_test_deletion.objects.create("name" => "multi_f", "test_result" => 10, "test_result2" => 20, "test_result_set_default" => nothing)
     
     # 1. Update matching zero rows: should not error and return nothing
     @test isnothing(M.Just_a_test_deletion.objects.filter("name" => "no_such_row").update("test_result" => 100))
@@ -235,37 +307,79 @@ end
     @test res[:test_result2] == 40
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Update filters: Qor must update exactly the OR-matched rows
+# Selection tests already cover Qor for reads. This block keeps the mutation path
+# honest by proving an OR filter feeds the UPDATE WHERE clause without widening
+# to unrelated rows.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Update with Qor filters" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    result_rows = M.Result.objects.order_by("resultid").limit(3).values("resultid").list()
+    @test length(result_rows) == 3
+    result_ids = [row[:resultid] for row in result_rows]
+
+    M.Just_a_test_deletion.objects.create("name" => "qor-target-a", "test_result" => result_ids[1], "test_result_set_default" => nothing)
+    M.Just_a_test_deletion.objects.create("name" => "qor-target-b", "test_result" => result_ids[2], "test_result_set_default" => nothing)
+    M.Just_a_test_deletion.objects.create("name" => "qor-skip", "test_result" => result_ids[3], "test_result_set_default" => nothing)
+
+    query = M.Just_a_test_deletion.objects
+    query.filter(Qor("name" => "qor-target-a", "test_result" => result_ids[2]))
+    query.update("test_result2" => 77)
+
+    rows = M.Just_a_test_deletion.objects.order_by("id").list()
+    by_name = Dict(row[:name] => row for row in rows)
+
+    @test by_name["qor-target-a"][:test_result2] == 77
+    @test by_name["qor-target-b"][:test_result2] == 77
+    @test by_name["qor-skip"][:test_result2] === nothing || ismissing(by_name["qor-skip"][:test_result2])
+end
+
 @testset "Transaction Rollback in Updates" begin
-    # Note: PormG.run_in_transaction wraps operations in BEGIN/COMMIT and handles ROLLBACK on error.
+    # run_in_transaction wraps the block in BEGIN/COMMIT and issues ROLLBACK on any
+    # exception. The error trigger here is PormG's ORM-layer PK protection, which
+    # throws before sending SQL. That is intentional: it proves that ANY Julia
+    # exception inside the block — not just a DB constraint — causes the whole
+    # transaction to roll back. The key assertion is that row1 retains its
+    # pre-transaction value (10), not the value written before the error (11).
     db_key = PORMG_DB_FOLDER
-    
-    # 1. Setup fresh data
+
     M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
-    M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 10)
-    M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 20)
-    
-    # Verify initial state
+    M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 10, "test_result_set_default" => nothing)
+    M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 20, "test_result_set_default" => nothing)
     @test M.Just_a_test_deletion.objects.count() == 2
-    
+
     try
-        PormG.run_in_transaction(db_key) do
-            # This update should succeed initially within the transaction
-            M.Just_a_test_deletion.objects.filter("name" => "row1").update("test_result" => 11)
-            
-            # This update will fail due to PK protection
-            # and trigger a transaction rollback.
-            M.Just_a_test_deletion.objects.filter("name" => "row2").update("id" => 999)
+        err = try
+            PormG.run_in_transaction(db_key) do
+                # This update executes successfully within the transaction.
+                M.Just_a_test_deletion.objects.filter("name" => "row1").update("test_result" => 11)
+
+                # This throws at the ORM layer (PK protection) and triggers ROLLBACK,
+                # undoing the row1 update above.
+                M.Just_a_test_deletion.objects.filter("name" => "row2").update("id" => 999)
+            end
+            nothing
+        catch e
+            e
         end
-    catch e
-        @info "Caught expected error for transaction rollback" error=e
+        @test err !== nothing
+        @test occursin("id", lowercase(sprint(showerror, err))) || occursin("primary", lowercase(sprint(showerror, err)))
+
+        # row1 must be back to 10 — the proof that the transaction rolled back.
+        res1 = M.Just_a_test_deletion.objects.filter("name" => "row1").list() |> first
+        @test res1[:test_result] == 10
+
+        # row2 was never the update target; its value being 20 does not prove rollback
+        # but confirms no unintended side-effect touched it either.
+        res2 = M.Just_a_test_deletion.objects.filter("name" => "row2").list() |> first
+        @test res2[:test_result] == 20
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
     end
-    
-    # After rollback, row1 should still have its ORIGINAL value (10), not 11.
-    res1 = M.Just_a_test_deletion.objects.filter("name" => "row1").list() |> first
-    @test res1[:test_result] == 10
-    
-    # Clean up
-    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 end
 
 @testset "Advanced Update Scenarios" begin
@@ -275,8 +389,8 @@ end
         # Reset table
         M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         
-        M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 10)
-        M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 20)
+        M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 10, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 20, "test_result_set_default" => nothing)
         
         # Update using CASE: if name is row1, set result to 100, else 200
         # PormG requires a filter for updates
@@ -295,7 +409,7 @@ end
     @testset "Deep Join Chains (A->B->C->D)" begin
         # Result -> Race -> Circuit -> country (verified parameter ordering)
         M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
-        M.Just_a_test_deletion.objects.create("name" => "temp", "test_result" => 1) # Result 1 = Lewis Hamilton, British, Australian GP, Australia
+        M.Just_a_test_deletion.objects.create("name" => "temp", "test_result" => 1, "test_result_set_default" => nothing) # Result 1 = Lewis Hamilton, British, Australian GP, Australia
         
         # We use a value from 3 levels deep: Result -> Race -> Circuit -> Name
         M.Just_a_test_deletion.objects.filter(
@@ -307,10 +421,67 @@ end
         @test res[:name] == "Albert Park Grand Prix Circuit"
     end
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Forward FK anti-join UPDATE: mutate base FK columns safely
+    # A LEFT anti-join on a forward FK must preserve SELECT semantics when the
+    # UPDATE targets base-table columns, including nullable FK columns. The SQL
+    # should target primary keys through a subquery instead of flattening the
+    # LEFT JOIN into an impossible UPDATE FROM predicate.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Forward-FK anti-join UPDATE via Primary Key Subquery" begin
+        # 1. Reset
+        M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+        result_rows = M.Result.objects.order_by("resultid").limit(2).values("resultid").list()
+        @test length(result_rows) == 2
+        first_result = result_rows[1]
+        second_result = result_rows[2]
+
+        # 2. Create one row with a valid relation, one without
+        M.Just_a_test_deletion.objects.create(
+            "name"                    => "has_result",
+            "test_result"             => first_result[:resultid],
+            "test_result_set_default" => nothing
+        )
+        M.Just_a_test_deletion.objects.create(
+            "name"                    => "no_result",
+            "test_result"             => nothing,
+            "test_result_set_default" => nothing
+        )
+
+        # The anti-join matches the row without a joined Result. Mutating the FK
+        # itself proves the base-table SET path is not limited to plain columns.
+        anti_join_update = M.Just_a_test_deletion.objects
+        anti_join_update.filter("test_result__resultid__@isnull" => true)
+        anti_join_update.update(
+            "name" => "updated_no_result",
+            "test_result" => second_result[:resultid]
+        )
+
+        rows_after_anti_join = M.Just_a_test_deletion.objects.order_by("id").list()
+        by_name_after_anti_join = Dict(row[:name] => row for row in rows_after_anti_join)
+
+        @test by_name_after_anti_join["has_result"][:test_result] == first_result[:resultid]
+        @test by_name_after_anti_join["updated_no_result"][:test_result] == second_result[:resultid]
+
+        # The original user-facing repair shape nulls a nullable FK through a
+        # joined predicate. With real FK constraints we cannot seed a dangling FK,
+        # so this uses a valid joined row and proves the nullable FK SET path.
+        null_fk_update = M.Just_a_test_deletion.objects
+        null_fk_update.filter("name" => "updated_no_result", "test_result__resultid" => second_result[:resultid])
+        null_fk_update.update("test_result" => nothing)
+
+        row1 = M.Just_a_test_deletion.objects.filter("name" => "has_result").list() |> first
+        row2 = M.Just_a_test_deletion.objects.filter("name" => "updated_no_result").list() |> first
+
+        @test row1[:test_result] == first_result[:resultid]
+        @test row2[:test_result] === nothing || ismissing(row2[:test_result])
+    end
+
     @testset "Subquery in WHERE" begin
         M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
-        M.Just_a_test_deletion.objects.create("name" => "target", "test_result" => 1)
-        M.Just_a_test_deletion.objects.create("name" => "other", "test_result" => 2)
+        M.Just_a_test_deletion.objects.create("name" => "target", "test_result" => 1, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "other", "test_result" => 2, "test_result_set_default" => nothing)
         
         # Subquery: select resultids for British drivers
         # Result 1 is Lewis Hamilton (British)
@@ -322,31 +493,50 @@ end
         @test M.Just_a_test_deletion.objects.filter("name" => "updated_by_subquery").count() == 1
     end
 
-    @testset "Bulk Update Atomicity on Partial Failure" begin
+    # ─────────────────────────────────────────────────────────────────────────
+    # bulk_update pre-flight validation rejects ALL rows when ANY row is invalid
+    #
+    # The error trigger (`"a"^300`) is caught by ORM-layer max_length validation
+    # before any SQL is sent. This is validation-layer all-or-nothing, NOT
+    # transactional rollback after partial DB execution. The key proof is that
+    # row1 (which would have passed validation) is still unchanged in the DB.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Bulk Update pre-flight validation rejects all rows on error" begin
         M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
-        M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 1)
-        M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 2)
-        
-        query = M.Just_a_test_deletion.objects.all()
-        df = query |> DataFrame
-        df[1, :name] = "success1"
-        df[2, :name] = "a"^300 # Should trigger max_length validation error
-        
+        M.Just_a_test_deletion.objects.create("name" => "row1", "test_result" => 1, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "row2", "test_result" => 2, "test_result_set_default" => nothing)
+
         try
-            bulk_update(M.Just_a_test_deletion.objects, df, columns=["name"], filters=["id"])
-        catch e
-            @info "Caught expected error in bulk_update" error=e
+            # order_by ensures df[1] is always row1 (test_result=1) and df[2] is row2
+            df = M.Just_a_test_deletion.objects.order_by("test_result") |> DataFrame
+            df[1, :name] = "success1"
+            df[2, :name] = "a"^300 # Triggers max_length validation on the second row
+
+            err = try
+                bulk_update(M.Just_a_test_deletion.objects, df, columns=["name"], filters=["id"])
+                nothing
+            catch e
+                e
+            end
+            @test err !== nothing
+            @test occursin("bulk_update", lowercase(sprint(showerror, err)))
+
+            # Neither row must have been written: the validation pass rejected the
+            # entire batch before sending any SQL.
+            res1 = M.Just_a_test_deletion.objects.filter("test_result" => 1).list() |> first
+            res2 = M.Just_a_test_deletion.objects.filter("test_result" => 2).list() |> first
+            @test res1[:name] == "row1"
+            @test res2[:name] == "row2"
+        finally
+            M.Just_a_test_deletion.objects.exists() &&
+                M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
         end
-        
-        # Verify row1 was NOT updated to "success1"
-        res1 = M.Just_a_test_deletion.objects.filter("test_result" => 1).list() |> first
-        @test res1[:name] == "row1"
     end
 
       @testset "Bulk Update rejects duplicate dynamic filter keys" begin
         M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
-        M.Just_a_test_deletion.objects.create("name" => "dup-key-row-1", "test_result" => 1)
-        M.Just_a_test_deletion.objects.create("name" => "dup-key-row-2", "test_result" => 2)
+        M.Just_a_test_deletion.objects.create("name" => "dup-key-row-1", "test_result" => 1, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "dup-key-row-2", "test_result" => 2, "test_result_set_default" => nothing)
 
         seeded = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
         duplicate_id = seeded[1, :id]
@@ -439,9 +629,9 @@ end
             query.exists() && query.delete(allow_delete_all = true)
             
             # Setup: Cat1 (update) and Cat2 (skip)
-            query.create("name" => "Cat1", "test_result" => 10)
-            query.create("name" => "Cat1", "test_result" => 20)
-            query.create("name" => "Cat2", "test_result" => 30)
+            query.create("name" => "Cat1", "test_result" => 10, "test_result_set_default" => nothing)
+            query.create("name" => "Cat1", "test_result" => 20, "test_result_set_default" => nothing)
+            query.create("name" => "Cat2", "test_result" => 30, "test_result_set_default" => nothing)
             
             ids = query.order_by("id").list()
             
@@ -473,10 +663,10 @@ end
               # UPDATE path instead of relying on lower-level WHERE builder tests.
               M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 
-              M.Just_a_test_deletion.objects.create("name" => "lookup_test_1", "test_result" => 1)
-              M.Just_a_test_deletion.objects.create("name" => "lookup_test_2", "test_result" => 2)
-              M.Just_a_test_deletion.objects.create("name" => "lookup_test_3", "test_result" => 3)
-              M.Just_a_test_deletion.objects.create("name" => "lookup_test_4", "test_result" => 4)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_1", "test_result" => 1, "test_result_set_default" => nothing)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_2", "test_result" => 2, "test_result_set_default" => nothing)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_3", "test_result" => 3, "test_result_set_default" => nothing)
+              M.Just_a_test_deletion.objects.create("name" => "lookup_test_4", "test_result" => 4, "test_result_set_default" => nothing)
 
               q = M.Just_a_test_deletion.objects.filter("name" => "lookup_test_1")
               q.update("test_result2" => 1)
@@ -601,7 +791,7 @@ end
 @testset "Bulk Update Constraint: JOINs Rejected" begin
     M.Just_a_test_deletion.objects.exists() &&
         M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
-    M.Just_a_test_deletion.objects.create("name" => "join-guard-row", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "join-guard-row", "test_result" => 1, "test_result_set_default" => nothing)
 
     df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
     df[1, :name] = "should-not-land"
@@ -679,4 +869,55 @@ end
         M.Django_contract_scratch.objects.filter("label" => label).exists() &&
             M.Django_contract_scratch.objects.filter("label" => label).delete()
     end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pagination guard on update():
+# Standard SQL UPDATE does not natively support LIMIT, OFFSET, or ORDER BY.
+# If a user chains any of these before calling .update(), PormG must throw
+# an ArgumentError before touching the database, so a developer never
+# accidentally mutates all matching rows when they intended to update only N.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update() rejects limit, offset, and order_by" begin
+    # Minimal setup: one row is enough; the guard fires before SQL is sent.
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    M.Just_a_test_deletion.objects.create("name" => "guard-row", "test_result" => 1, "test_result_set_default" => nothing)
+
+    base = M.Just_a_test_deletion.objects
+
+    # limit() must be rejected
+    err_limit = try
+        base.filter("test_result__@gt" => 0).limit(1).update("name" => "should-not-land")
+        nothing
+    catch e
+        e
+    end
+    @test err_limit isa ArgumentError
+    @test occursin("limit", lowercase(sprint(showerror, err_limit)))
+
+    # offset() must be rejected
+    err_offset = try
+        base.filter("test_result__@gt" => 0).offset(1).update("name" => "should-not-land")
+        nothing
+    catch e
+        e
+    end
+    @test err_offset isa ArgumentError
+    @test occursin("offset", lowercase(sprint(showerror, err_offset)))
+
+    # order_by() must be rejected
+    err_order = try
+        base.filter("test_result__@gt" => 0).order_by("id").update("name" => "should-not-land")
+        nothing
+    catch e
+        e
+    end
+    @test err_order isa ArgumentError
+    @test occursin("order_by", lowercase(sprint(showerror, err_order)))
+
+    # Verify no mutations slipped through despite the guard being in the execution path.
+    @test M.Just_a_test_deletion.objects.filter("name" => "guard-row").count() == 1
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 end

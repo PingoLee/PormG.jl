@@ -20,6 +20,7 @@ makedocs(
         "Configuration" => [
             "Overview" => "configuration/index.md",
             "Setup" => "configuration/setup.md",
+            "Connection YML" => "configuration/connection_yml.md",
             "Server Patterns" => "configuration/server.md",
             "Dynamic & Multi-Tenancy" => "configuration/dynamic.md",
             "Advanced" => "configuration/advanced.md",

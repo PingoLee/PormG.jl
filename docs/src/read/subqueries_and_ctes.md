@@ -33,6 +33,51 @@ WHERE "Tb"."statusid" IN (SELECT "Tb"."statusid" FROM "status" as "Tb" WHERE "Tb
 
 ---
 
+## Subquery Column Constraint
+
+An `@in` subquery **must project exactly one column**. PormG validates this before generating SQL and throws an `ArgumentError` if the subquery selects more than one field.
+
+```julia
+# Wrong — two columns will throw ArgumentError
+bad_sub = M.Status.objects.values("statusId", "status")
+query.filter("statusId__@in" => bad_sub)
+# ERROR: 'statusId__@in' requires a subquery that returns exactly one column
+#        (currently selects 2 columns: statusId, status)
+#        call .values("field_name") on the subquery to narrow it to one column.
+
+# Correct — exactly one column
+good_sub = M.Status.objects.filter("status" => "Engine").values("statusId")
+query.filter("statusId__@in" => good_sub)
+```
+
+### SQL Function Projections
+
+You can use a SQL function alias as the single column. PormG counts a `"alias" => Function(...)` pair as one column, so the validator accepts it:
+
+```julia
+using PormG: Max
+
+# Subquery that returns the single highest driver id
+top_id_sub = M.Driver.objects.values("top_id" => Max("driverid"))
+
+# Returns only the driver whose id equals the maximum id
+query = M.Driver.objects.filter("driverid__@in" => top_id_sub)
+df = query |> DataFrame
+```
+
+Generated SQL:
+```sql
+SELECT * FROM "drivers" AS "Tb"
+WHERE "Tb"."driverid" IN (
+    SELECT MAX("R1"."driverid") AS top_id FROM "drivers" AS "R1"
+)
+```
+
+> [!NOTE]
+> SQL function projections (like `Max`, `Min`, `Count`) compile to inline SQL with no bind parameters. `result[:parameters]` will be empty for such subqueries.
+
+---
+
 ## Subqueries with Additional Filters
 
 Combine subquery `@in` with other filter conditions:

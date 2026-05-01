@@ -36,6 +36,21 @@ sql = delete(query, show_query=:sql)
 # )"
 ```
 
+### `change_data` Guard
+
+If the connection is configured with `change_data: false`, any call to `delete()` raises an `ArgumentError` at the ORM layer before generating SQL.
+
+```julia
+# connection.yml: change_data: false
+query = M.Just_a_test_deletion.objects.filter("id" => 1)
+delete(query)
+# ERROR: Not allowed to delete ...
+```
+
+See [Connection YML](../configuration/connection_yml.md) for the `change_data` configuration option.
+
+---
+
 ## Bulk Deletion
 
 By default, calling `delete()` on a query without filters will raise an error to prevent accidental data loss. You must explicitly set `allow_delete_all=true`.

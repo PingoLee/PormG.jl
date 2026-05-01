@@ -117,6 +117,83 @@ end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bulk Insert Auto-Generated Primary Keys
+#
+# Callers should not need a pre-insert max(id) allocator. If an auto-generated
+# primary key column is present in the DataFrame but contains only blank values,
+# bulk_insert must omit that column and let the database assign ids. Mixed blank
+# and explicit id values are rejected because this bulk path cannot express a
+# row-wise mix of DEFAULT and explicit values safely.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Insert Auto-Generated Primary Keys" begin
+    cleanup_names = [
+        "bulk-blank-pk-a",
+        "bulk-blank-pk-b",
+        "bulk-blank-pk-c",
+        "bulk-blank-pk-mixed-a",
+        "bulk-blank-pk-mixed-b"
+    ]
+
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label__@in" => cleanup_names)
+    cleanup.exists() && cleanup.delete()
+
+    try
+        df_blank_pk = DataFrame(
+            id = Union{Missing, Int64}[missing, missing],
+            label = ["bulk-blank-pk-a", "bulk-blank-pk-b"]
+        )
+
+        @test all(ismissing, df_blank_pk.id)
+
+        bulk_insert(M.Django_contract_scratch.objects, df_blank_pk)
+
+        inserted = M.Django_contract_scratch.objects.filter(
+            "label__@in" => ["bulk-blank-pk-a", "bulk-blank-pk-b"]
+        ).order_by(
+            "label"
+        ).values(
+            "id", "label"
+        ).list()
+
+        inserted_ids = [row[:id] for row in inserted]
+
+        @test length(inserted) == 2
+        @test all(id -> id isa Integer && id > 0, inserted_ids)
+        @test length(unique(inserted_ids)) == 2
+        @test all(ismissing, df_blank_pk.id)
+
+        next_row = M.Django_contract_scratch.objects.create(
+            "label" => "bulk-blank-pk-c"
+        )
+        @test next_row[:id] > maximum(inserted_ids)
+
+        df_mixed_pk = DataFrame(
+            id = Union{Missing, Int64}[missing, 991001],
+            label = ["bulk-blank-pk-mixed-a", "bulk-blank-pk-mixed-b"]
+        )
+
+        err = try
+            bulk_insert(M.Django_contract_scratch.objects, df_mixed_pk)
+            nothing
+        catch e
+            e
+        end
+
+        @test err !== nothing
+        @test occursin("mixed blank and explicit values", string(err))
+        @test M.Django_contract_scratch.objects.filter(
+            "label__@in" => ["bulk-blank-pk-mixed-a", "bulk-blank-pk-mixed-b"]
+        ).count() == 0
+    finally
+        cleanup = M.Django_contract_scratch.objects
+        cleanup.filter("label__@in" => cleanup_names)
+        cleanup.exists() && cleanup.delete()
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Insertion Result Semantics
 #
 # The public contract of query.create() is that it returns a Dict{Symbol, Any}
@@ -315,5 +392,134 @@ end
         q = M.Status.objects
         q.filter("statusid__@in" => status_ids)
         q.exists() && q.delete()
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# allocate_primary_keys
+#
+# Verifies that allocate_primary_keys() pre-populates the id column before any
+# insert happens. This is the recommended replacement for the legacy
+# max(id)+range DataFrame indexing pattern.
+#
+# Three scenarios are exercised:
+#   1. No id column in the DataFrame: the function adds one with database-assigned ids.
+#   2. All-blank id column (missing values): the function fills it in.
+#   3. DataFrame already has explicit ids: the function leaves it unchanged.
+#
+# The test also verifies two sequence-consistency guarantees:
+#   - the next create() call after the bulk_insert does not collide, and
+#   - on SQLite, repeated pre-allocation before any insert still yields disjoint
+#     id ranges because the reserved range is reflected in sqlite_sequence.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "allocate_primary_keys" begin
+    labels_a = ["alloc-pk-no-col-a", "alloc-pk-no-col-b"]
+    labels_b = ["alloc-pk-blank-a",  "alloc-pk-blank-b"]
+    labels_c = ["alloc-pk-after-c"]
+    labels_d = ["alloc-pk-sqlite-first-a", "alloc-pk-sqlite-first-b"]
+    labels_e = ["alloc-pk-sqlite-second-a", "alloc-pk-sqlite-second-b"]
+    labels_f = ["alloc-pk-sqlite-create-a"]
+    all_labels = vcat(labels_a, labels_b, labels_c, labels_d, labels_e, labels_f)
+
+    cleanup = M.Django_contract_scratch.objects
+    cleanup.filter("label__@in" => all_labels)
+    cleanup.exists() && cleanup.delete()
+
+    try
+        # 1. No id column: allocate_primary_keys adds it
+        df_no_col = DataFrame(label = labels_a)
+        @test !("id" in names(df_no_col))
+
+        df_with_ids = allocate_primary_keys(M.Django_contract_scratch.objects, df_no_col)
+
+        # Must have returned a new column without mutating the original
+        @test "id" in names(df_with_ids)
+        @test !("id" in names(df_no_col))   # original is untouched (clone=true default)
+        @test length(df_with_ids.id) == 2
+        @test all(id -> id isa Integer && id > 0, df_with_ids.id)
+        @test length(unique(df_with_ids.id)) == 2
+
+        bulk_insert(M.Django_contract_scratch.objects, df_with_ids)
+
+        rows_a = M.Django_contract_scratch.objects.filter(
+            "label__@in" => labels_a
+        ).values("id", "label").list()
+        @test length(rows_a) == 2
+        @test Set(r[:id] for r in rows_a) == Set(df_with_ids.id)
+
+        # 2. All-blank id column: allocate_primary_keys fills it in
+        df_blank = DataFrame(
+            id    = Union{Missing, Int64}[missing, missing],
+            label = labels_b
+        )
+        @test all(ismissing, df_blank.id)
+
+        df_filled = allocate_primary_keys(M.Django_contract_scratch.objects, df_blank)
+
+        @test all(id -> id isa Integer && id > 0, df_filled.id)
+        @test all(ismissing, df_blank.id)   # original untouched
+
+        bulk_insert(M.Django_contract_scratch.objects, df_filled)
+
+        rows_b = M.Django_contract_scratch.objects.filter(
+            "label__@in" => labels_b
+        ).values("id", "label").list()
+        @test length(rows_b) == 2
+        @test Set(r[:id] for r in rows_b) == Set(df_filled.id)
+
+        if PORMG_DB_FOLDER == "db_sl"
+            first_reserved, second_reserved, created_row = PormG.run_in_transaction(PORMG_DB_FOLDER) do
+                first_reserved = allocate_primary_keys(
+                    M.Django_contract_scratch.objects,
+                    DataFrame(label = labels_d)
+                )
+                second_reserved = allocate_primary_keys(
+                    M.Django_contract_scratch.objects,
+                    DataFrame(label = labels_e)
+                )
+
+                @test minimum(second_reserved.id) > maximum(first_reserved.id)
+
+                created_row = M.Django_contract_scratch.objects.create("label" => labels_f[1])
+                @test created_row[:id] > maximum(second_reserved.id)
+
+                bulk_insert(M.Django_contract_scratch.objects, first_reserved)
+                bulk_insert(M.Django_contract_scratch.objects, second_reserved)
+
+                return first_reserved, second_reserved, created_row
+            end
+
+            rows_sqlite = M.Django_contract_scratch.objects.filter(
+                "label__@in" => vcat(labels_d, labels_e, labels_f)
+            ).values("id", "label").list()
+            @test length(rows_sqlite) == 5
+
+            reserved_ids = vcat(first_reserved.id, second_reserved.id)
+            @test length(unique(reserved_ids)) == 4
+            @test !(created_row[:id] in reserved_ids)
+            @test Set(r[:id] for r in rows_sqlite if r[:label] in Set(labels_d)) == Set(first_reserved.id)
+            @test Set(r[:id] for r in rows_sqlite if r[:label] in Set(labels_e)) == Set(second_reserved.id)
+        end
+
+        # 3. Explicit ids: allocate_primary_keys must not overwrite them
+        max_seen = maximum(vcat(df_with_ids.id, df_filled.id))
+        df_explicit = DataFrame(
+            id    = [max_seen + 10000, max_seen + 10001],
+            label = ["explicit-pk-check-a", "explicit-pk-check-b"]
+        )
+        df_after_alloc = allocate_primary_keys(M.Django_contract_scratch.objects, df_explicit)
+        @test df_after_alloc.id == df_explicit.id   # ids not changed
+
+        # 4. Sequence consistency: the next create() must not collide
+        next_row = M.Django_contract_scratch.objects.create("label" => labels_c[1])
+        @test next_row[:id] isa Integer && next_row[:id] > 0
+        all_inserted_ids = vcat(df_with_ids.id, df_filled.id)
+        @test !(next_row[:id] in all_inserted_ids)
+
+    finally
+        cleanup = M.Django_contract_scratch.objects
+        cleanup.filter("label__@in" => vcat(all_labels, ["explicit-pk-check-a", "explicit-pk-check-b"])).exists() &&
+            cleanup.filter("label__@in" => vcat(all_labels, ["explicit-pk-check-a", "explicit-pk-check-b"])).delete()
     end
 end

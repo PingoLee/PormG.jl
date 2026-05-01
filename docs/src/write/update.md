@@ -61,6 +61,44 @@ All updates pass through a centralized validation engine that enforces:
 - **Numeric Precision**: `DecimalField` and `FloatField` are checked for `max_digits` and `decimal_places`.
 - **Nullability**: Attempts to set non-nullable fields to `nothing` or `missing` will throw an error.
 
+### Pagination Guard
+
+Standard SQL `UPDATE` does not support `LIMIT`, `OFFSET`, or `ORDER BY`. If any of these are set on the query handler when `.update()` is called, PormG throws an `ArgumentError` immediately — before any SQL is generated — so the developer gets a clear error rather than silently mutating the wrong rows.
+
+```julia
+# These all raise ArgumentError before any SQL is sent
+q = M.Driver.objects.filter("nationality" => "British")
+q.limit(5).update("nationality" => "English")   # ERROR: UPDATE with LIMIT is not supported
+q.offset(2).update("nationality" => "English")  # ERROR: UPDATE with OFFSET is not supported
+q.order_by("driverid").update("nationality" => "English")  # ERROR: UPDATE with ORDER BY is not supported
+```
+
+Because `limit()`, `offset()`, and `order_by()` mutate the handler in place (last-call model), create a fresh handler for the update if you also need pagination elsewhere:
+
+```julia
+# Read the first 5 British drivers
+read_q = M.Driver.objects.filter("nationality" => "British")
+read_q.limit(5)
+top5 = read_q.list()
+
+# Update ALL British drivers on a separate handler
+update_q = M.Driver.objects.filter("nationality" => "British")
+update_q.update("nationality" => "English")
+```
+
+### `change_data` Guard
+
+If the connection is configured with `change_data: false`, any call to `.update()` raises an `ArgumentError` at the ORM layer before generating SQL. This applies to both normal execution and `show_query=:dict` dry-runs.
+
+```julia
+# connection.yml: change_data: false
+query = M.Driver.objects.filter("driverid" => 1)
+query.update("forename" => "Blocked")
+# ERROR: Not allowed to update ...
+```
+
+See [Connection YML](../configuration/connection_yml.md) for the `change_data` configuration option.
+
 ---
 
 ## Updates with Relationships

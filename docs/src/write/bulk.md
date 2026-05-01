@@ -6,6 +6,8 @@ Bulk operations are designed for high-performance data manipulation of large dat
 - **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion.
 - **`bulk_update()`**: Efficient multi-row updates from a DataFrame using a mapping key.
 
+All three operations accept `show_query=:sql`, `show_query=:dict`, or `show_query=:params` to inspect the generated SQL without executing it — the same modes available on `list()` and `update()`. See [Query Inspection](../read/index.md#query-inspection) for a full description of each mode.
+
 ### The Mapping Adaptor Strategy ⭐
 
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
@@ -45,6 +47,57 @@ bulk_insert(query, df)
 # Adjust chunk size for tables with many columns
 bulk_insert(query, df, chunk_size=500)
 ```
+
+### Auto-Generated Primary Keys
+
+Do not prefill an auto-increment primary key with `max(id) + 1` before calling `bulk_insert()` or `bulk_copy()`.
+
+- If the model uses `IDField()` or `AutoField()` and the DataFrame omits the primary key column, PormG leaves that field out of the SQL and lets the database allocate ids through its native sequence, identity, or autoincrement mechanism.
+- If the DataFrame includes the primary key column but every value is blank (`missing`, `nothing`, or an empty string), PormG treats that column as omitted for bulk inserts and COPY as well.
+- If you want to load explicit primary key values, provide a value for every row. Mixed blank and explicit values are rejected because the bulk path cannot safely express a row-by-row mix of generated and manual ids.
+
+This keeps id allocation concurrency-safe and avoids the collision risks of a client-side `SELECT MAX(id)` allocator.
+
+### Pre-allocating Primary Keys for Cross-Table FK Wiring
+
+Sometimes you need the assigned primary key values **before** the insert—for example, when you are loading a parent table and a child table at the same time and need to populate a foreign key column.
+
+Use `allocate_primary_keys()` for this:
+
+```julia
+drivers_df = CSV.File("f1/drivers.csv") |> DataFrame
+
+# Reserve ids from the database sequence without inserting yet.
+# After this call, drivers_df has an `id` column with integer values.
+drivers_df = allocate_primary_keys(M.Driver.objects, drivers_df)
+
+# Build the results table using the pre-allocated driver ids.
+results_df = DataFrame(
+    driverid  = repeat(drivers_df.id, inner=num_races),
+    raceid    = ...,
+    ...
+)
+
+# Insert both tables in a single transaction.
+PormG.run_in_transaction("db_2") do
+    bulk_insert(M.Driver.objects, drivers_df)
+    bulk_insert(M.Result.objects, results_df)
+end
+```
+
+**PostgreSQL**: ids are reserved by calling `nextval()` on the column's sequence. The allocation is atomic and concurrent-safe. Ids consumed by a call that is never followed by an insert (e.g. the transaction rolled back) leave gaps in the sequence; this is expected PostgreSQL behaviour and has no functional impact.
+
+**SQLite**: Since SQLite has no standalone sequences and only generates IDs at the exact moment of insertion, PormG fully emulates PostgreSQL's behavior to provide a consistent API. IDs are derived from `max(MAX(pk), sqlite_sequence.seq) + 1 … + N`, and `allocate_primary_keys()` immediately forces an update to the table's `sqlite_sequence` counter to the end of that reserved range. 
+Critically, PormG tracks this reserved high-water mark in memory within the `TransactionContext` during an open transaction. This guarantees that any subsequent `create()`, `bulk_insert()`, or `allocate_primary_keys()` calls for that table *within the same transaction* will safely skip over the IDs you just reserved. **You must** wrap the full pre-allocation and insertion workflow inside `PormG.run_in_transaction` when using SQLite to guarantee collision-safe reservations.
+
+If the DataFrame already contains the primary key column with at least one non-blank value, `allocate_primary_keys()` returns it unchanged so it is safe to call unconditionally in a data-loading pipeline.
+
+#### Notes and Limitations
+
+- **Handler filters are ignored.** `allocate_primary_keys()` operates on the model that backs the handler. Any filters or annotations attached to `M.Model.objects.filter(...)` have no effect — pk allocation is always table-wide.
+- **Column dtype narrows.** If you pass a DataFrame with a `Vector{Union{Missing, Int}}` pk column, the returned column is a plain `Vector{Int}`. Downstream code expecting the missing-able element type must be adjusted.
+- **PostgreSQL schema scope.** The PG path looks up the sequence via `pg_get_serial_sequence('table', 'col')` without a schema prefix and therefore assumes the model's table lives in the default search path (typically `public`).
+- **`clone` keyword.** `allocate_primary_keys(handler, df; clone=false)` skips the defensive copy and writes the new pk column straight into `df`. The default (`clone=true`) is the safe choice; flip it only when memory pressure justifies it.
 
 ### Pre-processing and Error Handling
 

@@ -21,6 +21,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - **Goal**: Allow queries to return concrete Julia `struct` types instead of dynamically typed Dictionaries.
   - [ ] **Strongly Typed Model Returns (Nitro compatibility)**: Implement `list_as(query, MyModel)` or similar to map DB results directly to typed structs.
   - [ ] **Fast JSON Serialization**: Optimize serialization path (e.g., via `JSON3.jl`) to leverage type-stable structs for lightning-fast JSON output.
+  - [ ] **Review `OperObject.values` Type Design**: Evaluate whether the large Union in `OperObject.values` should stay as-is, be grouped behind type aliases, or move to a parametric/tagged representation. Only pursue a runtime change if profiling shows it is a real bottleneck.
   - [ ] **Allocation Reduction with IO Strategy**:
     - **Context**: String concatenation (`*=` and interpolation) in the query builder triggers significant GC overhead.
     - [ ] Expand the `IOBuffer` approach used in `query()` to `insert()`, `update()`, `delete()`, `do_count()`, and `do_exists()`.
@@ -130,6 +131,11 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 ## 🔍 Review possible issues
 
 Issues identified during the code review of recent main changes
+
+- [x] **Ambiguous behavior: `order_by`, `limit`, and `offset` on simple `update()`**
+  - **Context**: Standard SQL `UPDATE` statements generally do not natively support `ORDER BY`, `LIMIT`, or `OFFSET` clauses. Previously, PormG allowed users to chain these methods but silently ignored them during SQL generation, risking unbounded mutations.
+  - **Resolution**: Implemented Option A — `update()` now throws `ArgumentError` immediately if `limit()`, `offset()`, or `order_by()` is set on the query. Developers must filter by primary key explicitly or compose a subquery to update a bounded set of rows.
+  - **Tests**: `test/unit/test_execution_show.jl` "Update rejects queries with limit, offset, or order_by" and `test/integration/test_updates.jl` "update() rejects limit, offset, and order_by".
 
 - [ ] **`do_exists` silently swallows database errors**
   - **Location**: `src/querybuilder/execution.jl`, `do_exists` catch block.

@@ -10,6 +10,7 @@ Scenarios covered:
   — Delete with no matches: early-exit without mutation
   — Unfiltered delete guard: explicit opt-in required via allow_delete_all
   — Keyless model guard and direct DELETE FROM emission
+    — Keyless related CASCADE: FK fallback is used when a child has no PK
   — DO_NOTHING: ORM defers to the database; PostgreSQL rejects, SQLite may permit
   — CASCADE: parent deletion removes dependent children through the collector
   — Nested CASCADE: multi-level dependency graph is walked recursively
@@ -19,7 +20,9 @@ Scenarios covered:
   — RESTRICT: deletion is blocked when live referenced rows exist
   — PROTECT: deletion is blocked when child rows exist, free when orphaned
   — Filtered delete: deleting by a dynamically collected ID list
+    — OR-filter delete: Qor predicates remove exactly the OR-matched rows
   — Join-filter delete: delete() respects filters written with __ join notation
+    — Pagination guard: limit, offset, and order_by are rejected for delete()
 
 Run with:
   julia -t auto --project=. test/integration/runtests.jl
@@ -97,6 +100,38 @@ function _reset_keyless_delete_scratch_schema!()
     CREATE TABLE "keyless_delete_scratch" (
         "bucket" TEXT NOT NULL,
         "label" TEXT
+    );
+    """)
+
+    return nothing
+end
+
+# ── Schema helpers: keyless_related_* ────────────────────────────────────────
+
+function _drop_keyless_related_delete_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"keyless_related_child_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"keyless_related_parent_scratch\";")
+    return nothing
+end
+
+function _reset_keyless_related_delete_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_keyless_related_delete_scratch_schema!()
+
+    id_type = _scratch_id_type(pool)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "keyless_related_parent_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "name" TEXT NOT NULL
+    );
+    """)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "keyless_related_child_scratch" (
+        "parent_id" INTEGER NOT NULL REFERENCES "keyless_related_parent_scratch" ("id"),
+        "label" TEXT NOT NULL
     );
     """)
 
@@ -345,6 +380,46 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Keyless related CASCADE: when a child table has no primary key, the
+    # collector must use the FK field that points at the deleted parent. This
+    # exercises the fallback delete-key path that direct keyless DELETE cannot.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with CASCADE: Keyless related child uses FK fallback" begin
+        parent_id = 940001
+
+        _reset_keyless_related_delete_scratch_schema!()
+
+        try
+            KeylessRelatedM.Keyless_related_parent_scratch.objects.create(
+                "id"   => parent_id,
+                "name" => "keyless-parent"
+            )
+            KeylessRelatedM.Keyless_related_child_scratch.objects.create(
+                "parent_id" => parent_id,
+                "label"     => "child-a"
+            )
+            KeylessRelatedM.Keyless_related_child_scratch.objects.create(
+                "parent_id" => parent_id,
+                "label"     => "child-b"
+            )
+
+            @test KeylessRelatedM.Keyless_related_child_scratch.objects.filter("parent_id" => parent_id).count() == 2
+
+            delete_q = KeylessRelatedM.Keyless_related_parent_scratch.objects
+            delete_q.filter("id" => parent_id)
+            total_deleted, deleted_counter = delete_q.delete()
+
+            @test total_deleted == 3
+            @test deleted_counter["keyless_related_parent_scratch"] == 1
+            @test deleted_counter["keyless_related_child_scratch"] == 2
+            @test !KeylessRelatedM.Keyless_related_parent_scratch.objects.filter("id" => parent_id).exists()
+            @test !KeylessRelatedM.Keyless_related_child_scratch.objects.filter("parent_id" => parent_id).exists()
+        finally
+            _drop_keyless_related_delete_scratch_schema!()
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
     # DO_NOTHING should not be preemptively handled by the collector.  The ORM
     # attempts the parent delete directly and defers the final outcome to the
     # backend: PostgreSQL rejects the FK violation, while SQLite may allow the
@@ -429,6 +504,16 @@ end
             child_query = M.Just_a_test_deletion.objects
             child_query.filter("id__@in" => child_ids)
             @test child_query.count() == 3
+
+            inspect_q = M.Result.objects
+            inspect_q.filter("resultid" => scratch_result_id)
+            inspection = inspect_q.delete(show_query = :dict)
+
+            @test inspection isa Vector
+            @test any(item -> item[:operation] == :delete && item[:model] == "result", inspection)
+            @test any(item -> item[:operation] == :delete && item[:model] == "just_a_test_deletion", inspection)
+            @test M.Result.objects.filter("resultid" => scratch_result_id).count() == 1
+            @test M.Just_a_test_deletion.objects.filter("id__@in" => child_ids).count() == 3
 
             # Deleting the parent Result must cascade to all three children.
             delete_query = M.Result.objects
@@ -804,6 +889,88 @@ end
     # Cleanup
     M.Just_a_test_deletion.objects.exists() &&
         M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Delete with Qor filters
+# Mirrors the update-path Qor coverage and proves OR filters feed the DELETE
+# subquery without widening the target set to unrelated rows.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "DELETE: Qor filters remove exactly OR-matched rows" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    try
+        result_rows = M.Result.objects.order_by("resultid").limit(3).values("resultid").list()
+        @test length(result_rows) == 3
+        result_ids = [row[:resultid] for row in result_rows]
+
+        M.Just_a_test_deletion.objects.create("name" => "delete-qor-a", "test_result" => result_ids[1])
+        M.Just_a_test_deletion.objects.create("name" => "delete-qor-b", "test_result" => result_ids[2])
+        M.Just_a_test_deletion.objects.create("name" => "delete-qor-keep", "test_result" => result_ids[3])
+
+        delete_q = M.Just_a_test_deletion.objects
+        delete_q.filter(Qor("name" => "delete-qor-a", "test_result" => result_ids[2]))
+        total_deleted, deleted_counter = delete_q.delete()
+
+        @test total_deleted == 2
+        @test deleted_counter["just_a_test_deletion"] == 2
+        @test !M.Just_a_test_deletion.objects.filter("name" => "delete-qor-a").exists()
+        @test !M.Just_a_test_deletion.objects.filter("name" => "delete-qor-b").exists()
+        @test M.Just_a_test_deletion.objects.filter("name" => "delete-qor-keep").count() == 1
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pagination guard on delete(): the deletion collector counts and cascades full
+# object sets, so limit, offset, and order_by are rejected instead of silently
+# producing adapter-specific bounded-delete semantics.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "delete() rejects limit, offset, and order_by" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    try
+        M.Just_a_test_deletion.objects.create("name" => "delete-guard-a", "test_result" => 1)
+        M.Just_a_test_deletion.objects.create("name" => "delete-guard-b", "test_result" => 2)
+
+        err_limit = try
+            M.Just_a_test_deletion.objects.filter("name__@contains" => "delete-guard").limit(1).delete()
+            nothing
+        catch e
+            e
+        end
+        @test err_limit isa ArgumentError
+        @test occursin("limit", lowercase(sprint(showerror, err_limit)))
+
+        err_offset = try
+            M.Just_a_test_deletion.objects.filter("name__@contains" => "delete-guard").offset(1).delete()
+            nothing
+        catch e
+            e
+        end
+        @test err_offset isa ArgumentError
+        @test occursin("offset", lowercase(sprint(showerror, err_offset)))
+
+        err_order = try
+            M.Just_a_test_deletion.objects.filter("name__@contains" => "delete-guard").order_by("id").delete()
+            nothing
+        catch e
+            e
+        end
+        @test err_order isa ArgumentError
+        @test occursin("order_by", lowercase(sprint(showerror, err_order)))
+
+        @test M.Just_a_test_deletion.objects.filter("name__@contains" => "delete-guard").count() == 2
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
 end
 
 

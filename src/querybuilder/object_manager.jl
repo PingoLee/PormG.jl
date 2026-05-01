@@ -244,6 +244,8 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return () -> do_count(q)
   elseif sym === :exists
     return () -> do_exists(q)
+  elseif sym === :first
+    return (; kwargs...) -> first(q; kwargs...)
   elseif sym === :list || sym === :all
     return (; kwargs...) -> list(q; kwargs...)
   elseif sym === :list_json

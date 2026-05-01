@@ -105,7 +105,6 @@ Result = Models.Model("results",
     points         = Models.FloatField(),
 )
 
-Models.set_models(@__MODULE__, @__DIR__)  # Required at end of file
 end
 ```
 

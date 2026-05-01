@@ -408,11 +408,25 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     end
   end
 
+  # SQLite reservation handling: if this transaction already pre-allocated ids for the
+  # table, consume the next id explicitly instead of relying on AUTOINCREMENT.
+  if connection isa PormGSQLite
+    auto_pk_fields = [field for field in fields if _is_auto_generated_bulk_primary_key(model.fields[field])]
+    if length(auto_pk_fields) == 1
+      pk_name = auto_pk_fields[1]
+      reserved_max = get_sqlite_reserved_primary_key_max(model, pk_name)
+      if reserved_max !== nothing && !haskey(real_obj.insert, pk_name)
+        reserved_id = _allocate_sqlite_ids(model, connection, pk_name, 1, settings)[1]
+        real_obj.insert[pk_name] = reserved_id
+      end
+    end
+  end
+
   pk_exist::Bool = false
   pk_field::Vector{String} = []
-  for field in keys(objct.insert)
+  for field in keys(real_obj.insert)
     # Validation checks
-    validate_field_data(model, field, objct.insert[field], "insert"; allow_primary_key = true)
+    validate_field_data(model, field, real_obj.insert[field], "insert"; allow_primary_key = true)
 
     # check if the field is a primary key
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
@@ -421,7 +435,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     push!(quoted_field_columns, quote_identifier(field, connection))
 
     # Format and add value to parameters
-    push!(param_values, add_parameter!(parameters, objct.insert[field] |> model.fields[field].formater))
+    push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formater))
 
   end
  
@@ -451,13 +465,15 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # SQLite: use fetch() to properly acquire/release from pool
     # Use RETURNING * if supported (SQLite 3.35+)
     try
-        result = fetch(settings, sql * " RETURNING *;", parameters)
-        return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+      result = fetch(settings, sql * " RETURNING *;", parameters)
+      pk_exist && _update_sequence(model, connection, pk_field, settings)
+      return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
     catch e
-        # Fallback for older SQLite versions
-        fetch(settings, sql, parameters)
-        # Return the input data as a fallback (will lack auto-generated fields)
-        return Dict(Symbol(k) => v for (k, v) in pairs(real_obj.insert))
+      # Fallback for older SQLite versions
+      fetch(settings, sql, parameters)
+      pk_exist && _update_sequence(model, connection, pk_field, settings)
+      # Return the input data as a fallback (will lack auto-generated fields)
+      return Dict(Symbol(k) => v for (k, v) in pairs(real_obj.insert))
     end
   else
     throw("Unsupported connection type")
@@ -544,14 +560,17 @@ end
 # end
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::SQLConn)
   for field in pk_field
-    max_id_query = "SELECT MAX($(field)) as m FROM $(string(model.name |> lowercase));"
+    safe_field_name = quote_identifier(field, connection)
+    safe_table_name = safe_table_identifier(string(model.name), connection)
+    safe_table_literal = replace(string(model.name |> lowercase), "'" => "''")
+    max_id_query = "SELECT MAX($(safe_field_name)) as m FROM $(safe_table_name);"
     # Execute query and convert to DataFrame to safely access the result
     df = fetch(connection, max_id_query) |> DataFrames.DataFrame
     
     if size(df, 1) > 0
       max_id = df[1, :m]
       if !ismissing(max_id) && !isnothing(max_id)
-        update_sequence_sql = "UPDATE sqlite_sequence SET seq = $(max_id + 1) WHERE name = '$(string(model.name |> lowercase))';"
+        update_sequence_sql = "INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES('$(safe_table_literal)', $(Int64(max_id)));"
         fetch(settings, update_sequence_sql)
       end
     end
@@ -671,6 +690,62 @@ function _build_join_conditions(row_join::Vector{Dict{String, Union{String, Vect
   return _get_join_condition_list(row_join, connection)
 end
 
+function _set_clause_uses_join_aliases(set_clause::String,
+  row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}},
+  connection::Union{PormGPostgres, PormGSQLite})::Bool
+  for join_dict in row_join
+    alias_b = quote_identifier(join_dict["alias_b"], connection)
+    occursin("$alias_b.", set_clause) && return true
+  end
+  return false
+end
+
+function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{String, Nothing}
+  pk_field_sym = get_model_pk_field(instruction.object.model)
+  pk_field_sym === nothing && return nothing
+
+  safe_table_name = safe_table_identifier(instruction.object.model.name, instruction.connection)
+  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+  quoted_pk = quote_identifier(String(pk_field_sym), instruction.connection)
+
+  io = IOBuffer()
+  print(io, "SELECT DISTINCT ", safe_alias, ".", quoted_pk)
+  print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
+
+  for j in instruction.join
+    print(io, j, "\n")
+  end
+
+  if !isempty(instruction._where)
+    print(io, "WHERE ")
+    for (i, w) in enumerate(instruction._where)
+      i > 1 && print(io, " AND \n   ")
+      print(io, w)
+    end
+    print(io, "\n")
+  end
+
+  if instruction.agregate && !isempty(instruction.group)
+    print(io, "GROUP BY ")
+    for (i, g) in enumerate(instruction.group)
+      i > 1 && print(io, ", ")
+      print(io, g)
+    end
+    print(io, " \n")
+  end
+
+  if !isempty(instruction.having)
+    print(io, "HAVING ")
+    for (i, h) in enumerate(instruction.having)
+      i > 1 && print(io, " AND \n   ")
+      print(io, h)
+    end
+    print(io, "\n")
+  end
+
+  return String(take!(io))
+end
+
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
@@ -678,11 +753,26 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   # Resolve settings
   settings, connection, conn_key = get_settings(objct, connection=connection)
- 
-  instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 
   # Check if is allowed to update
   !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
+
+  # Guard: limit(), offset(), and order_by() cannot be combined with update().
+  # Standard SQL UPDATE does not support these clauses. Silently dropping them
+  # risks updating far more rows than the user intended (e.g., query.limit(5).update(...)
+  # would mutate ALL matching rows, not just 5). To update a bounded set of rows,
+  # filter by primary key explicitly or compose a subquery.
+  if real_obj.limit > 0 || real_obj.offset > 0 || !isempty(real_obj.order)
+    throw(ArgumentError(
+      "Cannot call update() on a query that has limit(), offset(), or order_by() set. " *
+      "Standard SQL UPDATE does not support these clauses, and silently dropping them " *
+      "risks updating more rows than intended. " *
+      "Filter by primary key explicitly or compose a subquery to update a bounded set."
+    ))
+  end
+
+  instruction = build(real_obj, table_alias=table_alias, connection=connection) 
+
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw("Error in update, the update must have a filter")
   
@@ -725,25 +815,40 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # Build secure UPDATE SQL with JOIN support
   safe_table_name = safe_table_identifier(string(model.name), connection)
   safe_alias = quote_identifier(instruction.alias, connection)
+  pk_field_sym = get_model_pk_field(model)
   
   has_joins = !isempty(instruction.row_join)
   sql = ""
   
   if has_joins
     if connection isa PormGPostgres || connection isa PormGSQLite
-      # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax
-      from_clause = _build_from_tables(instruction.row_join, connection)
-      join_conditions = _build_join_conditions(instruction.row_join, connection)
-      
-      # Merge structural joins and logical filters, then deduplicate
-      final_where = unique([join_conditions; instruction._where])
-      
-      sql = """
-      UPDATE $(safe_table_name) AS $(safe_alias)
-      SET $(set_clause)
-      FROM $(from_clause)
-      WHERE $(join(final_where, " AND "))
-      """
+      set_uses_join_aliases = _set_clause_uses_join_aliases(set_clause, instruction.row_join, connection)
+      pk_subquery = (!set_uses_join_aliases && isempty(real_obj.ctes)) ? _build_update_target_pk_subquery(instruction) : nothing
+
+      if pk_subquery !== nothing && pk_field_sym !== nothing
+        quoted_pk = quote_identifier(String(pk_field_sym), connection)
+        sql = """
+        UPDATE $(safe_table_name) AS $(safe_alias)
+        SET $(set_clause)
+        WHERE $(safe_alias).$(quoted_pk) IN (
+        $(pk_subquery)
+        )
+        """
+      else
+        # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax
+        from_clause = _build_from_tables(instruction.row_join, connection)
+        join_conditions = _build_join_conditions(instruction.row_join, connection)
+        
+        # Merge structural joins and logical filters, then deduplicate
+        final_where = unique([join_conditions; instruction._where])
+        
+        sql = """
+        UPDATE $(safe_table_name) AS $(safe_alias)
+        SET $(set_clause)
+        FROM $(from_clause)
+        WHERE $(join(final_where, " AND "))
+        """
+      end
     else
       @error "Error in update: Unsupported database type for JOIN operations" connection_type=typeof(connection)
       throw("Error in update: Unsupported database type for JOIN operations")
@@ -972,6 +1077,34 @@ function list_json(objct::SQLObjectHandler; show_query::Symbol = :execute)
 end
 list_json(; kwargs...) = (objct) -> list_json(objct; kwargs...)
 
+"""
+    first(objct::SQLObjectHandler; show_query::Symbol = :execute)
+
+Return the first record matching the current query, or `nothing` if no records match.
+
+**Mutates the handler**: calls `objct.limit(1)` on the handler before executing. This is
+permanent — the `limit(1)` persists on the object after the call returns (last-call
+semantics, consistent with all other fluent methods such as `filter`, `order_by`, etc.).
+
+Because the limit is mutated into the handler, chaining `.first()` followed by `.update()`
+on the **same handler** will raise an `ArgumentError` ("UPDATE with LIMIT/OFFSET is not
+supported"). Obtain a fresh handler or call `.update()` before `.first()` if both
+operations are needed.
+
+```julia
+q = M.Driver.objects
+q.filter("nationality" => "British")
+driver = q.first()           # q now has limit=1
+
+# Wrong — throws because limit=1 was set by first()
+# q.update("nationality" => "English")
+
+# Correct — create a separate handler for the update
+u = M.Driver.objects
+u.filter("nationality" => "British")
+u.update("nationality" => "English")
+```
+"""
 function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
   objct.limit(1)
   res = list(objct, show_query=show_query)

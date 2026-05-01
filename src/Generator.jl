@@ -182,8 +182,6 @@ import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTE
 #     surname   = Models.CharField(max_length=255),
 # )
 
-Models.set_models(@__MODULE__, @__DIR__)
-
 end
 """)
     end

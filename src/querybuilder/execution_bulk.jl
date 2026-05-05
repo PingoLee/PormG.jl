@@ -725,13 +725,24 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   else
     # Execute the query for the given connection type.
     if connection isa PormGPostgres
+      # Use a savepoint when inside an active transaction and the model has a PK field.
+      # This lets the sequence-sync retry stay on the same TX connection.
+      use_savepoint = !isempty(pk_field)
       try
-        fetch(settings, sql, parameters)
+        if use_savepoint
+          with_savepoint(settings, "pormg_bulk_insert_retry") do
+            fetch(settings, sql, parameters)
+          end
+        else
+          fetch(settings, sql, parameters)
+        end
       catch e
         if occursin("duplicate key value violates unique constraint", e |> string)
           if !isempty(pk_field)
-            _update_sequence(model, connection, pk_field, settings, ignore_tx=true)
-            fetch(settings, sql, parameters; ignore_tx=true)
+            # with_savepoint already rolled back and released the savepoint; the outer
+            # transaction is still usable. Fix the sequence and retry without a savepoint.
+            _update_sequence(model, connection, pk_field, settings)
+            fetch(settings, sql, parameters)
           else
             throw("Error in bulk_insert, the row has a duplicate key value and no primary key sequence can be synchronized")
           end

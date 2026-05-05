@@ -107,7 +107,7 @@ import .QueryBuilder: object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, 
 
 export object, Q, Qor, F, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
-export fetch_async, await_result, FetchTask, run_in_transaction  # Async-first API
+export fetch_async, await_result, FetchTask, run_in_transaction, with_savepoint  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
 export setup, install_ai_skills
 

@@ -8,7 +8,7 @@ import SQLite
 import LibPQ
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
-export with_transaction, with_transaction_async, run_in_transaction
+export with_transaction, with_transaction_async, run_in_transaction, with_savepoint, with_savepoint
 export acquire_connection, release_connection, close_pool!
 export is_connection_alive, reconnect_db, is_connection_error
 export libpq_execute, libpq_execute_async
@@ -849,6 +849,38 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
 end
 with_transaction(pool::SQLConn, sql::AbstractString; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
 with_transaction_async(pool::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
+
+"""
+    with_savepoint(f::Function, settings::SQLConn, name::String) -> result
+
+Execute `f()` wrapped in a PostgreSQL savepoint named `name`. On success, releases the
+savepoint. On error, rolls back to the savepoint, releases it, and rethrows so the outer
+transaction remains usable.
+
+Transparently no-ops when called outside an active transaction context or on a
+non-PostgreSQL backend, so callers do not need to guard the call site.
+"""
+function with_savepoint(f::Function, settings::SQLConn, name::String)
+  pool = settings.connections
+  if !(pool isa PormGPostgres) || transaction_connection_for(settings) === nothing
+    return f()
+  end
+
+  fetch(settings, "SAVEPOINT $(name);")
+  try
+    result = f()
+    fetch(settings, "RELEASE SAVEPOINT $(name);")
+    return result
+  catch e
+    try
+      fetch(settings, "ROLLBACK TO SAVEPOINT $(name);")
+      fetch(settings, "RELEASE SAVEPOINT $(name);")
+    catch rollback_error
+      @error "Failed to rollback savepoint" name=name exception=rollback_error
+    end
+    rethrow(e)
+  end
+end
 
 """
     run_in_transaction(f::Function, pool::PormGPostgres) -> result

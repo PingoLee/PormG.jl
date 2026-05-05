@@ -161,21 +161,22 @@ else
     @test results[5, :test_result] == 500
 
     # 5. Test with column mapping
+    query = M.Just_a_test_deletion.objects
     query.delete(allow_delete_all = true)
     df_mapped = DataFrames.DataFrame(
         raw_name = ["Mapped 1", "Mapped 2"],
         raw_val = [10, 20]
     )
     bulk_copy(query, df_mapped, columns = ["raw_name" => "name", "raw_val" => "test_result"])
-    @test query.count() == 2
-    @test query.filter("name" => "Mapped 1").count() == 1
+    @test M.Just_a_test_deletion.objects.count() == 2
+    @test M.Just_a_test_deletion.objects.filter("name" => "Mapped 1").count() == 1
 
     # 6. Test with automated sequence update
     # Fetch current IDs to see where we are
-    last_id = query.order_by("-id").values("id").list() |> first |> x -> x[:id]
+    last_id = M.Just_a_test_deletion.objects.order_by("-id").values("id").list() |> first |> x -> x[:id]
     
     # Create a new row via standard create() to ensure sequence didn't break
-    new_row = query.create("name" => "Sequence check", "test_result" => 999)
+    new_row = M.Just_a_test_deletion.objects.create("name" => "Sequence check", "test_result" => 999)
     @test new_row[:id] > last_id
 
 end

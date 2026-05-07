@@ -36,7 +36,7 @@ makedocs(
             "Creating Records" => "write/create.md",
             "Updating Records" => "write/update.md",
             "Deleting Records" => "write/delete.md",
-            "Bulk Operations" => "write/bulk.md",
+            "Bulk Insert, Copy, and Update" => "write/bulk.md",
             "Transactions" => "write/transaction.md",
         ],
         "Reading" => [

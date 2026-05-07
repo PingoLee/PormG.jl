@@ -204,4 +204,30 @@ Django_contract_scratch = Models.Model("django_contract_scratch",
   price       = Models.DecimalField(max_digits=10, decimal_places=2, null=true) # Django: DecimalField(max_digits=10, decimal_places=2)
 )
 
+# Permanent fixture models for bulk_update regressions that exercise mixed
+# nullable fields, constrained foreign keys, date parsing, and boolean writes.
+Bulk_update_required_parent_scratch = Models.Model("bulk_update_required_parent_scratch",
+  id = Models.IDField(),
+  label = Models.CharField()
+)
+
+Bulk_update_optional_parent_scratch = Models.Model("bulk_update_optional_parent_scratch",
+  id = Models.IDField(),
+  label = Models.CharField()
+)
+
+Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
+  id = Models.IDField(),
+  label = Models.CharField(),
+  required_parent_id = Models.ForeignKey(Bulk_update_required_parent_scratch,
+    pk_field = "id",
+    on_delete = RESTRICT),
+  optional_parent_id = Models.ForeignKey(Bulk_update_optional_parent_scratch,
+    pk_field = "id",
+    on_delete = SET_NULL,
+    null = true),
+  event_date = Models.DateField(null = true),
+  is_active = Models.BooleanField(default = false)
+)
+
 end

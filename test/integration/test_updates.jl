@@ -2,6 +2,34 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+_bulk_update_scratch_to_date(value) = value isa Date ? value : Date(string(value))
+_bulk_update_scratch_to_bool(value) = value isa Bool ? value : Int(value) != 0
+_bulk_update_scratch_fk_string(id::Integer) = SubString("id=$(id)", 4)
+
+function _clear_bulk_update_scratch_rows!()
+    M.Bulk_update_payload_scratch.objects.delete(allow_delete_all = true)
+    M.Bulk_update_optional_parent_scratch.objects.delete(allow_delete_all = true)
+    M.Bulk_update_required_parent_scratch.objects.delete(allow_delete_all = true)
+    return nothing
+end
+
+function _seed_bulk_update_scratch_parents!(required_labels::Vector{String}, optional_labels::Vector{String})
+    required_ids = Dict{String, Int64}()
+    optional_ids = Dict{String, Int64}()
+
+    for label in required_labels
+        row = M.Bulk_update_required_parent_scratch.objects.create("label" => label)
+        required_ids[label] = Int64(row[:id])
+    end
+
+    for label in optional_labels
+        row = M.Bulk_update_optional_parent_scratch.objects.create("label" => label)
+        optional_ids[label] = Int64(row[:id])
+    end
+
+    return required_ids, optional_ids
+end
+
 
 
 @testset "Single and Bulk Insert/Update" begin
@@ -697,6 +725,207 @@ end
 end
 
 
+        # ─────────────────────────────────────────────────────────────────────────────
+        # Bulk Update: mixed-type payload executes end-to-end with string-backed FKs
+        #
+        # This reproduces the production shape more closely than the existing SQL-only
+        # inspection tests: a bulk_update against a real table with a required FK, a
+        # nullable FK, a DateField, a BooleanField, and a plain text field. The FK
+        # values are passed as AbstractString fragments instead of Int64 so the ORM has
+        # to validate them and the database has to enforce the live constraints.
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "Bulk Update mixed-type payload accepts string-backed FK ids and missing" begin
+            _clear_bulk_update_scratch_rows!()
+
+            try
+                required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+                    ["req-a", "req-b"],
+                    ["opt-a", "opt-b"],
+                )
+
+                row_a = M.Bulk_update_payload_scratch.objects.create(
+                    "label" => "payload-a",
+                    "required_parent_id" => required_ids["req-a"],
+                    "optional_parent_id" => optional_ids["opt-a"],
+                    "event_date" => Date(2024, 1, 10),
+                    "is_active" => false,
+                )
+                row_b = M.Bulk_update_payload_scratch.objects.create(
+                    "label" => "payload-b",
+                    "required_parent_id" => required_ids["req-b"],
+                    "optional_parent_id" => optional_ids["opt-b"],
+                    "event_date" => Date(2024, 1, 11),
+                    "is_active" => true,
+                )
+
+                update_df = DataFrame(
+                    id = [row_a[:id], row_b[:id]],
+                    label = ["payload-a-updated", "payload-b-updated"],
+                    required_parent_id = Any[
+                        _bulk_update_scratch_fk_string(required_ids["req-b"]),
+                        _bulk_update_scratch_fk_string(required_ids["req-a"]),
+                    ],
+                    optional_parent_id = Any[
+                        _bulk_update_scratch_fk_string(optional_ids["opt-b"]),
+                        missing,
+                    ],
+                    event_date = ["2024-02-10", "2024-02-11"],
+                    is_active = [true, false],
+                )
+
+                bulk_update(
+                    M.Bulk_update_payload_scratch.objects,
+                    update_df,
+                    columns = ["label", "required_parent_id", "optional_parent_id", "event_date", "is_active"],
+                    filters = ["id"],
+                )
+
+                persisted_rows = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+                by_id = Dict(row[:id] => row for row in persisted_rows)
+
+                @test by_id[row_a[:id]][:label] == "payload-a-updated"
+                @test by_id[row_a[:id]][:required_parent_id] == required_ids["req-b"]
+                @test by_id[row_a[:id]][:optional_parent_id] == optional_ids["opt-b"]
+                @test _bulk_update_scratch_to_date(by_id[row_a[:id]][:event_date]) == Date(2024, 2, 10)
+                @test _bulk_update_scratch_to_bool(by_id[row_a[:id]][:is_active]) == true
+
+                @test by_id[row_b[:id]][:label] == "payload-b-updated"
+                @test by_id[row_b[:id]][:required_parent_id] == required_ids["req-a"]
+                @test by_id[row_b[:id]][:optional_parent_id] === nothing || ismissing(by_id[row_b[:id]][:optional_parent_id])
+                @test _bulk_update_scratch_to_date(by_id[row_b[:id]][:event_date]) == Date(2024, 2, 11)
+                @test _bulk_update_scratch_to_bool(by_id[row_b[:id]][:is_active]) == false
+            finally
+                _clear_bulk_update_scratch_rows!()
+            end
+        end
+
+        # ─────────────────────────────────────────────────────────────────────────────
+        # Bulk Update: chunk_size splits one payload across multiple statements
+        #
+        # The production call uses chunk_size=500. This regression forces the same code
+        # path with chunk_size=2 so a five-row DataFrame crosses chunk boundaries and
+        # the final persisted state proves every batch used the right dynamic row key.
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "Bulk Update chunking applies all batches for mixed-type payloads" begin
+            _clear_bulk_update_scratch_rows!()
+
+            try
+                required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+                    ["req-left", "req-right"],
+                    ["opt-left", "opt-right"],
+                )
+
+                seeded_rows = [
+                    M.Bulk_update_payload_scratch.objects.create(
+                        "label" => "chunk-seed-$(index)",
+                        "required_parent_id" => required_ids["req-left"],
+                        "optional_parent_id" => optional_ids["opt-left"],
+                        "event_date" => Date(2024, 3, index),
+                        "is_active" => false,
+                    )
+                    for index in 1:5
+                ]
+
+                update_df = DataFrame(
+                    id = [row[:id] for row in seeded_rows],
+                    label = ["chunk-updated-$(index)" for index in 1:5],
+                    required_parent_id = Any[
+                        _bulk_update_scratch_fk_string(required_ids[index % 2 == 1 ? "req-right" : "req-left"])
+                        for index in 1:5
+                    ],
+                    optional_parent_id = Any[
+                        index in (2, 4) ? missing : _bulk_update_scratch_fk_string(optional_ids[index % 2 == 1 ? "opt-right" : "opt-left"])
+                        for index in 1:5
+                    ],
+                    event_date = [Dates.format(Date(2024, 4, index), "yyyy-mm-dd") for index in 1:5],
+                    is_active = [index % 2 == 0 for index in 1:5],
+                )
+
+                bulk_update(
+                    M.Bulk_update_payload_scratch.objects,
+                    update_df,
+                    columns = ["label", "required_parent_id", "optional_parent_id", "event_date", "is_active"],
+                    filters = ["id"],
+                    chunk_size = 2,
+                )
+
+                persisted_rows = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+                by_id = Dict(row[:id] => row for row in persisted_rows)
+
+                for index in 1:5
+                    seeded = seeded_rows[index]
+                    persisted = by_id[seeded[:id]]
+                    expected_required = required_ids[index % 2 == 1 ? "req-right" : "req-left"]
+                    expected_optional = index in (2, 4) ? nothing : optional_ids[index % 2 == 1 ? "opt-right" : "opt-left"]
+
+                    @test persisted[:label] == "chunk-updated-$(index)"
+                    @test persisted[:required_parent_id] == expected_required
+                    if expected_optional === nothing
+                        @test persisted[:optional_parent_id] === nothing || ismissing(persisted[:optional_parent_id])
+                    else
+                        @test persisted[:optional_parent_id] == expected_optional
+                    end
+                    @test _bulk_update_scratch_to_date(persisted[:event_date]) == Date(2024, 4, index)
+                    @test _bulk_update_scratch_to_bool(persisted[:is_active]) == (index % 2 == 0)
+                end
+            finally
+                _clear_bulk_update_scratch_rows!()
+            end
+        end
+
+        # ─────────────────────────────────────────────────────────────────────────────
+        # Bulk Update: numeric sentinel 0 is not treated as a nullable FK shortcut
+        #
+        # The production payload showed 0-like values in FK columns. This regression
+        # makes the contract explicit: if the referenced row does not exist, the live
+        # database must reject the bulk UPDATE and the prior FK value must remain.
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "Bulk Update rejects zero sentinel for constrained FK columns" begin
+            _clear_bulk_update_scratch_rows!()
+
+            try
+                required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+                    ["req-only"],
+                    ["opt-only"],
+                )
+
+                seeded = M.Bulk_update_payload_scratch.objects.create(
+                    "label" => "zero-sentinel-target",
+                    "required_parent_id" => required_ids["req-only"],
+                    "optional_parent_id" => optional_ids["opt-only"],
+                    "event_date" => Date(2024, 5, 1),
+                    "is_active" => true,
+                )
+
+                bad_update = DataFrame(
+                    id = [seeded[:id]],
+                    optional_parent_id = Any["0"],
+                )
+
+                err = try
+                    bulk_update(
+                        M.Bulk_update_payload_scratch.objects,
+                        bad_update,
+                        columns = ["optional_parent_id"],
+                        filters = ["id"],
+                    )
+                    nothing
+                catch e
+                    e
+                end
+
+                @test err !== nothing
+                @test occursin("foreign key", lowercase(string(err))) || occursin("constraint", lowercase(string(err)))
+
+                persisted = M.Bulk_update_payload_scratch.objects.filter("id" => seeded[:id]).list() |> first
+                @test persisted[:optional_parent_id] == optional_ids["opt-only"]
+                @test persisted[:label] == "zero-sentinel-target"
+            finally
+                _clear_bulk_update_scratch_rows!()
+            end
+        end
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JSONField Updates
 #
@@ -920,4 +1149,448 @@ end
     @test M.Just_a_test_deletion.objects.filter("name" => "guard-row").count() == 1
 
     M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: empty DataFrame is a no-op, not an error
+#
+# The production call site may legitimately produce an empty DataFrame (e.g.
+# after filtering a CSV with no matching rows). The implementation must log a
+# warning and return nothing without touching the database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update empty DataFrame is a no-op" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    M.Just_a_test_deletion.objects.create("name" => "no-op-sentinel", "test_result" => 1, "test_result_set_default" => nothing)
+
+    # Build a zero-row DataFrame that still has the right column schema.
+    # This can happen naturally when a read query returns no results.
+    empty_df = M.Just_a_test_deletion.objects.filter("test_result" => 99999) |> DataFrame
+    @test size(empty_df, 1) == 0
+
+    result = bulk_update(
+        M.Just_a_test_deletion.objects,
+        empty_df,
+        columns = ["name"],
+        filters = ["id"],
+    )
+
+    # Must return nothing — the empty path must not raise.
+    @test isnothing(result)
+
+    # The sentinel row must be completely unaffected.
+    sentinel = M.Just_a_test_deletion.objects.filter("name" => "no-op-sentinel").list() |> first
+    @test sentinel[:name] == "no-op-sentinel"
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: filters=nothing auto-detects the model primary key
+#
+# When no filters are passed, the implementation falls through to:
+#   dinanic_filters = pks
+# and infers the row identity from the model's primary key field(s). This is
+# the simplest caller shape. Use upper-case DataFrame columns here so the test
+# also proves the case-insensitive PK fallback branch.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update auto-PK filter inference is case-insensitive" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+
+    M.Just_a_test_deletion.objects.create("name" => "auto-pk-a", "test_result" => 1, "test_result_set_default" => nothing)
+    M.Just_a_test_deletion.objects.create("name" => "auto-pk-b", "test_result" => 2, "test_result_set_default" => nothing)
+
+    # Read back so we have real PKs in the DataFrame, then rename columns to
+    # upper-case so bulk_update has to use its lowercase-matching fallback.
+    df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
+    rename!(df, "id" => "ID", "name" => "NAME")
+    df[1, "NAME"] = "auto-pk-a-updated"
+    df[2, "NAME"] = "auto-pk-b-updated"
+
+    # No filters= argument: the ORM must discover "id" as the PK automatically.
+    bulk_update(
+        M.Just_a_test_deletion.objects,
+        df,
+        columns = ["name"],
+    )
+
+    rows = M.Just_a_test_deletion.objects.order_by("id").list()
+    @test rows[1][:name] == "auto-pk-a-updated"
+    @test rows[2][:name] == "auto-pk-b-updated"
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: explicit columns and filters use case-insensitive DF matching
+#
+# This covers the separate fallback branch where bulk_update must resolve both
+# an update column and a dynamic filter column from upper-case DataFrame names
+# while the caller still uses lower-case model field names.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update explicit filters are case-insensitive against DataFrame columns" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+
+    M.Just_a_test_deletion.objects.create("name" => "ci-filter-a", "test_result" => 1, "test_result_set_default" => nothing)
+    M.Just_a_test_deletion.objects.create("name" => "ci-filter-b", "test_result" => 2, "test_result_set_default" => nothing)
+
+    df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
+    rename!(df, "id" => "ID", "name" => "NAME")
+    df[1, "NAME"] = "ci-filter-a-updated"
+    df[2, "NAME"] = "ci-filter-b-updated"
+
+    bulk_update(
+        M.Just_a_test_deletion.objects,
+        df,
+        columns = ["name"],
+        filters = ["id"],
+    )
+
+    rows = M.Just_a_test_deletion.objects.order_by("id").list()
+    @test rows[1][:name] == "ci-filter-a-updated"
+    @test rows[2][:name] == "ci-filter-b-updated"
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: missing DataFrame columns fail with clear caller-facing errors
+#
+# Both error branches are important in practice:
+#   1. explicit filters=["id"] but the DF has no id column
+#   2. filters omitted, so PK inference runs, but the DF still has no id column
+# Neither path should touch the database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update missing filter and PK columns error clearly" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    M.Just_a_test_deletion.objects.create("name" => "missing-col-sentinel", "test_result" => 7, "test_result_set_default" => nothing)
+
+    try
+        missing_filter_df = DataFrame(name = ["should-not-land"])
+        err_filter = try
+            bulk_update(
+                M.Just_a_test_deletion.objects,
+                missing_filter_df,
+                columns = ["name"],
+                filters = ["id"],
+            )
+            nothing
+        catch e
+            e
+        end
+
+        @test err_filter isa ArgumentError
+        @test occursin("filter column", lowercase(sprint(showerror, err_filter)))
+        @test occursin("id", lowercase(sprint(showerror, err_filter)))
+
+        missing_pk_df = DataFrame(name = ["should-not-land-either"])
+        err_pk = try
+            bulk_update(
+                M.Just_a_test_deletion.objects,
+                missing_pk_df,
+                columns = ["name"],
+            )
+            nothing
+        catch e
+            e
+        end
+
+        @test err_pk isa ArgumentError
+        @test occursin("primary key column", lowercase(sprint(showerror, err_pk)))
+        @test occursin("id", lowercase(sprint(showerror, err_pk)))
+
+        sentinel = M.Just_a_test_deletion.objects.filter("test_result" => 7).list() |> first
+        @test sentinel[:name] == "missing-col-sentinel"
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: pre-applied query filters are cleared before rebuilding WHERE
+#
+# bulk_update intentionally ignores any filters already attached to the query
+# object and rebuilds the WHERE clause from filters=. Use a query with a stale
+# no-match predicate so the only way rows 2 and 3 update is if the reset path
+# runs and the new static filter is the only predicate that survives.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update rebuilds filters instead of inheriting stale query state" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+
+    try
+        M.Just_a_test_deletion.objects.create("name" => "reset-a", "test_result" => 1, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "reset-b", "test_result" => 2, "test_result_set_default" => nothing)
+        M.Just_a_test_deletion.objects.create("name" => "reset-c", "test_result" => 3, "test_result_set_default" => nothing)
+
+        df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
+        df[1, :name] = "reset-a-attempted"
+        df[2, :name] = "reset-b-updated"
+        df[3, :name] = "reset-c-updated"
+
+        stale_query = M.Just_a_test_deletion.objects
+        stale_query.filter("name" => "definitely-no-match")
+
+        bulk_update(
+            stale_query,
+            df,
+            columns = ["name"],
+            filters = ["id", "test_result__@in" => [2, 3]],
+        )
+
+        rows = M.Just_a_test_deletion.objects.order_by("test_result").list()
+        @test rows[1][:name] == "reset-a"
+        @test rows[2][:name] == "reset-b-updated"
+        @test rows[3][:name] == "reset-c-updated"
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: copy flag controls whether caller DataFrames are mutated
+#
+# The default copy=true deep-copies df_o before processing so the caller's
+# DataFrame is never modified by ORM-side auto-population. Use the
+# Django_contract_scratch model here because updated_at has auto_now=true, so
+# _prepare_bulk_df! will inject an updated_at column during bulk_update.
+# That makes the copy/no-copy distinction externally visible.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update copy flag controls caller DataFrame mutation" begin
+    safe_label = "copy-flag-safe-9903"
+    inplace_label = "copy-flag-inplace-9904"
+
+    M.Django_contract_scratch.objects.filter("label" => safe_label).exists() &&
+        M.Django_contract_scratch.objects.filter("label" => safe_label).delete()
+    M.Django_contract_scratch.objects.filter("label" => inplace_label).exists() &&
+        M.Django_contract_scratch.objects.filter("label" => inplace_label).delete()
+
+    try
+        safe_row = M.Django_contract_scratch.objects.create("label" => safe_label, "price" => "10.50")
+        df_safe = DataFrame(id = [safe_row[:id]], price = ["11.50"])
+        @test !("updated_at" in names(df_safe))
+
+        bulk_update(
+            M.Django_contract_scratch.objects,
+            df_safe,
+            columns = ["price"],
+            filters = ["id"],
+            copy    = true,
+        )
+
+        @test !("updated_at" in names(df_safe))
+
+        safe_persisted = M.Django_contract_scratch.objects.filter("label" => safe_label).values("price", "updated_at").list() |> first
+        @test parse(Float64, string(safe_persisted[:price])) == 11.5
+        @test !(safe_persisted[:updated_at] === nothing || ismissing(safe_persisted[:updated_at]))
+
+        inplace_row = M.Django_contract_scratch.objects.create("label" => inplace_label, "price" => "20.50")
+        df_inplace = DataFrame(id = [inplace_row[:id]], price = ["21.50"])
+        @test !("updated_at" in names(df_inplace))
+
+        bulk_update(
+            M.Django_contract_scratch.objects,
+            df_inplace,
+            columns = ["price"],
+            filters = ["id"],
+            copy    = false,
+        )
+
+        @test "updated_at" in names(df_inplace)
+        @test all(x -> !(x === nothing || ismissing(x)), df_inplace[!, "updated_at"])
+
+        inplace_persisted = M.Django_contract_scratch.objects.filter("label" => inplace_label).values("price", "updated_at").list() |> first
+        @test parse(Float64, string(inplace_persisted[:price])) == 21.5
+        @test !(inplace_persisted[:updated_at] === nothing || ismissing(inplace_persisted[:updated_at]))
+
+    finally
+        M.Django_contract_scratch.objects.filter("label" => safe_label).exists() &&
+            M.Django_contract_scratch.objects.filter("label" => safe_label).delete()
+        M.Django_contract_scratch.objects.filter("label" => inplace_label).exists() &&
+            M.Django_contract_scratch.objects.filter("label" => inplace_label).delete()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: show_query inspection modes work on the scratch FK model
+#
+# The :dict, :sql, and :params modes must return structured results without
+# hitting the database — the same contract as single update(show_query=...).
+# The multi-chunk :dict path (length(results) > 1) must return a Vector while
+# the single-chunk path returns the Dict directly.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update show_query inspection modes" begin
+    _clear_bulk_update_scratch_rows!()
+
+    try
+        required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+            ["insp-req"],
+            ["insp-opt"],
+        )
+
+        rows = [
+            M.Bulk_update_payload_scratch.objects.create(
+                "label"              => "insp-$(i)",
+                "required_parent_id" => required_ids["insp-req"],
+                "optional_parent_id" => optional_ids["insp-opt"],
+                "event_date"         => Date(2025, 1, i),
+                "is_active"          => false,
+            )
+            for i in 1:3
+        ]
+
+        df = DataFrame(
+            id    = [r[:id] for r in rows],
+            label = ["insp-$(i)-dry" for i in 1:3],
+        )
+
+        # ── :dict mode — single chunk (chunk_size=1000 > 3 rows) ─────────────
+        result_dict = bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns    = ["label"],
+            filters    = ["id"],
+            show_query = :dict,
+        )
+        # Single chunk → direct Dict, not Vector{Dict}
+        @test result_dict isa Dict
+        @test result_dict[:operation] == :update
+        @test occursin("update", lowercase(result_dict[:sql_text]))
+
+        # ── :inspection mode — alias of :dict with the same metadata contract ─
+        inspection_result = bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns    = ["label"],
+            filters    = ["id"],
+            show_query = :inspection,
+        )
+        @test inspection_result isa Dict
+        @test inspection_result[:operation] == :update
+        @test occursin("update", lowercase(inspection_result[:sql_text]))
+
+        # DB must be untouched — labels still "insp-N" not "insp-N-dry"
+        live = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+        for (i, row) in enumerate(live)
+            @test row[:label] == "insp-$(i)"
+        end
+
+        # ── :dict mode — multi-chunk path returns Vector ──────────────────────
+        result_vec = bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns    = ["label"],
+            filters    = ["id"],
+            show_query = :dict,
+            chunk_size = 1,   # forces 3 separate chunks → Vector of 3 dicts
+        )
+        @test result_vec isa Vector
+        @test length(result_vec) == 3
+        for chunk_result in result_vec
+            @test chunk_result isa Dict
+            @test chunk_result[:operation] == :update
+        end
+
+        # ── :sql mode ─────────────────────────────────────────────────────────
+        sql_result = bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns    = ["label"],
+            filters    = ["id"],
+            show_query = :sql,
+        )
+        @test sql_result isa String
+        @test occursin("update", lowercase(sql_result))
+
+        # ── :params mode ──────────────────────────────────────────────────────
+        params_result = bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns    = ["label"],
+            filters    = ["id"],
+            show_query = :params,
+        )
+        @test params_result isa Vector
+        # Parameters must include at least the label values and the id values.
+        @test length(params_result) >= length(rows)
+
+        # ── :none mode — build the statement, return nothing, execute nothing ─
+        none_result = bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns    = ["label"],
+            filters    = ["id"],
+            show_query = :none,
+        )
+        @test isnothing(none_result)
+
+        # Final sanity: no inspection call wrote to the DB.
+        live_final = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+        for (i, row) in enumerate(live_final)
+            @test row[:label] == "insp-$(i)"
+        end
+
+    finally
+        _clear_bulk_update_scratch_rows!()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk Update: all-missing optional FK column writes NULL to every row
+#
+# When an entire column in the update DataFrame is `missing`, the ORM must
+# write NULL for every row rather than skipping the column or erroring.
+# This closes a gap left by the zero-sentinel test where only one row was
+# given a bad value; here all rows receive `missing` for the nullable column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk Update all-missing optional FK column nulls every row" begin
+    _clear_bulk_update_scratch_rows!()
+
+    try
+        required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+            ["null-req-a", "null-req-b"],
+            ["null-opt-a", "null-opt-b"],
+        )
+
+        seeded = [
+            M.Bulk_update_payload_scratch.objects.create(
+                "label"              => "null-col-$(i)",
+                "required_parent_id" => required_ids["null-req-a"],
+                "optional_parent_id" => optional_ids["null-opt-a"],
+                "event_date"         => Date(2025, 6, i),
+                "is_active"          => true,
+            )
+            for i in 1:3
+        ]
+
+        # All rows carry missing for optional_parent_id — the entire column is NULL.
+        df = DataFrame(
+            id                 = [r[:id] for r in seeded],
+            optional_parent_id = [missing, missing, missing],
+        )
+
+        bulk_update(
+            M.Bulk_update_payload_scratch.objects,
+            df,
+            columns = ["optional_parent_id"],
+            filters = ["id"],
+        )
+
+        persisted = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+        for row in persisted
+            # Every optional_parent_id must now be NULL regardless of adapter.
+            @test row[:optional_parent_id] === nothing || ismissing(row[:optional_parent_id])
+            # Unrelated columns must be unaffected.
+            @test row[:required_parent_id] == required_ids["null-req-a"]
+            @test _bulk_update_scratch_to_bool(row[:is_active]) == true
+        end
+
+    finally
+        _clear_bulk_update_scratch_rows!()
+    end
 end

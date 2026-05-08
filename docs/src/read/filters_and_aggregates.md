@@ -146,6 +146,138 @@ query.filter("statusId__@in" => engine_statuses)
 
 The subquery must project exactly one column — see [Subqueries and CTEs](subqueries_and_ctes.md) for the full column-count rule and SQL-function projection examples.
 
+### Correlated EXISTS
+
+Use `Exists(subquery)` with `OuterRef("field")` when the child query must compare against the current row of the outer query. PormG renders the child query as `EXISTS (SELECT 1 ... LIMIT 1)` and keeps child filter values parameterized.
+
+```julia
+using PormG: Exists, OuterRef, Qor
+
+fast_laps = M.Lap_times.objects.filter(
+    "raceid" => OuterRef("raceid"),
+    "driverid" => OuterRef("driverid"),
+    "milliseconds__@lte" => 90_000,
+)
+
+fast_pit_stops = M.Pit_stops.objects.filter(
+    "raceid" => OuterRef("raceid"),
+    "driverid" => OuterRef("driverid"),
+    "milliseconds__@lte" => 30_000,
+)
+
+query = M.Result.objects
+query.filter(Qor(Exists(fast_laps), Exists(fast_pit_stops)))
+query.values("resultid", "raceid__name", "driverid__surname")
+```
+
+Generated SQL (PostgreSQL):
+
+```sql
+SELECT
+    "Tb"."resultid" as resultid,
+    "T1"."name" as raceid__name,
+    "T2"."surname" as driverid__surname
+FROM "result" as "Tb"
+INNER JOIN "races" as "T1" ON "Tb"."raceid" = "T1"."raceid"
+INNER JOIN "drivers" as "T2" ON "Tb"."driverid" = "T2"."driverid"
+WHERE (EXISTS (SELECT 1
+FROM "lap_times" as "R1"
+WHERE "R1"."raceid" = "Tb"."raceid" AND
+   "R1"."driverid" = "Tb"."driverid" AND
+   "R1"."milliseconds" <= $1
+LIMIT 1) OR EXISTS (SELECT 1
+FROM "pit_stops" as "R2"
+WHERE "R2"."raceid" = "Tb"."raceid" AND
+   "R2"."driverid" = "Tb"."driverid" AND
+   "R2"."milliseconds" <= $2
+LIMIT 1))
+-- Parameters: [90000, 30000]
+```
+
+`OuterRef("pk")` resolves to the outer model's primary key field automatically:
+
+```julia
+# Find results that have at least one linked test-deletion row
+del_sub = M.Just_a_test_deletion.objects.filter(
+    "test_result" => OuterRef("pk"),
+)
+query = M.Result.objects.filter(Exists(del_sub))
+```
+
+Generated SQL (PostgreSQL):
+
+```sql
+SELECT
+    *
+FROM "result" as "Tb"
+WHERE EXISTS (SELECT 1
+FROM "just_a_test_deletion" as "R1"
+WHERE "R1"."test_result" = "Tb"."resultId"
+LIMIT 1)
+```
+
+#### Combining EXISTS with outer scalar filters
+
+Additional filters on the outer query AND with the EXISTS predicate in the usual way:
+
+```julia
+fast_laps = M.Lap_times.objects.filter(
+    "raceid"             => OuterRef("raceid"),
+    "driverid"           => OuterRef("driverid"),
+    "milliseconds__@lte" => 90_000,
+)
+
+# All results for driver 1 that also have a fast lap — EXISTS AND scalar
+query = M.Result.objects.filter(Exists(fast_laps), "driverid" => 1)
+```
+
+Generated SQL (PostgreSQL):
+
+```sql
+SELECT
+    *
+FROM "result" as "Tb"
+WHERE EXISTS (SELECT 1
+FROM "lap_times" as "R1"
+WHERE "R1"."raceid" = "Tb"."raceid" AND
+   "R1"."driverid" = "Tb"."driverid" AND
+   "R1"."milliseconds" <= $1
+LIMIT 1) AND
+   "Tb"."driverid" = $2
+-- Parameters: [90000, 1]
+```
+
+#### Reusing a subquery object
+
+The same subquery object can be passed to `Exists` in multiple outer queries without mutation. Each outer query builds its own independent correlated subquery:
+
+```julia
+lap_sub = M.Lap_times.objects.filter(
+    "raceid"             => OuterRef("raceid"),
+    "driverid"           => OuterRef("driverid"),
+    "milliseconds__@lte" => 90_000,
+)
+
+all_fast     = M.Result.objects.filter(Exists(lap_sub))                       # all results with a fast lap
+driver2_fast = M.Result.objects.filter(Exists(lap_sub), "driverid" => 2)      # narrowed to driver 2
+```
+
+Generated SQL for `driver2_fast` (PostgreSQL):
+
+```sql
+SELECT
+    *
+FROM "result" as "Tb"
+WHERE EXISTS (SELECT 1
+FROM "lap_times" as "R1"
+WHERE "R1"."raceid" = "Tb"."raceid" AND
+   "R1"."driverid" = "Tb"."driverid" AND
+   "R1"."milliseconds" <= $1
+LIMIT 1) AND
+   "Tb"."driverid" = $2
+-- Parameters: [90000, 2]
+```
+
 ### Filter Values from Web Frameworks
 
 PormG accepts `SubString{String}` wherever a `String` filter value is expected, so values parsed directly from HTTP query strings (e.g. via `split`, `HTTP.URIs`, or Genie parameters) can be passed without an explicit `String(...)` conversion:

@@ -153,7 +153,9 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
   @pormg_debug false
   for v in object.filter
-    if isa(v, SQLTypeOper)
+    if isa(v, ExistsObject)
+      push!(instruc._where, _get_filter_query(v, instruc))
+    elseif isa(v, SQLTypeOper)
       @pormg_debug false
       if isa(v.column, SQLTypeField) && isa(v.column.field, String) && !contains(v.column.field, "__") && !(v.column.field in instruc.object.model.field_names)
         # @pormg_debug false
@@ -277,7 +279,8 @@ function build(object::SQLObject;
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
   connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing,
   parameters::Union{Nothing,AbstractPormGParam}=nothing,
-  set_contexts::Bool=true)
+  set_contexts::Bool=true,
+  outer::Union{Nothing,SQLInstruction}=nothing)
   ensure_model_transaction_scope(object.model)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
@@ -292,6 +295,7 @@ function build(object::SQLObject;
     connection=connection,
     django=settings.django_prefix === nothing ? nothing : settings.django_prefix * "_", # TODO, remover
     parameters=parameters,
+    outer=outer,
   )
 
   # Switch context for each SQL section so positional-parameter backends

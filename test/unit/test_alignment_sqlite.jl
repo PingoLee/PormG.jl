@@ -16,7 +16,7 @@ PormG.config["mock_sl_key"] = MockSettings
 include("../integration/db_sl/models.jl")
 import .models as M
 PormG.Models.set_models(M, "mock_sl_path")
-import PormG.QueryBuilder: cjoin, Q, Qor, F, inspect_query, Case, When, Sum, Avg, Value, Round, With
+import PormG.QueryBuilder: cjoin, Q, Qor, F, Exists, OuterRef, inspect_query, Case, When, Sum, Avg, Value, Round, With
 
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
@@ -79,6 +79,113 @@ end
     # because subqueries in filters are processed while context is :where.
     # Order should be depth-first expansion: Italy, 1991, 1
     @test insp[:parameters] == ["Italy", 1991, 1]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Correlated EXISTS: OuterRef("pk") should bind to the parent query alias, not
+# to a parameter, while ordinary child filters still land in the WHERE bucket.
+# The child query projection is deliberately ignored so EXISTS always renders
+# SELECT 1 with LIMIT 1.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - Correlated Exists resolves OuterRef pk" begin
+    child_query = M.Just_a_test_deletion.objects
+    child_query.values("id")
+    child_query.filter(
+        "test_result" => OuterRef("pk"),
+        "name__@icontains" => "roll"
+    )
+
+    q = M.Result.objects
+    q.filter("positionorder" => 1, Exists(child_query))
+    q.values("resultid")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test contains(sql, "EXISTS (SELECT 1")
+    @test contains(sql, "FROM \"just_a_test_deletion\" as \"R1\"")
+    @test contains(sql, "\"R1\".\"test_result\" = \"Tb\".\"resultid\"")
+    @test contains(sql, "LOWER(\"R1\".\"name\") LIKE LOWER(?)")
+    @test contains(sql, "LIMIT 1)")
+    @test !contains(sql, "\"R1\".\"id\" as id")
+
+    @test insp[:parameter_buckets][:where] == [1, "%roll%"]
+    @test insp[:parameters] == [1, "%roll%"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Correlated EXISTS with Qor: multiple Exists predicates should render as an OR
+# group while sharing the parent alias and keeping child parameters in SQL-text
+# order inside the WHERE bucket.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - Qor combines correlated Exists predicates" begin
+    fast_lap_query = M.Lap_times.objects.filter(
+        "raceid" => OuterRef("raceid"),
+        "driverid" => OuterRef("driverid"),
+        "milliseconds__@lte" => 90000,
+    )
+
+    pit_stop_query = M.Pit_stops.objects.filter(
+        "raceid" => OuterRef("raceid"),
+        "driverid" => OuterRef("driverid"),
+        "milliseconds__@lte" => 30000,
+    )
+
+    q = M.Result.objects.filter(Qor(Exists(fast_lap_query), Exists(pit_stop_query)))
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test length(collect(eachmatch(r"EXISTS \(SELECT 1", sql))) == 2
+    @test contains(sql, " OR ")
+    # The OR group must be wrapped in parens so it ANDs correctly with other outer filters
+    @test contains(sql, "WHERE (EXISTS")
+    @test contains(sql, "\"R1\".\"raceid\" = \"Tb\".\"raceid\"")
+    @test contains(sql, "\"R1\".\"driverid\" = \"Tb\".\"driverid\"")
+    @test contains(sql, "\"R2\".\"raceid\" = \"Tb\".\"raceid\"")
+    @test contains(sql, "\"R2\".\"driverid\" = \"Tb\".\"driverid\"")
+
+    @test insp[:parameter_buckets][:where] == [90000, 30000]
+    @test insp[:parameters] == [90000, 30000]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OuterRef guardrail: a top-level query has no parent alias to resolve against.
+# This keeps accidental OuterRef usage from becoming a silent self-comparison or
+# a bound parameter with the wrong semantics.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - OuterRef requires correlated context" begin
+    q = M.Result.objects.filter("raceid" => OuterRef("raceid"))
+
+    @test_throws ArgumentError begin
+        q |> inspect_query
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXISTS context restoration: a child query that builds joins temporarily enters
+# join context. After Exists returns, later parent filters must still land in the
+# outer WHERE bucket, preserving SQLite positional parameter alignment.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - Exists restores parent parameter context" begin
+    child_query = M.Just_a_test_deletion.objects.filter(
+        "test_result" => OuterRef("pk"),
+        "test_result__statusid__status" => "Finished",
+    )
+
+    q = M.Result.objects.filter(Exists(child_query), "points__@gte" => 5)
+
+    insp = q |> inspect_query
+
+    @test contains(insp[:sql_text], "EXISTS (SELECT 1")
+    @test contains(insp[:sql_text], "JOIN \"result\"")
+    # Scalar filter after EXISTS must be AND-connected in the WHERE clause,
+    # not merged into the subquery. This is the Django-compatible pattern:
+    # WHERE EXISTS (... LIMIT 1) AND "Tb"."points" >= ?
+    @test contains(insp[:sql_text], "LIMIT 1) AND")
+    @test isempty(insp[:parameter_buckets][:join])
+    @test insp[:parameter_buckets][:where] == ["Finished", 5]
+    @test insp[:parameters] == ["Finished", 5]
 end
 
 @testset "Alignment Verification - Multi-Join Stress (Real Models)" begin

@@ -14,7 +14,7 @@
 
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper, SQLTypeF}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QObject(filters = colect)
 end
 
@@ -35,7 +35,7 @@ end
 
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper, SQLTypeF}) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
   return QorObject(or = colect)
 end
 

@@ -144,6 +144,7 @@ function query(q::SQLObjectHandler;
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
   parameters::Union{Nothing, AbstractPormGParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
+  outer::Union{Nothing, SQLInstruction} = nothing,
   show_query::Symbol = :execute
   )
 
@@ -177,7 +178,7 @@ function query(q::SQLObjectHandler;
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
   # Subqueries skip context switching to inherit the parent's current bucket.
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=!is_subquery)
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=!is_subquery, outer=outer)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
   # Only enforce during actual execution (:execute) — inspection/dry-run modes (:dict, :sql,

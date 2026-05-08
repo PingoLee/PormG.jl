@@ -1,8 +1,19 @@
+# ExistsObject is a standalone EXISTS predicate, not a binary operator.
+# It is defined here — before FilterType — because FilterType references it
+# and Julia evaluates constant definitions sequentially at load time.
+# ExistsObject inherits SQLType (not SQLTypeOper) to avoid accidental access to
+# the .column / .values contract that SQLTypeOper implies.
+@kwdef mutable struct ExistsObject <: SQLType
+  query::SQLObjectHandler
+end
+Exists(query::SQLObjectHandler) = ExistsObject(query=query)
+Base.deepcopy(x::ExistsObject) = ExistsObject(query=deepcopy(x.query))
+
 #
 # Type Aliases for Heavy Unions
 #
-"""Filter components: Operator objects, Q (AND), Qor (OR), and F expressions."""
-const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF}
+"""Filter components: Operator objects, Q (AND), Qor (OR), F expressions, and EXISTS predicates."""
+const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF,ExistsObject}
 
 """Field references in SQL: text, functions, or string names."""
 const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF}
@@ -56,6 +67,7 @@ end
   cache::Dict{String,SQLTypeField} = sizehint!(Dict{String,SQLTypeField}(), 12)
   django::OptionalString = nothing
   parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
+  outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
 end
 
 # Store information to decide the name from table alias in subquery
@@ -194,8 +206,6 @@ OP(column::String, value) = OperObject(operator="=", values=value, column=SQLFie
 OP(column::SQLTypeFunction, value) = OperObject(operator="=", values=value, column=column)
 OP(column::String, operator::String, value) = OperObject(operator=operator, values=value, column=SQLField(column))
 OP(column::SQLTypeFunction, operator::String, value) = OperObject(operator=operator, values=value, column=column)
-
-
 
 @kwdef mutable struct QObject <: SQLTypeQ
   filters::Vector{FilterType} # filters to be used in the query
@@ -422,6 +432,16 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
     agregate=f.agregate
   )
 end
+
+@kwdef mutable struct OuterRefObject <: SQLTypeF
+  field_name::String
+end
+function OuterRef(field_name::AbstractString)
+  normalized = String(field_name)
+  isempty(normalized) && throw(ArgumentError("OuterRef requires a non-empty field name"))
+  return OuterRefObject(field_name=normalized)
+end
+Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 
 #
 # SQLTypeFunction Objects (functions from sql)

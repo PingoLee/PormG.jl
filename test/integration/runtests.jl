@@ -36,6 +36,7 @@ include("common_delete_setup.jl")
     @testset "Reverse Joins & on()"         begin include("test_reverse_joins.jl")      end
     @testset "CTEs (with)"                  begin include("test_cte.jl")                end
     @testset "Subqueries"                   begin include("test_subqueries.jl")         end
+    @testset "Correlated EXISTS"            begin include("test_exists_correlated.jl")  end
     @testset "Custom Joins (cjoin)"         begin include("test_cjoin.jl")              end    
     @testset "Cached Joins"                 begin include("test_cache_join.jl")         end
     @testset "Transactions"                 begin include("test_transactions.jl")       end

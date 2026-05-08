@@ -11,7 +11,7 @@ All tests use mock PostgreSQL connections (no live database required).
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
-using PormG.QueryBuilder: Q, Qor, F, inspect_query, list, update, delete, bulk_insert, bulk_update
+using PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, inspect_query, list, update, delete, bulk_insert, bulk_update
 import DataFrames
 
 # Initialize test models
@@ -29,6 +29,20 @@ RaceModel = Model("races",
   year = IntegerField(null=true) # Allow null for easy testing
 )
 RaceModel.connect_key = "default"
+
+DriverNoteModel = Model("driver_notes",
+  id = IDField(),
+  driver_id = IntegerField(),
+  body = CharField()
+)
+DriverNoteModel.connect_key = "default"
+
+RaceNoteModel = Model("race_notes",
+  id = IDField(),
+  race_id = IntegerField(),
+  note = CharField()
+)
+RaceNoteModel.connect_key = "default"
 
 # Mock settings for test mode (no DB connection needed)
 struct MockPostgres <: PormG.PormGPostgres end
@@ -401,6 +415,117 @@ PormG.config["default"] = MockSettings
     # For PostgreSQL, bucket_breakdown should be empty
     @test res[:parameter_buckets] isa Dict
     # For positional databases, it would show the breakdown
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Correlated EXISTS inspection: PostgreSQL should render EXISTS (SELECT 1 ...)
+  # with OuterRef("pk") resolved to the parent alias and text matching still
+  # represented as a normal bind parameter.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Correlated Exists Inspection" begin
+    note_query = DriverNoteModel.objects.filter(
+      "driver_id" => OuterRef("pk"),
+      "body__@icontains" => "rain",
+    )
+
+    q = DriverModel.objects
+    q.filter(Exists(note_query))
+    q.values("id")
+
+    res = inspect_query(q)
+
+    @test contains(res[:sql_text], "EXISTS (SELECT 1")
+    @test contains(res[:sql_text], "FROM \"driver_notes\" as \"R1\"")
+    @test contains(res[:sql_text], "\"R1\".\"driver_id\" = \"Tb\".\"id\"")
+    @test contains(res[:sql_text], "\"R1\".\"body\" ILIKE \$1")
+    @test contains(res[:sql_text], "LIMIT 1)")
+    @test res[:parameters] == ["%rain%"]
+    @test res[:dialect] == :postgresql
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Correlated EXISTS with a named (non-pk) OuterRef field.
+  # OuterRef("forename") must bind to the outer alias column, not become a
+  # parameter.  The scalar icontains filter must remain a bound parameter.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Correlated Exists Inspection - named OuterRef field" begin
+    note_query = DriverNoteModel.objects.filter(
+      "driver_id" => OuterRef("id"),
+      "body__@icontains" => "wet",
+    )
+
+    q = DriverModel.objects
+    q.filter("nationality" => "British", Exists(note_query))
+    q.values("id", "surname")
+
+    res = inspect_query(q)
+    sql = res[:sql_text]
+
+    # EXISTS block is present and correlated on the named field
+    @test contains(sql, "EXISTS (SELECT 1")
+    @test contains(sql, "\"R1\".\"driver_id\" = \"Tb\".\"id\"")
+    # Scalar filter before EXISTS must be AND-connected, not absorbed into the subquery.
+    # Django-compatible pattern: WHERE "Tb"."nationality" = $1 AND EXISTS (... LIMIT 1)
+    @test contains(sql, "AND EXISTS (SELECT 1")
+    # Scalar filter remains parameterized; nationality filter is $1, icontains is $2
+    @test contains(sql, "\"R1\".\"body\" ILIKE \$2")
+    @test contains(sql, "LIMIT 1)")
+    @test res[:parameters] == ["British", "%wet%"]
+    @test res[:dialect] == :postgresql
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Qor(Exists, Exists) in PostgreSQL: two EXISTS predicates joined by OR.
+  # Each child query gets its own alias counter (R1, R2).  Both child scalar
+  # filters become bound parameters in SQL-text order.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Correlated Exists Inspection - Qor two EXISTS predicates" begin
+    note_query = DriverNoteModel.objects.filter(
+      "driver_id" => OuterRef("pk"),
+      "body__@icontains" => "rain",
+    )
+    race_note_query = RaceNoteModel.objects.filter(
+      "race_id" => OuterRef("id"),
+      "note__@icontains" => "crash",
+    )
+
+    q = DriverModel.objects
+    q.filter(Qor(Exists(note_query), Exists(race_note_query)))
+    q.values("id")
+
+    res = inspect_query(q)
+    sql = res[:sql_text]
+
+    # Both EXISTS blocks rendered
+    @test length(collect(eachmatch(r"EXISTS \(SELECT 1", sql))) == 2
+    @test contains(sql, " OR ")
+    # The OR group must be wrapped in parens so it ANDs correctly with other outer filters
+    @test contains(sql, "WHERE (EXISTS")
+    # Each child table gets its own alias
+    @test contains(sql, "FROM \"driver_notes\" as \"R1\"")
+    @test contains(sql, "FROM \"race_notes\" as \"R2\"")
+    # OuterRef resolved for both children
+    @test contains(sql, "\"R1\".\"driver_id\" = \"Tb\".\"id\"")
+    @test contains(sql, "\"R2\".\"race_id\" = \"Tb\".\"id\"")
+    # Scalar filters parameterized in declaration order
+    @test contains(sql, "ILIKE \$1")
+    @test contains(sql, "ILIKE \$2")
+    @test res[:parameters] == ["%rain%", "%crash%"]
+    @test res[:dialect] == :postgresql
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # OuterRef guardrail: calling inspect_query directly on a subquery that
+  # contains OuterRef must raise ArgumentError because there is no outer
+  # instruction to resolve against.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Correlated Exists Inspection - OuterRef requires correlated context" begin
+    note_query = DriverNoteModel.objects.filter(
+      "driver_id" => OuterRef("id"),
+    )
+
+    # inspect_query on the raw subquery (no Exists wrapper, no outer) must error
+    @test_throws ArgumentError inspect_query(note_query)
   end
 
 end

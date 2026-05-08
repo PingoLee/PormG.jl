@@ -579,8 +579,80 @@ function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Noth
   end
   return "(" * join(resp, " AND ") * ")"
 end
+function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  return _get_filter_query(v, instruc)
+end
+function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  return _get_filter_query(v, instruc)
+end
 function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _set_update_query(q, instruc)
+end
+
+function _resolve_outer_ref_field_name(ref::OuterRefObject, outer::SQLInstruction)::String
+  if ref.field_name == "pk"
+    pk_field = Models.get_model_pk_field(outer.object.model)
+    pk_field === nothing && throw(ArgumentError("OuterRef(\"pk\") requires the outer model '$(outer.object.model.name)' to define exactly one primary key field"))
+    return String(pk_field)
+  end
+  return ref.field_name
+end
+
+function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction)::String
+  q = deepcopy(subquery)
+  q.object.values = []
+  q.object.order = []
+  q.object.limit = 0
+  q.object.offset = 0
+
+  old_context = instruc.parameters isa PormGSQLiteParam ? instruc.parameters.current_context : nothing
+  instruction = try
+    build(
+      q.object,
+      table_alias=instruc.table_alias,
+      connection=instruc.connection,
+      parameters=instruc.parameters,
+      set_contexts=false,
+      outer=instruc,
+    )
+  finally
+    old_context !== nothing && set_context!(instruc.parameters, old_context)
+  end
+
+  safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+
+  io = IOBuffer()
+  print(io, "EXISTS (SELECT 1\nFROM ", safe_table_name, " as ", safe_alias, "\n")
+
+  for join_sql in instruction.join
+    print(io, join_sql, "\n")
+  end
+
+  if !isempty(instruction._where)
+    print(io, "WHERE ")
+    for (index, where_sql) in enumerate(instruction._where)
+      index > 1 && print(io, " AND \n   ")
+      print(io, where_sql)
+    end
+    print(io, "\n")
+  end
+
+  if instruction.agregate && !isempty(instruction.group)
+    print(io, "GROUP BY ", join(instruction.group, ", "), " \n")
+  end
+
+  if !isempty(instruction.having)
+    print(io, "HAVING ")
+    for (index, having_sql) in enumerate(instruction.having)
+      index > 1 && print(io, " AND \n   ")
+      print(io, having_sql)
+    end
+    print(io, "\n")
+  end
+
+  print(io, "LIMIT 1)")
+  return String(take!(io))
 end
 
 
@@ -616,6 +688,13 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc) # Does this have any coletaral efect?
+end
+function _get_filter_query(v::ExistsObject, instruc::SQLInstruction)
+  return _build_exists_query(v.query, instruc)
+end
+function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
+  instruc.outer === nothing && throw(ArgumentError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
+  return _get_filter_query(_resolve_outer_ref_field_name(v, instruc.outer), instruc.outer)
 end
 # function _get_filter_query(v::SQLTypeText, instruc::SQLInstruction)
 #   return _get_select_query(v, instruc)
@@ -658,7 +737,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       throw("Error in values, $(v.column.field) in filter is not a object")
     end
     _validate_membership_subquery(v)
-    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters)
+    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
   else
     @pormg_debug false

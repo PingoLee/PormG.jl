@@ -525,7 +525,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 The following symbols are exported by `PormG` and available after `using PormG`:
 
 ### Query Builder
-`object`, `Q`, `Qor`, `F`, `show_query`, `inspect_query`
+`object`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `show_query`, `inspect_query`
 
 ### Aggregate Functions
 `Sum`, `Avg`, `Count`, `Max`, `Min`

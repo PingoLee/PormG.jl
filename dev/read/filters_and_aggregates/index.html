@@ -17,7 +17,85 @@ query.filter(&quot;raceId__circuitId__name__@in&quot; =&gt; [&quot;Circuit de Mo
 query.filter(&quot;nationality__@nin&quot; =&gt; [&quot;British&quot;, &quot;German&quot;])</code></pre><h3 id="Subquery-IN"><a class="docs-heading-anchor" href="#Subquery-IN">Subquery IN</a><a id="Subquery-IN-1"></a><a class="docs-heading-anchor-permalink" href="#Subquery-IN" title="Permalink"></a></h3><p>You can also pass a query object to <code>@in</code> for a server-side <code>IN (SELECT ...)</code>:</p><pre><code class="language-julia hljs">engine_statuses = M.Status.objects.filter(&quot;status&quot; =&gt; &quot;Engine&quot;).values(&quot;statusId&quot;)
 
 query = M.Result.objects
-query.filter(&quot;statusId__@in&quot; =&gt; engine_statuses)</code></pre><p>The subquery must project exactly one column — see <a href="../subqueries_and_ctes/">Subqueries and CTEs</a> for the full column-count rule and SQL-function projection examples.</p><h3 id="Filter-Values-from-Web-Frameworks"><a class="docs-heading-anchor" href="#Filter-Values-from-Web-Frameworks">Filter Values from Web Frameworks</a><a id="Filter-Values-from-Web-Frameworks-1"></a><a class="docs-heading-anchor-permalink" href="#Filter-Values-from-Web-Frameworks" title="Permalink"></a></h3><p>PormG accepts <code>SubString{String}</code> wherever a <code>String</code> filter value is expected, so values parsed directly from HTTP query strings (e.g. via <code>split</code>, <code>HTTP.URIs</code>, or Genie parameters) can be passed without an explicit <code>String(...)</code> conversion:</p><pre><code class="language-julia hljs"># SubString from a query-string parser — no conversion needed
+query.filter(&quot;statusId__@in&quot; =&gt; engine_statuses)</code></pre><p>The subquery must project exactly one column — see <a href="../subqueries_and_ctes/">Subqueries and CTEs</a> for the full column-count rule and SQL-function projection examples.</p><h3 id="Correlated-EXISTS"><a class="docs-heading-anchor" href="#Correlated-EXISTS">Correlated EXISTS</a><a id="Correlated-EXISTS-1"></a><a class="docs-heading-anchor-permalink" href="#Correlated-EXISTS" title="Permalink"></a></h3><p>Use <code>Exists(subquery)</code> with <code>OuterRef(&quot;field&quot;)</code> when the child query must compare against the current row of the outer query. PormG renders the child query as <code>EXISTS (SELECT 1 ... LIMIT 1)</code> and keeps child filter values parameterized.</p><pre><code class="language-julia hljs">using PormG: Exists, OuterRef, Qor
+
+fast_laps = M.Lap_times.objects.filter(
+    &quot;raceid&quot; =&gt; OuterRef(&quot;raceid&quot;),
+    &quot;driverid&quot; =&gt; OuterRef(&quot;driverid&quot;),
+    &quot;milliseconds__@lte&quot; =&gt; 90_000,
+)
+
+fast_pit_stops = M.Pit_stops.objects.filter(
+    &quot;raceid&quot; =&gt; OuterRef(&quot;raceid&quot;),
+    &quot;driverid&quot; =&gt; OuterRef(&quot;driverid&quot;),
+    &quot;milliseconds__@lte&quot; =&gt; 30_000,
+)
+
+query = M.Result.objects
+query.filter(Qor(Exists(fast_laps), Exists(fast_pit_stops)))
+query.values(&quot;resultid&quot;, &quot;raceid__name&quot;, &quot;driverid__surname&quot;)</code></pre><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;resultid&quot; as resultid,
+    &quot;T1&quot;.&quot;name&quot; as raceid__name,
+    &quot;T2&quot;.&quot;surname&quot; as driverid__surname
+FROM &quot;result&quot; as &quot;Tb&quot;
+INNER JOIN &quot;races&quot; as &quot;T1&quot; ON &quot;Tb&quot;.&quot;raceid&quot; = &quot;T1&quot;.&quot;raceid&quot;
+INNER JOIN &quot;drivers&quot; as &quot;T2&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;T2&quot;.&quot;driverid&quot;
+WHERE (EXISTS (SELECT 1
+FROM &quot;lap_times&quot; as &quot;R1&quot;
+WHERE &quot;R1&quot;.&quot;raceid&quot; = &quot;Tb&quot;.&quot;raceid&quot; AND
+   &quot;R1&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot; AND
+   &quot;R1&quot;.&quot;milliseconds&quot; &lt;= $1
+LIMIT 1) OR EXISTS (SELECT 1
+FROM &quot;pit_stops&quot; as &quot;R2&quot;
+WHERE &quot;R2&quot;.&quot;raceid&quot; = &quot;Tb&quot;.&quot;raceid&quot; AND
+   &quot;R2&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot; AND
+   &quot;R2&quot;.&quot;milliseconds&quot; &lt;= $2
+LIMIT 1))
+-- Parameters: [90000, 30000]</code></pre><p><code>OuterRef(&quot;pk&quot;)</code> resolves to the outer model&#39;s primary key field automatically:</p><pre><code class="language-julia hljs"># Find results that have at least one linked test-deletion row
+del_sub = M.Just_a_test_deletion.objects.filter(
+    &quot;test_result&quot; =&gt; OuterRef(&quot;pk&quot;),
+)
+query = M.Result.objects.filter(Exists(del_sub))</code></pre><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    *
+FROM &quot;result&quot; as &quot;Tb&quot;
+WHERE EXISTS (SELECT 1
+FROM &quot;just_a_test_deletion&quot; as &quot;R1&quot;
+WHERE &quot;R1&quot;.&quot;test_result&quot; = &quot;Tb&quot;.&quot;resultId&quot;
+LIMIT 1)</code></pre><h4 id="Combining-EXISTS-with-outer-scalar-filters"><a class="docs-heading-anchor" href="#Combining-EXISTS-with-outer-scalar-filters">Combining EXISTS with outer scalar filters</a><a id="Combining-EXISTS-with-outer-scalar-filters-1"></a><a class="docs-heading-anchor-permalink" href="#Combining-EXISTS-with-outer-scalar-filters" title="Permalink"></a></h4><p>Additional filters on the outer query AND with the EXISTS predicate in the usual way:</p><pre><code class="language-julia hljs">fast_laps = M.Lap_times.objects.filter(
+    &quot;raceid&quot;             =&gt; OuterRef(&quot;raceid&quot;),
+    &quot;driverid&quot;           =&gt; OuterRef(&quot;driverid&quot;),
+    &quot;milliseconds__@lte&quot; =&gt; 90_000,
+)
+
+# All results for driver 1 that also have a fast lap — EXISTS AND scalar
+query = M.Result.objects.filter(Exists(fast_laps), &quot;driverid&quot; =&gt; 1)</code></pre><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    *
+FROM &quot;result&quot; as &quot;Tb&quot;
+WHERE EXISTS (SELECT 1
+FROM &quot;lap_times&quot; as &quot;R1&quot;
+WHERE &quot;R1&quot;.&quot;raceid&quot; = &quot;Tb&quot;.&quot;raceid&quot; AND
+   &quot;R1&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot; AND
+   &quot;R1&quot;.&quot;milliseconds&quot; &lt;= $1
+LIMIT 1) AND
+   &quot;Tb&quot;.&quot;driverid&quot; = $2
+-- Parameters: [90000, 1]</code></pre><h4 id="Reusing-a-subquery-object"><a class="docs-heading-anchor" href="#Reusing-a-subquery-object">Reusing a subquery object</a><a id="Reusing-a-subquery-object-1"></a><a class="docs-heading-anchor-permalink" href="#Reusing-a-subquery-object" title="Permalink"></a></h4><p>The same subquery object can be passed to <code>Exists</code> in multiple outer queries without mutation. Each outer query builds its own independent correlated subquery:</p><pre><code class="language-julia hljs">lap_sub = M.Lap_times.objects.filter(
+    &quot;raceid&quot;             =&gt; OuterRef(&quot;raceid&quot;),
+    &quot;driverid&quot;           =&gt; OuterRef(&quot;driverid&quot;),
+    &quot;milliseconds__@lte&quot; =&gt; 90_000,
+)
+
+all_fast     = M.Result.objects.filter(Exists(lap_sub))                       # all results with a fast lap
+driver2_fast = M.Result.objects.filter(Exists(lap_sub), &quot;driverid&quot; =&gt; 2)      # narrowed to driver 2</code></pre><p>Generated SQL for <code>driver2_fast</code> (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    *
+FROM &quot;result&quot; as &quot;Tb&quot;
+WHERE EXISTS (SELECT 1
+FROM &quot;lap_times&quot; as &quot;R1&quot;
+WHERE &quot;R1&quot;.&quot;raceid&quot; = &quot;Tb&quot;.&quot;raceid&quot; AND
+   &quot;R1&quot;.&quot;driverid&quot; = &quot;Tb&quot;.&quot;driverid&quot; AND
+   &quot;R1&quot;.&quot;milliseconds&quot; &lt;= $1
+LIMIT 1) AND
+   &quot;Tb&quot;.&quot;driverid&quot; = $2
+-- Parameters: [90000, 2]</code></pre><h3 id="Filter-Values-from-Web-Frameworks"><a class="docs-heading-anchor" href="#Filter-Values-from-Web-Frameworks">Filter Values from Web Frameworks</a><a id="Filter-Values-from-Web-Frameworks-1"></a><a class="docs-heading-anchor-permalink" href="#Filter-Values-from-Web-Frameworks" title="Permalink"></a></h3><p>PormG accepts <code>SubString{String}</code> wherever a <code>String</code> filter value is expected, so values parsed directly from HTTP query strings (e.g. via <code>split</code>, <code>HTTP.URIs</code>, or Genie parameters) can be passed without an explicit <code>String(...)</code> conversion:</p><pre><code class="language-julia hljs"># SubString from a query-string parser — no conversion needed
 nationality = split(&quot;nationality=British&quot;, &quot;=&quot;)[2]  # SubString{String}
 query = M.Driver.objects.filter(&quot;nationality&quot; =&gt; nationality)
 
@@ -98,4 +176,4 @@ query.filter(&quot;avg_perf__@gt&quot; =&gt; 5)</code></pre><p>For more complex 
         &quot;best_finish&quot; =&gt; Min(&quot;positionOrder&quot;),
         &quot;races&quot; =&gt; Count(&quot;resultId&quot;)
     )
-    .order_by(&quot;best_finish&quot;) |&gt; DataFrame</code></pre><hr/><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><strong><a href="../functions_and_dates/">Functions and Dates</a></strong> — Use <code>Case</code>, <code>Coalesce</code>, <code>Concat</code>, date extraction, and math functions.</li><li><strong><a href="../q_objects/">Q Objects</a></strong> — Build complex OR/AND logic beyond what <code>filter()</code> pairs support.</li><li><strong><a href="../field_expressions/">Field Expressions</a></strong> — Field-to-field comparisons with <code>F()</code> and aggregate ratios.</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../functions_and_dates/">Functions and Dates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 7 May 2026 18:52">Thursday 7 May 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+    .order_by(&quot;best_finish&quot;) |&gt; DataFrame</code></pre><hr/><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><strong><a href="../functions_and_dates/">Functions and Dates</a></strong> — Use <code>Case</code>, <code>Coalesce</code>, <code>Concat</code>, date extraction, and math functions.</li><li><strong><a href="../q_objects/">Q Objects</a></strong> — Build complex OR/AND logic beyond what <code>filter()</code> pairs support.</li><li><strong><a href="../field_expressions/">Field Expressions</a></strong> — Field-to-field comparisons with <code>F()</code> and aggregate ratios.</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../functions_and_dates/">Functions and Dates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 8 May 2026 16:33">Friday 8 May 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

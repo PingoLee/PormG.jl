@@ -2,6 +2,40 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+_bulk_update_fixture_id_type(pool) = pool isa PormG.PormGPostgres ? "SERIAL" : "INTEGER"
+
+function _ensure_bulk_update_fixture_schema!()
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  id_type = _bulk_update_fixture_id_type(pool)
+
+  PormG.ConnectionPool.fetch(pool, """
+  CREATE TABLE IF NOT EXISTS \"bulk_update_required_parent_scratch\" (
+    \"id\" $id_type PRIMARY KEY,
+    \"label\" TEXT NOT NULL
+  );
+  """)
+
+  PormG.ConnectionPool.fetch(pool, """
+  CREATE TABLE IF NOT EXISTS \"bulk_update_optional_parent_scratch\" (
+    \"id\" $id_type PRIMARY KEY,
+    \"label\" TEXT NOT NULL
+  );
+  """)
+
+  PormG.ConnectionPool.fetch(pool, """
+  CREATE TABLE IF NOT EXISTS \"bulk_update_payload_scratch\" (
+    \"id\" $id_type PRIMARY KEY,
+    \"label\" TEXT NOT NULL,
+    \"required_parent_id\" INTEGER NOT NULL REFERENCES \"bulk_update_required_parent_scratch\" (\"id\"),
+    \"optional_parent_id\" INTEGER REFERENCES \"bulk_update_optional_parent_scratch\" (\"id\"),
+    \"event_date\" DATE,
+    \"is_active\" BOOLEAN NOT NULL DEFAULT FALSE
+  );
+  """)
+
+  return nothing
+end
+
 # function ensure_integration_schema_current!()
 #   settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
 #   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
@@ -24,6 +58,8 @@ end
   # extracted to test_inserts.jl, which runs before this file in the suite.
   # This file now acts purely as a fixture seeder for the remaining test phases.
 
+  _ensure_bulk_update_fixture_schema!()
+
   # Clear all tables
   M.Driver_standings.objects.delete(allow_delete_all = true)
   M.Lap_times.objects.delete(allow_delete_all = true)
@@ -38,6 +74,9 @@ end
   M.Constructor.objects.delete(allow_delete_all = true)
   M.Result.objects.delete(allow_delete_all = true)
   M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+  M.Bulk_update_payload_scratch.objects.delete(allow_delete_all = true)
+  M.Bulk_update_optional_parent_scratch.objects.delete(allow_delete_all = true)
+  M.Bulk_update_required_parent_scratch.objects.delete(allow_delete_all = true)
 
   @testset "Single insertions" begin
 

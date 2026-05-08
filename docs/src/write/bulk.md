@@ -6,15 +6,17 @@ Bulk operations are designed for high-performance data manipulation of large dat
 - **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion.
 - **`bulk_update()`**: Efficient multi-row updates from a DataFrame using a mapping key.
 
-All three operations accept `show_query=:sql`, `show_query=:dict`, or `show_query=:params` to inspect the generated SQL without executing it — the same modes available on `list()` and `update()`. See [Query Inspection](../read/index.md#query-inspection) for a full description of each mode.
+All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:inspection`, `show_query=:params`, or `show_query=:none` to inspect the generated SQL without executing it. See [Query Inspection](../read/index.md#query-inspection) for a full description of each mode.
 
 ### The Mapping Adaptor Strategy ⭐
 
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
-- **Non-Destructive**: Your original DataFrame is never modified (no column renaming).
+- **Default-Safe**: With `copy=true` (the default), PormG deep-copies the input `DataFrame` before applying defaults, timestamps, or other ORM-side normalization.
 - **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
 - **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by name (case-insensitive).
 - **Centralized Validation**: Every row is automatically checked against the model's constraints (`max_length`, `nullability`, etc.) before reaching the database.
+
+If you are processing a very large frame and no longer need the original values, pass `copy=false` to let the bulk path mutate the caller's `DataFrame` in place and avoid the defensive deep copy.
 
 ---
 
@@ -274,7 +276,7 @@ bulk_copy(M.Result.objects, results_df, chunk_size=10000)
 
 ## Bulk Update
 
-`bulk_update()` allows you to update multiple records from a `DataFrame`. It typically uses a temporary table or a `values` join to update the database in a single transaction.
+`bulk_update()` updates multiple rows from a `DataFrame`. PormG matches update columns and row-identifying filters against model fields, validates every row up front, and then emits a multi-row `UPDATE` using a `VALUES` source (PostgreSQL) or `WITH source(...) AS (VALUES ...)` form (SQLite).
 
 ### Basic Usage
 
@@ -307,6 +309,15 @@ bulk_update(query, custom_df,
     filters=["record_id" => "id"]           # Map 'record_id' to table field 'id'
 )
 ```
+
+### Matching and Execution Rules
+
+- **Case-insensitive DataFrame matching**: PormG resolves `columns` and dynamic `filters` against `DataFrame` column names case-insensitively, so `ID` and `POINTS` work for model fields `id` and `points`.
+- **Primary key fallback**: If you omit `filters=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame`.
+- **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `filters=`. Pass every predicate you need through `filters=` rather than relying on prior `query.filter(...)` state.
+- **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
+- **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.
+- **Nullable columns accept all-`missing` batches**: If a nullable update column is `missing` for every targeted row, PormG writes SQL `NULL` for every row in that column.
 
 ### Use Cases
 
@@ -359,29 +370,33 @@ bulk_update(query, df,
 )
 ```
 
-### Atomicity and Transactions
+The `filters=` argument is the whole contract for the bulk-update `WHERE` clause. If you already used `query.filter(...)` to prepare the `DataFrame`, switch back to a fresh handler for the write or repeat the predicate in `filters=`.
 
-- **No Related Joins**: `bulk_update` filters currently do not support double-underscore lookups (e.g., `statusid__status`).
-  - **Workaround**: Filter the data in Julia before passing to `bulk_update`:
+### Join Limits
+
+- **Base-table lookup operators are supported**: Static filters such as `"points__@in" => [18, 25]` or `"statusid__@isnull" => true` are valid as long as they only reference columns on the model being updated.
+- **Relation traversals that require JOINs are rejected**: Filters such as `"statusid__status" => "Finished"` or `"raceid__circuitid__country" => "Italy"` are not allowed on `bulk_update()` because the `VALUES`-driven mutation path cannot safely merge in joined query state.
+- **Workaround**: Read the target rows through a normal joined query, mutate the resulting `DataFrame`, then write back through a fresh handler using primary-key filters only.
   
 ```julia
-query = M.Result.objects
-df = query.filter("statusid__status" => "Finished") |> DataFrame
+df = M.Result.objects.filter("statusid__status" => "Finished") |> DataFrame
 
 # Modify data
 for row in eachrow(df)
     row.points = row.points + 1
 end
 
-# Bulk update (filter already applied via DataFrame)
-bulk_update(query, df, columns=["points"], filters=["resultid"])
+# Bulk update by primary key on a fresh handler.
+# Do not rely on the earlier .filter(...) state surviving into bulk_update.
+bulk_update(M.Result.objects, df, columns=["points"], filters=["resultid"])
 ```
 
 ### Performance Characteristics
 
 - **Atomicity**: All rows updated together or none.
 - **Speed**: Much faster than individual `update()` calls (100-1000x for large datasets).
-- **Memory**: Entire DataFrame must fit in memory; use chunking for very large datasets:
+- **Memory**: By default PormG deep-copies the input frame to keep caller-owned data unchanged. Pass `copy=false` to reduce peak memory when you explicitly want in-place mutation.
+- **Chunking**: For very large datasets, process the `DataFrame` in chunks:
 
 ```julia
 # Process in chunks for huge datasets

@@ -87,6 +87,7 @@ An integrated switch available on all terminal methods to toggle between executi
 | `:execute` | Default. Executes the query and returns results. |
 | `:sql` | Returns the SQL string only. Minimal overhead for benchmarking. |
 | `:dict` | Returns full metadata dictionary (sql, parameters, dialect, model, operation, etc.). |
+| `:inspection` | Alias of `:dict`. Useful when you want the same rich metadata shape used by `inspect_query()`. |
 | `:params` | Returns the parameters array only. |
 | `:none` | Returns `nothing`. Zero-overhead mode for benchmarking the builder itself. |
 
@@ -360,8 +361,16 @@ result = bulk_insert(M.Driver, df)
 Updates multiple records in a single operation.
 
 ```julia
-bulk_update(M.Driver.objects, df_with_changes)
+bulk_update(M.Result.objects, df_with_changes, columns=["points"], filters=["resultid"])
 ```
+
+Key contracts:
+
+- DataFrame columns are matched case-insensitively for both `columns` and dynamic `filters`.
+- If `filters` is omitted, PormG infers the model primary key columns and uses those to identify rows.
+- `bulk_update()` rebuilds the `WHERE` clause from `filters=` and does not preserve filters that were already attached to the handler.
+- Static lookup filters on base-table columns are supported, but relation traversals that would require JOINs are rejected.
+- The same dry-run modes available elsewhere apply here: `:sql`, `:dict`, `:inspection`, `:params`, and `:none`.
 
 ### `bulk_copy`
 

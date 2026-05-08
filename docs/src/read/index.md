@@ -188,6 +188,7 @@ println(inspection[:operation])  # => :select
 | `:execute` | Default — executes the query and returns results. |
 | `:sql` | SQL string only (`String`). |
 | `:dict` | Full metadata dictionary (`Dict`) with keys `:sql_text` (the SQL string), `:parameters` (the bound values array), `:dialect`, and `:operation`. |
+| `:inspection` | Alias of `:dict`, provided for inspection-focused workflows that want the same metadata shape as `inspect_query()`. |
 | `:params` | Parameters array only. |
 | `:none` | `nothing` (zero-overhead benchmarking). |
 

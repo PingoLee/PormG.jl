@@ -46,6 +46,7 @@ makedocs(
             "Functions and Dates" => "read/functions_and_dates.md",
             "Subqueries and CTEs" => "read/subqueries_and_ctes.md",
             "Field Expressions" => "read/field_expressions.md",
+            "Window Functions" => "read/window_functions.md",
             "Q Objects" => "read/q_objects.md",
         ],
         "Import from Django" => "import_django.md",

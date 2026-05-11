@@ -55,6 +55,7 @@ include("querybuilder/ctes.jl")
 export OP
 export Q, Qor
 export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Case, Cast, Concat, Extract, To_char, Value
+export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim
 export Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 export With

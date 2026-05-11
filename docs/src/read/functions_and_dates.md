@@ -324,4 +324,5 @@ df = query |> DataFrame
 
 - **[Subqueries and CTEs](subqueries_and_ctes.md)** — Decompose complex queries with `WITH` clauses.
 - **[Field Expressions](field_expressions.md)** — Database-side arithmetic and field-to-field comparisons.
+- **[Window Functions](window_functions.md)** — `Rank`, `Lag`, `Lead`, and friends for per-row analytics.
 - **[Filters and Aggregates](filters_and_aggregates.md)** — Lookup operators and `HAVING` clause details.

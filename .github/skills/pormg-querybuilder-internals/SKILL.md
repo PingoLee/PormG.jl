@@ -1,6 +1,6 @@
 ---
 name: pormg-querybuilder-internals
-description: Work on QueryBuilder internals such as SQL generation, parameter routing, joins, CTEs, functions, and inspection paths, with deterministic unit coverage.
+description: Work on QueryBuilder internals in src/QueryBuilder.jl, src/querybuilder/, and src/Dialect.jl: SQL generation, parameter buckets, joins, CTEs, functions, deletion planning, and inspection paths, with deterministic unit coverage.
 user-invocable: true
 ---
 
@@ -16,10 +16,17 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 - Editing `src/QueryBuilder.jl`
 - Editing files under `src/querybuilder/`
+- Editing `src/Dialect.jl` when the change affects SQL clause or function rendering
 - Fixing SQL rendering regressions
 - Fixing parameter ordering and bucket routing
 - Fixing `With`, `cjoin`, `on`, `having`, alias promotion, and join planning internals
 - Working with `inspect_query`, `show_query`, and builder metadata
+
+## Core entry points
+
+- `src/QueryBuilder.jl` is the builder entry point and includes the specialized querybuilder modules
+- `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution.jl`, and `functions.jl` are the main internal coordination surfaces
+- Keep user-facing behavior expressed through `M.Model.objects`; reach into builder internals only for implementation work or deterministic unit coverage
 
 ## Boundary With Public API Work
 
@@ -74,7 +81,8 @@ Canonical unit files:
 Integration touchpoints:
 
 - `test/integration/test_having.jl`
-- `test/integration/test_joins_cte.jl`
+- `test/integration/test_cjoin.jl`
+- `test/integration/test_cte.jl`
 
 Testing boundary:
 
@@ -159,8 +167,9 @@ Integration regressions should still use the public fluent API unless the bug on
 ```powershell
 julia --project=. test/unit/test_alignment_sqlite.jl
 julia --project=. test/unit/test_inspect_query.jl
-julia -t auto --project=. test/integration/test_joins_cte.jl
 julia -t auto --project=. test/integration/test_having.jl
+julia -t auto --project=. test/integration/test_cjoin.jl
+julia -t auto --project=. test/integration/test_cte.jl
 ```
 
 ## Anti-Patterns

@@ -46,6 +46,10 @@ function _check_function(f::FObject)
   f.column = _check_function(f.column)
   return f
 end
+function _check_function(f::WindowFunction)
+  f.column !== nothing && (f.column = _check_function(f.column))
+  return f
+end
 function _check_function(f::Vector{FObject})
   for i in 1:size(f, 1)
     f[i] = _check_function(f[i])
@@ -510,6 +514,100 @@ end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # use logic to when funtion
   return _get_filter_query(v, instruc)
+end
+function _resolve_window_expression(v, instruc::SQLInstruction)
+  if v isa Symbol
+    return _resolve_window_expression(String(v), instruc)
+  elseif v isa String
+    isempty(v) && throw(ArgumentError("Window expression fields cannot be empty"))
+    return _get_select_query(_check_function(v), instruc)
+  elseif v isa SQLType
+    return _get_select_query(v, instruc)
+  else
+    throw(ArgumentError("Unsupported window expression $(repr(v)) of type $(typeof(v))"))
+  end
+end
+
+function _normalize_window_orientation(orientation::AbstractString)::String
+  normalized = uppercase(strip(String(orientation)))
+  normalized in ("ASC", "DESC") || throw(ArgumentError("Window ORDER BY orientation must be ASC or DESC, got $(repr(orientation))"))
+  return normalized
+end
+
+function _resolve_window_order(v::String, instruc::SQLInstruction)::String
+  isempty(v) && throw(ArgumentError("Window ORDER BY fields cannot be empty"))
+  orientation = startswith(v, "-") ? "DESC" : "ASC"
+  field = startswith(v, "-") ? v[2:end] : v
+  isempty(field) && throw(ArgumentError("Window ORDER BY fields cannot be empty"))
+  return string(_resolve_window_expression(field, instruc), " ", orientation)
+end
+
+function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::String
+  return string(_resolve_window_expression(v.field, instruc), " ", _normalize_window_orientation(v.orientation))
+end
+
+function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
+  parts = String[]
+
+  if !isempty(over.partition_by)
+    partition_sql = [_resolve_window_expression(field, instruc) for field in over.partition_by]
+    push!(parts, "PARTITION BY " * join(partition_sql, ", "))
+  end
+
+  if !isempty(over.order_by)
+    order_sql = [_resolve_window_order(order_field, instruc) for order_field in over.order_by]
+    push!(parts, "ORDER BY " * join(order_sql, ", "))
+  end
+
+  if over.frame !== nothing
+    instruc.connection isa PormGSQLite && throw(ArgumentError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(over.frame)) or use PostgreSQL."))
+    frame = strip(over.frame)
+    isempty(frame) && throw(ArgumentError("Window frame cannot be empty"))
+    push!(parts, frame)
+  end
+
+  return join(parts, " ")
+end
+
+function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{Nothing,String}=nothing)
+  if value isa Missing || value === nothing || value == "NULL"
+    return "NULL"
+  elseif value isa SQLType
+    return _get_select_query(value, instruc)
+  else
+    return add_parameter!(instruc, value; sql_type=sql_type === nothing ? _infer_parameter_sql_type(value, instruc) : sql_type)
+  end
+end
+
+function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  over_sql = _build_over_clause(v.over, instruc)
+  func_name = Symbol(v.function_name)
+
+  if v.column === nothing
+    v.function_name in ["LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE"] &&
+      throw(ArgumentError("$(v.function_name) requires a column argument; got nothing"))
+    return getfield(Dialect, func_name)(over_sql, instruc.connection)
+  end
+
+  resolved_column = _resolve_window_expression(v.column, instruc)
+
+  if v.function_name in ["LAG", "LEAD"]
+    resolved_kwargs = Dict{String,Any}()
+    if haskey(v.kwargs, "offset")
+      resolved_kwargs["offset"] = _resolve_window_kwarg(v.kwargs["offset"], instruc; sql_type="integer")
+    end
+    if haskey(v.kwargs, "default")
+      resolved_kwargs["default"] = _resolve_window_kwarg(v.kwargs["default"], instruc)
+    end
+    return getfield(Dialect, func_name)(resolved_column, over_sql, resolved_kwargs, instruc.connection)
+  elseif v.function_name == "NTH_VALUE"
+    n = get(v.kwargs, "n", nothing)
+    n isa Integer || throw(ArgumentError("NthValue requires a positive integer n"))
+    n <= 0 && throw(ArgumentError("NthValue n must be a positive integer"))
+    return getfield(Dialect, func_name)(resolved_column, n, over_sql, instruc.connection)
+  else
+    return getfield(Dialect, func_name)(resolved_column, over_sql, instruc.connection)
+  end
 end
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # Parameterize scalar kwargs instead of rendering them as SQL literals.

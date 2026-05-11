@@ -380,6 +380,9 @@ GROUP BY 1, 2, 3, 4   -- groups by non-aggregate columns
 
 You do **not** write `GROUP BY` manually — PormG handles it.
 
+> [!TIP]
+> Window functions (`Rank`, `RowNumber`, `Lag`, …) can coexist with aggregates in the same `values()` call. PormG keeps window aliases out of `GROUP BY` automatically. See [Window Functions](window_functions.md).
+
 ---
 
 ## HAVING Clauses

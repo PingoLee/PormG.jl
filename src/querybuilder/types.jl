@@ -21,6 +21,15 @@ const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF}
 """Column references: fields, functions, strings, or vectors of operations."""
 const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,Vector{Union{String,SQLTypeF}}}
 
+"""Window PARTITION BY expressions."""
+const WindowPartitionPart = Union{String,SQLTypeField,SQLTypeFunction,SQLTypeF}
+
+"""Window ORDER BY expressions."""
+const WindowOrderPart = Union{String,SQLTypeOrder}
+
+"""Window function argument expressions."""
+const WindowColumnPart = Union{Nothing,String,SQLTypeField,SQLTypeText,SQLTypeFunction,SQLTypeF}
+
 """Optional strings (often used for aliases or configs)."""
 const OptionalString = Union{String,Nothing}
 
@@ -464,6 +473,68 @@ function Base.deepcopy(f::FObject)
     _as=f._as,
     kwargs=deepcopy(f.kwargs)
   )
+end
+
+@kwdef mutable struct WindowSpec <: SQLType
+  partition_by::Vector{WindowPartitionPart} = WindowPartitionPart[]
+  order_by::Vector{WindowOrderPart} = WindowOrderPart[]
+  frame::OptionalString = nothing
+end
+function Base.deepcopy(w::WindowSpec)
+  return WindowSpec(
+    partition_by=deepcopy(w.partition_by),
+    order_by=deepcopy(w.order_by),
+    frame=w.frame
+  )
+end
+
+@kwdef mutable struct WindowFunction <: SQLTypeFunction
+  function_name::String
+  column::WindowColumnPart = nothing
+  over::WindowSpec
+  agregate::Bool = false
+  formater::Union{Nothing,Function} = nothing
+  _as::OptionalString = nothing
+  kwargs::Dict{String,Any} = Dict{String,Any}()
+end
+function Base.deepcopy(f::WindowFunction)
+  return WindowFunction(
+    function_name=f.function_name,
+    column=deepcopy(f.column),
+    over=deepcopy(f.over),
+    agregate=f.agregate,
+    formater=f.formater,
+    _as=f._as,
+    kwargs=deepcopy(f.kwargs)
+  )
+end
+
+_is_agg(::WindowFunction) = false
+_is_window_expr(::WindowFunction) = true
+_is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_expr(f.operand)
+_is_window_expr(f::FObject) = _is_window_expr(f.column)
+_is_window_expr(values::Vector) = any(_is_window_expr, values)
+_is_window_expr(::Any) = false
+
+function Base.:+(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+end
+function Base.:-(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+end
+function Base.:*(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+end
+function Base.:/(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
+  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+end
+
+function Base.:+(operand::Union{Integer,Float64}, f::WindowFunction)
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=false)
+end
+
+function Base.:*(operand::Union{Integer,Float64}, f::WindowFunction)
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=false)
 end
 
 # Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)

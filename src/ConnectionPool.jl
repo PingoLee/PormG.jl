@@ -52,6 +52,22 @@ function _sqlite_with_retry(op::Function)
   end
 end
 
+function _unwrap_async_exception(exception)
+  current = exception
+  while true
+    if current isa TaskFailedException
+      nested = current.task.exception
+      nested === current && return current
+      current = nested
+    elseif current isa CompositeException && length(current.exceptions) == 1
+      nested = current.exceptions[1]
+      nested === current && return current
+      current = nested
+    else
+      return current
+    end
+  end
+end
 #
 # Connection Pool Implementation
 #
@@ -577,12 +593,8 @@ function await_result(ft::FetchTask)
     return result
   catch e
     ft.completed = true
-    # Unwrap TaskFailedException so callers see the real SQL/LibPQ error
-    if e isa TaskFailedException
-      root = e.task.exception
-      throw(root)
-    end
-    rethrow(e)
+    root = _unwrap_async_exception(e)
+    root === e ? rethrow() : throw(root)
   finally
     # Only release connection if we're not in a transaction context
     # Transaction context manages its own connection lifecycle
@@ -682,7 +694,8 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   try
     return await_result(fetch_task)
   catch e    
-    if is_connection_error(e, connection)
+    root = _unwrap_async_exception(e)
+    if is_connection_error(root, connection)
       @warn "Lost connection to database. Attempting to reconnect..."
       # Get a fresh connection and retry
       new_conn = reconnect_db(connection, fetch_task.conn)
@@ -691,11 +704,7 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
         return await_result(retry_task)
       end
     end
-    # Short-circuit composite errors to the underlying DB cause when present
-    if e isa CompositeException && length(e.exceptions) == 1
-      throw(e.exceptions[1])
-    end
-    throw(e)
+    throw(root)
   end
 end
 fetch(settings::SQLConn, sql::String; conn::Union{Nothing, LibPQ.Connection, SQLite.DB} = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
@@ -958,6 +967,7 @@ function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite}
     
     return result
   catch e
+    root = _unwrap_async_exception(e)
     # Rollback on error if transaction actually started
     if tx_started
       try
@@ -975,7 +985,7 @@ function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite}
         end
       end
     end
-    rethrow(e)
+    root === e ? rethrow() : throw(root)
   finally
     release_connection(pool, conn)
   end

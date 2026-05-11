@@ -227,7 +227,9 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
     on_delete = SET_NULL,
     null = true),
   event_date = Models.DateField(null = true),
-  is_active = Models.BooleanField(default = false)
+  is_active = Models.BooleanField(default = false),
+  event_time = Models.DateTimeField(null = true),
+  nullable_int = Models.IntegerField(null = true)
 )
 
 end

@@ -82,6 +82,70 @@ end
 function Min(x)
   return FObject(function_name = "MIN", column = x, agregate = true)
 end
+
+function _window_part_vector(value, part_name::String)::Vector{WindowPartitionPart}
+  value === nothing && return WindowPartitionPart[]
+  values = value isa Tuple ? collect(value) : value isa AbstractVector ? collect(value) : [value]
+  parts = WindowPartitionPart[]
+  for item in values
+    item isa Symbol && (item = String(item))
+    item isa WindowPartitionPart || throw(ArgumentError("WindowOver $part_name entries must be strings, SQL fields, SQL functions, or F expressions. Got $(typeof(item))."))
+    push!(parts, item)
+  end
+  return parts
+end
+
+function _window_order_vector(value)::Vector{WindowOrderPart}
+  value === nothing && return WindowOrderPart[]
+  values = value isa Tuple ? collect(value) : value isa AbstractVector ? collect(value) : [value]
+  parts = WindowOrderPart[]
+  for item in values
+    item isa Symbol && (item = String(item))
+    item isa WindowOrderPart || throw(ArgumentError("WindowOver order_by entries must be strings or SQLOrder objects. Got $(typeof(item))."))
+    push!(parts, item)
+  end
+  return parts
+end
+
+function WindowOver(partition_by, order_by=WindowOrderPart[]; frame::OptionalString=nothing)
+  return WindowSpec(
+    partition_by=_window_part_vector(partition_by, "partition_by"),
+    order_by=_window_order_vector(order_by),
+    frame=frame
+  )
+end
+function WindowOver(; partition_by=WindowPartitionPart[], order_by=WindowOrderPart[], frame::OptionalString=nothing)
+  return WindowOver(partition_by, order_by; frame=frame)
+end
+
+Rank(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="RANK", column=nothing, over=over)
+Rank(over::WindowSpec) = Rank(over=over)
+DenseRank(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="DENSE_RANK", column=nothing, over=over)
+DenseRank(over::WindowSpec) = DenseRank(over=over)
+RowNumber(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="ROW_NUMBER", column=nothing, over=over)
+RowNumber(over::WindowSpec) = RowNumber(over=over)
+
+function Lag(x::WindowColumnPart; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
+  offset < 0 && throw(ArgumentError("Lag offset must be a non-negative integer"))
+  kwargs = Dict{String,Any}("offset" => offset)
+  default !== nothing && (kwargs["default"] = default)
+  return WindowFunction(function_name="LAG", column=x, over=over, kwargs=kwargs)
+end
+
+function Lead(x::WindowColumnPart; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
+  offset < 0 && throw(ArgumentError("Lead offset must be a non-negative integer"))
+  kwargs = Dict{String,Any}("offset" => offset)
+  default !== nothing && (kwargs["default"] = default)
+  return WindowFunction(function_name="LEAD", column=x, over=over, kwargs=kwargs)
+end
+
+FirstValue(x::WindowColumnPart; over::WindowSpec=WindowOver()) = WindowFunction(function_name="FIRST_VALUE", column=x, over=over)
+LastValue(x::WindowColumnPart; over::WindowSpec=WindowOver()) = WindowFunction(function_name="LAST_VALUE", column=x, over=over)
+function NthValue(x::WindowColumnPart, n::Integer; over::WindowSpec=WindowOver())
+  n <= 0 && throw(ArgumentError("NthValue n must be a positive integer"))
+  return WindowFunction(function_name="NTH_VALUE", column=x, over=over, kwargs=Dict{String,Any}("n" => n))
+end
+
 """
     Value(x)
 

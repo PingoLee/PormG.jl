@@ -359,12 +359,12 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     return length(result) > 0
   catch e
     @pormg_debug false
-    # Re-throw validation/argument errors so user sees helpful messages
-    if e isa ArgumentError
-      rethrow(e)
-    end
+    # Log for observability, then rethrow unconditionally.
+    # Silently returning false would mask connection failures, SQL errors, and
+    # permission errors as "does not exist", which is incorrect and dangerous.
+    # The only legitimate false return is from `length(result) > 0` above.
     @error "Error in do_exists for model $(oq.object.model.name): $e"
-    return false
+    rethrow(e)
   end
 end
 

@@ -466,7 +466,9 @@ PormG.config["default"] = MockSettings
     @test contains(sql, "\"R1\".\"driver_id\" = \"Tb\".\"id\"")
     # Scalar filter before EXISTS must be AND-connected, not absorbed into the subquery.
     # Django-compatible pattern: WHERE "Tb"."nationality" = $1 AND EXISTS (... LIMIT 1)
-    @test contains(sql, "AND EXISTS (SELECT 1")
+    # Normalize whitespace (the builder emits " AND \n   " between conditions).
+    normalized_sql = replace(sql, r"\s+" => " ")
+    @test contains(normalized_sql, "AND EXISTS (SELECT 1")
     # Scalar filter remains parameterized; nationality filter is $1, icontains is $2
     @test contains(sql, "\"R1\".\"body\" ILIKE \$2")
     @test contains(sql, "LIMIT 1)")

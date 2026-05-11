@@ -13,6 +13,7 @@ This section covers the read side of PormG — querying, filtering, joining, agg
 | [Functions and Dates](functions_and_dates.md) | SQL functions (`Case`, `Coalesce`, `Concat`, …), date extraction, and math transforms. |
 | [Subqueries and CTEs](subqueries_and_ctes.md) | `IN` subqueries, `With(...)` CTEs, deep join paths, and CTE + cjoin combinations. |
 | [Field Expressions](field_expressions.md) | `F()` for field-to-field comparisons, arithmetic, aggregate ratios, aliasing, and atomic updates. |
+| [Window Functions](window_functions.md) | `Rank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — per-row analytics without collapsing rows. |
 | [Q Objects](q_objects.md) | Complex boolean logic with `Q` (AND), `Qor` (OR), nesting, dynamic construction, and `F()` integration. |
 
 ---

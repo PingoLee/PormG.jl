@@ -298,3 +298,60 @@ end
     PormG.config["default"].change_data = previous_change_data
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# do_exists error-propagation contract
+#
+# Before the fix, do_exists caught ALL exceptions and returned false — meaning
+# a connection failure, SQL error, or permission denial was silently reported
+# as "does not exist". That masks real infrastructure problems.
+#
+# The correct contract is:
+#   • Return false only when the query executes successfully and yields 0 rows.
+#   • Rethrow every other exception so the caller can handle real failures.
+#
+# The MockPostgres connection registered in this file has no real backend, so
+# any fetch() call inside do_exists will raise an exception. Before the fix,
+# .exists() would swallow that and return false. After the fix, it rethrows.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "do_exists rethrows database errors instead of returning false" begin
+  q = TestDriver.objects.filter("forename" => "Lewis")
+
+  # The MockPostgres backend has no real connection, so fetch() inside
+  # do_exists raises a backend exception (not an ArgumentError).
+  # The fixed implementation must propagate that exception rather than
+  # swallowing it and returning false.
+  err = try
+    q.exists()
+    nothing
+  catch e
+    e
+  end
+
+  # Must propagate — any exception is acceptable here, but it must not be
+  # nothing (which would indicate the call silently returned false).
+  @test err !== nothing
+  # Must NOT be an ArgumentError produced by ORM query validation — those
+  # are intentionally propagated by both old and new code. The backend error
+  # from the mock connection is a different exception type.
+  @test !(err isa ArgumentError)
+end
+
+@testset "do_exists propagates ArgumentError from ORM validation" begin
+  # An __@in subquery that projects two columns is caught by ORM validation
+  # and raises ArgumentError. Both the old and new code must propagate this.
+  # This test ensures the fix did not inadvertently swallow ArgumentErrors.
+  subquery = TestDriver.objects.values("id", "forename")
+  q = TestDriver.objects.filter("id__@in" => subquery)
+
+  err = try
+    q.exists()
+    nothing
+  catch e
+    e
+  end
+
+  @test err isa ArgumentError
+  message = sprint(showerror, err)
+  @test occursin("requires a subquery that returns exactly one column", message)
+end

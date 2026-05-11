@@ -30,6 +30,7 @@ end
     @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")

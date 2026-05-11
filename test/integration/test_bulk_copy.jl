@@ -323,11 +323,7 @@ end
 
     # Verify: 2) Data round-trips correctly without SQL execution
     results = query.order_by("test_result") |> DataFrame
-    for (i, vector) in enumerate(injection_vectors)
-        retrieved = results[i, :name]
-        expected = vector.name
-        @test retrieved == expected
-    end
+    @test collect(results.name) == [vector.name for vector in injection_vectors]
 
     # Verify: 3) Attempt to filter by one of the suspicious strings succeeds
     suspicious_name = "'; DROP TABLE just_a_test_deletion; --"

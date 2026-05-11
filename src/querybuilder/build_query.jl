@@ -29,7 +29,9 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     end
 
     if isa(v_copy.field, Union{SQLTypeFunction, SQLTypeF})
-      if v_copy.field.agregate == false
+      if _is_window_expr(v_copy.field)
+        nothing
+      elseif v_copy.field.agregate == false
         push!(instruc.group, i |> string)
       else
         instruc.agregate = true

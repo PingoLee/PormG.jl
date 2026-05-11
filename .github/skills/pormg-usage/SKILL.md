@@ -1,6 +1,6 @@
 ---
 name: pormg-usage
-description: Use PormG.jl to define models, manage migrations, and write expressive database queries using the Django-inspired fluent API in Julia.
+description: Answer PormG usage questions and write consumer-style examples for model definitions, @import_models, migration flow, fluent queries, joins, F/Q/Qor expressions, and bulk operations.
 user-invocable: true
 ---
 

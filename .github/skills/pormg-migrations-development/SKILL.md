@@ -1,6 +1,6 @@
 ---
 name: pormg-migrations-development
-description: Implement or refactor PormG migration behavior, history, dry-run, status, and destructive-safety workflows with matching docs and regression tests.
+description: Implement or refactor migration planning and execution in src/Migrations.jl and src/migrations/: schema reconciliation, migration history, dry-run/status, destructive guards, migration docs, and CI workflows.
 user-invocable: true
 ---
 
@@ -15,11 +15,18 @@ This skill is for the migration subsystem itself, not for ordinary ORM query beh
 ## Use This Skill For
 
 - Editing `src/Migrations.jl`
+- Editing `src/Generator.jl` when the work affects migration/bootstrap setup
 - Editing `src/migrations/introspection.jl`
 - Editing `src/migrations/planner.jl`
 - Editing `src/migrations/runner.jl`
 - Updating migration docs and migration-focused tests
 - Investigating `init_migrations()`, `status()`, `dry_run()`, `makemigrations()`, `migrate()`, `mark_applied()`, `mark_failed()`, and `remove_migration_record()`
+
+## Bootstrap and system model
+
+- Treat `Generator.create_db_folder_and_yml()` as the expected bootstrap path for creating `db/connection.yml` before migration workflows touch project config
+- PormG uses a state-based migration engine that reconciles current Julia model state against the live database schema via introspection
+- Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior rather than implying Django-style completeness
 
 ## Core Rules
 
@@ -38,6 +45,8 @@ Keep docs, tests, and implementation aligned with this sequence:
 4. `dry_run()`
 5. `migrate()`
 
+`status()` and `dry_run()` are part of the normal operator flow, not optional extras.
+
 ### Destructive actions
 
 - If `dry_run()` reports destructive SQL, require explicit `destructive=true`
@@ -48,6 +57,11 @@ Keep docs, tests, and implementation aligned with this sequence:
 
 - Do not document or test `migrate_to(version)` as supported unless implementation is completed
 - If a feature is partial, keep the contract explicit instead of implying Django-like completeness
+
+### CI and automation
+
+- Use `interactive=false` to bypass rename confirmation prompts in non-interactive environments
+- If the generated plan contains destructive SQL, CI must opt in explicitly with `destructive=true`
 
 ## Test Strategy
 
@@ -99,6 +113,7 @@ Use unit tests when validating:
 - Keep migration docs synchronized with implementation in the same change when practical
 - If docs claim a public API, verify it exists in `src/Migrations.jl` and is exercised by at least one test
 - Keep limitations explicit, especially for destructive rollback and unsupported targeted execution paths
+- Build docs when migration-facing public behavior or examples change
 
 ## Workflow
 

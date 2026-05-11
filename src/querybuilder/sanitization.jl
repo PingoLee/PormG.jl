@@ -86,6 +86,30 @@ function _is_integer_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("INTEGER", "BIGINT")
 end
 
+function _is_constrained_relation_field(f_meta)::Bool
+    return hasfield(typeof(f_meta), :to) && hasfield(typeof(f_meta), :db_constraint) && f_meta.db_constraint
+end
+
+function _is_zero_sentinel(value)::Bool
+    if value isa Integer
+        return value == 0
+    elseif value isa Decimals.Decimal
+        try
+            return Int64(value) == 0
+        catch e
+            e isa Exception || rethrow()
+            return false
+        end
+    elseif value isa AbstractString
+        stripped = strip(value)
+        isempty(stripped) && return false
+        parsed = tryparse(Int64, stripped)
+        return parsed !== nothing && parsed == 0
+    end
+
+    return false
+end
+
 function _is_decimal_field(f_meta)::Bool
     return getproperty(f_meta, :type) == "DECIMAL"
 end
@@ -367,6 +391,16 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
         _validation_error(operation, model, field, "null values are not allowed")
     elseif value === nothing || ismissing(value)
         return true
+    end
+
+    if _is_constrained_relation_field(f_meta) && _is_zero_sentinel(value)
+        _validation_error(
+            operation,
+            model,
+            field,
+            "foreign key constraint fields do not accept the 0 sentinel";
+            suggestion="use nothing or missing to write NULL, or pass a real related primary key"
+        )
     end
     
     # 4. Skip further validation for SQL expressions (F-expressions, Functions)

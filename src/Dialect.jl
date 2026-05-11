@@ -120,6 +120,80 @@ function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MIN($(column))"
 end
 
+const SQLITE_WINDOW_MIN_VERSION = 3025000
+
+function _assert_sqlite_window_support(conn::PormGSQLite)
+  version_number = SQLite.C.sqlite3_libversion_number()
+  if version_number < SQLITE_WINDOW_MIN_VERSION
+    version_text = unsafe_string(SQLite.C.sqlite3_libversion())
+    throw(ArgumentError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $version_text."))
+  end
+  return nothing
+end
+
+function _window_no_column(function_name::String, over_sql::String)
+  return "$(function_name)() OVER ($(over_sql))"
+end
+
+function _window_column(function_name::String, column::String, over_sql::String)
+  return "$(function_name)($(column)) OVER ($(over_sql))"
+end
+
+function _window_offset(function_name::String, column::String, over_sql::String, kwargs::Dict{String,Any})
+  args = String[column]
+  haskey(kwargs, "offset") && push!(args, string(kwargs["offset"]))
+  haskey(kwargs, "default") && push!(args, string(kwargs["default"]))
+  return "$(function_name)($(join(args, ", "))) OVER ($(over_sql))"
+end
+
+RANK(over_sql::String, conn::PormGPostgres) = _window_no_column("RANK", over_sql)
+function RANK(over_sql::String, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_no_column("RANK", over_sql)
+end
+
+DENSE_RANK(over_sql::String, conn::PormGPostgres) = _window_no_column("DENSE_RANK", over_sql)
+function DENSE_RANK(over_sql::String, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_no_column("DENSE_RANK", over_sql)
+end
+
+ROW_NUMBER(over_sql::String, conn::PormGPostgres) = _window_no_column("ROW_NUMBER", over_sql)
+function ROW_NUMBER(over_sql::String, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_no_column("ROW_NUMBER", over_sql)
+end
+
+LAG(column::String, over_sql::String, kwargs::Dict{String,Any}, conn::PormGPostgres) = _window_offset("LAG", column, over_sql, kwargs)
+function LAG(column::String, over_sql::String, kwargs::Dict{String,Any}, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_offset("LAG", column, over_sql, kwargs)
+end
+
+LEAD(column::String, over_sql::String, kwargs::Dict{String,Any}, conn::PormGPostgres) = _window_offset("LEAD", column, over_sql, kwargs)
+function LEAD(column::String, over_sql::String, kwargs::Dict{String,Any}, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_offset("LEAD", column, over_sql, kwargs)
+end
+
+FIRST_VALUE(column::String, over_sql::String, conn::PormGPostgres) = _window_column("FIRST_VALUE", column, over_sql)
+function FIRST_VALUE(column::String, over_sql::String, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_column("FIRST_VALUE", column, over_sql)
+end
+
+LAST_VALUE(column::String, over_sql::String, conn::PormGPostgres) = _window_column("LAST_VALUE", column, over_sql)
+function LAST_VALUE(column::String, over_sql::String, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return _window_column("LAST_VALUE", column, over_sql)
+end
+
+NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGPostgres) = "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
+function NTH_VALUE(column::String, n::Integer, over_sql::String, conn::PormGSQLite)
+  _assert_sqlite_window_support(conn)
+  return "NTH_VALUE($(column), $(n)) OVER ($(over_sql))"
+end
+
 function VALUE(value::Nothing, conn::PormGPostgres)
   return "NULL"
 end

@@ -13,7 +13,7 @@ include("common_delete_setup.jl")
     # ── Phase 0: Migration Preflight + Schema Bootstrap ──────────────
     # Validates the migration engine on the selected DB starting from
     # empty, then bootstraps the real schema so fixture seeding can proceed.
-    # @testset "Migration Bootstrap"          begin include("test_migration_bootstrap.jl") end
+    @testset "Migration Bootstrap"          begin include("test_migration_bootstrap.jl") end
 
     # ── Phase 1: Fixture Seeding ─────────────────────────────────────
     # test_inserts.jl runs first: it exercises insert-specific behavioral
@@ -31,6 +31,7 @@ include("common_delete_setup.jl")
     @testset "Deletes"                      begin include("test_deletes.jl")            end
     @testset "Bulk copy"                    begin include("test_bulk_copy.jl")          end
     @testset "SQL Functions"                begin include("test_sql_functions.jl")      end  
+    @testset "Window Functions"             begin include("test_window_functions.jl")   end
 
     # ── Phase 3: Advanced Features ───────────────────────────────────
     @testset "Reverse Joins & on()"         begin include("test_reverse_joins.jl")      end

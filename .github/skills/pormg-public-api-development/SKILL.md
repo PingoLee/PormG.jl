@@ -1,6 +1,6 @@
 ---
 name: pormg-public-api-development
-description: Implement or refactor PormG features through the public API, write regression tests, and keep user-facing examples aligned with the fluent query surface.
+description: Implement or refactor user-visible PormG ORM behavior through M.Model.objects, model definitions and loading, field validation contracts, docs/examples, README content, and integration tests.
 user-invocable: true
 ---
 
@@ -19,9 +19,10 @@ Use `pormg-querybuilder-internals` instead when the task centers on `src/QueryBu
 ## Use This Skill For
 
 - Implementing feature work in `src/` when the change is expressed through the public ORM surface rather than the migration subsystem or low-level QueryBuilder internals
+- Editing `src/Models.jl`, `src/models/fields.jl`, `ext/PormGReviseExt.jl`, or other public-facing model/loading code
 - Fixing ORM regressions discovered in integration tests
 - Writing or refactoring tests in `test/integration/`
-- Writing examples and docs that should mirror package usage
+- Writing examples and docs in `README.MD`, `src/*.md`, and `docs/` that should mirror package usage
 - Deciding whether a regression belongs in unit tests, integration tests, or both
 
 ## Public API First
@@ -80,6 +81,54 @@ Use internal or function-style helpers only when the test is explicitly about in
 - `bulk_insert`, `bulk_update`, `bulk_copy` for bulk APIs
 - direct `PormG.QueryBuilder` imports in unit tests targeting builders, buckets, or planner behavior
 
+## Query, model, and field contracts
+
+### Query construction contracts
+
+- Prefer the pipe operator `|>` when it makes multi-step query construction easier to read
+- Use `String` keys for dynamic filter field names
+- Use double underscore `__` for joins and lookups
+- Use `__@operator` for modifier lookups
+- Use `Qor` for OR logic; do not rely on bitwise `|` or `&` for query composition
+- Prefer `F("fieldname")` for database-side field references in updates, arithmetic projections, and field-to-field comparisons
+- Avoid `query.filter(F("points") > 20)` when the scalar predicate is clearer as `query.filter("points__@gt" => 20)`
+- `DataFrame` is the primary output format for analytical queries, while `list()` returns `Vector{Dict{Symbol, Any}}`
+
+### Model loading and naming contracts
+
+- Define models with `Models.Model` and call `Models.set_models(@__MODULE__, @__DIR__)` after the module when using the classic model-loading path
+- Keep Julia model bindings capitalized even when SQL tables are snake_case
+- Prefer `PormG.@import_models "path/to/models.jl" my_models` for hot-reload-friendly model loading
+- If defining models inline rather than in a separate file, use `PormG.@models_module ... begin ... end`
+
+### Field validation contracts
+
+- Validation happens at the ORM layer before SQL generation
+- `FloatField` accepts finite numeric values or strictly valid numeric strings, including scientific notation
+- `FloatField` rejects `Inf`, `-Inf`, `NaN`, and garbage numeric strings
+- `DecimalField` validates `max_digits` and `decimal_places` in Julia before the query reaches the database
+- `DateTimeField.default` stores `Union{ZonedDateTime, DateTime, Nothing}`
+- A naive Julia `DateTime` currently serializes as UTC through the default formatter path
+- Prefer `ZonedDateTime` when the source value has a real civil timezone
+- `auto_now` and `auto_now_add` attach `settings.time_zone` to generated values
+- `DateField` accepts `Date`, `DateTime`, `ZonedDateTime`, and `YYYY-MM-DD` strings, coercing temporal values to their calendar date
+
+## Documentation and example rules
+
+- Do not use generic examples such as `User`, `Post`, `Foo`, or `Bar`
+- User-facing docs and examples must use the Formula 1 dataset from `test/integration/db_sl/models.jl` and `test/integration/db_2/`
+- Prefer scenario-based examples that mirror realistic questions such as race wins, standings, or constructor comparisons
+- Explicitly demonstrate join behavior through double-underscore relations when relevant
+- Refer to the integration tests as the canonical example source for public behavior
+- When documenting complex queries, briefly explain the generated SQL shape
+- Keep limitations explicit instead of implying unsupported features are complete
+
+### Auxiliary mechanics-only models
+
+- `M.Just_a_test_deletion`: CRUD and deletion safety tests
+- `M.Just_a_nested_roll_back`: transaction rollback and savepoint tests
+- `M.New_join_position`: specialized join-mechanics tests
+
 ## Test Placement Rules
 
 ### Integration tests
@@ -134,6 +183,7 @@ Add both:
 - Keep Julia model bindings capitalized even when SQL tables are snake_case
 - Prefer expressive ORM filters and joins over raw SQL
 - Preserve async-first assumptions and transaction safety
+- When importing Formula 1 fixtures, normalize bad source values in the import or test layer rather than weakening field contracts
 
 ## Workflow
 
@@ -150,7 +200,8 @@ Add both:
 julia --project=. test/runtests.jl
 julia -t auto --project=. test/integration/runtests.jl
 julia -t auto --project=. test/integration/test_bulk_copy.jl
-julia -t auto --project=. test/integration/test_joins_cte.jl
+$env:PORMG_DB="db_sl"; julia -t 1 --project=. test/integration/runtests.jl
+julia --project=. docs/make.jl
 ```
 
 ## Anti-Patterns

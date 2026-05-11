@@ -29,9 +29,25 @@ function _ensure_bulk_update_fixture_schema!()
     \"required_parent_id\" INTEGER NOT NULL REFERENCES \"bulk_update_required_parent_scratch\" (\"id\"),
     \"optional_parent_id\" INTEGER REFERENCES \"bulk_update_optional_parent_scratch\" (\"id\"),
     \"event_date\" DATE,
-    \"is_active\" BOOLEAN NOT NULL DEFAULT FALSE
+    \"is_active\" BOOLEAN NOT NULL DEFAULT FALSE,
+    \"event_time\" TIMESTAMP,
+    \"nullable_int\" INTEGER
   );
   """)
+
+  # Add new columns to any pre-existing table that was created before event_time / nullable_int
+  # were introduced. PostgreSQL supports ADD COLUMN IF NOT EXISTS directly. SQLite 3.37+ does
+  # too, but older versions require a try/catch.
+  for col_sql in [
+    "ALTER TABLE \"bulk_update_payload_scratch\" ADD COLUMN IF NOT EXISTS \"event_time\" TIMESTAMP",
+    "ALTER TABLE \"bulk_update_payload_scratch\" ADD COLUMN IF NOT EXISTS \"nullable_int\" INTEGER",
+  ]
+    try
+      PormG.ConnectionPool.fetch(pool, col_sql)
+    catch
+      # Column already exists on this backend version — safe to ignore.
+    end
+  end
 
   return nothing
 end

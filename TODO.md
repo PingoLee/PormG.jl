@@ -8,26 +8,17 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - **Context**: Currently, `bulk_update(filters=...)` handles both DataFrame column mapping and static SQL filters. While flexible, this leads to ambiguity and potential breaking changes if column names overlap with model fields.
   - **Goal**: Introduce a clearer separation (e.g., `mapping` vs `filters` or explicitly typed objects) to improve type safety and readability without breaking legacy support.
 
-- [ ] **Advanced Query Expressions**
-  - [ ] Support for **Subqueries** (using `OuterRef`).
-  - [ ] **Window Functions** (`OVER`, `RANK`, `ROW_NUMBER`).
-  - [ ] **Conditional Expressions** (`Case`, `When`) improvements (ensure full PostgreSQL compliance).
-  - [ ] **F-Expression** expansion (bitwise operations, complex transformations).
-    - [ ] **Date/Time Functions**: add support to `values("fim" => F("transferencia__data_envio__@date") + Day(30))`
+- [/] **Advanced Query Expressions**
+  - [x] Support for **Subqueries** (using `OuterRef`). — Correlated `Exists(subquery)`, `OuterRef("field")`, and `__@in` subquery membership tests are fully implemented and tested. Gaps: no scalar subqueries, no UNION/set operations.
+  - [x] **Window Functions** (`OVER`, `RANK`, `ROW_NUMBER`). — Implemented inline `OVER` support with `WindowOver`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, and `NthValue`. Remaining gaps: aggregate-over-window helpers, named `WINDOW` clauses, and SQLite explicit frame support.
+  - [x] **Conditional Expressions** (`Case`, `When`). — Fully implemented. Works in `values()`, `filter()`, and `update()` SET clauses; nests correctly inside aggregates like `Sum(Case([...]))`.
+  - [/] **F-Expression** expansion.
+    - [x] Arithmetic (`+`, `-`, `*`, `/`) and comparison operators (`==`, `>`, `<=`, etc.) — fully implemented, including field-to-field arithmetic and chaining.
+    - [ ] **Bitwise operations** (`&`, `|`, `^`, `<<`, `>>`) — not implemented.
+    - [x] **Date/Time extraction**: `Extract()`, `@date`, `@year`, `@month`, `@day`, `@quarter` lookups — implemented and dialect-aware.
+    - [/] **Date arithmetic with duration types**: Integer-offset `F("date") + 30` works. Explicit Julia duration types like `Day(30)` / `Interval()` are not recognized — arithmetic relies on bare integers interpreted as days by the dialect.
     - [ ] **Extend test coverage** for date/time functions to ensure cross-database compatibility and correct SQL generation.
 
-- [ ] **Performance & Type Stability**
-  - **Context**: Current `list()` returns `Vector{Dict{Symbol, Any}}`. While flexible for JSON-first SPAs, this triggers dynamic dispatch in Julia, hitting a "performance ceiling" for high-throughput Nitro.jl applications.
-  - **Goal**: Allow queries to return concrete Julia `struct` types instead of dynamically typed Dictionaries.
-  - [ ] **Strongly Typed Model Returns (Nitro compatibility)**: Implement `list_as(query, MyModel)` or similar to map DB results directly to typed structs.
-  - [ ] **Fast JSON Serialization**: Optimize serialization path (e.g., via `JSON3.jl`) to leverage type-stable structs for lightning-fast JSON output.
-  - [ ] **Review `OperObject.values` Type Design**: Evaluate whether the large Union in `OperObject.values` should stay as-is, be grouped behind type aliases, or move to a parametric/tagged representation. Only pursue a runtime change if profiling shows it is a real bottleneck.
-  - [ ] **Allocation Reduction with IO Strategy**:
-    - **Context**: String concatenation (`*=` and interpolation) in the query builder triggers significant GC overhead.
-    - [ ] Expand the `IOBuffer` approach used in `query()` to `insert()`, `update()`, `delete()`, `do_count()`, and `do_exists()`.
-    - [ ] Refactor internal helper functions (`_query_select`, `build_cte_clause`, etc.) to optionally take an `IO` object.
-  - [ ] **Performance Benchmarking**: Establish a baseline for query generation and execution overhead.
-  - [ ] **Thread Safety**: Audit connection pool for concurrent `Async` safety.
 
 - [x] **Refactor QueryBuilder Parameter Handling (Contextual Buckets Strategy)**
   - **Context:** Currently, the query builder generates PostgreSQL parameters (`$1`, `$2`...) sequentially. MySQL/MariaDB and SQLite use positional parameters (`?`), which require a "Bucket" strategy because code execution order (e.g., Processing `WHERE` before `JOIN` to determine needs) doesn't match SQL string order.
@@ -92,25 +83,6 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🛠 Project Infrastructure & Quality
 
-- [x] **Field Validation Test Coverage Gaps - Integration Tests**
-  - **Focus**: Database write/read validation (complementary to unit tests), missing field types, delete operations.
-  - [x] **Field DB Round-Trip Tests**: Verify all field types persist and retrieve correctly from PostgreSQL/SQLite.
-    - Test that ORM-written values match their database representation when read back.
-    - Validate type coerccion during write and type recovery during read for each field type.
-  - [x] **Missing Field Types DB Tests**: Integration tests for:
-    - [x] `TimeField`: Persist time-only values, verify no date contamination.
-    - [x] `UUIDField`: Native UUID support, UUID string parsing and round-trip.
-    - [x] `URLField`: URL validation at model level and database storage.
-    - [x] `SlugField`: Slug validation (alphanumeric + hyphens/underscores) and storage.
-    - [/] `JSONField`: JSON serialization and round-trip integrity. (Query support `@>`, `?` operators still missing).
-  - [x] **Delete Operations with Constraints**: Test cascading deletes and FK relationship cleanup.
-    - [x] Verify `on_delete=CASCADE` removes related records atomically.
-    - [x] Verify `on_delete=SET_NULL` nullifies FK fields in related records.
-    - [x] Verify `on_delete=PROTECT` prevents deletion when related records exist.
-    - [x] Test nested cascade scenarios (3+ levels deep).
-  - [x] **DELETE Inspection**: Test query inspection for DELETE operations (currently only SELECT/UPDATE inspected).
-    - [x] Verify `query.delete(show_query=:dict)` returns correct SQL and metadata.
-
 
 ## 🏗 Phase 2: Operational Maturity
 
@@ -128,33 +100,27 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Expand the Formula 1 dataset examples in the docs.
   - [ ] Add a "PostgreSQL Power User" guide.
 
+- [ ] **Performance & Type Stability**
+  - **Context**: Current `list()` returns `Vector{Dict{Symbol, Any}}`. While flexible for JSON-first SPAs, this triggers dynamic dispatch in Julia, hitting a "performance ceiling" for high-throughput Nitro.jl applications.
+  - **Goal**: Allow queries to return concrete Julia `struct` types instead of dynamically typed Dictionaries.
+  - [ ] **Strongly Typed Model Returns (Nitro compatibility)**: Implement `list_as(query, MyModel)` or similar to map DB results directly to typed structs.
+  - [ ] **Fast JSON Serialization**: Optimize serialization path (e.g., via `JSON3.jl`) to leverage type-stable structs for lightning-fast JSON output.
+  - [ ] **Review `OperObject.values` Type Design**: Evaluate whether the large Union in `OperObject.values` should stay as-is, be grouped behind type aliases, or move to a parametric/tagged representation. Only pursue a runtime change if profiling shows it is a real bottleneck.
+  - [ ] **Allocation Reduction with IO Strategy**:
+    - **Context**: String concatenation (`*=` and interpolation) in the query builder triggers significant GC overhead.
+    - [ ] Expand the `IOBuffer` approach used in `query()` to `insert()`, `update()`, `delete()`, `do_count()`, and `do_exists()`.
+    - [ ] Refactor internal helper functions (`_query_select`, `build_cte_clause`, etc.) to optionally take an `IO` object.
+  - [ ] **Performance Benchmarking**: Establish a baseline for query generation and execution overhead.
+  - [ ] **Thread Safety**: Audit connection pool for concurrent `Async` safety.
+
 ## 🔍 Review possible issues
 
 Issues identified during the code review of recent main changes
-
-- [x] **Ambiguous behavior: `order_by`, `limit`, and `offset` on simple `update()`**
-  - **Context**: Standard SQL `UPDATE` statements generally do not natively support `ORDER BY`, `LIMIT`, or `OFFSET` clauses. Previously, PormG allowed users to chain these methods but silently ignored them during SQL generation, risking unbounded mutations.
-  - **Resolution**: Implemented Option A — `update()` now throws `ArgumentError` immediately if `limit()`, `offset()`, or `order_by()` is set on the query. Developers must filter by primary key explicitly or compose a subquery to update a bounded set of rows.
-  - **Tests**: `test/unit/test_execution_show.jl` "Update rejects queries with limit, offset, or order_by" and `test/integration/test_updates.jl` "update() rejects limit, offset, and order_by".
-
-- [ ] **`do_exists` silently swallows database errors**
-  - **Location**: `src/querybuilder/execution.jl`, `do_exists` catch block.
-  - **Issue**: Non-`ArgumentError` exceptions (connection failures, SQL errors, permission errors) return `false` instead of propagating. This masks real problems as "does not exist".
-  - **Fix**: Rethrow all exceptions except `ArgumentError`; only return `false` when the query legitimately produces zero rows.
 
 - [ ] **`deepcopy(ctes)` → `copy(ctes)` shared-state risk**
   - **Location**: `src/querybuilder/types.jl`, `Base.deepcopy(::SQLObjectQuery)`.
   - **Issue**: Two query objects created via `deepcopy(query)` now share CTE sub-query internal state (filters, values). Mutating a CTE after the copy affects both queries.
   - **Fix**: Document the limitation, or implement a custom deep-copy that clones CTE dict values without traversing Module references.
-
-- [ ] **`resolve_fill_value` DATE/TIMESTAMPTZ asymmetry**
-  - **Location**: `src/querybuilder/execution_bulk.jl`, inner `resolve_fill_value` closure.
-  - **Issue**: `TIMESTAMPTZ` auto-now values go through `f_meta.formater(now(), tz)` but `DATE` auto-now returns bare `today()` without any formatter. If a `DateField` ever gains a custom formatter, it would be silently bypassed.
-  - **Fix**: Pass `DATE` auto-now values through the field formatter for consistency, or add a comment documenting why it's intentionally skipped.
-
-- [x] **`SafeTestsets` is dead weight**
-  - **Issue**: Commented out of the only usage (`test/integration/common_setup.jl`) but still declared in `Project.toml` under `[compat]`, `[extras]`, and `[targets]`.
-  - **Fix**: Remove from all three `Project.toml` sections.
 
 - [ ] **Think in this aproach** With new aproach:
    # Main query joining CTE
@@ -163,7 +129,6 @@ Issues identified during the code review of recent main changes
         "positionorder" => 1
     )
 
-- [ ] **Check name of operators**: `__@ne` or `__@neq`?
 
 ## Future Considerations
 - [ ] **Parameterize LIMIT/OFFSET (Future)**
@@ -173,3 +138,6 @@ Issues identified during the code review of recent main changes
 # Better then echo """
 Write-Output @'
 '@ 
+
+# how review
+@workspace /review  review unstaged changes before push

@@ -299,6 +299,13 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       end
     elseif f_meta.type == "DATE"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
+        # NOTE: `today()` is returned as a bare `Date` object without calling
+        # `f_meta.formater` here. The DATE formatter (`format_date_sql`) only
+        # converts Date → String and does not transform the value (no time_zone
+        # argument), unlike the TIMESTAMPTZ formatter which returns a ZonedDateTime.
+        # Sanitization handles both `Date` objects and date strings correctly, so
+        # bypassing the formatter is intentional. If `DateField` ever gains a
+        # custom value-transforming formatter, this path must be updated to call it.
         return true, today()
       elseif operation == :update && f_meta.auto_now
         return true, today()

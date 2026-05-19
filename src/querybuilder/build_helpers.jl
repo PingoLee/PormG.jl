@@ -147,6 +147,14 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
+# Allow Case/When and other FObject expressions as filter RHS values
+function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
+  if haskey(PormGsuffix, x.first[end])
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  end
+end
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
   if x.first[end] in ["in", "nin"]
     @pormg_debug false
@@ -816,6 +824,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   if isa(v.values, SQLTypeF)
     @pormg_debug false
     # F expressions are safe since they reference model fields    
+    placeholders = _get_filter_query(v.values, instruc)
+    return string(column, " ", v.operator, " ", placeholders)
+  elseif isa(v.values, SQLTypeFunction)
+    # Case/When and other SQL function expressions as filter RHS
     placeholders = _get_filter_query(v.values, instruc)
     return string(column, " ", v.operator, " ", placeholders)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formater !== nothing

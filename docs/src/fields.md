@@ -369,7 +369,7 @@ end
 ```julia
 import PormG.models as M
 import PormG.Models: make_password, check_password
-import PormG.QueryBuilder: list, bulk_insert
+import PormG.QueryBuilder: bulk_insert
 
 # Create a team manager account
 hashed_password = make_password("McLaren1988!")
@@ -386,7 +386,7 @@ query.bulk_insert(
 function authenticate(username::String, raw_password::String)
     query = M.Team_manager.objects
     query.filter("username" => username)
-    users = query |> list
+    users = query.list(:dict)
     
     isempty(users) && return nothing
     user = users[1]
@@ -933,6 +933,46 @@ User_settings = Models.Model(
     notifications_enabled = Models.BooleanField(default=true)
 )
 ```
+
+### ManyToManyField(to_model)
+
+**Purpose**: Many-to-many relationships through a join table, without adding a column to either related model table.
+
+When `through` is not supplied, PormG migrations synthesize a join table with two foreign keys and a composite unique index. The relation can be traversed in filters and projections with the same double-underscore syntax used by `ForeignKey` joins.
+
+```julia
+Driver_collection = Models.Model("driver_collections",
+    id = Models.IDField(),
+    label = Models.CharField(max_length=120),
+    drivers = Models.ManyToManyField(Driver, related_name="collections")
+)
+
+query = Driver_collection.objects
+query.filter("drivers__nationality" => "Brazilian")
+query.values("label", "drivers__surname")
+rows = query.list()
+
+driver_query = Driver.objects
+driver_query.filter("collections__label" => "World champions")
+driver_query.values("forename", "surname")
+champions = driver_query.list()
+```
+
+For write operations, bind the relation to a source primary key and use the relation manager:
+
+```julia
+collection_id = 1
+senna_id = 102
+prost_id = 117
+
+manager = Driver_collection.drivers(collection_id)
+manager.add!(senna_id, prost_id)  # returns nothing
+manager.remove!(prost_id)         # returns nothing
+manager.set!([senna_id])          # returns (added=X, removed=Y)
+driver_rows = manager.all().values("surname", "nationality").list()
+```
+
+Use `through=Existing_model` when the relationship table has extra fields, such as the season when a driver was added to a collection. In that case PormG treats the through model as a normal model and does not auto-generate a join table.
 
 ---
 

@@ -194,6 +194,15 @@ PormG.config["default"] = MockSettings
         @test_throws ErrorException validate_field_data(mock_float_model, "ratio", nothing, "insert")
     end
 
+    @testset "Numeric Formatter: Bool input converts to Int" begin
+        # Regression: Bool <: Integer in Julia, so without an explicit Bool overload,
+        # format_number_sql(true) would dispatch to the Integer method and return the Bool
+        # as-is. LibPQ then serializes it as 'true' which PostgreSQL rejects for INTEGER columns.
+        @test Models.format_number_sql(true) === 1
+        @test Models.format_number_sql(false) === 0
+        @test Models.format_number_sql(true) isa Int
+    end
+
     @testset "Numeric Formatter: AbstractString Regression" begin
         # This regression covers the query-builder path used by IN filters on numeric fields.
         # In Julia, slicing can yield `SubString{String}` instead of `String`, unlike Python/Django

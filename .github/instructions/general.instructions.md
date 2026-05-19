@@ -15,7 +15,7 @@ Adhere to these interaction rules:
 
 ## Repo-wide priorities
 - Keep PormG user-facing work centered on the expressive ORM surface. Do not drift toward raw SQL in docs, examples, or integration tests unless the feature explicitly requires it.
-- Prefer `M.Model.objects` and fluent terminal methods such as `query.list()`, `query.list_json()`, `query.delete()`, `query.count()`, and `query.exists()` whenever a fluent method exists.
+- Prefer `M.Model.objects` and fluent terminal methods such as `query.list()`, `query.list(:json)`, `query.get()`, `query.delete()`, `query.count()`, and `query.exists()` whenever a fluent method exists.
 - Keep PostgreSQL and SQLite behavior aligned unless a backend-specific difference is required. When behavior diverges, make the reason explicit in code, tests, and docs.
 - Always use parameterized queries. Never interpolate user input directly into SQL strings.
 - Preserve async-first behavior: synchronous `fetch()` remains a scheduler-friendly wrapper over `fetch_async()`, and connection-pool synchronization stays on `ReentrantLock`.
@@ -45,7 +45,7 @@ If the task is to review pending changes rather than implement them, load the re
 - [src/Configuration.jl](../../src/Configuration.jl) plus [src/constants.jl](../../src/constants.jl) own config loading, `DB_PATH`, `PORMG_ENV`, and transaction/bootstrap state.
 - [src/ConnectionPool.jl](../../src/ConnectionPool.jl) owns `fetch`, `fetch_copy`, transaction-context helpers, and pool synchronization.
 - [src/Dialect.jl](../../src/Dialect.jl) owns backend-specific SQL rendering.
-- [src/QueryBuilder.jl](../../src/QueryBuilder.jl) is the SQL builder entry point; specialized logic lives under `src/querybuilder/`.
+- [src/QueryBuilder.jl](../../src/QueryBuilder.jl) is the SQL builder entry point; specialized logic lives under `src/querybuilder/` (including `many_to_many.jl` for relationship managers).
 - [src/Migrations.jl](../../src/Migrations.jl) plus `src/migrations/` implement state-based schema reconciliation against live database introspection.
 
 ## Verification expectations

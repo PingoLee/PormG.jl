@@ -246,10 +246,10 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return () -> do_exists(q)
   elseif sym === :first
     return (; kwargs...) -> first(q; kwargs...)
-  elseif sym === :list || sym === :all
-    return (; kwargs...) -> list(q; kwargs...)
-  elseif sym === :list_json
-    return (; kwargs...) -> list_json(q; kwargs...)
+  elseif sym === :get
+    return (args...; show_query=:execute) -> get(q, args...; show_query=show_query)
+  elseif sym === :list
+    return (format::Symbol=:row; show_query::Symbol=:execute) -> list(q, Val(format); show_query=show_query)
   elseif sym === :inspect_query || sym === :inspect
     return (; kwargs...) -> inspect_query(q; kwargs...)
   elseif sym === :delete
@@ -266,6 +266,11 @@ function Base.getproperty(m::PormGModel, sym::Symbol)
     # Self-healing: Ensure models are initialized before returning objects
     Models.ensure_model_initialized(m)
     return object(m)
+  elseif sym in fieldnames(typeof(m))
+    return getfield(m, sym)
+  elseif Models.has_many_to_many_accessor(m, String(sym))
+    Models.ensure_model_initialized(m)
+    return ManyToManyDescriptor(m, String(sym), Models.get_many_to_many_relation(m, String(sym)))
   else
     return getfield(m, sym)
   end

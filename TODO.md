@@ -101,7 +101,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] Add a "PostgreSQL Power User" guide.
 
 - [ ] **Performance & Type Stability**
-  - **Context**: Current `list()` returns `Vector{Dict{Symbol, Any}}`. While flexible for JSON-first SPAs, this triggers dynamic dispatch in Julia, hitting a "performance ceiling" for high-throughput Nitro.jl applications.
+  - **Context**: `list()` now returns `Vector{PormGRow}` by default, while `list(:dict)` preserves the dynamic dictionary path for integrations that require real `Dict` values. Fully concrete application structs would still be faster for high-throughput Nitro.jl applications.
   - **Goal**: Allow queries to return concrete Julia `struct` types instead of dynamically typed Dictionaries.
   - [ ] **Strongly Typed Model Returns (Nitro compatibility)**: Implement `list_as(query, MyModel)` or similar to map DB results directly to typed structs.
   - [ ] **Fast JSON Serialization**: Optimize serialization path (e.g., via `JSON3.jl`) to leverage type-stable structs for lightning-fast JSON output.
@@ -116,6 +116,17 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 ## 🔍 Review possible issues
 
 Issues identified during the code review of recent main changes
+
+- [ ] **`Base.getproperty(q::ObjectHandler)` — accumulated issues** (`src/querybuilder/object_manager.jl`)
+  Several unrelated problems were noticed while working on the `list(format)` / `PormGRow` feature. None are blockers today but should be addressed before a public release.
+
+  - [ ] **`:inspect_query` alias** — `sym === :inspect_query || sym === :inspect` has the same problem as `:all` had for `:list`: two names for one terminal, only the shorter `:inspect` should survive. The alias won't forward new positional args if `:inspect` ever gains them.
+
+  - [ ] **`:count` and `:exists` silently ignore `show_query`** — both are bound as `return () -> do_count(q)` with no kwargs. There is no way to inspect the generated SQL. Should become `return (; show_query=:execute) -> do_count(q; show_query=show_query)` (and same for `:exists`).
+
+  - [ ] **`args...` is widespread and type-unstable** — `:with`, `:cjoin`, `:on`, `:create`, `:update` all use `(args...; kwargs...)`. The compiler cannot infer return types for these closures. For chainable methods this is tolerable (return type is always `ObjectHandler`), but for `:create` and `:update` the return type is unknown. Consider typed signatures where the argument shape is fixed.
+
+  - [ ] **Category 2/3 comment is mis-indented** — the `# === CATEGORY 2: Terminal methods ===` comment sits inside the `elseif sym === :copy` block due to indentation, making the structure misleading when reading the file. Cosmetic but confusing.
 
 - [ ] **`deepcopy(ctes)` → `copy(ctes)` shared-state risk**
   - **Location**: `src/querybuilder/types.jl`, `Base.deepcopy(::SQLObjectQuery)`.

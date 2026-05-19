@@ -29,6 +29,7 @@ end
     @testset "Contextual Buckets (SQLite)" include("unit/test_parameters.jl")
     @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
+    @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")

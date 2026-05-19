@@ -18,6 +18,7 @@ PormG is designed as **Async-First**. All database operations must utilize non-b
 | Operation | Best For | Speed | Protocol |
 | :--- | :--- | :--- | :--- |
 | `create()` | Single rows | Standard | SQL INSERT |
+| `row.save()` | Persisting one fetched row | Standard | SQL UPDATE |
 | `bulk_insert()` | Medium datasets (< 10k rows) | Fast | Multi-row INSERT |
 | `bulk_copy()` ⭐ | Massive datasets | Ultra-Fast | Postgres COPY |
 | `update()` | Selective updates | Standard | SQL UPDATE |

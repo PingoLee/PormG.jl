@@ -138,12 +138,12 @@ tinf = @snoop_inference begin
     if SNOOP_MODE == "full"
         progress("phase 6/8: json output")
 
-        # ── list_json ──────────────────────────────────────────────────────────
+        # ── list(:json) ───────────────────────────────────────────────────────
         M.Qualifying.objects.filter("raceid__year" => 2022
             ).filter("position__@lte" => 3
             ).values("driverid__code", "raceid__name", "position"
             ).order_by("raceid__round", "position"
-            ).list_json()
+            ).list(:json)
 
         progress("phase 7/8: F expressions")
     else

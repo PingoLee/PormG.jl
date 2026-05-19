@@ -11,7 +11,7 @@ end
   @test dict[1][:resultid] == 26745
   @test dict[1][:laps] == 58
 
-  dict_json = query.list_json()
+  dict_json = query.list(:json)
   @test isa(dict_json, String)
   @test JSON.parse(dict_json)[1]["resultid"] == 26745
 end

@@ -168,7 +168,8 @@ query.filter("nationality" => "Brazilian")
 query.order_by("surname")
 query.limit(10)
 
-rows = query.list()         # Vector{Dict{Symbol, Any}}
+rows = query.list()         # Vector{PormGRow}
+dicts = query.list(:dict)   # Vector{Dict{Symbol, Any}}
 df   = query |> DataFrame   # DataFrames.DataFrame
 ```
 
@@ -188,13 +189,14 @@ df   = query |> DataFrame   # DataFrames.DataFrame
 
 | Method | Returns | Description |
 | :--- | :--- | :--- |
-| `.list()` | `Vector{Dict}` | All matching rows as dicts. |
-| `.all()` | `Vector{Dict}` | Alias for `.list()`. |
+| `.list()` | `Vector{PormGRow}` | All matching rows as model-aware rows. |
+| `.list(:dict)` | `Vector{Dict}` | Plain dictionaries. |
+| `.list(:json)` | `String` | Results as JSON string. |
 | `query \|> DataFrame` | `DataFrame` | Tabular output. |
-| `.first()` | `Dict` or `nothing` | First matching row. |
+| `.first()` | `PormGRow` or `nothing` | First matching row. |
+| `.get(filters...)` | `PormGRow` | Exactly one matching row, or a typed exception. |
 | `.count()` | `Int` | `SELECT COUNT(*)`. |
 | `.exists()` | `Bool` | True if any rows match. |
-| `.list_json()` | `String` | Results as JSON string. |
 
 ---
 

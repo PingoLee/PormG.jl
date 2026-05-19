@@ -25,10 +25,25 @@ import PormG: @pormg_debug
   verbose_name::Union{String, Nothing} = nothing
   fields::Dict{String, PormGField}
   field_names::Vector{String} = [] # needed to create sql queries with joins
-  related_objects::Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}} = Dict{String, Tuple{Symbol, Symbol, Symbol, Symbol}}() # needed to create sql queries with joins
+  related_objects::Dict{String, Any} = Dict{String, Any}() # needed to create sql queries with joins
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
   connect_key::Union{String, Nothing} = nothing # needed to get the connection
   cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
+end
+
+@kwdef struct ManyToManyRelation
+  field_name::String
+  through_model::String
+  owner_model::String
+  owner_binding::String
+  owner_pk::String
+  owner_column::String
+  related_model::String
+  related_binding::String
+  related_pk::String
+  related_column::String
+  inverse_accessor::String
+  reverse::Bool = false
 end
 function deepcopy(model::Model_Type)
   try
@@ -168,6 +183,7 @@ function set_models(_module::Module, path::String)::Nothing
   for model in models
     model._module = _module
     empty!(model.related_objects)
+    haskey(model.cache, "many_to_many") && delete!(model.cache, "many_to_many")
   end
   # Validate like django related_name, if the model has more than one foreign key to the same model the related_name must be defined
   for model in models
@@ -225,6 +241,8 @@ function set_models(_module::Module, path::String)::Nothing
           @error("The field $field_name in the model $(model.name) has on_delete SET_DEFAULT and default nothing, this is not allowed")
         end
                  
+      elseif is_many_to_many_field(field)
+        _register_many_to_many_relation!(_module, settings, model, field_name, field)
       end
     end
   end
@@ -355,7 +373,7 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
     fields_dict[field_name] = field[2]
-    push!(field_names, field_name)
+    !is_many_to_many_field(field[2]) && push!(field_names, field_name)
   end
   # println(fields_dict)
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
@@ -367,7 +385,7 @@ end
 function Model(name::AbstractString, dict::Dict{String, PormGField})
   field_names::Vector{String} = []
   for (field_name, field) in pairs(dict)    
-    push!(field_names, field_name |> format_fild_name)
+    !is_many_to_many_field(field) && push!(field_names, field_name |> format_fild_name)
   end
   return Model_Type(name=name, fields=dict, field_names=field_names)
 end
@@ -381,7 +399,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
       throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
     fields_dict[field_name] = field
-    push!(field_names, field_name)
+    !is_many_to_many_field(field) && push!(field_names, field_name)
   end
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
@@ -391,6 +409,27 @@ function Model(name::String)
 end
 function Model(; fields...)
   return Model("", fields |> Tuple)
+end
+
+"""
+    add_field!(model::PormGModel, field_name::Union{String, Symbol}, field::PormGField)
+
+Dynamically adds a field to an existing model. If the field is a ManyToManyField,
+it also handles reverse relation registration.
+"""
+function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field::PormGField)
+  field_name = format_fild_name(field_name isa Symbol ? String(field_name) : field_name)
+  model.fields[field_name] = field
+  if !is_many_to_many_field(field)
+    push!(model.field_names, field_name)
+  else
+    # M2M needs registration for reverse accessors.
+    # Note: we check if model has enough context for registration.
+    if model._module !== nothing && model.connect_key !== nothing && haskey(config, model.connect_key)
+      _register_many_to_many_relation!(model._module, config[model.connect_key], model, field_name, field)
+    end
+  end
+  return nothing
 end
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -426,7 +465,13 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
     struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol    
     sets::Vector{String} = []
     try
-      fields = struct_name in [:ForeignKey, :OneToOneField] ? _model_to_str_foreign_key(field_name, field, struct_name, sets, fields) : _model_to_str_general(field_name, field, struct_name, sets, fields)
+      fields = if struct_name in [:ForeignKey, :OneToOneField]
+        _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
+      elseif struct_name == :ManyToManyField
+        _model_to_str_many_to_many(field_name, field, sets, fields)
+      else
+        _model_to_str_general(field_name, field, struct_name, sets, fields)
+      end
     catch e
       # @pormg_debug
     end
@@ -464,6 +509,18 @@ function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   
 end
 
+function _model_to_str_many_to_many(field_name, field, sets, fields)
+  to = field.to isa PormGModel ? field.to.name : field.to
+  field.through !== nothing && push!(sets, "through=$(format_string(field.through isa PormGModel ? field.through.name : field.through))")
+  field.related_name !== nothing && push!(sets, "related_name=$(format_string(field.related_name))")
+  field.db_table !== nothing && push!(sets, "db_table=$(format_string(field.db_table))")
+  field.source_field !== nothing && push!(sets, "source_field=$(format_string(field.source_field))")
+  field.target_field !== nothing && push!(sets, "target_field=$(format_string(field.target_field))")
+  field.verbose_name !== nothing && push!(sets, "verbose_name=$(format_string(field.verbose_name))")
+  fields *= ",\n  $field_name = Models.ManyToManyField(\"$to\"$(isempty(sets) ? "" : ", " * join(sets, ", ")))"
+  return fields
+end
+
 # ---
 # Tools to manage models
 #
@@ -471,7 +528,7 @@ end
 function foreign_keys_in_model(model::PormGModel)
   fks = Dict{String, Any}()
   for (fname, field) in model.fields
-    if hasfield(typeof(field), :to)   # detects ForeignKey / OneToOneField
+    if hasfield(typeof(field), :to) && !is_many_to_many_field(field)   # detects ForeignKey / OneToOneField
       fks[fname] = field
     end
   end
@@ -661,6 +718,11 @@ function format_json_sql(value)
   throw(ArgumentError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
 end
 
+function format_number_sql(value::Bool)
+  # Bool <: Integer in Julia, so without this overload `true` would be returned as-is
+  # and LibPQ would serialize it as 'true', which PostgreSQL rejects for integer columns.
+  return Int(value)  # true → 1, false → 0
+end
 function format_number_sql(value::Integer)
   return value
     # return string(value)    
@@ -876,6 +938,269 @@ end
 #═══════════════════════════════════════════════════════════════════════════════
 
 include("models/fields.jl")
+
+is_many_to_many_field(::PormGField)::Bool = false
+is_many_to_many_field(::sManyToManyField)::Bool = true
+
+function _model_reference_name(model_ref::Union{String, PormGModel})::String
+  return model_ref isa PormGModel ? model_ref.name : String(model_ref)
+end
+
+function _same_model_reference(a::Union{String, PormGModel}, b::PormGModel)::Bool
+  return format_model_name(_model_reference_name(a)) == format_model_name(b.name)
+end
+
+function _find_model_binding_name(_module::Module, model::PormGModel)::String
+  for name in names(_module; all=true, imported=true)
+    attr = try
+      Base.invokelatest(getfield, _module, name)
+    catch
+      nothing
+    end
+    attr === model && return String(name)
+  end
+  return uppercasefirst(String(model.name))
+end
+
+_resolve_model_reference(_module::Module, model_ref::PormGModel)::PormGModel = model_ref
+
+function _resolve_model_reference(_module::Module, model_ref::String)::PormGModel
+  try
+    return Base.invokelatest(getfield, _module, Symbol(model_ref))
+  catch
+    target_name = format_model_name(model_ref)
+    for model in get_all_models(_module)
+      format_model_name(model.name) == target_name && return model
+    end
+  end
+  throw(ArgumentError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
+end
+
+_resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::PormGModel)::PormGModel = model_ref
+
+function _resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::String)::PormGModel
+  target_name = format_model_name(model_ref)
+  for (binding_name, info) in models
+    model = info[:model]
+    if format_model_name(String(binding_name)) == target_name || format_model_name(model.name) == target_name
+      return model
+    end
+  end
+  throw(ArgumentError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
+end
+
+function _many_to_many_table_name(source_model::PormGModel, field_name::String, field::sManyToManyField, settings::SQLConn)::String
+  field.db_table !== nothing && return field.db_table
+  source_name = get_model_name(source_model, settings, false)
+  return format_model_name("$(source_name)_$(field_name)")
+end
+
+function _many_to_many_column_name(model::PormGModel, pk_field::String)::String
+  return format_fild_name("$(format_model_name(model.name))_$(pk_field)")
+end
+
+function _infer_through_field(through_model::PormGModel, target_model::PormGModel, role::String)::String
+  matches = String[]
+  for (field_name, field) in through_model.fields
+    if (field isa sForeignKey || field isa sOneToOneField) && _same_model_reference(field.to, target_model)
+      push!(matches, field_name)
+    end
+  end
+
+  length(matches) == 1 && return matches[1]
+  isempty(matches) && throw(ArgumentError("The explicit through model $(through_model.name) has no foreign key to $(target_model.name) for the many-to-many $(role) side"))
+  throw(ArgumentError("The explicit through model $(through_model.name) has multiple foreign keys to $(target_model.name); set $(role)_field explicitly"))
+end
+
+function _relation_from_many_to_many(
+  owner_model::PormGModel,
+  owner_binding::String,
+  field_name::String,
+  field::sManyToManyField,
+  related_model::PormGModel,
+  related_binding::String,
+  settings::SQLConn;
+  _module::Union{Module, Nothing}=nothing,
+  model_map::Union{Nothing, Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}}=nothing,
+)
+  owner_pk_sym = get_model_pk_field(owner_model)
+  related_pk_sym = get_model_pk_field(related_model)
+  owner_pk_sym === nothing && throw(ArgumentError("ManyToManyField $(owner_model.name).$(field_name) requires the source model to define a single primary key"))
+  related_pk_sym === nothing && throw(ArgumentError("ManyToManyField $(owner_model.name).$(field_name) requires the target model to define a single primary key"))
+
+  owner_pk = String(owner_pk_sym)
+  related_pk = String(related_pk_sym)
+  through_model_name = _many_to_many_table_name(owner_model, field_name, field, settings)
+  owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
+  related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
+
+  if field.through !== nothing
+    through_model = if field.through isa PormGModel
+      field.through
+    elseif _module !== nothing
+      _resolve_model_reference(_module, field.through)
+    elseif model_map !== nothing
+      _resolve_model_reference(model_map, field.through)
+    else
+      throw(ArgumentError("Cannot resolve explicit through model $(field.through) for $(owner_model.name).$(field_name)"))
+    end
+
+    through_model_name = through_model.name
+    owner_column = field.source_field === nothing ? _infer_through_field(through_model, owner_model, "source") : field.source_field
+    related_column = field.target_field === nothing ? _infer_through_field(through_model, related_model, "target") : field.target_field
+    owner_fk = through_model.fields[owner_column]
+    related_fk = through_model.fields[related_column]
+    owner_pk = owner_fk.pk_field === nothing ? owner_pk : String(owner_fk.pk_field)
+    related_pk = related_fk.pk_field === nothing ? related_pk : String(related_fk.pk_field)
+  end
+
+  inverse_accessor = field.related_name === nothing ? get_model_name(owner_model, settings, false) : field.related_name
+  return ManyToManyRelation(
+    field_name=field_name,
+    through_model=through_model_name,
+    owner_model=owner_model.name,
+    owner_binding=owner_binding,
+    owner_pk=owner_pk,
+    owner_column=owner_column,
+    related_model=related_model.name,
+    related_binding=related_binding,
+    related_pk=related_pk,
+    related_column=related_column,
+    inverse_accessor=inverse_accessor,
+    reverse=false,
+  )
+end
+
+function _reverse_many_to_many_relation(relation::ManyToManyRelation, reverse_accessor::String)::ManyToManyRelation
+  return ManyToManyRelation(
+    field_name=reverse_accessor,
+    through_model=relation.through_model,
+    owner_model=relation.related_model,
+    owner_binding=relation.related_binding,
+    owner_pk=relation.related_pk,
+    owner_column=relation.related_column,
+    related_model=relation.owner_model,
+    related_binding=relation.owner_binding,
+    related_pk=relation.owner_pk,
+    related_column=relation.owner_column,
+    inverse_accessor=relation.field_name,
+    reverse=true,
+  )
+end
+
+function _cache_many_to_many_relation!(model::PormGModel, accessor::String, relation::ManyToManyRelation)
+  cache = get!(model.cache, "many_to_many", Dict{String, Any}())
+  cache[accessor] = relation
+  return relation
+end
+
+function _register_many_to_many_relation!(_module::Module, settings::SQLConn, model::PormGModel, field_name::String, field::sManyToManyField)::Nothing
+  related_model = _resolve_model_reference(_module, field.to)
+  relation = _relation_from_many_to_many(
+    model,
+    _find_model_binding_name(_module, model),
+    field_name,
+    field,
+    related_model,
+    _find_model_binding_name(_module, related_model),
+    settings,
+    _module=_module,
+  )
+  _cache_many_to_many_relation!(model, field_name, relation)
+
+  reverse_accessor = relation.inverse_accessor
+  haskey(related_model.related_objects, reverse_accessor) && throw(ArgumentError("The related_name $(reverse_accessor) in the model $(model.name) is already defined"))
+  related_model.related_objects[reverse_accessor] = _reverse_many_to_many_relation(relation, reverse_accessor)
+  field.related_name === nothing && (field.related_name = reverse_accessor)
+  return nothing
+end
+
+function has_many_to_many_accessor(model::PormGModel, accessor::String)::Bool
+  if haskey(model.cache, "many_to_many") && haskey(model.cache["many_to_many"], accessor)
+    return true
+  end
+  return haskey(model.related_objects, accessor) && model.related_objects[accessor] isa ManyToManyRelation
+end
+
+function get_many_to_many_relation(model::PormGModel, accessor::String)::ManyToManyRelation
+  if haskey(model.cache, "many_to_many") && haskey(model.cache["many_to_many"], accessor)
+    return model.cache["many_to_many"][accessor]::ManyToManyRelation
+  elseif haskey(model.related_objects, accessor) && model.related_objects[accessor] isa ManyToManyRelation
+    return model.related_objects[accessor]::ManyToManyRelation
+  end
+  throw(ArgumentError("The accessor $(accessor) is not a ManyToMany relation on model $(model.name)"))
+end
+
+function strip_many_to_many_fields(model::PormGModel)::PormGModel
+  physical_fields = Dict{String, PormGField}()
+  for (field_name, field) in model.fields
+    is_many_to_many_field(field) && continue
+    physical_fields[field_name] = field
+  end
+
+  physical_field_names = [field_name for field_name in model.field_names if haskey(physical_fields, field_name)]
+  return Model_Type(
+    name=model.name,
+    verbose_name=model.verbose_name,
+    fields=physical_fields,
+    field_names=physical_field_names,
+    related_objects=copy(model.related_objects),
+    _module=model._module,
+    connect_key=model.connect_key,
+    cache=copy(model.cache),
+  )
+end
+
+function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn)
+  expanded = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}()
+
+  for (model_name, model_info) in current_schema
+    expanded[model_name] = Dict{Symbol, Union{Bool, PormGModel}}(
+      :model => strip_many_to_many_fields(model_info[:model]),
+      :exist => model_info[:exist],
+    )
+  end
+
+  for (model_name, model_info) in current_schema
+    source_model = model_info[:model]
+    owner_binding = uppercasefirst(String(model_name))
+    for (field_name, field) in source_model.fields
+      is_many_to_many_field(field) || continue
+      field.through === nothing || continue
+
+      target_model = _resolve_model_reference(current_schema, field.to)
+      related_binding = uppercasefirst(format_model_name(target_model.name))
+      relation = _relation_from_many_to_many(source_model, owner_binding, field_name, field, target_model, related_binding, settings, model_map=current_schema)
+      through_fields = Dict{Symbol, Any}(
+        :id => IDField(),
+        Symbol(relation.owner_column) => ForeignKey(source_model, pk_field=relation.owner_pk, on_delete=CASCADE),
+        Symbol(relation.related_column) => ForeignKey(target_model, pk_field=relation.related_pk, on_delete=CASCADE),
+      )
+      through_model = Model(relation.through_model, through_fields)
+      through_model.cache["many_to_many_auto"] = Dict{String, Any}(
+        "owner_column" => relation.owner_column,
+        "related_column" => relation.related_column,
+        "unique_index" => "$(relation.through_model)_$(relation.owner_column)_$(relation.related_column)_uniq",
+      )
+      through_key = Symbol(relation.through_model)
+      if haskey(expanded, through_key)
+        existing = expanded[through_key][:model]
+        existing_auto = existing.cache !== nothing ? get(existing.cache, "many_to_many_auto", nothing) : nothing
+        if existing_auto === nothing ||
+           get(existing_auto, "owner_column", nothing) != relation.owner_column ||
+           get(existing_auto, "related_column", nothing) != relation.related_column
+          throw(ArgumentError(
+            "Auto-generated through table $(relation.through_model) for $(source_model.name).$(field_name) " *
+            "collides with an existing model or another ManyToManyField. " *
+            "Define an explicit `through=` model or override `db_table=` to disambiguate."))
+        end
+      end
+      expanded[through_key] = Dict{Symbol, Union{Bool, PormGModel}}(:model => through_model, :exist => false)
+    end
+  end
+
+  return expanded
+end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Auxiliar Functions

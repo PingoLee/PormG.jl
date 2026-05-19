@@ -17,6 +17,7 @@ makedocs(
         "Home" => "index.md",
         "Models" => "models.md",
         "Fields" => "fields.md",
+        "Many-to-Many" => "many_to_many.md",
         "Configuration" => [
             "Overview" => "configuration/index.md",
             "Setup" => "configuration/setup.md",

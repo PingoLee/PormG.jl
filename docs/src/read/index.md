@@ -24,29 +24,36 @@ PormG provides several terminal methods to execute a query and return data in di
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
-| `.list()` | `Vector{Dict{Symbol, Any}}` | Returns all rows as a collection of dictionaries. |
-| `.all()` | `Vector{Dict}` | Alias for `.list()`. |
+| `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
+| `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations. |
+| `.list(:json)` | `String` | Returns results as a JSON string for API responses. |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). |
-| `.list_json()` | `String` | Returns results as a JSON string (useful for API responses). |
+| `.first()` | `PormGRow` or `nothing` | Returns the first matching row. |
+| `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises a typed exception. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
 
 ### Choosing an Output Format
 
 ```julia
-query = M.Result.objects.filter("driverId__nationality" => "Brazilian", "positionOrder" => 1)
+query = M.Result.objects
+query.filter("driverId__nationality" => "Brazilian", "positionOrder" => 1)
+query.values("driverId__surname", "raceId__name")
 
-# As a list of dictionaries — best for iteration
+# As model-aware rows — best for ORM-style iteration
 results = query.list()
 for row in results
-    println(row[:driverId__surname], " won at ", row[:raceId__name])
+    println(row[:driverid__surname], " won at ", row[:raceid__name])
 end
+
+# As plain dictionaries — useful when another framework requires Dict values
+dicts = query.list(:dict)
 
 # As a DataFrame — best for analysis
 df = query.values("driverId__surname", "raceId__year") |> DataFrame
 
 # As JSON — best for API responses
-json_str = query.list_json()
+json_str = query.list(:json)
 
 # Just the count
 n = query.count()      # => 42
@@ -54,6 +61,19 @@ n = query.count()      # => 42
 # Just a boolean check
 has_any = query.exists()  # => true
 ```
+
+Rows returned by `.list()`, `.first()`, and `.get()` are `PormGRow` values. They support property access, indexed access, many-to-many relationship accessors, and dirty tracking for `row.save()`:
+
+```julia
+driver = M.Driver.objects.get("driverref" => "hamilton")
+
+println(driver.forename, " ", driver.surname)
+
+driver.nationality = "British"
+driver.save()
+```
+
+For framework integrations that require plain dictionaries, use `.list(:dict)`. For tabular analysis, pipe the query to `DataFrame`.
 
 ---
 
@@ -77,7 +97,7 @@ drivers = M.Driver.objects
 results = M.Result.objects
     .db("client_42")
     .filter("points__@gt" => 10)
-    .all()
+    .list()
 ```
 
 ### Pipe Style (Legacy)
@@ -117,7 +137,7 @@ These methods modify the query builder and return the handler for further chaini
 ### Simple Filter and List
 
 ```julia
-# Return a Vector of Dicts
+# Return model-aware rows
 data = M.Status.objects.filter("status" => "Engine").list()
 
 # Return a DataFrame
@@ -193,7 +213,7 @@ println(inspection[:operation])  # => :select
 | `:params` | Parameters array only. |
 | `:none` | `nothing` (zero-overhead benchmarking). |
 
-`show_query` is supported on all terminal methods: `list()`, `list_json()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
+`show_query` is supported on terminal methods such as `list()`, `first()`, `get()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
 
 ---
 

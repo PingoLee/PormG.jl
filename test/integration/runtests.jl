@@ -26,6 +26,8 @@ include("common_delete_setup.jl")
 
     # ── Phase 2: Behavioral Tests (reads, filters, expressions) ──────
     @testset "Selection and Filters"        begin include("test_selection.jl")          end # TODO: split this into multiple files (selection, filters, expressions)
+    @testset "PormGRow and get()"           begin include("test_row_and_get.jl")        end
+    @testset "PormGRow Mutation"            begin include("test_row_mutation.jl")       end
     @testset "Field Expressions"            begin include("test_field_expressions.jl")  end
     @testset "Updates"                      begin include("test_updates.jl")            end
     @testset "Deletes"                      begin include("test_deletes.jl")            end
@@ -35,6 +37,7 @@ include("common_delete_setup.jl")
 
     # ── Phase 3: Advanced Features ───────────────────────────────────
     @testset "Reverse Joins & on()"         begin include("test_reverse_joins.jl")      end
+    @testset "Many-to-Many"                 begin include("test_many_to_many.jl")       end
     @testset "CTEs (with)"                  begin include("test_cte.jl")                end
     @testset "Subqueries"                   begin include("test_subqueries.jl")         end
     @testset "Correlated EXISTS"            begin include("test_exists_correlated.jl")  end

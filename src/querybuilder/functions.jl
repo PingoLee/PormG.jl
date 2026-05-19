@@ -70,7 +70,7 @@ Creates an aggregate COUNT function object for use in query building.
 query = MyModels.model_test |> object;
 query.filter("id__@gte" => 1)
 query.values("id", "count" => Count("other_model_id", distinct=true))
-df = query |> list |> DataFrame
+df = query |> DataFrame
 ```
 """
 function Count(x; distinct::Bool = false)
@@ -178,6 +178,8 @@ function Concat(x::Vector; output_field::Union{N, String, Nothing} where N <: Po
   end
   return FObject(function_name = "CONCAT", column = x, kwargs = Dict{String, Any}("output_field" => output_field, "as" => _as))
 end
+# Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
+Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 
 """
     Extract(column, part)
@@ -193,17 +195,26 @@ function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vecto
   isa(formater, PormGField) && (formater = formater.formater)
   return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
-function When(x::NTuple{N, <:Pair}; then::Any = 0, _else::Any = missing) where N
-  return When(Q(x), then = then, _else = _else)
+# Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
+# When(..., otherwise=x) is a complete standalone expression. When used inside Case([...]),
+# `otherwise` is always missing (the default) so no wrapping occurs — Case owns the ELSE branch.
+function _make_when(column, then, otherwise)
+  fobj = FObject(function_name = "WHEN", column = column, kwargs = Dict{String, Any}("then" => then, "else" => missing))
+  ismissing(otherwise) && return fobj
+  return FObject(function_name = "CASE", column = fobj, kwargs = Dict{String, Any}("else" => otherwise, "output_field" => nothing))
 end
-function  When(x::Pair{String, T}; then::Any = 0, _else::Any = missing) where T
-  return FObject(function_name = "WHEN", column = _get_pair_to_oper(x), kwargs = Dict{String, Any}("then" => then, "else" => _else))
+
+function When(x::NTuple{N, <:Pair}; then::Any = 0, otherwise::Any = missing) where N
+  return When(Q(x), then = then, otherwise = otherwise)
 end
-function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Any = 0, _else::Any = missing)
-  return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
+function When(x::Pair{String, T}; then::Any = 0, otherwise::Any = missing) where T
+  return _make_when(_get_pair_to_oper(x), then, otherwise)
 end
-function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Any = 0, _else::Any = missing)
-  return FObject(function_name = "WHEN", column = x, kwargs = Dict{String, Any}("then" => then, "else" => _else))
+function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Any = 0, otherwise::Any = missing)
+  return _make_when(x, then, otherwise)
+end
+function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Any = 0, otherwise::Any = missing)
+  return _make_when(x, then, otherwise)
 end
 function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "NULL", output_field::Union{N, String, Nothing} where N <: PormGField = nothing)
   if isa(output_field, PormGField)

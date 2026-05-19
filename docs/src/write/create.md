@@ -140,9 +140,9 @@ A more complex example showing multiple relationships:
 
 ```julia
 # Assume we have IDs from existing or newly created records
-driver_id = M.Driver.objects.filter("forename" => "Lewis") |> list |> first |> x -> x[:driverid]
-constructor_id = M.Constructor.objects.filter("name" => "Mercedes") |> list |> first |> x -> x[:constructorid]
-race_id = M.Race.objects.filter("year" => 2024, "round" => 1) |> list |> first |> x -> x[:raceid]
+driver_id = M.Driver.objects.filter("forename" => "Lewis").first().driverid
+constructor_id = M.Constructor.objects.filter("name" => "Mercedes").first().constructorid
+race_id = M.Race.objects.filter("year" => 2024, "round" => 1).first().raceid
 
 # Create the result linking all three
 result = M.Result.objects.create(

@@ -232,4 +232,54 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
   nullable_int = Models.IntegerField(null = true)
 )
 
+# Scratch models exercising the ManyToManyField API (auto-generated through
+# table) against the F1 scenario "drivers endorsed by sponsors".
+M2m_sponsor_scratch = Models.Model("m2m_sponsor_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_driver_endorsement_scratch = Models.Model("m2m_driver_endorsement_scratch",
+  id = Models.IDField(),
+  driverRef = Models.CharField(unique=true),
+  sponsors = Models.ManyToManyField(M2m_sponsor_scratch, related_name="drivers")
+)
+
+# Advanced M2M tests: Multi-hop joins (Driver -> Sponsor -> Country)
+M2m_country_scratch = Models.Model("m2m_country_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_sponsor_with_country_scratch = Models.Model("m2m_sponsor_with_country_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true),
+  country = Models.ForeignKey(M2m_country_scratch, on_delete=Models.PROTECT)
+)
+
+M2m_driver_multi_hop_scratch = Models.Model("m2m_driver_multi_hop_scratch",
+  id = Models.IDField(),
+  driverRef = Models.CharField(unique=true),
+  sponsors = Models.ManyToManyField(M2m_sponsor_with_country_scratch, related_name="drivers")
+)
+
+# Advanced M2M tests: Explicit through model
+M2m_team_scratch = Models.Model("m2m_team_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_driver_explicit_scratch = Models.Model("m2m_driver_explicit_scratch",
+  id = Models.IDField(),
+  driverRef = Models.CharField(unique=true),
+  teams = Models.ManyToManyField(M2m_team_scratch, through="M2m_membership_scratch", related_name="drivers")
+)
+
+M2m_membership_scratch = Models.Model("m2m_membership_scratch",
+  id = Models.IDField(),
+  driver = Models.ForeignKey(M2m_driver_explicit_scratch, on_delete=Models.CASCADE),
+  team = Models.ForeignKey(M2m_team_scratch, on_delete=Models.CASCADE),
+  joined_year = Models.IntegerField()
+)
+
 end

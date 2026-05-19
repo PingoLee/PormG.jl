@@ -76,6 +76,88 @@ function _resolve_django_join_field(model::PormGModel, field_name::String, instr
   return field_name
 end
 
+function _resolve_many_to_many_related_model(_module::Module, relation::Models.ManyToManyRelation)::PormGModel
+  binding = Symbol(relation.related_binding)
+  if isdefined(_module, binding)
+    candidate = Base.invokelatest(getfield, _module, binding)
+    candidate isa PormGModel && return candidate
+  end
+
+  target_name = Models.format_model_name(relation.related_model)
+  for model in Models.get_all_models(_module)
+    Models.format_model_name(model.name) == target_name && return model
+  end
+
+  throw(ArgumentError("The many-to-many related model $(relation.related_binding) for accessor $(relation.field_name) is not defined"))
+end
+
+function _insert_many_to_many_joins(
+  relation::Models.ManyToManyRelation,
+  instruct::SQLInstruction,
+  parent_table::String,
+  parent_alias::String,
+  join_path::String;
+  previus_how::Union{String, Nothing}=nothing,
+)
+  join_type = previus_how == "LEFT" ? "LEFT" : "INNER"
+
+  through_row = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
+  through_row["a"] = parent_table
+  through_row["alias_a"] = parent_alias
+  through_row["key_a"] = relation.owner_pk
+  through_row["b"] = relation.through_model
+  through_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
+  through_row["key_b"] = relation.owner_column
+  through_row["how"] = join_type
+
+  through_alias = _insert_join(instruct.row_join, through_row, instruct.row_path, "$(join_path)__through")
+
+  related_row = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
+  related_row["a"] = relation.through_model
+  related_row["alias_a"] = through_alias
+  related_row["key_a"] = relation.related_column
+  related_row["b"] = relation.related_model
+  related_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
+  related_row["key_b"] = relation.related_pk
+  related_row["how"] = join_type
+
+  return _insert_join(instruct.row_join, related_row, instruct.row_path, join_path)
+end
+
+function _row_join_for_alias(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, alias::String)
+  for row in row_join
+    row["alias_b"] == alias && return row
+  end
+  throw(ArgumentError("Internal error: join alias $(alias) was not found in row_join"))
+end
+
+# Shared helper used at the four sites in `_build_row_join` where a many-to-many
+# (forward or reverse) hop must be expanded into the through-table + related-table
+# join pair. Returns the alias of the related-table join, the row dict for that
+# join, the resolved related PormGModel, and (when applicable) the trailing
+# `last_field` reference.
+function _apply_many_to_many_branch(
+  relation::Models.ManyToManyRelation,
+  instruct::SQLInstruction,
+  parent_table::String,
+  parent_alias::String,
+  join_path::String,
+  vector::Vector{String};
+  previus_how::Union{String, Nothing}=nothing,
+  reverse::Bool=false,
+)
+  foreing_table_module = instruct.object.model._module::Module
+  foreign_model = _resolve_many_to_many_related_model(foreing_table_module, relation)
+  if length(vector) == 1
+    msg = reverse ? "many-to-many reverse field" : "many-to-many field"
+    throw("Error in _build_row_join, the column $(vector[1]) is a $(msg), you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
+  end
+  last_field = size(vector, 1) == 2 ? foreign_model.fields[vector[2]] : nothing
+  tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how)
+  row_join = _row_join_for_alias(instruct.row_join, tb_alias)
+  return (tb_alias, row_join, foreign_model, last_field)
+end
+
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
   vector = copy(field) 
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
@@ -87,6 +169,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   first_column = _resolve_django_join_field(instruct.object.model, vector[1], instruct)
   last_field::Union{Nothing, PormGField} = nothing
   join_path = field[1]
+  m2m_inserted = false
 
   # Check if first_column references a CTE table
   if haskey(instruct.object.ctes, vector[1])
@@ -138,6 +221,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     foreign_table_name = cte_model
     last_field = cte_model.fields[vector[2]]
    
+  elseif haskey(instruct.object.model.fields, first_column) && Models.is_many_to_many_field(instruct.object.model.fields[first_column])
+    relation = Models.get_many_to_many_relation(instruct.object.model, first_column)
+    tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
+      relation, instruct, instruct.object.model.name, instruct.alias, join_path, vector
+    )
+    foreign_table_name = foreign_model
+    m2m_inserted = true
   elseif first_column in instruct.object.model.field_names || _get_join_field(instruct.object, join_path) !== nothing
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
@@ -160,6 +250,15 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["key_b"] = first_field.pk_field::String
     row_join["key_a"] = first_column
   elseif haskey(instruct.object.model.related_objects, vector[1])
+    related_object = instruct.object.model.related_objects[vector[1]]
+    if related_object isa Models.ManyToManyRelation
+      relation = related_object::Models.ManyToManyRelation
+      tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
+        relation, instruct, instruct.object.model.name, instruct.alias, join_path, vector; reverse=true
+      )
+      foreign_table_name = foreign_model
+      m2m_inserted = true
+    else
     # @pormg_debug false
     s_model = Symbol(uppercasefirst(string(instruct.object.model.related_objects[vector[1]][3])))
     reverse_model = getfield(foreing_table_module, s_model)
@@ -184,21 +283,24 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
     foreign_table_name = s_model |> string
     @pormg_debug false
+    end
   else
     @pormg_debug false
     throw(ArgumentError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
 
-  join_type_override = _get_join_type_override(instruct.object, join_path)
-  join_type_override !== nothing && (row_join["how"] = join_type_override)
+  if !m2m_inserted
+    join_type_override = _get_join_type_override(instruct.object, join_path)
+    join_type_override !== nothing && (row_join["how"] = join_type_override)
 
-  join_filters = _get_join_filters(instruct.object, join_path)
-  if join_filters !== nothing && !isempty(join_filters)
-    @pormg_debug false
-    row_join["on_conditions"] = join_filters
+    join_filters = _get_join_filters(instruct.object, join_path)
+    if join_filters !== nothing && !isempty(join_filters)
+      @pormg_debug false
+      row_join["on_conditions"] = join_filters
+    end
+
+    tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path) 
   end
-
-  tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path) 
   
   vector = vector[2:end]  
 
@@ -218,8 +320,16 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
     # Track whether the reverse-join branch already advanced vector
     _reverse_advanced = false
+    _m2m_inserted = false
 
-    if first_column in new_object.field_names
+    if haskey(new_object.fields, first_column) && Models.is_many_to_many_field(new_object.fields[first_column])
+      relation = Models.get_many_to_many_relation(new_object, first_column)
+      tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
+        relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how
+      )
+      foreign_table_name = foreign_model
+      _m2m_inserted = true
+    elseif first_column in new_object.field_names
       first_field = new_object.fields[first_column]
       !hasfield(typeof(first_field), :to) && throw("Error in _build_row_join, the column $(first_column) is a field from $(new_object.name), but this field has not a foreign key")
       row_join["a"] = prev_b
@@ -239,6 +349,15 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["key_b"] = new_object.fields[first_column].pk_field::String
       row_join["key_a"] = first_column    
     elseif haskey(new_object.related_objects, vector[1])
+      related_object = new_object.related_objects[vector[1]]
+      if related_object isa Models.ManyToManyRelation
+        relation = related_object::Models.ManyToManyRelation
+        tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
+          relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, reverse=true
+        )
+        foreign_table_name = foreign_model
+        _m2m_inserted = true
+      else
       s_model = Symbol(uppercasefirst(string(new_object.related_objects[vector[1]][3])))
       reverse_model = getfield(foreing_table_module, s_model)
       length(vector) == 1 && throw("Error in _build_row_join, the column $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")")
@@ -263,21 +382,24 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       foreign_table_name = s_model |> string
       vector = vector[2:end]
       _reverse_advanced = true
+      end
 
     else
       throw("Error in _build_row_join, the column $(vector[1]) not found in $(new_object.name)")
     end
 
     @pormg_debug false   
-    join_type_override = _get_join_type_override(instruct.object, join_path)
-    join_type_override !== nothing && (row_join["how"] = join_type_override)
+    if !_m2m_inserted
+      join_type_override = _get_join_type_override(instruct.object, join_path)
+      join_type_override !== nothing && (row_join["how"] = join_type_override)
 
-    join_filters = _get_join_filters(instruct.object, join_path)
-    if join_filters !== nothing && !isempty(join_filters)
-      row_join["on_conditions"] = join_filters
+      join_filters = _get_join_filters(instruct.object, join_path)
+      if join_filters !== nothing && !isempty(join_filters)
+        row_join["on_conditions"] = join_filters
+      end
+      
+      tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
     end
-    
-    tb_alias = _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
 
     # Only advance vector for forward-FK joins; reverse joins already advanced above
     if !_reverse_advanced

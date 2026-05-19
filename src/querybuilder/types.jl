@@ -208,7 +208,7 @@ That is a internal function, please do not use it.
 """
 @kwdef mutable struct OperObject <: SQLTypeOper
   operator::String
-  values::Union{String,Number,Bool,Dates.Period,Dates.CompoundPeriod,SQLObjectHandler,SQLTypeF,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF}
+  values::Union{String,Number,Bool,Dates.Period,Dates.CompoundPeriod,SQLObjectHandler,SQLTypeF,SQLTypeFunction,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF}
   column::ColumnPart # Vector{String} is needed
 end
 OP(column::String, value) = OperObject(operator="=", values=value, column=SQLField(column))
@@ -570,6 +570,94 @@ mutable struct ObjectHandler <: SQLObjectHandler
   object::SQLObject
 end
 ObjectHandler(; object::SQLObject) = ObjectHandler(object)
+
+"""
+A model-aware row returned by `list()`, `first()`, and `get()`.
+
+Wraps a `Dict{Symbol, Any}` and remembers which model produced it, enabling
+dot-access to fields and many-to-many relationship accessors.
+"""
+mutable struct PormGRow
+  _data::Dict{Symbol,Any}
+  _model::PormGModel
+  _dirty::Set{Symbol}
+end
+PormGRow(data::Dict{Symbol,<:Any}, model::PormGModel) = PormGRow(Dict{Symbol,Any}(data), model, Set{Symbol}())
+
+"""Normalize row-facing symbols to the lowercase storage keys used internally."""
+function _normalize_row_symbol(sym::Symbol)::Symbol
+  parts = split(String(sym), "__")
+  any(isempty, parts) && throw(ArgumentError("Invalid projected row field '$sym'. Empty '__' path segment."))
+  return Symbol(join(Models.format_fild_name.(String.(parts)), "__"))
+end
+
+Base.getindex(row::PormGRow, key::Symbol) = getfield(row, :_data)[_normalize_row_symbol(key)]
+Base.getindex(row::PormGRow, key::String) = getfield(row, :_data)[_normalize_row_symbol(Symbol(key))]
+Base.haskey(row::PormGRow, key::Symbol) = haskey(getfield(row, :_data), _normalize_row_symbol(key))
+Base.haskey(row::PormGRow, key::String) = haskey(getfield(row, :_data), _normalize_row_symbol(Symbol(key)))
+Base.get(row::PormGRow, key::Symbol, default) = get(getfield(row, :_data), _normalize_row_symbol(key), default)
+Base.get(row::PormGRow, key::String, default) = get(getfield(row, :_data), _normalize_row_symbol(Symbol(key)), default)
+Base.keys(row::PormGRow) = keys(getfield(row, :_data))
+Base.values(row::PormGRow) = values(getfield(row, :_data))
+Base.pairs(row::PormGRow) = pairs(getfield(row, :_data))
+Base.iterate(row::PormGRow, args...) = iterate(getfield(row, :_data), args...)
+
+function Base.getproperty(row::PormGRow, sym::Symbol)
+  sym === :_data && return getfield(row, :_data)
+  sym === :_model && return getfield(row, :_model)
+  sym === :_dirty && return getfield(row, :_dirty)
+  sym === :save && return (; show_query::Symbol=:execute) -> save(row; show_query=show_query)
+
+  data = getfield(row, :_data)
+  model = getfield(row, :_model)
+  normalized = _normalize_row_symbol(sym)
+
+  haskey(data, normalized) && return data[normalized]
+
+  if Models.has_many_to_many_accessor(model, String(normalized))
+    descriptor = ManyToManyDescriptor(model, String(normalized), Models.get_many_to_many_relation(model, String(normalized)))
+    return descriptor(data)
+  end
+
+  if haskey(model.fields, String(normalized)) && model.fields[String(normalized)] isa Models.sForeignKey
+    throw(ArgumentError(
+      "$(model.name).$(normalized) is a ForeignKey. Lazy FK traversal is not supported in PormG. " *
+      "Use `.on(\"$(normalized)\")` in your query to eagerly join the related table."
+    ))
+  end
+
+  throw(ArgumentError("$(model.name) row has no field or accessor '$(sym)'"))
+end
+
+function Base.setproperty!(row::PormGRow, sym::Symbol, value)
+  sym in (:_data, :_model, :_dirty) && return setfield!(row, sym, value)
+
+  normalized = _normalize_row_symbol(sym)
+  model = getfield(row, :_model)
+  normalized_string = String(normalized)
+
+  if occursin("__", normalized_string)
+    fk_name = first(split(normalized_string, "__", limit=2)) |> String
+    if !(haskey(model.fields, fk_name) && model.fields[fk_name] isa Models.sForeignKey)
+      throw(ArgumentError("Cannot assign to '$(sym)': '$(fk_name)' is not a ForeignKey field on $(model.name)."))
+    end
+  else
+    if !haskey(model.fields, normalized_string)
+      throw(ArgumentError("$(model.name) row has no writable field '$(sym)'."))
+    end
+    if model.fields[normalized_string].primary_key
+      throw(ArgumentError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))
+    end
+  end
+
+  getfield(row, :_data)[normalized] = value
+  push!(getfield(row, :_dirty), normalized)
+  return value
+end
+
+Tables.isrowtable(::Type{Vector{PormGRow}}) = true
+Tables.columnnames(row::PormGRow) = collect(keys(getfield(row, :_data)))
+Tables.getcolumn(row::PormGRow, nm::Symbol) = getfield(row, :_data)[nm]
 
 
 """

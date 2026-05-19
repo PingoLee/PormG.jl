@@ -68,7 +68,7 @@ row = M.Result.objects
 ### For terminal operations, prefer fluent methods
 
 - Use `query.list()` instead of piping to a free `list` helper
-- Use `query.list_json()` instead of a free `list_json` helper
+- Use `query.list(:json)` for JSON output
 - Use `query.delete()` instead of a free `delete(query, ...)` call
 - Use `query.count()` and `query.exists()` for behavior-focused tests
 
@@ -92,7 +92,7 @@ Use internal or function-style helpers only when the test is explicitly about in
 - Use `Qor` for OR logic; do not rely on bitwise `|` or `&` for query composition
 - Prefer `F("fieldname")` for database-side field references in updates, arithmetic projections, and field-to-field comparisons
 - Avoid `query.filter(F("points") > 20)` when the scalar predicate is clearer as `query.filter("points__@gt" => 20)`
-- `DataFrame` is the primary output format for analytical queries, while `list()` returns `Vector{Dict{Symbol, Any}}`
+- `DataFrame` is the primary output format for analytical queries, while `list()` returns `Vector{PormGRow}` and `list(:dict)` returns `Vector{Dict{Symbol, Any}}`
 
 ### Model loading and naming contracts
 

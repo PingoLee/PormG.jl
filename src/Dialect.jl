@@ -445,7 +445,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sUUIDField, sURLField, sSlugField, sJSONField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField
 
 function _format_default_sql_value(default_value)
   if default_value isa AbstractString
@@ -678,6 +678,7 @@ end
 function create_table(conn::PormGPostgres, model::PormGModel)
   columns::Vector{String} = []
   for (field_name, field) in model.fields
+    field isa sManyToManyField && continue
     push!(columns, field_to_column(field_name |> string, field, conn))
   end
 
@@ -687,6 +688,7 @@ end
 function create_table(conn::PormGSQLite, model::PormGModel)
   columns::Vector{String} = []
   for (field_name, field) in model.fields
+    field isa sManyToManyField && continue
     push!(columns, field_to_column(field_name |> string, field, conn))
   end
 
@@ -708,6 +710,14 @@ end
 
 function create_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String})
   return """CREATE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+end
+
+function create_unique_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String})
+  return """CREATE UNIQUE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+end
+
+function create_unique_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String})
+  return """CREATE UNIQUE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
 function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol,String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String)

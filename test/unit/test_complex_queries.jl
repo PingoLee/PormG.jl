@@ -321,8 +321,8 @@ ResultCamelDjangoModel._module = Main
     @test res_dict isa Dict
     @test haskey(res_dict, :sql_text)
 
-    # Test: list_json returns dict when show_query=:dict
-    res_json = q.list_json(show_query=:dict)
+    # Test: list(:json) returns inspection metadata when show_query=:dict
+    res_json = q.list(:json, show_query=:dict)
     @test res_json isa Dict
   end
 
@@ -448,6 +448,55 @@ ResultCamelDjangoModel._module = Main
     res3 = q3.list(show_query=:dict)
     @test !contains(res3[:sql_text], "nothing")
     @test contains(res3[:sql_text], "\"id\"")  # id is quoted to avoid keyword collision
+  end
+
+  # ===== Section: Concat variadic vs vector form =====
+  @testset "Concat variadic and vector forms produce identical SQL" begin
+    using PormG: Concat, Value
+
+    # Variadic form: Concat("forename", Value(" "), "surname")
+    q_var = DriverModel.objects
+    q_var.values("full_name" => Concat("forename", Value(" "), "surname"))
+    res_var = q_var.list(show_query=:dict)
+
+    # Vector form: Concat(["forename", Value(" "), "surname"])
+    q_vec = DriverModel.objects
+    q_vec.values("full_name" => Concat(["forename", Value(" "), "surname"]))
+    res_vec = q_vec.list(show_query=:dict)
+
+    # Both should produce a CONCAT(...) SELECT clause
+    @test contains(res_var[:sql_text], "CONCAT")
+    @test contains(res_vec[:sql_text], "CONCAT")
+
+    # Both forms must generate the same SQL
+    @test res_var[:sql_text] == res_vec[:sql_text]
+    @test res_var[:parameters] == res_vec[:parameters]
+  end
+
+  # ===== Section: Case/When expression as filter RHS =====
+  @testset "Case/When as filter RHS value" begin
+    using PormG: Case, When
+
+    # Filter: year >= threshold where threshold comes from a Case expression
+    q = RaceModel.objects
+    q.filter(
+      "year__@gte" => Case([
+        When("year__@gte" => 2010, then = 2010),
+      ], default = 1950)
+    )
+    res = q.list(show_query=:dict)
+
+    # Must include a CASE WHEN ... END in the WHERE clause
+    @test contains(res[:sql_text], "WHERE")
+    @test contains(res[:sql_text], "CASE")
+    @test contains(res[:sql_text], "WHEN")
+    @test contains(res[:sql_text], "END")
+
+    # Threshold values are parameterised — never interpolated into SQL
+    @test !contains(res[:sql_text], "2010")
+    @test !contains(res[:sql_text], "1950")
+    @test 2010 in res[:parameters]
+    @test 1950 in res[:parameters]
   end
 
 end

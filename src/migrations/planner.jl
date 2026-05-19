@@ -12,7 +12,8 @@ function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol};
   _hash = randstring(8) 
   name = "$(model_name)_$field_name"
   if length(name) + 8 + apend_number > 63
-    name = name[1:63 - length(_hash)]
+    max_prefix_length = max(1, 63 - length(_hash) - apend_number)
+    length(name) > max_prefix_length && (name = first(name, max_prefix_length))
   end
   return "$(name)_$_hash" |> lowercase
 end
@@ -89,6 +90,8 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
 end
 
 function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::Union{String, Symbol}, field::PormGField, name::String)::Nothing
+  Models.is_many_to_many_field(field) && return nothing
+
   # to new fields
   # If the new field is a foreign key
   if hasfield(field |> typeof, :to) && field.db_constraint
@@ -111,17 +114,35 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
   nothing
 end
 
+function _add_many_to_many_auto_constraints(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
+  haskey(model.cache, "many_to_many_auto") || return nothing
+
+  metadata = model.cache["many_to_many_auto"]
+  owner_column = metadata["owner_column"]::String
+  related_column = metadata["related_column"]::String
+  unique_index = metadata["unique_index"]::String
+  _configure_order_dict_migration_plan(
+    migration_plan,
+    model_name,
+    "Create many-to-many unique index",
+    Dialect.create_unique_index(conn, "\"$unique_index\"", "\"$(model.name |> lowercase)\"", ["\"$owner_column\"", "\"$related_column\""])
+  )
+  return nothing
+end
+
 function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
   for (field_name, field) in model.fields       
     name = _hash_field_name(model_name, field_name)      
     _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)      
   end
+  _add_many_to_many_auto_constraints(conn, migration_plan, model_name, model)
   return nothing
 end
 
 function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, field_name::String; temporary_default_value::Any = nothing)::Nothing
   field = model.fields[field_name]
+  Models.is_many_to_many_field(field) && return nothing
   name = _hash_field_name(model_name, field_name)
   _configure_order_dict_migration_plan(migration_plan, model_name, "Add field: $field_name", Dialect.add_field(conn, model_name, field_name, field, temporary_default = temporary_default_value))
   _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
@@ -343,6 +364,7 @@ function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Sym
 
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
 futher_processing = Dict{Symbol, Dict{Symbol, Any}}()
+current_schema = Models.synthesize_many_to_many_through_models(current_schema, settings)
 
 # models is empty set all models to migration_plan
 if isempty(models)

@@ -360,6 +360,74 @@ function _get_on_delete_mode(on_delete::Function)
 end
 
 
+mutable struct sManyToManyField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  to::Union{String, PormGModel, Nothing}
+  through::Union{String, PormGModel, Nothing}
+  related_name::Union{String, Nothing}
+  db_table::Union{String, Nothing}
+  source_field::Union{String, Nothing}
+  target_field::Union{String, Nothing}
+  type::String
+  formater::Function
+end
+
+"""
+    ManyToManyField(to::Union{String, PormGModel}; kwargs...)
+
+Declare a many-to-many relationship without adding a physical column to the
+owning model table. When `through` is omitted, migrations synthesize a join
+table with two foreign keys and a composite unique index.
+
+# Keyword Arguments
+- `through::Union{String, PormGModel, Nothing} = nothing`: explicit through model; skips auto table synthesis.
+- `related_name::Union{String, Nothing} = nothing`: reverse accessor on the target model.
+- `db_table::Union{String, Nothing} = nothing`: auto-through table name override.
+- `source_field::Union{String, Nothing} = nothing`: through-table column pointing to the source model.
+- `target_field::Union{String, Nothing} = nothing`: through-table column pointing to the target model.
+"""
+function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
+  accepted = Set([
+    :verbose_name, :through, :related_name, :db_table, :source_field, :target_field
+  ])
+
+  for (k, v) in kwargs
+    if !(k in accepted)
+      @warn "Unexpected parameter for ManyToManyField. It will be ignored." field="ManyToManyField" param=k value=v
+    end
+  end
+
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  through = get(kwargs, :through, nothing)
+  related_name = get(kwargs, :related_name, nothing)
+  db_table = get(kwargs, :db_table, nothing)
+  source_field = get(kwargs, :source_field, nothing)
+  target_field = get(kwargs, :target_field, nothing)
+
+  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(through isa Union{Nothing, String, PormGModel}) && throw(ArgumentError("The 'through' parameter must be a String, PormGModel, or nothing"))
+  !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
+  !(db_table isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'db_table' must be a String or nothing"))
+  !(source_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'source_field' must be a String, Symbol, or nothing"))
+  !(target_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'target_field' must be a String, Symbol, or nothing"))
+
+  return sManyToManyField(
+    verbose_name,
+    false,
+    to,
+    through,
+    related_name === nothing ? nothing : String(related_name),
+    db_table === nothing ? nothing : format_model_name(String(db_table)),
+    source_field === nothing ? nothing : format_fild_name(source_field),
+    target_field === nothing ? nothing : format_fild_name(target_field),
+    "MANYTOMANY",
+    identity
+  )
+end
+
+
 mutable struct sOneToOneField <: PormGField
   unique::Bool
   verbose_name::Union{String, Nothing}
@@ -1887,7 +1955,7 @@ import PormG.Models: check_password
 # Fetch user from database
 user_query = M.User |> object
 user_query.filter("username" => "ayrton_senna")
-users = user_query |> list
+users = user_query.list(:dict)
 
 if !isempty(users)
     user = users[1]

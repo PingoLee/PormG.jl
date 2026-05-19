@@ -428,6 +428,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   for field in keys(real_obj.insert)
     # Validation checks
     validate_field_data(model, field, real_obj.insert[field], "insert"; allow_primary_key = true)
+    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in create(); use $(model.name).$(field)(source_id).add!(target_id) after creating the source row"))
 
     # check if the field is a primary key
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
@@ -796,6 +797,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   for field in keys(objct.insert)    
     # Validation checks
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
+    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add!, remove!, clear!, or set! methods"))
     
     quoted_field = quote_identifier(field, connection)
 
@@ -904,7 +906,7 @@ query = M.Result |> object
 query.filter("raceid__year" => 2020)
 query.values("driverid__forename", "constructorid__name", "laps" => Count("laps"))
 query.order_by("-laps")
-df = query |> list |> DataFrame
+df = query |> DataFrame
 ```
 """
 function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
@@ -1004,31 +1006,8 @@ function _parse_sqlite_datetime(v::Any)
     try; return DateTime(v[1:min(19, length(v))], dateformat"yyyy-mm-ddTHH:MM:SS"); catch; end
     return v
 end
-"""
-Fetches a list of records from the database and returns them as an array of dictionaries.
-
-This function executes the query and converts each row to a dictionary with column names as keys.
-
-# Arguments
-- `objct::SQLObjectHandler`: The SQL object handler containing the query
-
-# Returns
-- `Vector{Dict{Symbol, Any}}`: Array of dictionaries, where each dictionary represents a row
-
-# Example
-```julia
-query = M.Result |> object
-query.filter("raceid__year" => 2020)
-query.values("driverid__forename", "constructorid__name", "laps")
-records = query |> list  # Returns array of dictionaries
-# Example output: [Dict(:driverid__forename => "Lewis", :constructorid__name => "Mercedes", :laps => 58), ...]
-```
-"""
-function list(objct::SQLObjectHandler; show_query::Symbol = :execute)
-  result = query_list(objct, show_query=show_query)
-  if show_query !== :execute
-    return result
-  end
+function _list_raw(objct::SQLObjectHandler)
+  result = query_list(objct)
   rows = Tables.rowtable(result) |> collect |> x -> [Dict(Symbol(k) => v for (k, v) in pairs(row)) for row in x]
   # SQLite returns DATETIME columns as raw strings. Normalise columns that correspond to a
   # DateTimeField in the primary model into ZonedDateTime / DateTime so the return type
@@ -1043,43 +1022,37 @@ function list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   end
   return rows
 end
-list(; kwargs...) = (objct) -> list(objct; kwargs...)
 
-"""
-Fetches a list of records from the database and returns them as a JSON string.
-
-This function executes the query, converts each row to a dictionary, and serializes the result as JSON.
-
-# Arguments
-- `objct::SQLObjectHandler`: The SQL object handler containing the query
-
-# Returns
-- `String`: JSON string representation of the query results
-
-# Example
-```julia
-query = M.Result |> object
-query.filter("raceid__year" => 2020)
-query.values("driverid__forename", "constructorid__name", "laps")
-json_data = query |> list_json  # Returns JSON string
-# Example output: "[{\"driverid__forename\":\"Lewis\",\"constructorid__name\":\"Mercedes\",\"laps\":58}]"
-```
-"""
-function list_json(objct::SQLObjectHandler; show_query::Symbol = :execute)
-  records = list(objct, show_query=show_query)
-  if show_query !== :execute
-    return records
-  end
-  # Convert Symbol keys to String keys for JSON serialization
-  string_key_records = [Dict(String(k) => v for (k, v) in pairs(record)) for record in records]
-  return JSON.json(string_key_records)
+"""Return model-aware `PormGRow` objects. Default format."""
+function list(objct::SQLObjectHandler, ::Val{:row}; show_query::Symbol = :execute)
+  show_query !== :execute && return query_list(objct, show_query=show_query)
+  model = objct.object.model
+  return [PormGRow(row, model) for row in _list_raw(objct)]
 end
-list_json(; kwargs...) = (objct) -> list_json(objct; kwargs...)
+
+"""Return plain `Dict{Symbol,Any}` rows for framework integrations that need real dictionaries."""
+function list(objct::SQLObjectHandler, ::Val{:dict}; show_query::Symbol = :execute)
+  show_query !== :execute && return query_list(objct, show_query=show_query)
+  return _list_raw(objct)
+end
+
+"""Return a JSON string without allocating `PormGRow` wrappers."""
+function list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execute)
+  show_query !== :execute && return query_list(objct, show_query=show_query)
+  return JSON.json([Dict(String(k) => v for (k, v) in row) for row in _list_raw(objct)])
+end
+
+function list(objct::SQLObjectHandler, ::Val{F}; kwargs...) where F
+  throw(ArgumentError("Unknown list format :$F. Expected :row, :dict, or :json."))
+end
+
+list(objct::SQLObjectHandler, format::Symbol; kwargs...) = list(objct, Val(format); kwargs...)
+list(objct::SQLObjectHandler; kwargs...) = list(objct, Val(:row); kwargs...)
 
 """
     first(objct::SQLObjectHandler; show_query::Symbol = :execute)
 
-Return the first record matching the current query, or `nothing` if no records match.
+Return the first `PormGRow` matching the current query, or `nothing` if no records match.
 
 **Mutates the handler**: calls `objct.limit(1)` on the handler before executing. This is
 permanent — the `limit(1)` persists on the object after the call returns (last-call
@@ -1113,3 +1086,158 @@ function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
   return isempty(res) ? nothing : res[1]
 end
 first(; kwargs...) = (objct) -> first(objct; kwargs...)
+
+function _get_filter_repr(filter::SQLTypeOper)::String
+  column = filter.column isa SQLTypeField ? filter.column.field : filter.column
+  return "$(column) $(filter.operator) $(filter.values)"
+end
+
+function _get_filter_repr(filter::SQLTypeQ)::String
+  return "(" * join(_get_filter_repr.(filter.filters), " AND ") * ")"
+end
+
+function _get_filter_repr(filter::SQLTypeQor)::String
+  return "(" * join(_get_filter_repr.(getfield(filter, :or)), " OR ") * ")"
+end
+
+_get_filter_repr(filter) = sprint(show, filter)
+
+"""
+    get(objct::SQLObjectHandler, filters...; show_query=:execute) -> PormGRow
+
+Return exactly one row matching the query filters.
+
+Filters can be passed inline or applied with `.filter()` before calling `.get()`:
+
+```julia
+driver = M.Driver.objects.get("driverref" => "hamilton")
+driver = M.Driver.objects.filter("driverref" => "hamilton").get()
+```
+
+Raises `DoesNotExist` when no rows match and `MultipleObjectsReturned` when more
+than one row matches.
+"""
+function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
+  !isempty(filters) && up_filter!(objct.object, filters)
+
+  q = deepcopy(objct)
+  q = q.limit(2)
+
+  if show_query !== :execute
+    return query_list(q, show_query=show_query)
+  end
+
+  rows = list(q)
+  model_name = objct.object.model.name
+  filter_repr = isempty(objct.object.filter) ? "(none)" : join(_get_filter_repr.(objct.object.filter), ", ")
+
+  isempty(rows) && throw(DoesNotExist(model_name, filter_repr))
+  length(rows) > 1 && throw(MultipleObjectsReturned(model_name, length(rows), filter_repr))
+
+  return rows[1]
+end
+
+function _row_update_pairs(updates::Dict{String,Any})
+  return [field => updates[field] for field in sort(collect(keys(updates)))]
+end
+
+function _row_related_model(model::PormGModel, fk_meta::Models.sForeignKey)::PormGModel
+  fk_meta.to isa PormGModel && return fk_meta.to
+
+  model._module !== nothing || throw(ArgumentError("Cannot resolve related model $(fk_meta.to) for $(model.name); model module is not initialized."))
+  related = Base.invokelatest(getfield, model._module, Symbol(fk_meta.to))
+  related isa PormGModel && return related
+  throw(ArgumentError("Related model $(fk_meta.to) for $(model.name) is not a PormG model."))
+end
+
+function _row_require_data_key(data::Dict{Symbol,Any}, key::Symbol, context::String)
+  haskey(data, key) && return data[key]
+  throw(ArgumentError("Cannot save() $(context): row data does not include required key '$(key)'. Select it before mutating and saving the row."))
+end
+
+"""
+    save(row::PormGRow; show_query=:execute) -> PormGRow | Vector
+
+Persist dirty fields assigned on a `PormGRow`.
+
+Direct fields update the row's own table. Projected fields like
+`driverid__forename` update the related table identified by the `driverid`
+foreign key value already present on the row.
+"""
+function save(row::PormGRow; show_query::Symbol = :execute)
+  dirty = getfield(row, :_dirty)
+  isempty(dirty) && return row
+
+  data = getfield(row, :_data)
+  model = getfield(row, :_model)
+
+  pk_sym = try
+    Models.get_model_pk_field(model)
+  catch e
+    e isa ArgumentError || rethrow(e)
+    throw(ArgumentError("save() requires exactly one primary key field; $(model.name) is not supported."))
+  end
+  pk_sym === nothing && throw(ArgumentError("save() requires exactly one primary key field; $(model.name) is not supported."))
+
+  own_updates = Dict{String,Any}()
+  fk_updates = Dict{Symbol,Dict{String,Any}}()
+  touched_fk_fields = Set{Symbol}()
+
+  for dirty_sym in dirty
+    normalized = _normalize_row_symbol(dirty_sym)
+    normalized_string = String(normalized)
+    separator = findfirst("__", normalized_string)
+
+    if separator === nothing
+      own_updates[normalized_string] = data[normalized]
+      if haskey(model.fields, normalized_string) && model.fields[normalized_string] isa Models.sForeignKey
+        push!(touched_fk_fields, normalized)
+      end
+    else
+      fk_sym = Symbol(normalized_string[1:first(separator)-1])
+      column = normalized_string[last(separator)+1:end]
+      fk_bucket = get!(fk_updates, fk_sym, Dict{String,Any}())
+      fk_bucket[column] = data[normalized]
+    end
+  end
+
+  conflict = intersect(touched_fk_fields, Set(keys(fk_updates)))
+  isempty(conflict) || throw(ArgumentError(
+    "Cannot save() a row after mutating both FK field(s) $(collect(conflict)) and projected '__' fields under the same prefix. Save the FK change separately first."
+  ))
+
+  settings, _, _ = get_settings(object(model))
+
+  function planned_updates(show_mode::Symbol)
+    inspections = Any[]
+
+    if !isempty(own_updates)
+      pk_value = _row_require_data_key(data, pk_sym, "own-table updates for $(model.name)")
+      own_pairs = _row_update_pairs(own_updates)
+      push!(inspections, object(model).filter(String(pk_sym) => pk_value).update(own_pairs...; show_query=show_mode))
+    end
+
+    for fk_sym in sort(collect(keys(fk_updates)); by=String)
+      fk_meta = model.fields[String(fk_sym)]::Models.sForeignKey
+      fk_value = _row_require_data_key(data, fk_sym, "projected updates under '$(fk_sym)' for $(model.name)")
+      related_model = _row_related_model(model, fk_meta)
+      fk_pairs = _row_update_pairs(fk_updates[fk_sym])
+      related_query = object(related_model)
+      related_query.filter(String(fk_meta.pk_field) => fk_value)
+      push!(inspections, related_query.update(fk_pairs...; show_query=show_mode))
+    end
+
+    return inspections
+  end
+
+  if show_query !== :execute
+    return planned_updates(show_query)
+  end
+
+  run_in_transaction(settings) do
+    planned_updates(:execute)
+  end
+
+  empty!(dirty)
+  return row
+end

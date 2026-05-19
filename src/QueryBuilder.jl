@@ -4,7 +4,7 @@ import DataFrames, Tables, JSON, CSV
 using Dates, TimeZones, Intervals, Decimals, UUIDs
 using SQLite, LibPQ
 
-import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey
+import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey, sManyToManyField
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
@@ -14,11 +14,13 @@ import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, tra
 	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
 	get_settings as get_configuration_settings
 import PormG: @pormg_debug
-import Base: first
+import Base: first, get
 
 #
 # SQL Sanitization
 include("querybuilder/types.jl")
+
+include("querybuilder/exceptions.jl")
 
 include("querybuilder/sanitization.jl")
 
@@ -29,6 +31,8 @@ include("querybuilder/parameters.jl")
 include("querybuilder/functions.jl")
 
 include("querybuilder/object_manager.jl")
+
+include("querybuilder/many_to_many.jl")
 
 include("querybuilder/operators.jl")
 
@@ -82,6 +86,8 @@ export object
 export page
 export query
 export update
+export get
+export PormGRow, DoesNotExist, MultipleObjectsReturned
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 

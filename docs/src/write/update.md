@@ -2,6 +2,43 @@
 
 PormG allows you to update existing records efficiently using filters, relationship lookups, and database-level expressions.
 
+## Instance Updates with `row.save()`
+
+Use `row.save()` when you have already fetched exactly one model row and want to persist assignments made to that row.
+
+```julia
+driver = M.Driver.objects.get("driverref" => "hamilton")
+
+driver.nationality = "British"
+driver.save()
+```
+
+Only fields assigned on the row are included in the generated `UPDATE`. The primary key must be present on the row, and models with no primary key or multiple primary keys are rejected.
+
+Inspection modes work the same way as other write methods, but they do not execute the update or clear the row's dirty state:
+
+```julia
+driver = M.Driver.objects.get("driverref" => "hamilton")
+driver.forename = "Lewis"
+
+sql = driver.save(show_query=:sql)
+# row is still dirty; call driver.save() to execute
+```
+
+Rows can also save projected foreign-key fields selected through `values(...)`. In this example, the assignment targets the related `Driver` table, not the `Result` table:
+
+```julia
+result = M.Result.objects
+  .filter("resultid" => 1)
+  .values("resultid", "driverid", "driverid__nationality")
+  .get()
+
+result.driverid__nationality = "British"
+result.save()
+```
+
+If you need to change both the foreign-key value and projected fields under that same foreign key, save those changes in two steps so PormG can route each update unambiguously.
+
 ## Single Record Updates
 
 Update specific records by applying a filter to the model's objects and then calling `.update()`.

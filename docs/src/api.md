@@ -49,16 +49,37 @@ These methods finalize the query and execute it against the database:
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
-| `.list()` | `Vector{Dict{Symbol, Any}}` | Returns all matching rows as dictionaries. |
-| `.all()` | `Vector{Dict}` | Alias for `.list()`. |
+| `.list()` | `Vector{PormGRow}` | Returns model-aware rows with dot-access and relationship accessors. |
+| `.list(:dict)` | `Vector{Dict{Symbol, Any}}` | Returns plain dictionaries for framework integrations that need real `Dict` values. |
+| `.list(:json)` | `String` | Returns results as a JSON string. |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
-| `.first()` | `Dict` or `nothing` | Returns the first matching record or `nothing`. |
-| `.list_json()` | `String` | Returns results as a JSON string. |
+| `.first()` | `PormGRow` or `nothing` | Returns the first matching record or `nothing`. |
+| `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
 | `.create(key => value, ...)` | `Dict` | Inserts a single record and returns it. |
 | `.update(key => value, ...)` | — | Updates all matching records. |
 | `.delete()` | — | Deletes all matching records. |
+
+### `PormGRow` Instance Methods
+
+Rows returned by `.list()`, `.first()`, and `.get()` expose model-aware property access and instance-level persistence:
+
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `row.field` | value | Reads a selected field using normalized Julia-style field names. |
+| `row[:field]` | value | Reads a selected field by `Symbol` or `String`. |
+| `row.relationship` | `ManyToManyManager` | Accesses a many-to-many relationship manager when the model defines one. |
+| `row.save()` | `PormGRow` | Persists fields assigned on the row and clears its dirty state. |
+| `row.save(show_query=:sql)` | `Vector` | Returns planned `UPDATE` inspection payloads without executing or clearing dirty state. |
+
+```julia
+driver = M.Driver.objects.get("driverref" => "hamilton")
+driver.nationality = "British"
+driver.save()
+```
+
+`row.save()` requires a model with exactly one primary key. Primary-key assignments are rejected, and a row fetched without the primary key selected cannot be saved.
 
 **Example:**
 
@@ -287,13 +308,23 @@ PormG exports a comprehensive set of SQL functions:
 
 ### Case Expressions
 
+**Binary (single condition):** pass `otherwise` directly to `When` — no `Case` wrapper needed:
+
 ```julia
-Case(
-    ("positionOrder" => 1) => Value("Winner"),
-    ("positionOrder__@lte" => 3) => Value("Podium"),
-    default=Value("Other")
-)
+# CASE WHEN idade >= 60 THEN 'Sim' ELSE 'Não' END
+"mais_60" => When("idade__@gte" => 60, then = "Sim", otherwise = "Não")
 ```
+
+**Multi-branch:** wrap a vector of `When` fragments in `Case`:
+
+```julia
+"category" => Case([
+    When("positionOrder" => 1,            then = "Winner"),
+    When("positionOrder__@lte" => 3,      then = "Podium"),
+], default = "Other")
+```
+
+Plain strings and numbers work as `then`, `otherwise`, and `default` values without `Value()`.
 
 See [Functions and Dates](read/functions_and_dates.md) for more details.
 

@@ -197,8 +197,16 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
 
       current_model = field.to isa PormGModel ? field.to : getfield(current_module, Symbol(String(field.to)))
     elseif haskey(current_model.related_objects, part)
-      reverse_model = Symbol(uppercasefirst(string(current_model.related_objects[part][3])))
-      current_model = getfield(current_module, reverse_model)
+      related_value = current_model.related_objects[part]
+      if related_value isa Models.ManyToManyRelation
+        # ManyToMany reverse traversal in cjoin path: hop directly to the
+        # related model, the through table is materialized later by the
+        # query builder when emitting joins.
+        current_model = getfield(current_module, Symbol(related_value.related_binding))
+      else
+        reverse_model = Symbol(uppercasefirst(string(related_value[3])))
+        current_model = getfield(current_module, reverse_model)
+      end
     else
       throw(ArgumentError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'."))
     end

@@ -242,7 +242,11 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
   _django = collector.settings.django_prefix === nothing ? false : true
     
   # For models with foreign keys pointing to this model (related_model has FK -> model)
-  for (related_name, (field_name, pk_field, related_model_name, pk_model)) in model.related_objects
+  for (related_name, related_value) in model.related_objects
+    # Skip many-to-many reverse accessors — these are handled by the through
+    # table's own CASCADE FK on the owner side, not by this loop.
+    related_value isa Models.ManyToManyRelation && continue
+    field_name, pk_field, related_model_name, pk_model = related_value
     _django && (related_model_name = replace(string(related_model_name), collector.settings.django_prefix * "_" => "") |> Symbol)
     related_model = getfield(model._module, related_model_name |> capitalize_symbol);
 

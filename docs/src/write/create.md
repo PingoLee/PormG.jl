@@ -15,6 +15,14 @@ import .models as M
 new_record = M.Just_a_test_deletion.objects.create("name" => "test", "test_result" => 1)
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "just_a_test_deletion" ("name", "test_result") 
+VALUES ($1, $2) 
+RETURNING *
+-- Parameters: ["test", 1]
+```
+
 ### Return Value
 
 The return value is a `Dict{Symbol, Any}` with all fields of the inserted record:
@@ -37,7 +45,17 @@ new_record = M.Driver.objects.create(
     "driverref" => "hamilton",
     "dob" => Date(1985, 1, 7)
 )
+```
 
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "driver" ("forename", "surname", "nationality", "driverref", "dob") 
+VALUES ($1, $2, $3, $4, $5) 
+RETURNING *
+-- Parameters: ["Lewis", "Hamilton", "British", "hamilton", '1985-01-07']
+```
+
+```julia
 # Access the auto-generated ID
 driver_id = new_record[:driverid]
 
@@ -48,6 +66,14 @@ race_result = M.Result.objects.create(
     "constructorid" => 1,
     "positionorder" => 1
 )
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "result" ("driverid", "raceid", "constructorid", "positionorder") 
+VALUES ($1, $2, $3, $4) 
+RETURNING *
+-- Parameters: [driver_id, 1, 1, 1]
 ```
 
 ### Validation
@@ -80,6 +106,14 @@ record = M.Status.objects.create("status" => "Finished")
 # created_at will be set automatically to the current timestamp
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "status" ("status") 
+VALUES ($1) 
+RETURNING *
+-- Parameters: ["Finished"]
+```
+
 ### Generated Fields
 
 Primary key fields with `GENERATED ALWAYS AS IDENTITY` or auto-increment are created automatically:
@@ -96,6 +130,14 @@ record = M.Driver.objects.create(
 
 # The returned dict includes the generated ID
 generated_id = record[:driverid]
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "driver" ("forename", "surname", "nationality", "driverref", "dob") 
+VALUES ($1, $2, $3, $4, $5) 
+RETURNING *
+-- Parameters: ["Max", "Verstappen", "Dutch", "max_verstappen", '1997-04-01']
 ```
 
 ## Creating with Relationships
@@ -118,7 +160,17 @@ circuit = M.Circuit.objects.create(
     "alt" => 5,
     "url" => "https://en.wikipedia.org/wiki/Circuit_de_Monaco"
 )
+```
 
+**Generated SQL for Step 1 (PostgreSQL):**
+```sql
+INSERT INTO "circuit" ("name", "country", "circuitref", "location", "lat", "lng", "alt", "url") 
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+RETURNING *
+-- Parameters: ["Monaco", "Monaco", "monaco", "Monte Carlo", 43.7347, 7.4206, 5, "https://..."]
+```
+
+```julia
 # Step 2: Extract the auto-generated circuit ID
 circuit_id = circuit[:circuitid]
 
@@ -132,6 +184,14 @@ race = M.Race.objects.create(
     "time" => Time(13, 0, 0),
     "url" => "https://www.formula1.com/races/2024-monaco-gp"
 )
+```
+
+**Generated SQL for Step 3 (PostgreSQL):**
+```sql
+INSERT INTO "race" ("year", "round", "circuitid", "name", "date", "time", "url") 
+VALUES ($1, $2, $3, $4, $5, $6, $7) 
+RETURNING *
+-- Parameters: [2024, 8, circuit_id, "Monaco Grand Prix", '2024-05-26', '13:00:00', "https://..."]
 ```
 
 ### Example: Result with Driver, Constructor, and Race
@@ -159,6 +219,14 @@ result = M.Result.objects.create(
 @info "Result created" result_id=result[:resultid] points=result[:points]
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "result" ("raceid", "driverid", "constructorid", "positionorder", "points", "grid", "laps") 
+VALUES ($1, $2, $3, $4, $5, $6, $7) 
+RETURNING *
+-- Parameters: [race_id, driver_id, constructor_id, 1, 25.0, 1, 58]
+```
+
 ### Foreign Key Constraints
 
 PormG enforces referential integrity. Attempting to create a record with a non-existent foreign key will raise an error:
@@ -176,6 +244,14 @@ try
 catch e
     @error "Foreign key constraint violation" exception=e
 end
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "race" ("year", "round", "circuitid", "name", "date") 
+VALUES ($1, $2, $3, $4, $5) 
+RETURNING *
+-- Parameters: [2025, 1, 9999, "Phantom Grand Prix", '2025-03-23']
 ```
 
 ## Creating Multiple Records Individually
@@ -207,6 +283,13 @@ for (name, test_result) in test_data
 end
 
 @info "Created $(length(created_ids)) records" ids=created_ids
+```
+
+**Generated SQL per iteration (PostgreSQL):**
+```sql
+INSERT INTO "just_a_test_deletion" ("name", "test_result") 
+VALUES ($1, $2) 
+RETURNING *
 ```
 
 ### Why Not Loop for Large Datasets?

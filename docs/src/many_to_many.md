@@ -82,6 +82,32 @@ M2m_membership_scratch = Models.Model("m2m_membership_scratch",
 
 This pattern matches Django exactly and keeps your model definitions clean and readable.
 
+### Relationship Mutator Limitations on Custom Through Tables
+
+> [!WARNING]
+> **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add!`, `remove!`, `clear!`, and `set!`) are disabled and will raise an `ArgumentError`.
+
+This constraint prevents silent failures or incomplete rows, as PormG cannot determine appropriate values to insert for your custom fields. 
+
+To link or unlink rows when using custom through models with extra fields, interact with the intermediate through model **directly** using its own object manager:
+
+```julia
+# Link a driver to a team with extra metadata:
+M2m_membership_scratch.objects.create(
+    "driver" => driver[:id], 
+    "team" => team[:id], 
+    "joined_year" => 2005
+)
+
+# Unlink a relationship:
+M2m_membership_scratch.objects.filter(
+    "driver" => driver[:id], 
+    "team" => team[:id]
+).delete()
+```
+
+If the custom intermediate model *only* contains the two foreign keys (and no extra columns), mutator methods like `add!` and `remove!` are fully supported.
+
 ---
 
 ## The ManyToMany Manager API
@@ -95,7 +121,7 @@ Model-level access starts from `.objects` and builds queries across all rows:
 ```julia
 drivers = M.M2m_driver_endorsement_scratch.objects
 drivers.filter("sponsors__name" => "Petrolux")
-drivers.values("driverRef")
+drivers.values("driverref")
 rows = drivers.list()
 ```
 
@@ -183,7 +209,7 @@ query = M.M2m_driver_multi_hop_scratch.objects
 query.filter("sponsors__country__name" => "Italy")
 
 # Select the driver's ref and the sponsor's name
-query.values("driverRef", "sponsors__name")
+query.values("driverref", "sponsors__name")
 
 df = query |> DataFrame
 ```

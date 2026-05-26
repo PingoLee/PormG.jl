@@ -22,7 +22,7 @@ Driver = Models.Model(
 )
 ```
 
-3. **Example of module contruction in `db/models.jl`**
+3. **Example of module construction in `db/models.jl`**
 
 ```julia
 module models
@@ -36,7 +36,7 @@ Status = Models.Model(
 )
 
 Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the names of models.
-  circuitId = Models.IDField(), # the PormG automatically do a lowercase for the name of the field, so you can use a capital letter in the name of the field, Hoewver you need to use a lowercase in the query operations.
+  circuitId = Models.IDField(), # PormG automatically lowercases the name of the field, so you can use a capital letter in the name of the field. However, you must use lowercase in query operations.
   circuitRef = Models.CharField(),
   name = Models.CharField(),
   location = Models.CharField(),
@@ -104,7 +104,7 @@ Result = Models.Model(
   milliseconds = Models.IntegerField(null=true),
   fastestLap = Models.IntegerField(null=true),
   rank = Models.IntegerField(null=true),
-  fastestLapTime = Models.TimeField(null=true),
+  fastestLapTime = Models.DurationField(null=true),
   fastestLapSpeed = Models.FloatField(null=true),
   statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
 )

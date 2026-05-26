@@ -30,7 +30,7 @@ makedocs(
             "Overview" => "migrations/index.md",
             "Workflow" => "migrations/workflow.md",
             "Advanced" => "migrations/advanced.md",
-            "Tachikoma Dashboard" => "migrations/tachikoma.md",
+            # "Tachikoma Dashboard" => "migrations/tachikoma.md",
         ],
         "Writing" => [
             "Overview" => "write/index.md",
@@ -43,6 +43,7 @@ makedocs(
         "Reading" => [
             "Overview" => "read/index.md",
             "Values and Joins" => "read/values_and_joins.md",
+            "Custom Joins" => "read/custom_joins.md",
             "Filters and Aggregates" => "read/filters_and_aggregates.md",
             "Functions and Dates" => "read/functions_and_dates.md",
             "Subqueries and CTEs" => "read/subqueries_and_ctes.md",
@@ -51,7 +52,6 @@ makedocs(
             "Q Objects" => "read/q_objects.md",
         ],
         "Import from Django" => "import_django.md",
-        "Custom Joins" => "custom_joins.md",
 
         "Advisory Locks" => "advisory_lock.md",
         "Contributing" => "contributing.md",

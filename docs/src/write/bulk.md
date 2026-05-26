@@ -50,6 +50,15 @@ bulk_insert(query, df)
 bulk_insert(query, df, chunk_size=500)
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "driver" ("forename", "surname", "nationality", "driverref", "dob") 
+VALUES 
+  ($1, $2, $3, $4, $5), 
+  ($6, $7, $8, $9, $10),
+  -- ... (batched up to chunk_size rows)
+```
+
 ### Auto-Generated Primary Keys
 
 Do not prefill an auto-increment primary key with `max(id) + 1` before calling `bulk_insert()` or `bulk_copy()`.
@@ -194,6 +203,11 @@ query = M.Driver.objects
 bulk_copy(query, df)
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+COPY "driver" ("forename", "surname", "nationality", "driverref", "dob") FROM STDIN WITH (FORMAT CSV, HEADER FALSE)
+```
+
 ### Advanced: Column Mapping
 
 If your `DataFrame` column names differ from the database schema, use the `columns` parameter:
@@ -205,6 +219,11 @@ bulk_copy(query, df_raw, columns = [
     "last_name" => "surname",
     "country" => "nationality"
 ])
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+COPY "driver" ("forename", "surname", "nationality") FROM STDIN WITH (FORMAT CSV, HEADER FALSE)
 ```
 
 ### Sequence Management
@@ -296,7 +315,21 @@ bulk_update(query, df,
     columns=["points"],                      # Auto-matches 'points' in DF
     filters=["resultid"]                    # Auto-matches 'resultid' in DF
 )
+```
 
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "result" AS "Tb" 
+SET "points" = "source"."points" 
+FROM (VALUES 
+  (1::bigint, 26.0::double precision), 
+  (2::bigint, 19.0::double precision),
+  -- ... (chunked multi-row values)
+) AS "source"("resultid", "points") 
+WHERE "Tb"."resultid" = "source"."resultid"
+```
+
+```julia
 # Using explicit mapping (Adaptor style)
 # This allows using a DataFrame with totally different column names
 custom_df = DataFrame(
@@ -308,6 +341,18 @@ bulk_update(query, custom_df,
     columns=["new_score" => "points"],      # Map 'new_score' to table field 'points'
     filters=["record_id" => "id"]           # Map 'record_id' to table field 'id'
 )
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "result" AS "Tb" 
+SET "points" = "source"."new_score" 
+FROM (VALUES 
+  (1::bigint, 25::integer), 
+  (2::bigint, 18::integer), 
+  (3::bigint, 15::integer)
+) AS "source"("record_id", "new_score") 
+WHERE "Tb"."id" = "source"."record_id"
 ```
 
 ### Matching and Execution Rules
@@ -368,6 +413,18 @@ bulk_update(query, df,
         "category_id" => 172100   # Static: Only update records where DB 'category_id' is 172100
     ]
 )
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "result" AS "Tb" 
+SET "points" = "source"."new_points" 
+FROM (VALUES 
+  (1::bigint, 25::integer), 
+  (2::bigint, 18::integer)
+) AS "source"("record_id", "new_points") 
+WHERE "Tb"."id" = "source"."record_id" 
+  AND "Tb"."category_id" = 172100
 ```
 
 The `filters=` argument is the whole contract for the bulk-update `WHERE` clause. If you already used `query.filter(...)` to prepare the `DataFrame`, switch back to a fresh handler for the write or repeat the predicate in `filters=`.

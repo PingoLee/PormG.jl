@@ -62,6 +62,11 @@ end
     @test nrow(df_from_rows) == 1
     @test nrow(df_direct) == 1
     @test df_from_rows[1, :driverid] == df_direct[1, :driverid]
+
+    # Tables.getcolumn symbol normalization test (BUG-10 regression)
+    row_item = row_result[1]
+    @test Tables.getcolumn(row_item, :driverId) == row_item.driverid
+    @test Tables.getcolumn(row_item, :driverid) == row_item.driverid
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

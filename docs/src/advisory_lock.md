@@ -18,7 +18,9 @@ Common use cases include:
 The `with_advisory_lock` function requires a **connection key** (pointing to a PostgreSQL database) and a **key string**.
 
 ```julia
-import PormG.models as M
+# Load your models (preferred: hot-reload-friendly, self-registering)
+PormG.@import_models "db/models.jl" models
+import .models as M
 
 # Example: Ensuring only one task updates a specific Driver's statistics
 driver_id = 1

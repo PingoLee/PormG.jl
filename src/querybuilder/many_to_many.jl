@@ -76,6 +76,33 @@ function _m2m_target_ids(manager::ManyToManyManager, targets)::Vector{Any}
   return ids
 end
 
+function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
+  owner_module = manager.owner_model._module
+  owner_module === nothing && return false
+
+  # Only catch ArgumentError ("binding not found") — the expected failure when
+  # the through model is auto-generated and not registered in the module.
+  # Any other exception (type error, module error, etc.) should propagate so
+  # the caller is not silently allowed to mutate a through table with extra fields.
+  through_model = try
+    _m2m_model_from_binding(owner_module, manager.relation.through_model, manager.relation.through_model)
+  catch e
+    e isa ArgumentError && return false
+    rethrow(e)
+  end
+
+  owner_col = manager.relation.owner_column
+  related_col = manager.relation.related_column
+
+  for field_name in keys(through_model.fields)
+    clean_name = strip(field_name, '"')
+    if clean_name != "id" && clean_name != owner_col && clean_name != related_col
+      return true
+    end
+  end
+  return false
+end
+
 function (descriptor::ManyToManyDescriptor)(owner)
   owner_id = _m2m_extract_pk(owner, descriptor.relation.owner_pk)
   owner_module = descriptor.owner_model._module
@@ -93,39 +120,59 @@ function _m2m_query(manager::ManyToManyManager)
 end
 
 function add!(manager::ManyToManyManager, targets...)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   target_ids = _m2m_target_ids(manager, targets)
-  isempty(target_ids) && return 0
+  isempty(target_ids) && return nothing
 
   settings, connection, conn_key = _m2m_settings(manager)
   !settings.change_data && throw(ArgumentError("Error in many-to-many add!, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to insert"))
 
-  parameters = get_parameter(connection)
-  set_context!(parameters, :select)
-  owner_value = _m2m_format_owner(manager)
-  groups = String[]
-  for target_id in target_ids
-    owner_placeholder = add_parameter!(parameters, owner_value)
-    target_placeholder = add_parameter!(parameters, target_id)
-    push!(groups, "($owner_placeholder, $target_placeholder)")
-  end
-
   table_name = safe_table_identifier(manager.relation.through_model, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
   related_column = quote_identifier(manager.relation.related_column, connection)
+  owner_value = _m2m_format_owner(manager)
 
-  sql = if connection isa PormGPostgres
-    "INSERT INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", ")) ON CONFLICT ($owner_column, $related_column) DO NOTHING;"
+  if connection isa PormGPostgres
+    # Use INSERT ... SELECT ... WHERE NOT EXISTS for idempotent inserts.
+    # This works regardless of whether a unique constraint exists on the
+    # through table (auto-generated through tables have one; explicit
+    # through models typically do not).
+    # Since Postgres/LibPQ parameterized queries do not allow multiple statements
+    # in a single query execution, we execute them one by one.
+    for target_id in target_ids
+      parameters = get_parameter(connection)
+      set_context!(parameters, :select)
+      owner_ph = add_parameter!(parameters, owner_value)
+      target_ph = add_parameter!(parameters, target_id)
+      owner_ph2 = add_parameter!(parameters, owner_value)
+      target_ph2 = add_parameter!(parameters, target_id)
+      sql = "INSERT INTO $table_name ($owner_column, $related_column) " *
+            "SELECT $owner_ph, $target_ph " *
+            "WHERE NOT EXISTS (" *
+              "SELECT 1 FROM $table_name WHERE $owner_column = $owner_ph2 AND $related_column = $target_ph2" *
+            ");"
+      fetch(settings, sql, parameters)
+    end
   elseif connection isa PormGSQLite
-    "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
+    parameters = get_parameter(connection)
+    set_context!(parameters, :select)
+    groups = String[]
+    for target_id in target_ids
+      owner_placeholder = add_parameter!(parameters, owner_value)
+      target_placeholder = add_parameter!(parameters, target_id)
+      push!(groups, "($owner_placeholder, $target_placeholder)")
+    end
+    sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
+    fetch(settings, sql, parameters)
   else
     throw(ArgumentError("Unsupported connection type $(typeof(connection)) for many-to-many add!"))
   end
 
-  fetch(settings, sql, parameters)
   return nothing
 end
 
 function remove!(manager::ManyToManyManager, targets...)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
@@ -153,6 +200,7 @@ function remove!(manager::ManyToManyManager, targets...)
 end
 
 function clear!(manager::ManyToManyManager)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   settings, connection, conn_key = _m2m_settings(manager)
   !settings.change_data && throw(ArgumentError("Error in many-to-many clear!, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
 
@@ -180,6 +228,7 @@ function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
 end
 
 function set!(manager::ManyToManyManager, targets...)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   desired_ids = Set(_m2m_target_ids(manager, targets))
   settings, _, _ = _m2m_settings(manager)
 

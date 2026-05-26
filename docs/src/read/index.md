@@ -87,17 +87,17 @@ Chain methods directly and finish with a terminal call:
 
 ```julia
 # Full chain with terminal call
-drivers = M.Driver.objects
-    .filter("nationality" => "Brazilian")
-    .order_by("surname")
-    .limit(10)
-    .list()
+drivers = M.Driver.objects.
+    filter("nationality" => "Brazilian").
+    order_by("surname").
+    limit(10).
+    list()
 
 # Route a query to another configured database pool
-results = M.Result.objects
-    .db("client_42")
-    .filter("points__@gt" => 10)
-    .list()
+results = M.Result.objects.
+    db("client_42").
+    filter("points__@gt" => 10).
+    list()
 ```
 
 ### Pipe Style (Legacy)
@@ -184,10 +184,10 @@ winners_by_team   = base_query.copy().values("constructorId__name", "wins" => Co
 You can inspect the generated SQL without executing the query:
 
 ```julia
-query = M.Result.objects
-    .filter("driverId__nationality" => "Brazilian")
-    .values("driverId__surname", "points")
-    .order_by("-points")
+query = M.Result.objects.
+    filter("driverId__nationality" => "Brazilian").
+    values("driverId__surname", "points").
+    order_by("-points")
 
 # Get just the SQL string
 sql = query.list(show_query=:sql)

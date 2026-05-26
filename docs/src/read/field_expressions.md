@@ -256,9 +256,9 @@ M.Result.objects.filter("points__@gt" => 10).update("points" => F("points") * 0.
 Set one column equal to another column in the same row:
 
 ```julia
-M.Just_a_test_deletion.objects
-    .filter("id" => 5)
-    .update("test_result2" => F("test_result"))
+M.Just_a_test_deletion.objects.
+    filter("id" => 5).
+    update("test_result2" => F("test_result"))
 ```
 
 ### Complex Expressions

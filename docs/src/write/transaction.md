@@ -52,6 +52,28 @@ PormG.run_in_transaction("db_2") do
 end
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+-- PormG transaction boundary control
+BEGIN;
+
+-- SELECT query executing inside the transaction connection
+SELECT 
+  "T1"."forename" AS "driverid__forename", 
+  "T1"."surname" AS "driverid__surname", 
+  "T2"."name" AS "constructorid__name", 
+  "Tb"."points" AS "points"
+FROM "result" AS "Tb"
+INNER JOIN "races" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+INNER JOIN "driver" AS "T1" ON "Tb"."driverid" = "T1"."driverid"
+INNER JOIN "constructor" AS "T2" ON "Tb"."constructorid" = "T2"."constructorid"
+WHERE "Tb_1"."year" = \$1 AND "Tb"."positionorder" = \$2
+-- Parameters: [2025, 1]
+
+-- Auto-committed when the block completes successfully
+COMMIT;
+```
+
 The connection is automatically returned to the pool when the block exits. If any exception is raised inside the block, the transaction is rolled back and the exception rethrows.
 
 
@@ -84,6 +106,25 @@ PormG.run_in_transaction("db_2") do
   
   # Both changes succeed together, or both roll back
 end
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+BEGIN;
+
+-- Pit stop insert
+INSERT INTO "pit_stop" ("raceid", "driverid", "stop", "lap", "time", "duration") 
+VALUES (\$1, \$2, \$3, \$4, \$5, \$6) 
+RETURNING *
+-- Parameters: [900, 1, 1, 42, 35, 22.5]
+
+-- Driver stats update using F() expression
+UPDATE "driver" AS "Tb" 
+SET "pit_stops_count" = "Tb"."pit_stops_count" + 1 
+WHERE "Tb"."driverid" = \$1
+-- Parameters: [1]
+
+COMMIT;
 ```
 
 If the driver update fails, the pit stop is never recorded. This keeps championship data consistent.
@@ -314,7 +355,22 @@ catch e
   @error "Transaction failed, rolling back" exception=e
   # Perform cleanup (e.g., release temporary resources)
 end
+```
+**Generated SQL (PostgreSQL):**
+```sql
+BEGIN;
 
+-- Insert attempted
+INSERT INTO "result" ("raceid", "driverid", "constructorid", "points") 
+VALUES (\$1, \$2, \$3, \$4) 
+RETURNING *
+-- Parameters: [1, 1, 1, 25]
+
+-- Exception raised -> PormG intercepts and executes rollback
+ROLLBACK;
+```
+
+```julia
 # The record was never inserted because the transaction rolled back
 q = M.Result.objects
 q.filter("raceid" => 1)

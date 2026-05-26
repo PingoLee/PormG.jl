@@ -369,17 +369,15 @@ end
 ```julia
 import PormG.models as M
 import PormG.Models: make_password, check_password
-import PormG.QueryBuilder: bulk_insert
 
 # Create a team manager account
 hashed_password = make_password("McLaren1988!")
 
-query = M.Team_manager.objects
-query.bulk_insert(
-    username = "ron_dennis",
-    email = "ron@mclaren.com",
-    password = hashed_password,
-    team_id = 1  # McLaren
+M.Team_manager.objects.create(
+    "username" => "ron_dennis",
+    "email"    => "ron@mclaren.com",
+    "password" => hashed_password,
+    "team_id"  => 1  # McLaren
 )
 
 # Login verification
@@ -836,7 +834,7 @@ Config = Models.Model(
 )
 
 # Example usage:
-# Config.objects.create(settings=Dict("theme"=>"dark", "notifications"=>true))
+Config.objects.create("settings" => Dict("theme"=>"dark", "notifications"=>true))
 ```
 
 ---
@@ -973,6 +971,9 @@ driver_rows = manager.all().values("surname", "nationality").list()
 ```
 
 Use `through=Existing_model` when the relationship table has extra fields, such as the season when a driver was added to a collection. In that case PormG treats the through model as a normal model and does not auto-generate a join table.
+
+> [!WARNING]
+> **Django-Style Strict Mutators**: If the custom `through` model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (`add!`, `remove!`, `clear!`, and `set!`) will raise an `ArgumentError`. Create or delete custom through model objects directly using the through model's objects manager instead.
 
 ---
 

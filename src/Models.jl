@@ -201,6 +201,12 @@ function set_models(_module::Module, path::String)::Nothing
           throw(ArgumentError("The model $(field.to) in the field $field_name in the model $(model.name) is not defined"))
         end
         # println("field_to_", field_to.name)
+        if field.pk_field === nothing
+          pk_sym = get_model_pk_field(field_to)
+          if pk_sym !== nothing
+            field.pk_field = string(pk_sym)
+          end
+        end
         if haskey(dict_tables_c, field_to.name)
           dict_tables_c[field_to.name] += 1
           push!(dict_tables_fiels[field_to.name], field_name)
@@ -415,20 +421,33 @@ end
     add_field!(model::PormGModel, field_name::Union{String, Symbol}, field::PormGField)
 
 Dynamically adds a field to an existing model. If the field is a ManyToManyField,
-it also handles reverse relation registration.
+it also registers reverse accessors and caches join metadata (requires the model to
+be initialized via `set_models()` / `@import_models` with a configured connection).
 """
 function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field::PormGField)
   field_name = format_fild_name(field_name isa Symbol ? String(field_name) : field_name)
-  model.fields[field_name] = field
-  if !is_many_to_many_field(field)
-    push!(model.field_names, field_name)
-  else
-    # M2M needs registration for reverse accessors.
-    # Note: we check if model has enough context for registration.
-    if model._module !== nothing && model.connect_key !== nothing && haskey(config, model.connect_key)
-      _register_many_to_many_relation!(model._module, config[model.connect_key], model, field_name, field)
+
+  if is_many_to_many_field(field)
+    ensure_model_initialized(model)
+    if model._module === nothing
+      throw(ArgumentError(
+        "ManyToManyField $(model.name).$(field_name) requires the model to be registered via " *
+        "set_models() or @import_models before add_field! can register reverse accessors."
+      ))
     end
+    if model.connect_key === nothing || !haskey(config, model.connect_key)
+      throw(ArgumentError(
+        "ManyToManyField $(model.name).$(field_name) requires a database connection. " *
+        "Call set_models() with a configured connection before add_field!."
+      ))
+    end
+    model.fields[field_name] = field
+    _register_many_to_many_relation!(model._module, config[model.connect_key], model, field_name, field)
+    return nothing
   end
+
+  model.fields[field_name] = field
+  push!(model.field_names, field_name)
   return nothing
 end
 
@@ -1263,11 +1282,46 @@ function validate_default(default, expected_type::Type, field_name::String, conv
 end
 
 function validate_timezone(value::String, format::String) # TODO: maeby is unnecesary, i think that is better to use validate_default aproach
+  # If it looks like a full ZonedDateTime string with timezone info, return it as-is
+  # to avoid double-formatting or truncation.
+  if occursin(r"(?:Z|[+-]\d{2}:\d{2})$", value)
+      return value
+  end
   try
     return DateTime(value, format) |> string
   catch e
     throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
   end
+end
+
+"""
+    normalize_sqlite_datetime_string(s::AbstractString) -> String
+
+Normalise a raw SQLite datetime string so it can be parsed by a strict ISO 8601
+formatter (`dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"`):
+
+- Pads sub-second digits to exactly 3 (milliseconds).
+- Truncates sub-second digits longer than 3.
+- Injects `.000` when no sub-second component is present.
+- Returns the string unchanged when it does not match any expected pattern.
+"""
+function normalize_sqlite_datetime_string(s::AbstractString)
+    m = match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})$", s)
+    if m !== nothing
+        base_dt, ms, tz = m.captures
+        if length(ms) < 3
+            ms = rpad(ms, 3, '0')
+        elseif length(ms) > 3
+            ms = ms[1:3]
+        end
+        return "$(base_dt).$(ms)$(tz)"
+    end
+    m_no_ms = match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(Z|[+-]\d{2}:\d{2})$", s)
+    if m_no_ms !== nothing
+        base_dt, tz = m_no_ms.captures
+        return "$(base_dt).000$(tz)"
+    end
+    return s
 end
 
 end

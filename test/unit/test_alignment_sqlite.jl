@@ -16,7 +16,7 @@ PormG.config["mock_sl_key"] = MockSettings
 include("../integration/db_sl/models.jl")
 import .models as M
 PormG.Models.set_models(M, "mock_sl_path")
-import PormG.QueryBuilder: cjoin, Q, Qor, F, Exists, OuterRef, inspect_query, Case, When, Sum, Avg, Value, Round, With
+import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, inspect_query, Case, When, Sum, Avg, Value, Round, With
 
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
@@ -40,7 +40,7 @@ end
     # Using cjoin (custom join) to inject parameters directly into ON clause
     q = M.Result.objects.filter("positionorder" => 1) # This goes to :where
 
-    cjoin(q, "raceid" => "Race", filters=["year" => 2000], warn=false)
+    q.cjoin("raceid" => "Race", filters=["year" => 2000], warn=false)
 
     # Trigger the join by accessing a field from the related model
     q.values("raceid__name", "points")
@@ -62,7 +62,7 @@ end
     q = M.Result.objects
 
     @test_throws ArgumentError begin
-        cjoin(q, "raceid" => "Race", filters=["points" => 10], warn=false)
+        q.cjoin("raceid" => "Race", filters=["points" => 10], warn=false)
     end
 end
 
@@ -438,7 +438,7 @@ end
     q = M.Result.objects.filter("raceid__year" => 2000)
 
     # Apply custom join to Result -> Race with 2 conditions
-    cjoin(q, "raceid" => "Race", filters=["raceid__year" => 2000, "raceid__round" => 1], warn=false)
+    q.cjoin("raceid" => "Race", filters=["raceid__year" => 2000, "raceid__round" => 1], warn=false)
     q.values("raceid__name")
 
     insp = q |> inspect_query
@@ -747,7 +747,7 @@ end
     q = M.Result.objects
     With(q, "races_1991", races_91, join_field="raceid" => "raceid")
 
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
+    q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
     q.filter("points" => 10)
     q.values("raceid__name", "driverid__surname", "points")
 
@@ -928,7 +928,7 @@ end
     q = M.Result.objects
 
     # Passing Q and Qor with plain fields that should be prefixed
-    cjoin(q, "driverid" => "Driver", filters=[
+    q.cjoin("driverid" => "Driver", filters=[
         Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))
     ], warn=false)
 
@@ -959,7 +959,7 @@ end
 @testset "Alignment Verification - set_context! Stability (Join Context)" begin
     # Verify that build_row_join_sql_text sets :join context properly
     q = M.Result.objects
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "German"], warn=false)
+    q.cjoin("driverid" => "Driver", filters=["nationality" => "German"], warn=false)
     q.filter("points" => 5)
     q.values("driverid__surname")
 
@@ -983,12 +983,12 @@ end
 
     # This should raise an error because driverid points to Driver, not Constructor
     @test_throws ArgumentError begin
-        cjoin(q, "driverid" => "Constructor", filters=["name" => "Ferrari"])
+        q.cjoin("driverid" => "Constructor", filters=["name" => "Ferrari"])
     end
 
     # This should succeed because we use the correct target (Driver)
     q2 = M.Result.objects
-    cjoin(q2, "driverid" => "Driver", filters=["nationality" => "Italian"], warn=false)
+    q2.cjoin("driverid" => "Driver", filters=["nationality" => "Italian"], warn=false)
     q2.values("driverid__surname")
 
     insp = q2 |> inspect_query
@@ -1005,7 +1005,7 @@ end
     warn_buffer = IOBuffer()
 
     with_logger(ConsoleLogger(warn_buffer, Logging.Warn)) do
-        cjoin(q, "positionorder" => "Result", warn=true)  # Explicit warn=true
+        q.cjoin("positionorder" => "Result", warn=true)  # Explicit warn=true
         q.values("positionorder__points")
     end
 
@@ -1024,7 +1024,7 @@ end
     warn_count_before = length(String(take!(warn_buffer)))
 
     with_logger(ConsoleLogger(warn_buffer, Logging.Warn)) do
-        cjoin(q, "positionorder" => "Result", warn=false)  # Suppress warning
+        q.cjoin("positionorder" => "Result", warn=false)  # Suppress warning
         q.values("positionorder__points")
     end
 
@@ -1043,7 +1043,7 @@ end
 
     q = M.Result.objects
     With(q, "r91", races_91, join_field="raceid" => "raceid")
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
+    q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
     q.filter("points" => 10)
     q.values("driverid__surname")
 
@@ -1195,7 +1195,7 @@ end
     q = M.Result.objects.filter("raceid__year" => 1990)
 
     # Add a custom join with a filter (lands in :join bucket)
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
+    q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
 
     # Run UPDATE inspection
     insp = q.update("points" => 25, show_query=:inspection)
@@ -1223,7 +1223,7 @@ end
     With(q, "r91", races_91, join_field="raceid" => "raceid")
 
     # 2. Provide JOIN parameter (should go to :join)
-    cjoin(q, "driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
+    q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
 
     # 3. Provide WHERE parameter (should go to :where)
     q.filter("points__@gt" => 5)
@@ -1271,7 +1271,7 @@ end
     # `then=2` and `default=3` are rendered as SQL literals (THEN 2, ELSE 3).
     races_91.values("raceid", "points_avg" => Avg("round"), "cat" => Case([When("round__@gt" => 1, then=2)], default=3))
     # CTE-internal JOIN: param "Monza" → goes to PARENT's :join bucket
-    cjoin(races_91, "circuitid" => "Circuit", filters=["name" => "Monza"], warn=false)
+    races_91.cjoin("circuitid" => "Circuit", filters=["name" => "Monza"], warn=false)
     # CTE-internal WHERE: param 1991 → stays in :cte bucket
     races_91.filter("year" => 1991)
     # CTE-internal HAVING: param 5 → goes to PARENT's :having bucket
@@ -1284,7 +1284,7 @@ end
     With(q, "drivers_br", drivers_br, join_field="driverid" => "driverid")
 
     # 2. Outer JOIN Elements (Order: Italian -> VET -> MSC)
-    cjoin(q, "driverid" => "Driver", filters=[
+    q.cjoin("driverid" => "Driver", filters=[
         "nationality" => "Italian",
         "code__@in" => ["VET", "MSC"]
     ], warn=false)

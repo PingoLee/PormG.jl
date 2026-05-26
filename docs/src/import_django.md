@@ -10,7 +10,7 @@ The `import_models_from_django` function allows you to seamlessly convert Django
 - Maintaining consistency between Django and Julia models
 - Quickly prototyping Julia models based on existing Django schemas
 - Converting legacy Django models for use in Julia applications
-- Create a ETL pipeline for data processing in Julia for a Django APP (my case)
+- Creating an ETL pipeline for data processing in Julia from an existing Django application
 
 ## Function Signature
 
@@ -206,4 +206,30 @@ When PormG writes into tables that are also managed by Django, timezone semantic
 - If your Django app uses `USE_TZ=True` and `TIME_ZONE = "America/Sao_Paulo"`, passing a plain `DateTime(2026, 3, 13, 9, 0)` from Julia does not mean "09:00 Sao Paulo"; it means "09:00 UTC". Use `ZonedDateTime(DateTime(2026, 3, 13, 9, 0), tz"America/Sao_Paulo")` when the civil timezone matters.
 
 
-This will generate Julia models compatible with PormG that maintain the same structure and relationships as your original Django models.\n\n## Using Converted Models with `@import_models`\n\nAfter converting your Django models to PormG format, you can load them in your application using the `@import_models` macro for automatic registration and hot-reloading support:\n\n```julia\n# In your main Julia package:\nmodule MyApp\n    using PormG\n    \n    # Load the converted models\n    PormG.@import_models \"db/models.jl\" models\n    import .models as M\n    \n    # Now you can use queries like:\n    # M.Product.objects.filter(\"price__@gt\" => 100) |> DataFrame\nend\n```\n\nThis approach provides:\n- **Automatic registration** of all converted models\n- **Hot-reloading** during interactive development (with Revise.jl)\n- **Post-precompilation support** so models work in packaged code\n- **No manual `set_models()` calls** required\n\nFor more details on using models in your application, see [Defining Models in PormG](models.md).\n\n```
+This will generate Julia models compatible with PormG that maintain the same structure and relationships as your original Django models.
+
+## Using Converted Models with `@import_models`
+
+After converting your Django models to PormG format, you can load them in your application using the `@import_models` macro for automatic registration and hot-reloading support:
+
+```julia
+# In your main Julia package:
+module MyApp
+    using PormG
+    
+    # Load the converted models
+    PormG.@import_models "db/models.jl" models
+    import .models as M
+    
+    # Now you can use queries like:
+    # M.Product.objects.filter("price__@gt" => 100) |> DataFrame
+end
+```
+
+This approach provides:
+- **Automatic registration** of all converted models
+- **Hot-reloading** during interactive development (with Revise.jl)
+- **Post-precompilation support** so models work in packaged code
+- **No manual `set_models()` calls** required
+
+For more details on using models in your application, see [Defining Models in PormG](models.md).

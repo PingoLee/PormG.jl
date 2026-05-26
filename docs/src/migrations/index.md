@@ -11,11 +11,28 @@ Migrations are version-controlled scripts that describe changes to your database
 - Track migration history with checksums and status
 
 ## How it Works: State-Based Reconciliation
-PormG follows a **State-Based** migration philosophy (similar to tools like Flyway or Atlas, rather than purely change-based like Django). 
-1. **Introspection**: PormG inspects your live database schema.
-2. **Comparison**: It compares the live schema against your in-memory Julia `Models`.
-3. **Diffing**: It calculates the "delta" required to move the database to the state defined in your code.
+
+PormG follows a **State-Based** migration philosophy (similar to modern tools like Flyway, Prisma, or Atlas, rather than purely change-based like standard Django). 
+
+1. **Active Introspection**: PormG reads your `connection.yml` file, connects to the specified live database, and introspects its actual physical schema.
+2. **Comparison**: It compares that live schema against your in-memory Julia `Models` loaded in the current runtime session.
+3. **Diffing**: It calculates the exact "delta" required to move the database to the target state defined in your code.
 4. **Generation**: It produces a standalone Julia script (`pending_migrations.jl`) containing the DDL commands.
+
+---
+
+## Terminology Mapping
+
+If you are new to Django-style ORMs, the migration APIs map directly to standard universal database schema-management concepts:
+
+| PormG Command | Django Concept | Universal DB / SQL Concept |
+| :--- | :--- | :--- |
+| `makemigrations("db")` | `makemigrations` | **Schema Diffing & Script Generation** (compares code to live DB and generates DDL scripts). |
+| `migrate("db")` | `migrate` | **Schema Deployment / Execution** (applies the DDL scripts to the live database). |
+| `init_migrations("db")` | — | **Bootstrap / Initialization** (registers/creates history tables on an existing database). |
+| `dry_run("db")` | — | **Dry Run / Plan Preview** (previews the DDL statements without executing them). |
+
+---
 
 ## Migration History Table
 

@@ -267,6 +267,11 @@ function Base.getproperty(m::PormGModel, sym::Symbol)
     Models.ensure_model_initialized(m)
     return object(m)
   elseif sym in fieldnames(typeof(m))
+    # IMPORTANT: struct fields MUST be intercepted here via getfield before the M2M
+    # accessor check below.  has_many_to_many_accessor() itself accesses m.cache and
+    # m.related_objects; if those go through getproperty again we get infinite recursion.
+    # M2M accessor names are validated through format_fild_name which rejects reserved
+    # names, so a user-defined M2M field cannot shadow a Model_Type struct field.
     return getfield(m, sym)
   elseif Models.has_many_to_many_accessor(m, String(sym))
     Models.ensure_model_initialized(m)

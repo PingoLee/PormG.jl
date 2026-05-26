@@ -148,3 +148,37 @@ end
     multi_pk_row.label = "after"
     @test_throws ArgumentError multi_pk_row.save()
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PormGRow save: FK pk_field not resolved (BUG-6 regression)
+# Verifies that save() raises ArgumentError when a projected FK update is
+# attempted but fk_meta.pk_field is nothing (model not fully initialised).
+# Before the fix, String(nothing) = "nothing" produced a silent wrong query.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PormGRow save FK pk_field guard (BUG-6)" begin
+    # Build a synthetic FK whose pk_field has NOT been set (simulating an
+    # uninitialised model that was never passed through set_models()).
+    unresolved_fk = Models.ForeignKey("SomeModel", on_delete=Models.CASCADE)
+    # Confirm pk_field is indeed nothing before we proceed
+    @test unresolved_fk.pk_field === nothing
+
+    # Create a synthetic model with that unresolved FK
+    synthetic_model = Models.Model("pk_guard_scratch",
+        id       = Models.IDField(),
+        parentid = unresolved_fk,
+    )
+    # Synthetic PormGRow: data contains both the FK value and a projected field
+    row_data = Dict{Symbol,Any}(
+        :id       => 1,
+        :parentid => 99,
+        :parentid__label => "new label",
+    )
+    row = PormGRow(row_data, synthetic_model)
+
+    # Mark the projected field as dirty (simulate a setproperty! call)
+    push!(getfield(row, :_dirty), :parentid__label)
+
+    # save() must detect pk_field === nothing and throw ArgumentError
+    # instead of building a filter on the literal string "nothing".
+    @test_throws ArgumentError row.save()
+end

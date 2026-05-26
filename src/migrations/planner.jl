@@ -11,9 +11,19 @@
 function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
   _hash = randstring(8) 
   name = "$(model_name)_$field_name"
-  if length(name) + 8 + apend_number > 63
+  if sizeof(name) + 8 + apend_number > 63
     max_prefix_length = max(1, 63 - length(_hash) - apend_number)
-    length(name) > max_prefix_length && (name = first(name, max_prefix_length))
+    if sizeof(name) > max_prefix_length
+      safe_name = ""
+      for c in name
+        if sizeof(safe_name) + sizeof(c) <= max_prefix_length
+          safe_name *= c
+        else
+          break
+        end
+      end
+      name = safe_name
+    end
   end
   return "$(name)_$_hash" |> lowercase
 end
@@ -83,8 +93,9 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
     end
     constraint_name = "$(name)_fk" |> lowercase
     resolved_pk = isnothing(new_field.pk_field) ? "id" : string(new_field.pk_field)
+    on_delete_sql = hasfield(typeof(new_field), :on_delete) ? Dialect._foreign_key_on_delete_sql(new_field.on_delete) : nothing
     _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> format_model_name)\"", "\"$resolved_pk\""))
+    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
   end
   return nothing
 end
@@ -98,8 +109,9 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
     if conn isa PormGPostgres
       constraint_name = name * "_fk" |> lowercase
       resolved_pk = isnothing(field.pk_field) ? "id" : string(field.pk_field)
+      on_delete_sql = hasfield(typeof(field), :on_delete) ? Dialect._foreign_key_on_delete_sql(field.on_delete) : nothing
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> format_model_name)\"", "\"$resolved_pk\""))
+      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
     # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
     # we might need recreation if it's a FK.
     end

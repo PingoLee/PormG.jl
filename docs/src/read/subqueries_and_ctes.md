@@ -289,43 +289,33 @@ query.filter("statusId__@in" => subq)   # Reuse the subquery in a filter
 
 ## Mixing CTEs and Custom Joins
 
-PormG allows CTEs and custom joins (`cjoin`) in the same query. Parameter ordering is deterministic across these combinations:
+PormG allows CTEs and custom joins (`.cjoin()`) in the same query. Parameter ordering is deterministic across these combinations:
 
 ```julia
-using PormG: cjoin
-
 # 1. Define the CTE
-top_const = M.Constructor.objects
-    .filter("constructorId__@lte" => 5)
-    .values("constructorId", "name")
+top_const = M.Constructor.objects.
+    filter("constructorId__@lte" => 5).
+    values("constructorId", "name")
 
-query = M.Result.objects
-
-# 2. Attach the CTE
-query.with("tc" => top_const, join_field="constructorId" => "constructorId")
-
-# 3. Add a custom join
-query.cjoin("driverId" => "Driver", filters=["nationality" => "German"])
-
-# 4. Filter and select across physical tables, custom joins, and CTEs
-query.filter("positionOrder" => 1)
-query.values("resultId", "tc__name", "driverId__surname")
-df = query |> DataFrame
+# 2. Build the chain with CTE, cjoin, filters, and values
+df = M.Result.objects.
+    with("tc" => top_const, join_field="constructorId" => "constructorId").
+    cjoin("driverId" => "Driver", filters=["nationality" => "German"]).
+    filter("positionOrder" => 1).
+    values("resultId", "tc__name", "driverId__surname") |> DataFrame
 ```
 
 ### Chaining Multiple Custom Joins
 
 ```julia
-query = M.Result.objects
-query.cjoin("driverId" => "Driver", filters=["nationality" => "Brazilian", "forename" => "Ayrton"])
-query.cjoin("raceId" => "Race", filters=["year" => 1991])
-
-query.filter("positionOrder" => 1)
-query.values("resultId", "driverId__surname", "raceId__name")
-df = query |> DataFrame
+df = M.Result.objects.
+    cjoin("driverId" => "Driver", filters=["nationality" => "Brazilian", "forename" => "Ayrton"]).
+    cjoin("raceId" => "Race", filters=["year" => 1991]).
+    filter("positionOrder" => 1).
+    values("resultId", "driverId__surname", "raceId__name") |> DataFrame
 ```
 
-See [Custom Joins](../custom_joins.md) for the full `cjoin()` and `on()` documentation.
+See [Custom Joins](custom_joins.md) for the full `.cjoin()` and `.on()` documentation.
 
 ---
 
@@ -344,6 +334,6 @@ See [Custom Joins](../custom_joins.md) for the full `cjoin()` and `on()` documen
 
 ## Next Steps
 
-- **[Custom Joins](../custom_joins.md)** — Full `cjoin()` and `on()` documentation.
+- **[Custom Joins](custom_joins.md)** — Full `cjoin()` and `on()` documentation.
 - **[Field Expressions](field_expressions.md)** — Use `F()` for arithmetic and computed columns.
 - **[Q Objects](q_objects.md)** — Complex boolean logic in filters.

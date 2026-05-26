@@ -81,7 +81,6 @@ export With
 #   end
 # end
 
-export cjoin
 export object
 export page
 export query

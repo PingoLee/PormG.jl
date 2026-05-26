@@ -657,7 +657,7 @@ end
 
 Tables.isrowtable(::Type{Vector{PormGRow}}) = true
 Tables.columnnames(row::PormGRow) = collect(keys(getfield(row, :_data)))
-Tables.getcolumn(row::PormGRow, nm::Symbol) = getfield(row, :_data)[nm]
+Tables.getcolumn(row::PormGRow, nm::Symbol) = getfield(row, :_data)[_normalize_row_symbol(nm)]
 
 
 """

@@ -1,0 +1,28 @@
+﻿# --- Security / local ---
+*connection.yml
+db/
+.env
+.env.*
+
+# --- Large fixtures (indexing already skips *.csv) ---
+test/integration/f1/*.csv
+
+# --- Duplicate of .cursor/skills (avoid conflicting instructions) ---
+.github/skills/
+
+# --- Generated / local artifacts ---
+docs/build/
+docs/site/
+test/performance/snoop_out/
+*.jl.cov
+*.jl.mem
+test/integration/db_sl/migrations/
+test/integration/db_2/migrations/
+test/integration/db_test_migration/
+test/integration/db_test_migration_pg/
+
+# --- Planning scratch ---
+implementation_plan.md
+implementation_plan_m2m.md
+manytomany.md
+.github/thinking/

@@ -65,9 +65,14 @@ function _to_utc_datetime(raw)
     # Defensive fallback — should not be reached for DateTimeField columns returned by list().
     s = string(raw)
     try
-        return DateTime(astimezone(ZonedDateTime(s), TimeZone("UTC")))
+        normalized = PormG.Models.normalize_sqlite_datetime_string(s)
+        return DateTime(astimezone(ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"), TimeZone("UTC")))
     catch
-        return DateTime(s[1:min(19, length(s))], dateformat"yyyy-mm-ddTHH:MM:SS")
+        try
+            return DateTime(astimezone(ZonedDateTime(s), TimeZone("UTC")))
+        catch
+            return DateTime(s[1:min(19, length(s))], dateformat"yyyy-mm-ddTHH:MM:SS")
+        end
     end
 end
 

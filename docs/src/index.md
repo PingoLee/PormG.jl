@@ -83,26 +83,51 @@ dev:
 
 ### 3. Define Your Models
 
-Create `db/models.jl` with your model definitions:
+Create `db/models.jl` with your model definitions. 
+
+> [!NOTE]
+> PormG automatically formats field names to lowercase internally under the hood. While you can define fields with capital letters (e.g. `driverId`), they are stored lowercase (`driverid`) and **must** be queried in lowercase in all filter, values, and order_by operations. To avoid confusion, define your fields in lowercase snake_case directly.
 
 ```julia
 module models
 import PormG.Models
 
 Driver = Models.Model("drivers",
-    driverId    = Models.IDField(),
+    driverid    = Models.IDField(),
     forename    = Models.CharField(max_length=50),
     surname     = Models.CharField(max_length=50),
     nationality = Models.CharField(max_length=50),
     dob         = Models.DateField(null=true),
 )
 
+Circuit = Models.Model("circuits",
+    circuitid   = Models.IDField(),
+    name        = Models.CharField(max_length=100),
+    location    = Models.CharField(max_length=100),
+    country     = Models.CharField(max_length=100),
+)
+
+Race = Models.Model("races",
+    raceid      = Models.IDField(),
+    name        = Models.CharField(max_length=255),
+    year        = Models.IntegerField(),
+    date        = Models.DateField(),
+    circuitid   = Models.ForeignKey(Circuit, pk_field="circuitid", on_delete="CASCADE"),
+)
+
+Constructor = Models.Model("constructors",
+    constructorid = Models.IDField(),
+    name          = Models.CharField(max_length=50),
+    nationality   = Models.CharField(max_length=50),
+)
+
 Result = Models.Model("results",
-    resultId       = Models.IDField(),
-    raceId         = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-    driverId       = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-    positionOrder  = Models.IntegerField(),
-    points         = Models.FloatField(),
+    resultid      = Models.IDField(),
+    raceid        = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+    driverid      = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+    constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
+    positionorder = Models.IntegerField(),
+    points        = Models.FloatField(),
 )
 
 end
@@ -143,31 +168,34 @@ bulk_data = DataFrame([
     Dict("forename" => "Alain",  "surname" => "Prost",    "nationality" => "French"),
     Dict("forename" => "Nelson", "surname" => "Piquet",   "nationality" => "Brazilian"),
 ])
-bulk_insert(M.Driver, bulk_data)
+# We call bulk_insert on the .objects handler to respect the ORM boundary
+bulk_insert(M.Driver.objects, bulk_data)
 ```
 
 ### 7. Query Your Data
 
 ```julia
+using PormG: Count, F
+
 # Simple filter and list
 drivers = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname").list()
 
-# Chainable methods with DataFrame output
+# Chainable methods with DataFrame output (always use lowercase field names in queries!)
 df = M.Result.objects.filter(
-        "driverId__nationality" => "Brazilian",
-        "positionOrder"         => 1
+        "driverid__nationality" => "Brazilian",
+        "positionorder"         => 1
     ).values(
-        "driverId__forename",
-        "driverId__surname",
-        "raceId__year",
-    ).order_by("-raceId__year") |> DataFrame
+        "driverid__forename",
+        "driverid__surname",
+        "raceid__year",
+    ).order_by("-raceid__year") |> DataFrame
 
 # Aggregations
 df = M.Result.objects.filter(
-        "positionOrder" => 1
+        "positionorder" => 1
     ).values(
-        "constructorId__name",
-        "wins" => Count("resultId")
+        "constructorid__name",
+        "wins" => Count("resultid")
     ).order_by("-wins") |> DataFrame
 ```
 
@@ -178,11 +206,24 @@ df = M.Result.objects.filter(
 M.Driver.objects.filter("nationality" => "Brazilian").update("nationality" => "Brazil")
 
 # Atomic update with F-expression (no read-modify-write race)
-M.Result.objects.filter("resultId" => 1).update("points" => F("points") + 10)
+M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 10)
 
 # Delete matching records
 M.Driver.objects.filter("surname" => "TestDriver").delete()
 ```
+
+---
+
+## Django Data-Type & Compatibility Contract
+
+PormG is designed to be fully wire-format compatible with tables managed by Django. It guarantees identical column serialization and mutation semantics across both **PostgreSQL** and **SQLite** backends:
+
+*   **TIMESTAMPTZ Contract**: Naive `DateTime` values are treated as UTC, while timezone-aware `ZonedDateTime` values preserve the exact UTC instant across backends. (SQLite stores ISO 8601 strings and normalizes on read).
+*   **DateField Truncation**: Temporal inputs like `DateTime` or `ZonedDateTime` are automatically truncated to their calendar date portion when saved into a `DateField`, matching Django's silent truncation behavior instead of throwing errors.
+*   **DecimalField Precision**: Underpinned by `NUMERIC` types, `DecimalField(max_digits, decimal_places)` prevents float drift in round-trips (e.g. `99.99` is retrieved precisely as `99.99` in `Decimals.Decimal` format).
+*   **Auto Temporal Fields**: 
+    *   `auto_now_add=true`: Automatically populated with the transaction's timezone-aware timestamp upon `INSERT`, then frozen during subsequent updates.
+    *   `auto_now=true`: Automatically populated upon `INSERT` and refreshed with the system timestamp on every `UPDATE`.
 
 ---
 
@@ -229,13 +270,13 @@ This documentation is organized into the following sections:
 | **Reading** | |
 | &nbsp;&nbsp;[Overview](read/index.md) | Query execution, output formats, and query styles. |
 | &nbsp;&nbsp;[Values and Joins](read/values_and_joins.md) | Column selection, `__` join traversal, aliases. |
+| &nbsp;&nbsp;[Custom Joins](read/custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
 | &nbsp;&nbsp;[Filters and Aggregates](read/filters_and_aggregates.md) | Lookup operators, grouping, and `HAVING`. |
 | &nbsp;&nbsp;[Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
 | &nbsp;&nbsp;[Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries and `With(...)` CTEs. |
 | &nbsp;&nbsp;[Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
 | &nbsp;&nbsp;[Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |
-| [Custom Joins](custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
 | [Advisory Locks](advisory_lock.md) | Distributed locking with `with_advisory_lock`. |
 | [Contributing](contributing.md) | Development workflow, `@pormg_debug` breakpoints, and testing conventions. |
 | [API Reference](api.md) | Full auto-generated API reference and exported function catalog. |
@@ -249,15 +290,15 @@ The examples throughout this documentation use the **Formula 1 World Championshi
 ```julia
 # Example: Find all Brazilian race winners with circuit information
 df = M.Result.objects.filter(
-        "driverId__nationality" => "Brazilian",
-        "positionOrder"         => 1,
+        "driverid__nationality" => "Brazilian",
+        "positionorder"         => 1,
     ).values(
-        "driverId__forename",
-        "driverId__surname",
-        "raceId__name",
-        "raceId__circuitId__name",
-        "raceId__year",
-    ).order_by("-raceId__year") |> DataFrame
+        "driverid__forename",
+        "driverid__surname",
+        "raceid__name",
+        "raceid__circuitid__name",
+        "raceid__year",
+    ).order_by("-raceid__year") |> DataFrame
 ```
 
 ---

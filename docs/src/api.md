@@ -33,11 +33,12 @@ These methods modify the query builder and return the handler for further chaini
 | `.offset(n)` | Skip the first `n` rows. | `.offset(20)` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
 | `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverId", "nationality" => "British")` |
+| `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverId" => "Driver")` |
 
-See also: [`cjoin()`](#cjoin) for custom join definitions and [`with()`](#with-common-table-expressions) for CTEs.
+See also: [`.cjoin()`](#cjoin) for custom join definitions and [`.with()`](#with-common-table-expressions) for CTEs.
 
 > [!IMPORTANT]
-> Queries that use `cjoin()` **must** call `.values(...)` explicitly before execution.
+> Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution.
 > A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with
 > `ArgumentError: Duplicate variable names`. PormG throws a clear error if you forget.
 > Use `.values("*", "joined_model__field")` to quickly select all main-table columns
@@ -332,34 +333,31 @@ See [Functions and Dates](read/functions_and_dates.md) for more details.
 
 ## Custom Joins
 
-### `cjoin()`
+### `.cjoin()`
 
-Defines custom join conditions at query time. Useful for legacy databases, non-FK joins, and multi-tenant systems.
+Defines custom join conditions at query time as a chainable method on the query handler. Useful for legacy databases, non-FK joins, and multi-tenant systems.
 
 ```julia
-using PormG: cjoin, Q, Qor
+using PormG: Q, Qor
 
-query = M.Result.objects
-cjoin(query, "driverId" => "Driver",
+df = M.Result.objects.cjoin(
+    "driverId" => "Driver",
     filters=[Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))],
     join_type="INNER"
-)
-query.values("driverId__forename", "driverId__surname", "points")
-df = query |> DataFrame
+).values("driverId__forename", "driverId__surname", "points") |> DataFrame
 ```
 
 **Parameters:**
 
 | Argument | Type | Description |
 | :--- | :--- | :--- |
-| `query` | handler | The query object to add the join to. |
 | `main_join` | `Pair{String,String}` | `"field" => "TargetModel"` — the join path. |
 | `filters` | `Vector` | ON-clause predicates. Supports `Pair`, `Q()`, `Qor()`, F expressions. |
 | `join_type` | `String` | `"LEFT"` (default), `"INNER"`, `"RIGHT"`, or `"FULL"`. |
 | `field` | `PormGField` | Optional custom field definition for non-FK joins. |
 | `warn` | `Bool` | Suppress auto-discovery warnings (default: `true`). |
 
-See [Custom Joins](custom_joins.md) for the full documentation.
+See [Custom Joins](read/custom_joins.md) for the full documentation.
 
 ### `on()`
 

@@ -279,7 +279,37 @@ M2m_membership_scratch = Models.Model("m2m_membership_scratch",
   id = Models.IDField(),
   driver = Models.ForeignKey(M2m_driver_explicit_scratch, on_delete=Models.CASCADE),
   team = Models.ForeignKey(M2m_team_scratch, on_delete=Models.CASCADE),
-  joined_year = Models.IntegerField()
+  joined_year = Models.IntegerField(null=true)
+)
+
+# Explicit through with only the two FK columns (manager mutators allowed).
+M2m_team_plain_scratch = Models.Model("m2m_team_plain_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_driver_plain_scratch = Models.Model("m2m_driver_plain_scratch",
+  id = Models.IDField(),
+  driverRef = Models.CharField(unique=true),
+  teams = Models.ManyToManyField(M2m_team_plain_scratch, through="M2m_link_plain_scratch", related_name="drivers")
+)
+
+M2m_link_plain_scratch = Models.Model("m2m_link_plain_scratch",
+  id = Models.IDField(),
+  driver = Models.ForeignKey(M2m_driver_plain_scratch, on_delete=Models.CASCADE),
+  team = Models.ForeignKey(M2m_team_plain_scratch, on_delete=Models.CASCADE),
+)
+
+# Default reverse accessor (no related_name): target uses owner model name lowercase.
+M2m_brand_scratch = Models.Model("m2m_brand_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_driver_default_reverse_scratch = Models.Model("m2m_driver_default_reverse_scratch",
+  id = Models.IDField(),
+  driverRef = Models.CharField(unique=true),
+  partners = Models.ManyToManyField(M2m_brand_scratch),
 )
 
 end

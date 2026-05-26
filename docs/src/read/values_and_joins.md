@@ -161,7 +161,7 @@ df = query |> DataFrame
 This selects every column from `Result` plus `surname` and `forename` from the joined `Driver` table.
 
 > [!IMPORTANT]
-> Queries that use `cjoin()` **must** call `.values(...)` explicitly before execution. A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with `ArgumentError: Duplicate variable names`. Use `.values("*", "joined__field")` to safely include joined columns.
+> Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution. A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with `ArgumentError: Duplicate variable names`. Use `.values("*", "joined__field")` to safely include joined columns.
 
 ---
 
@@ -173,10 +173,10 @@ PormG selects join types based on your model's field definitions:
 | :--- | :--- |
 | Non-nullable ForeignKey | `INNER JOIN` |
 | Nullable ForeignKey (`null=true`) | `LEFT JOIN` |
-| Custom join via `cjoin()` | `LEFT JOIN` by default (configurable) |
-| Override via `on()` | Configurable: `"INNER"`, `"LEFT"`, etc. |
+| Custom join via `.cjoin()` | `LEFT JOIN` by default (configurable) |
+| Override via `.on()` | Configurable: `"INNER"`, `"LEFT"`, etc. |
 
-The join direction is always inferred from the relation path. For custom join behavior, see [Custom Joins](../custom_joins.md).
+The join direction is always inferred from the relation path. For custom join behavior, see [Custom Joins](custom_joins.md).
 
 ---
 
@@ -290,4 +290,4 @@ df = M.Result.objects.filter("driverId__nationality" => "British") |> DataFrame
 ## Next Steps
 
 - **[Filters and Aggregates](filters_and_aggregates.md)** — Learn about lookup operators (`@gt`, `@in`, `@contains`, …) and grouping.
-- **[Custom Joins](../custom_joins.md)** — Use `cjoin()` for non-FK joins and `on()` for ON-clause predicates.
+- **[Custom Joins](custom_joins.md)** — Use `.cjoin()` for non-FK joins and `.on()` for ON-clause predicates.

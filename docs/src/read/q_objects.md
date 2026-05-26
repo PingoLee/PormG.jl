@@ -260,10 +260,10 @@ function search_results(; driver=nothing, team=nothing, year=nothing, winner_onl
     !isnothing(year)   && push!(q, "raceId__year" => year)
     winner_only        && push!(q, "positionOrder" => 1)
     
-    return M.Result.objects
-        .filter(q)
-        .values("driverId__surname", "constructorId__name", "raceId__year", "positionOrder")
-        .order_by("-raceId__year") |> DataFrame
+    return M.Result.objects.
+        filter(q).
+        values("driverId__surname", "constructorId__name", "raceId__year", "positionOrder").
+        order_by("-raceId__year") |> DataFrame
 end
 ```
 
@@ -308,4 +308,4 @@ df = M.Driver.objects.filter("nationality__@in" => nationalities) |> DataFrame
 
 - **[Field Expressions](field_expressions.md)** — Use `F()` for column-to-column comparisons and arithmetic.
 - **[Filters and Aggregates](filters_and_aggregates.md)** — Lookup operators, grouping, and HAVING.
-- **[Custom Joins](../custom_joins.md)** — Q/Qor in `cjoin()` filter conditions.
+- **[Custom Joins](custom_joins.md)** — Q/Qor in `cjoin()` filter conditions.

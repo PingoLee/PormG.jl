@@ -30,11 +30,11 @@ This document tracks missing features and planned improvements for PormG.jl, wit
     4. **Context Control**: `set_context!(params, context::Symbol)` to direct parameters to the correct bucket.
     5. **Finalization**: `get_final_parameters` returns `vcat` of buckets in standard SQL order.
     - [x] **show_query**: Update to support new parameter structure and ensure correct SQL string generation for each dialect. Finishing the concept of Symbol-based `show_query` modes for flexible inspection.
-    - [ ] **Testing & Alignment Verification**:
-      - [ ] **Positional Cross-Check**: Create tests that count the number of `?` in each SQL block (SELECT, JOIN, WHERE) and compare them against the length of the corresponding parameter bucket.
-      - [ ] **Execution Order Stress Test**: Specifically test queries where JOINs are calculated dynamically based on filters to ensure parameter positions don't drift.
-      - [ ] **Subquery Isolation**: Verify that nested subqueries correctly restore the parent's `current_context` after execution.
-      - [ ] **Unit Tests**: Implement these using `inspect_query` and mocked connections in `test/unit/test_parameters.jl`.
+    - [x] **Testing & Alignment Verification**:
+      - [x] **Positional Cross-Check**: Create tests that count the number of `?` in each SQL block (SELECT, JOIN, WHERE) and compare them against the length of the corresponding parameter bucket.
+      - [x] **Execution Order Stress Test**: Specifically test queries where JOINs are calculated dynamically based on filters to ensure parameter positions don't drift.
+      - [x] **Subquery Isolation**: Verify that nested subqueries correctly restore the parent's `current_context` after execution.
+      - [x] **Unit Tests**: Implement these using `inspect_query` and mocked connections in `test/unit/test_parameters.jl`.
 
 - [ ] **Full Transaction Control**
   - [ ] **Savepoints**: Support for nested transactions/atomic blocks.
@@ -68,7 +68,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 - [ ] **Performance Bulk Operations**
   - [x] **COPY command**: Implement high-speed bulk inserts using PostgreSQL's `COPY` protocol.
-  - [ ] **Dataframes Type Normalization**: Create integration tests for bulk operation type normalization in `execution_bulk.jl`.
+  - [x] **Dataframes Type Normalization**: Create integration tests for bulk operation type normalization in `execution_bulk.jl`.
     - Validate edge cases for `bulk_insert`, `bulk_update`, and `bulk_copy`:
       - Float to Integer coercion (e.g., `14.0` in `Vector{Float64}` to `Int64`).
       - Mixed types in column (Strings that are numeric).

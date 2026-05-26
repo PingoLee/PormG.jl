@@ -29,16 +29,22 @@ This is safe to run on existing databases and will create the `pormg_migrations`
 ---
 
 ## Step 1: Define Your Models
+
 Edit your models in `db/models.jl` (or your chosen models file). PormG uses these definitions as the "target state" for your database.
+
+> [!IMPORTANT]
+> **Active Memory Registration**: PormG generates migrations by comparing the live database schema against the **in-memory** representations of your models. 
+> Before running `makemigrations`, make sure your model definitions file has been evaluated or loaded in the current Julia session (for example, by calling `include("db/models.jl")` or using the `@import_models` macro).
 
 ---
 
 ## Step 2: Generate Migrations
-Once your models are defined, generate a migration plan:
+
+Once your models are defined and evaluated in the Julia runtime, generate a DDL migration plan (Schema Diff):
 ```julia
 PormG.Migrations.makemigrations("db")
 ```
-This compares your models against the live database and generates `db/migrations/pending_migrations.jl`.
+This connects to the physical database, compares the live table schema against the registered in-memory `PormGModel` subclasses, and generates the transition plan in `db/migrations/pending_migrations.jl`.
 
 ---
 

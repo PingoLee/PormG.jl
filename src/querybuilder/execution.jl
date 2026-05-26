@@ -396,7 +396,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
       if model.fields[field].default !== nothing
         real_obj.insert[field] = model.fields[field].default
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        real_obj.insert[field] = model.fields[field].formater(now(), settings.time_zone)
+        real_obj.insert[field] = model.fields[field].formater(now(TimeZone(settings.time_zone)))
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
         real_obj.insert[field] = model.fields[field].formater(today())
       elseif model.fields[field].type == "UUID" && model.fields[field].auto_add
@@ -783,7 +783,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   for field in fields
     if !haskey(objct.insert, field)
       if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(now(), settings.time_zone)
+        objct.insert[field] = model.fields[field].formater(now(TimeZone(settings.time_zone)))
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
         objct.insert[field] = model.fields[field].formater(today())
       end
@@ -967,7 +967,7 @@ function _sqlite_datetime_aliases(objct::SQLObjectHandler)::Set{Symbol}
         for v in objct.object.values
             v isa SQLTypeField || continue
             # The effective alias is how the column appears in the result dict
-            effective_alias = v.custom_as !== nothing ? v.custom_as : v._as
+            effective_alias = v.custom_as !== nothing ? v.custom_as : (v._as !== nothing ? v._as : (v.field isa String ? v.field : nothing))
             effective_alias === nothing && continue
             # The field reference must be a plain string to look up in model.fields.
             # Expressions or function objects are skipped.
@@ -1000,8 +1000,9 @@ natively via LibPQ).
 """
 function _parse_sqlite_datetime(v::Any)
     v isa AbstractString || return v
+    normalized = Models.normalize_sqlite_datetime_string(v)
     # Try timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00")
-    try; return ZonedDateTime(v); catch; end
+    try; return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz"); catch; end
     # Fall back to naive datetime (e.g. "2026-04-07T21:30:23")
     try; return DateTime(v[1:min(19, length(v))], dateformat"yyyy-mm-ddTHH:MM:SS"); catch; end
     return v
@@ -1219,6 +1220,13 @@ function save(row::PormGRow; show_query::Symbol = :execute)
 
     for fk_sym in sort(collect(keys(fk_updates)); by=String)
       fk_meta = model.fields[String(fk_sym)]::Models.sForeignKey
+      if fk_meta.pk_field === nothing
+        throw(ArgumentError(
+          "save() cannot update projected fields under '$(fk_sym)' because the FK's " *
+          "target primary key has not been resolved. Call set_models() to initialize " *
+          "the model before using save() with projected FK fields."
+        ))
+      end
       fk_value = _row_require_data_key(data, fk_sym, "projected updates under '$(fk_sym)' for $(model.name)")
       related_model = _row_related_model(model, fk_meta)
       fk_pairs = _row_update_pairs(fk_updates[fk_sym])

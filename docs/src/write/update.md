@@ -13,6 +13,14 @@ driver.nationality = "British"
 driver.save()
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "driver" 
+SET "nationality" = $2 
+WHERE "driverid" = $1
+-- Parameters: [driver_id, "British"]
+```
+
 Only fields assigned on the row are included in the generated `UPDATE`. The primary key must be present on the row, and models with no primary key or multiple primary keys are rejected.
 
 Inspection modes work the same way as other write methods, but they do not execute the update or clear the row's dirty state:
@@ -25,16 +33,32 @@ sql = driver.save(show_query=:sql)
 # row is still dirty; call driver.save() to execute
 ```
 
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "driver" 
+SET "forename" = $2 
+WHERE "driverid" = $1
+-- Parameters: [driver_id, "Lewis"]
+```
+
 Rows can also save projected foreign-key fields selected through `values(...)`. In this example, the assignment targets the related `Driver` table, not the `Result` table:
 
 ```julia
-result = M.Result.objects
-  .filter("resultid" => 1)
-  .values("resultid", "driverid", "driverid__nationality")
-  .get()
+result = M.Result.objects.
+  filter("resultid" => 1).
+  values("resultid", "driverid", "driverid__nationality").
+  get()
 
 result.driverid__nationality = "British"
 result.save()
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "driver" 
+SET "nationality" = $2 
+WHERE "driverid" = $1
+-- Parameters: [driver_id, "British"]
 ```
 
 If you need to change both the foreign-key value and projected fields under that same foreign key, save those changes in two steps so PormG can route each update unambiguously.
@@ -54,7 +78,17 @@ df = query |> DataFrame
 
 # Perform update
 query.update("nationality" => "Xylos")
+```
 
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "driver" AS "Tb" 
+SET "nationality" = $2 
+WHERE "Tb"."forename" = $1
+-- Parameters: ["Lewis", "Xylos"]
+```
+
+```julia
 # Verify the update
 df = query |> DataFrame
 # Row 1: nationality="Xylos"
@@ -147,11 +181,36 @@ PormG supports updating records based on filter criteria spanning related tables
 query = M.Result.objects;
 query.filter("driverid__nationality" => "British", "resultid" => 1);
 query.update("points" => F("points") + 10)
+```
 
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "result" AS "Tb" 
+SET "points" = "Tb"."points" + 10 
+FROM "driver" AS "Tb_1" 
+WHERE "Tb"."driverid" = "Tb_1"."driverid" 
+  AND "Tb_1"."nationality" = $1 
+  AND "Tb"."resultid" = $2
+-- Parameters: ["British", 1]
+```
+
+```julia
 # Update with complex relationship traversal
 query = M.Result.objects;
 query.filter("raceid__circuitid__name__@icontains" => "Monaco", "resultid" => 7654);
 query.update("points" => 11)
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "result" AS "Tb" 
+SET "points" = 11 
+FROM "race" AS "Tb_1", "circuit" AS "Tb_2" 
+WHERE "Tb"."raceid" = "Tb_1"."raceid" 
+  AND "Tb_1"."circuitid" = "Tb_2"."circuitid" 
+  AND "Tb_2"."name" ILIKE $1 
+  AND "Tb"."resultid" = $2
+-- Parameters: ["Monaco", 7654]
 ```
 
 ---
@@ -167,9 +226,27 @@ query.update("points" => 11)
 query = M.Driver.objects;
 query.filter("driverid" => 1);
 query.update("number" => F("number") + 1)
+```
 
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "driver" AS "Tb" 
+SET "number" = "Tb"."number" + 1 
+WHERE "Tb"."driverid" = $1
+-- Parameters: [1]
+```
+
+```julia
 # Set one field equal to another
 query.update("number" => F("driverid"))
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+UPDATE "driver" AS "Tb" 
+SET "number" = "Tb"."driverid" 
+WHERE "Tb"."driverid" = $1
+-- Parameters: [1]
 ```
 
 ### Supported Mathematical Operations

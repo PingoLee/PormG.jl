@@ -22,10 +22,10 @@ using PrecompileTools
 # NOTE: redefining the macro alone (without Revise re-parsing the call site) has no effect,
 # because macro expansion happens at parse time, not at runtime.
 macro pormg_debug()
-    return nothing
+  return nothing
 end
 macro pormg_debug(ex)
-    return nothing
+  return nothing
 end
 export @pormg_debug
 
@@ -60,7 +60,7 @@ abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
 
 abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
-abstract type PormGField  <: PormGModel end # define the type of the column from the model
+abstract type PormGField <: PormGModel end # define the type of the column from the model
 
 abstract type Migration <: PormGAbstractType end
 
@@ -103,9 +103,9 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+import .QueryBuilder: object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, When, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 
-export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, When, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, with_savepoint  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers
@@ -121,7 +121,7 @@ Requires `Tachikoma.jl` to be installed and loaded (`using Tachikoma`).
 
 See `ext/PormGTachikomaExt.jl` for the full implementation.
 """
-function tui(db_path::String; models_module::Union{Nothing, Module}=nothing, fps::Int=30)
+function tui(db_path::String; models_module::Union{Nothing,Module}=nothing, fps::Int=30)
   error("PormG.tui() requires Tachikoma.jl. Run `using Tachikoma` before calling PormG.tui().")
 end
 export tui

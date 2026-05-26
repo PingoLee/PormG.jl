@@ -446,32 +446,32 @@ For more complex expressions, see [Field Expressions](field_expressions.md).
 ### Wins Per Constructor
 
 ```julia
-df = M.Result.objects
-    .filter("positionOrder" => 1)
-    .values("constructorId__name", "wins" => Count("resultId"))
-    .order_by("-wins") |> DataFrame
+df = M.Result.objects.
+    filter("positionOrder" => 1).
+    values("constructorId__name", "wins" => Count("resultId")).
+    order_by("-wins") |> DataFrame
 ```
 
 ### Total Points Per Driver
 
 ```julia
-df = M.Result.objects
-    .values("driverId__surname", "total_pts" => Sum("points"))
-    .order_by("-total_pts")
-    .limit(20) |> DataFrame
+df = M.Result.objects.
+    values("driverId__surname", "total_pts" => Sum("points")).
+    order_by("-total_pts").
+    limit(20) |> DataFrame
 ```
 
 ### Best Finish Per Driver at a Specific Circuit
 
 ```julia
-df = M.Result.objects
-    .filter("raceId__circuitId__name" => "Circuit de Monaco")
-    .values(
+df = M.Result.objects.
+    filter("raceId__circuitId__name" => "Circuit de Monaco").
+    values(
         "driverId__surname",
         "best_finish" => Min("positionOrder"),
         "races" => Count("resultId")
-    )
-    .order_by("best_finish") |> DataFrame
+    ).
+    order_by("best_finish") |> DataFrame
 ```
 
 ---

@@ -194,4 +194,15 @@ struct MockSQLite <: PormGSQLite end
         @test !isempty(destructive)
     end
 
+    @testset "Multi-byte Identifier Truncation (BUG-4)" begin
+        # Test that _hash_field_name truncates long ASCII names under the 63-byte limit
+        long_ascii = Migrations._hash_field_name(:very_long_model_name_that_exceeds_sixty_three_characters, :and_has_a_very_long_field_name_too)
+        @test sizeof(long_ascii) <= 63
+
+        # Test that _hash_field_name handles multi-byte (UTF-8) names cleanly under the 63-byte limit without throwing indexing errors
+        long_utf8 = Migrations._hash_field_name(:modelo_com_caracteres_especiais_🍕🍕🍕🍕🍕🍕, :campo_de_teste_emoji_🚀🚀🚀🚀🚀🚀)
+        @test sizeof(long_utf8) <= 63
+        @test isvalid(long_utf8)
+    end
+
 end

@@ -72,8 +72,8 @@ function setup(path::String = DB_PATH)
 
     println()
     println("\e[34m--- AI Assistant Setup ---\e[0m")
-    println("PormG can install 'AI skills' (.github/skills) to help coding assistants")
-    println("(Cursor, Windsurf, Copilot) understand the PormG API in your project.")
+    println("PormG can install 'AI skills' (.cursor/skills) to help coding assistants")
+    println("(Cursor and other agents) understand the PormG API in your project.")
     print("Do you want to install PormG AI skills? (Y/n) [Default Y]: ")
     
     choice = readline() |> strip |> lowercase
@@ -85,17 +85,17 @@ end
 """
     install_ai_skills(target_dir::String = pwd())
 
-Copy PormG AI skill blueprints to the target project's `.github/skills` directory.
-This helps AI assistants (Cursor, Windsurf, Copilot) provide better PormG code suggestions.
+Copy PormG AI skill blueprints to the target project's `.cursor/skills` directory.
+This helps AI assistants (Cursor and other agents) provide better PormG code suggestions.
 
-The skill blueprint lives in the PormG package itself under `.github/skills/pormg-usage/`.
+The skill blueprint lives in the PormG package itself under `.cursor/skills/pormg-usage/`.
 """
 function install_ai_skills(target_dir::String = pwd())
-    # @__DIR__ is src/ — navigate up to package root then into .github/skills
+    # @__DIR__ is src/ — navigate up to package root then into .cursor/skills
     pkg_root = dirname(@__DIR__)
-    skill_src = joinpath(pkg_root, ".github", "skills", "pormg-usage", "SKILL.md")
+    skill_src = joinpath(pkg_root, ".cursor", "skills", "pormg-usage", "SKILL.md")
 
-    target_skill_dir  = joinpath(target_dir, ".github", "skills", "pormg-usage")
+    target_skill_dir  = joinpath(target_dir, ".cursor", "skills", "pormg-usage")
     target_skill_file = joinpath(target_skill_dir, "SKILL.md")
 
     try

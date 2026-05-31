@@ -1043,3 +1043,66 @@ end
     M.Just_a_test_deletion.objects.exists() &&
         M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Delete guards: distinct() and group_by()
+#
+# delete() must reject queries that have distinct() or group_by() set because
+# those clauses collapse the result set, making the deletion collector's
+# cascade counting and constraint handling unreliable.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "DELETE: Guard rejects distinct()" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "distinct-guard", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "distinct-guard", "test_result" => 2)
+
+    try
+        err = try
+            M.Just_a_test_deletion.objects.
+                filter("name" => "distinct-guard").
+                distinct().
+                delete()
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("distinct", lowercase(sprint(showerror, err)))
+
+        # Rows must survive — the delete was rejected.
+        @test M.Just_a_test_deletion.objects.filter("name" => "distinct-guard").count() == 2
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
+@testset "DELETE: Guard rejects group_by()" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "group-guard", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "group-guard", "test_result" => 2)
+
+    try
+        q = M.Just_a_test_deletion.objects.
+            filter("name" => "group-guard").
+            values("name" => Count("id"))
+        err = try
+            q.delete()
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("group", lowercase(sprint(showerror, err)))
+
+        # Rows must survive — the delete was rejected.
+        @test M.Just_a_test_deletion.objects.filter("name" => "group-guard").count() == 2
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end

@@ -322,8 +322,8 @@ end
     M.Just_a_test_deletion.objects.exists() && M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     M.Just_a_test_deletion.objects.create("name" => "multi_f", "test_result" => 10, "test_result2" => 20, "test_result_set_default" => nothing)
     
-    # 1. Update matching zero rows: should not error and return nothing
-    @test isnothing(M.Just_a_test_deletion.objects.filter("name" => "no_such_row").update("test_result" => 100))
+    # 1. Update matching zero rows: should not error and return 0
+    @test M.Just_a_test_deletion.objects.filter("name" => "no_such_row").update("test_result" => 100) == 0
     
     # 2. Multiple F expressions in the same update
     M.Just_a_test_deletion.objects.filter("name" => "multi_f").update(
@@ -333,6 +333,47 @@ end
     res = M.Just_a_test_deletion.objects.filter("name" => "multi_f").list() |> first
     @test res[:test_result] == 15
     @test res[:test_result2] == 40
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bitwise Updates: Atomic Bitwise operations inside UPDATE, values(), and filter()
+# Proves that bitwise overloads (&, |, ~, <<, >>, xor/⊻) execute cleanly end-to-end
+# on actual database connections (both SQLite and PostgreSQL).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bitwise Updates and Filters" begin
+  M.New_join_position.objects.exists() && M.New_join_position.objects.delete(allow_delete_all = true)
+  # Seed row with flag value 5 (binary 0101)
+  M.New_join_position.objects.create("description" => "bitwise", "result" => 5)
+
+  # 1. filter() + values() with AND
+  # (5 & 4) is 4, which is > 0, so the row should match.
+  # We also project a masked value in values() using AND.
+  query = M.New_join_position.objects.
+    filter("description" => "bitwise", (F("result") & 4) > 0).
+    values("description", "masked" => F("result") & 4)
+  df = query |> DataFrame
+  @test size(df, 1) == 1
+  @test df[1, :masked] == 4
+
+  # 2. update() with OR: set the 2nd bit (value 2), making 5 | 2 = 7
+  M.New_join_position.objects.filter("description" => "bitwise").update("result" => F("result") | 2)
+  row = M.New_join_position.objects.filter("description" => "bitwise").values("result").list() |> first
+  @test row[:result] == 7
+
+  # 3. update() with shift left: shift by 1, making 7 << 1 = 14
+  M.New_join_position.objects.filter("description" => "bitwise").update("result" => F("result") << 1)
+  row = M.New_join_position.objects.filter("description" => "bitwise").values("result").list() |> first
+  @test row[:result] == 14
+
+  # 4. update() with shift right: shift by 2, making 14 >> 2 = 3
+  M.New_join_position.objects.filter("description" => "bitwise").update("result" => F("result") >> 2)
+  row = M.New_join_position.objects.filter("description" => "bitwise").values("result").list() |> first
+  @test row[:result] == 3
+
+  # 5. update() with XOR: xor with 6, making 3 ⊻ 6 = 5
+  M.New_join_position.objects.filter("description" => "bitwise").update("result" => F("result") ⊻ 6)
+  row = M.New_join_position.objects.filter("description" => "bitwise").values("result").list() |> first
+  @test row[:result] == 5
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1790,5 +1831,127 @@ end
 
     finally
         _clear_bulk_update_scratch_rows!()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Update guards: distinct() and group_by()
+#
+# update() must reject queries that have distinct() or group_by() set because
+# those clauses collapse the result set, making the UPDATE target ambiguous.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "UPDATE: Guard rejects distinct()" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "distinct-upd", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "distinct-upd", "test_result" => 2)
+
+    try
+        err = try
+            M.Just_a_test_deletion.objects.
+                filter("name" => "distinct-upd").
+                distinct().
+                update("name" => "should-not-happen")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("distinct", lowercase(sprint(showerror, err)))
+
+        # Verify no rows were mutated.
+        @test M.Just_a_test_deletion.objects.filter("name" => "distinct-upd").count() == 2
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
+@testset "UPDATE: Guard rejects group_by()" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "group-upd", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "group-upd", "test_result" => 2)
+
+    try
+        q = M.Just_a_test_deletion.objects.
+            filter("name" => "group-upd").
+            values("name" => Count("id"))
+        err = try
+            q.update("name" => "should-not-happen")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("group", lowercase(sprint(showerror, err)))
+
+        # Verify no rows were mutated.
+        @test M.Just_a_test_deletion.objects.filter("name" => "group-upd").count() == 2
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Update return value: affected row count
+#
+# update() now returns an Int with the number of matched rows (Django
+# semantics). Both PostgreSQL and SQLite should return the count of rows
+# matching the WHERE clause, even when the new value equals the old value.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "UPDATE: Returns affected row count" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "count-ret", "test_result" => 1)
+    M.Just_a_test_deletion.objects.create("name" => "count-ret", "test_result" => 2)
+    M.Just_a_test_deletion.objects.create("name" => "count-ret", "test_result" => 3)
+
+    try
+        # Update all 3 rows — should return 3.
+        n = M.Just_a_test_deletion.objects.
+            filter("name" => "count-ret").
+            update("name" => "count-ret-updated")
+        @test n isa Integer
+        @test n == 3
+
+        # Update a single row — should return 1.
+        n2 = M.Just_a_test_deletion.objects.
+            filter("test_result" => 1).
+            update("name" => "count-ret-single")
+        @test n2 == 1
+
+        # Verify data integrity after the updates.
+        @test M.Just_a_test_deletion.objects.filter("name" => "count-ret-single").count() == 1
+        @test M.Just_a_test_deletion.objects.filter("name" => "count-ret-updated").count() == 2
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    end
+end
+
+@testset "UPDATE: Returns 0 when no rows match" begin
+    M.Just_a_test_deletion.objects.exists() &&
+        M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    M.Just_a_test_deletion.objects.create("name" => "zero-ret", "test_result" => 1)
+
+    try
+        # Filter for a non-existent value — should return 0.
+        n = M.Just_a_test_deletion.objects.
+            filter("name" => "this-name-does-not-exist").
+            update("name" => "should-not-happen")
+        @test n isa Integer
+        @test n == 0
+
+        # Original row must be untouched.
+        @test M.Just_a_test_deletion.objects.filter("name" => "zero-ret").count() == 1
+    finally
+        M.Just_a_test_deletion.objects.exists() &&
+            M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     end
 end

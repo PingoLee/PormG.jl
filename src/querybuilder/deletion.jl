@@ -70,6 +70,22 @@ function delete(objct::SQLObjectHandler;
     ))
   end
 
+  if objct.object.distinct
+    throw(ArgumentError(
+      "Cannot call delete() on a query with distinct(). " *
+      "DISTINCT collapses the result set, making the deletion collector's " *
+      "cascade counting unreliable. Remove distinct() or filter by primary key."
+    ))
+  end
+
+  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.agregate, objct.object.values)
+    throw(ArgumentError(
+      "Cannot call delete() on a query with group_by() / annotate aggregations. " *
+      "GROUP BY collapses rows, making cascade counting and constraint handling " *
+      "unreliable. Remove the aggregation or filter by primary key."
+    ))
+  end
+
   # don't allow to delete without filter
   !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")
   

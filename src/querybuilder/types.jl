@@ -283,7 +283,7 @@ query.values("price", "discounted_price" => F("price") * 0.9)
 ```
 """
 @kwdef mutable struct FExpression <: SQLTypeF
-  field_name::Union{String,SQLTypeF,SQLTypeFunction}
+  field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction}
   operation::OptionalString = nothing  # +, -, *, /, etc.
   operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Nothing} = nothing
   function_name::String = "F"
@@ -371,37 +371,61 @@ end
 
 # Comparison operations for F expressions
 function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
-  f.operation = "="
-  f.operand = operand
-  return f
+  if f.operation === nothing
+    f.operation = "="
+    f.operand = operand
+    return f
+  else
+    return FExpression(field_name=f, operation="=", operand=operand, function_name="F", column="", agregate=f.agregate)
+  end
 end
 function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
-  f.operation = "!="
-  f.operand = operand
-  return f
+  if f.operation === nothing
+    f.operation = "!="
+    f.operand = operand
+    return f
+  else
+    return FExpression(field_name=f, operation="!=", operand=operand, function_name="F", column="", agregate=f.agregate)
+  end
 end
 function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
-  f.operation = ">"
-  f.operand = operand
-  return f
+  if f.operation === nothing
+    f.operation = ">"
+    f.operand = operand
+    return f
+  else
+    return FExpression(field_name=f, operation=">", operand=operand, function_name="F", column="", agregate=f.agregate)
+  end
 end
 
 function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
-  f.operation = "<"
-  f.operand = operand
-  return f
+  if f.operation === nothing
+    f.operation = "<"
+    f.operand = operand
+    return f
+  else
+    return FExpression(field_name=f, operation="<", operand=operand, function_name="F", column="", agregate=f.agregate)
+  end
 end
 
 function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
-  f.operation = ">="
-  f.operand = operand
-  return f
+  if f.operation === nothing
+    f.operation = ">="
+    f.operand = operand
+    return f
+  else
+    return FExpression(field_name=f, operation=">=", operand=operand, function_name="F", column="", agregate=f.agregate)
+  end
 end
 
 function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
-  f.operation = "<="
-  f.operand = operand
-  return f
+  if f.operation === nothing
+    f.operation = "<="
+    f.operand = operand
+    return f
+  else
+    return FExpression(field_name=f, operation="<=", operand=operand, function_name="F", column="", agregate=f.agregate)
+  end
 end
 # function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
 #   return OperObject(operator = ">", values = operand, column = f)
@@ -552,6 +576,7 @@ function Base.:/(f::FObject, operand::Union{Integer,Float64,String,FExpression,F
   return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
 end
 
+
 # Commutative: scalar op FObject
 function Base.:+(operand::Union{Integer,Float64}, f::FObject)
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate)
@@ -561,6 +586,91 @@ function Base.:*(operand::Union{Integer,Float64}, f::FObject)
   return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate)
 end
 
+
+# ---
+# Bitwise expression types and operands (narrow overloads to prevent spooky dispatch)
+# ---
+const BitwiseExpression = Union{FExpression,WindowFunction,FObject}
+const BitwiseOperand = Union{Integer,FExpression,WindowFunction,FObject}
+
+_bitwise_is_agg(f::BitwiseExpression) = f.agregate
+_bitwise_is_agg(::Integer) = false
+
+function _build_bitwise_expr(left, op::String, right)
+  return FExpression(
+    field_name=left isa FExpression && left.operation === nothing ? left.field_name : left,
+    operation=op,
+    operand=right,
+    function_name="F",
+    column=left isa FExpression && left.operation === nothing ? (left.field_name isa String ? left.field_name : "") : "",
+    agregate=_bitwise_is_agg(left) || _bitwise_is_agg(right)
+  )
+end
+
+function _build_bitwise_unary(expr, op::String)
+  return FExpression(
+    field_name=expr,
+    operation=op,
+    operand=nothing,
+    function_name="F",
+    column="",
+    agregate=_bitwise_is_agg(expr)
+  )
+end
+
+# Overload Base operators
+function Base.:&(a::BitwiseExpression, b::BitwiseOperand)
+  return _build_bitwise_expr(a, "&", b)
+end
+function Base.:&(a::Integer, b::BitwiseExpression)
+  return _build_bitwise_expr(b, "&", a)
+end
+
+function Base.:|(a::BitwiseExpression, b::BitwiseOperand)
+  return _build_bitwise_expr(a, "|", b)
+end
+function Base.:|(a::Integer, b::BitwiseExpression)
+  return _build_bitwise_expr(b, "|", a)
+end
+
+function Base.:~(f::BitwiseExpression)
+  return _build_bitwise_unary(f, "~")
+end
+
+function Base.:<<(a::BitwiseExpression, b::BitwiseOperand)
+  return _build_bitwise_expr(a, "<<", b)
+end
+function Base.:<<(a::Integer, b::BitwiseExpression)
+  return FExpression(
+    field_name=a,
+    operation="<<",
+    operand=b,
+    function_name="F",
+    column="",
+    agregate=_bitwise_is_agg(b)
+  )
+end
+
+function Base.:>>(a::BitwiseExpression, b::BitwiseOperand)
+  return _build_bitwise_expr(a, ">>", b)
+end
+function Base.:>>(a::Integer, b::BitwiseExpression)
+  return FExpression(
+    field_name=a,
+    operation=">>",
+    operand=b,
+    function_name="F",
+    column="",
+    agregate=_bitwise_is_agg(b)
+  )
+end
+
+function Base.xor(a::BitwiseExpression, b::BitwiseOperand)
+  return _build_bitwise_expr(a, "xor", b)
+end
+function Base.xor(a::Integer, b::BitwiseExpression)
+  return _build_bitwise_expr(b, "xor", a)
+end
 
 
 # ---

@@ -14,7 +14,7 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [x] **Conditional Expressions** (`Case`, `When`). — Fully implemented. Works in `values()`, `filter()`, and `update()` SET clauses; nests correctly inside aggregates like `Sum(Case([...]))`.
   - [/] **F-Expression** expansion.
     - [x] Arithmetic (`+`, `-`, `*`, `/`) and comparison operators (`==`, `>`, `<=`, etc.) — fully implemented, including field-to-field arithmetic and chaining.
-    - [ ] **Bitwise operations** (`&`, `|`, `^`, `<<`, `>>`) — not implemented.
+    - [x] **Bitwise operations** (`&`, `|`, `⊻`/`xor`, `<<`, `>>`) — fully implemented and verified on SQLite & PostgreSQL.
     - [x] **Date/Time extraction**: `Extract()`, `@date`, `@year`, `@month`, `@day`, `@quarter` lookups — implemented and dialect-aware.
     - [/] **Date arithmetic with duration types**: Integer-offset `F("date") + 30` works. Explicit Julia duration types like `Day(30)` / `Interval()` are not recognized — arithmetic relies on bare integers interpreted as days by the dialect.
     - [ ] **Extend test coverage** for date/time functions to ensure cross-database compatibility and correct SQL generation.

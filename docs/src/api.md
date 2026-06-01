@@ -399,6 +399,7 @@ Key contracts:
 - If `filters` is omitted, PormG infers the model primary key columns and uses those to identify rows.
 - `bulk_update()` rebuilds the `WHERE` clause from `filters=` and does not preserve filters that were already attached to the handler.
 - Static lookup filters on base-table columns are supported, but relation traversals that would require JOINs are rejected.
+- Foreign-key columns accept scalar primary-key values, including `0` when that referenced row exists; use `nothing` or `missing` to write SQL `NULL` on nullable FK columns.
 - The same dry-run modes available elsewhere apply here: `:sql`, `:dict`, `:inspection`, `:params`, and `:none`.
 
 ### `bulk_copy`

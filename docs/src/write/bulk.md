@@ -15,6 +15,7 @@ All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
 - **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
 - **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by name (case-insensitive).
 - **Centralized Validation**: Every row is automatically checked against the model's constraints (`max_length`, `nullability`, etc.) before reaching the database.
+- **Relation Value Semantics**: Foreign-key columns accept scalar key values (including `0` if present in the target table). Use `nothing` or `missing` when you want SQL `NULL` on nullable relation columns.
 
 If you are processing a very large frame and no longer need the original values, pass `copy=false` to let the bulk path mutate the caller's `DataFrame` in place and avoid the defensive deep copy.
 

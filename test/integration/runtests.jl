@@ -5,6 +5,7 @@ include("common_setup.jl")
 # 1b. Load delete scratch modules at top level (module expressions are forbidden
 #     inside @testset / macro-wrapped bodies in Julia).
 include("common_delete_setup.jl")
+include("common_bulk_scratch_setup.jl")
 
 # 2. Include individual test files
 # Each file now focuses only on test logic, without setup

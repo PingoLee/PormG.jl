@@ -2,36 +2,6 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-_bulk_update_scratch_to_date(value) = value isa Date ? value : Date(string(value))
-_bulk_update_scratch_to_bool(value) = value isa Bool ? value : Int(value) != 0
-_bulk_update_scratch_fk_string(id::Integer) = SubString("id=$(id)", 4)
-
-function _clear_bulk_update_scratch_rows!()
-    M.Bulk_update_payload_scratch.objects.delete(allow_delete_all = true)
-    M.Bulk_update_optional_parent_scratch.objects.delete(allow_delete_all = true)
-    M.Bulk_update_required_parent_scratch.objects.delete(allow_delete_all = true)
-    return nothing
-end
-
-function _seed_bulk_update_scratch_parents!(required_labels::Vector{String}, optional_labels::Vector{String})
-    required_ids = Dict{String, Int64}()
-    optional_ids = Dict{String, Int64}()
-
-    for label in required_labels
-        row = M.Bulk_update_required_parent_scratch.objects.create("label" => label)
-        required_ids[label] = Int64(row[:id])
-    end
-
-    for label in optional_labels
-        row = M.Bulk_update_optional_parent_scratch.objects.create("label" => label)
-        optional_ids[label] = Int64(row[:id])
-    end
-
-    return required_ids, optional_ids
-end
-
-
-
 @testset "Single and Bulk Insert/Update" begin
   query = M.Just_a_test_deletion.objects;
     query.exists() && query.delete(allow_delete_all = true);
@@ -882,13 +852,14 @@ end
         end
 
         # ─────────────────────────────────────────────────────────────────────────────
-        # Bulk Update: numeric sentinel 0 is not treated as a nullable FK shortcut
+        # Bulk Update: FK value 0 can reference a real parent row
         #
-        # The production payload showed 0-like values in FK columns. This regression
-        # makes the contract explicit: if the referenced row does not exist, the live
-        # database must reject the bulk UPDATE and the prior FK value must remain.
+        # Some schemas legitimately use primary key 0 in reference tables. This
+        # regression ensures bulk_update passes 0 through validation and lets the
+        # live FK constraint accept it when the parent row exists.
+        # Parity: test_inserts.jl — "Bulk scratch payload: bulk_insert" / zero-valued FK.
         # ─────────────────────────────────────────────────────────────────────────────
-        @testset "Bulk Update rejects zero sentinel for constrained FK columns" begin
+        @testset "Bulk Update accepts zero-valued constrained FK columns" begin
             _clear_bulk_update_scratch_rows!()
 
             try
@@ -898,36 +869,34 @@ end
                 )
 
                 seeded = M.Bulk_update_payload_scratch.objects.create(
-                    "label" => "zero-sentinel-target",
+                    "label" => "zero-fk-target",
                     "required_parent_id" => required_ids["req-only"],
                     "optional_parent_id" => optional_ids["opt-only"],
                     "event_date" => Date(2024, 5, 1),
                     "is_active" => true,
                 )
 
-                bad_update = DataFrame(
+                zero_parent = M.Bulk_update_optional_parent_scratch.objects.create(
+                    "id" => 0,
+                    "label" => "opt-zero",
+                )
+                @test zero_parent[:id] == 0
+
+                zero_update = DataFrame(
                     id = [seeded[:id]],
                     optional_parent_id = Any["0"],
                 )
 
-                err = try
-                    bulk_update(
-                        M.Bulk_update_payload_scratch.objects,
-                        bad_update,
-                        columns = ["optional_parent_id"],
-                        filters = ["id"],
-                    )
-                    nothing
-                catch e
-                    e
-                end
-
-                @test err !== nothing
-                @test occursin("foreign key", lowercase(string(err))) || occursin("constraint", lowercase(string(err)))
+                bulk_update(
+                    M.Bulk_update_payload_scratch.objects,
+                    zero_update,
+                    columns = ["optional_parent_id"],
+                    filters = ["id"],
+                )
 
                 persisted = M.Bulk_update_payload_scratch.objects.filter("id" => seeded[:id]).list() |> first
-                @test persisted[:optional_parent_id] == optional_ids["opt-only"]
-                @test persisted[:label] == "zero-sentinel-target"
+                @test persisted[:optional_parent_id] == 0
+                @test persisted[:label] == "zero-fk-target"
             finally
                 _clear_bulk_update_scratch_rows!()
             end
@@ -1031,108 +1000,6 @@ end
                 _clear_bulk_update_scratch_rows!()
             end
         end
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Bulk Insert combined: explicit id + DateTimeField + nullable IntegerField
-#                       + nullable FK + BooleanField
-#
-# Mirrors the production `bulk_insert` pattern where:
-#   - "id" is explicitly included in columns= so the caller controls the PKs
-#   - nullable columns (event_time, nullable_int, optional_parent_id, event_date)
-#       carry a mix of concrete values and missing across rows
-#   - chunk_size=2 forces the 3-row DataFrame to span two DB round-trips,
-#       exercising column-map consistency across chunks
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "Bulk Insert combined explicit-id + DateTimeField + nullable IntegerField + FK + BooleanField" begin
-    _clear_bulk_update_scratch_rows!()
-
-    try
-        required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
-            ["req-bi-combo"],
-            ["opt-bi-combo"],
-        )
-
-        # IDs well above any auto-sequence value; table is empty after the clear
-        # above, so there is no PK collision risk.
-        explicit_ids = [990_100, 990_101, 990_102]
-
-        insert_df = DataFrame(
-            id                 = explicit_ids,
-            label              = ["bi-combo-a", "bi-combo-b", "bi-combo-c"],
-            required_parent_id = fill(required_ids["req-bi-combo"], 3),
-            optional_parent_id = Any[optional_ids["opt-bi-combo"], missing, optional_ids["opt-bi-combo"]],
-            event_date         = Any[Date(2024, 3, 1), Date(2024, 3, 2), missing],
-            is_active          = [true, false, true],
-            event_time         = Any[DateTime(2024, 3, 1, 9, 0, 0), missing, DateTime(2024, 3, 3, 10, 30, 0)],
-            nullable_int       = Any[7, missing, 77],
-        )
-
-        # chunk_size=2 splits the 3-row DataFrame into two DB round-trips.
-        bulk_insert(
-            M.Bulk_update_payload_scratch.objects,
-            insert_df,
-            columns    = ["id", "label", "required_parent_id", "optional_parent_id",
-                          "event_date", "is_active", "event_time", "nullable_int"],
-            chunk_size = 2,
-        )
-
-        rows = M.Bulk_update_payload_scratch.objects.filter(
-            "label__@in" => ["bi-combo-a", "bi-combo-b", "bi-combo-c"]
-        ).order_by("id").values(
-            "id", "label", "required_parent_id", "optional_parent_id",
-            "event_date", "is_active", "event_time", "nullable_int"
-        ).list()
-
-        @test length(rows) == 3
-        @test Set(r[:id] for r in rows) == Set(explicit_ids)
-
-        by_label = Dict(r[:label] => r for r in rows)
-
-        # ── row A: all non-null values ────────────────────────────────────────
-        ra = by_label["bi-combo-a"]
-        @test ra[:id] == 990_100
-        @test _bulk_update_scratch_to_bool(ra[:is_active]) == true
-        @test ra[:nullable_int] == 7
-        @test ra[:optional_parent_id] == optional_ids["opt-bi-combo"]
-        stored_a = ra[:event_time]
-        norm_a = if stored_a isa DateTime
-            stored_a
-        elseif stored_a isa AbstractString
-            DateTime(stored_a[1:19])
-        else
-            DateTime(string(stored_a)[1:19])
-        end
-        @test norm_a == DateTime(2024, 3, 1, 9, 0, 0)
-
-        # ── row B: all nullable columns are null/missing ──────────────────────
-        rb = by_label["bi-combo-b"]
-        @test rb[:id] == 990_101
-        @test _bulk_update_scratch_to_bool(rb[:is_active]) == false
-        @test rb[:nullable_int] === nothing || ismissing(rb[:nullable_int])
-        @test rb[:event_time] === nothing || ismissing(rb[:event_time])
-        @test rb[:optional_parent_id] === nothing || ismissing(rb[:optional_parent_id])
-
-        # ── row C: event_date missing, event_time and nullable_int non-null ───
-        rc = by_label["bi-combo-c"]
-        @test rc[:id] == 990_102
-        @test _bulk_update_scratch_to_bool(rc[:is_active]) == true
-        @test rc[:nullable_int] == 77
-        @test rc[:event_date] === nothing || ismissing(rc[:event_date])
-        stored_c = rc[:event_time]
-        norm_c = if stored_c isa DateTime
-            stored_c
-        elseif stored_c isa AbstractString
-            DateTime(stored_c[1:19])
-        else
-            DateTime(string(stored_c)[1:19])
-        end
-        @test norm_c == DateTime(2024, 3, 3, 10, 30, 0)
-
-    finally
-        _clear_bulk_update_scratch_rows!()
-    end
-end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1747,7 +1614,7 @@ end
 #
 # When an entire column in the update DataFrame is `missing`, the ORM must
 # write NULL for every row rather than skipping the column or erroring.
-# This closes a gap left by the zero-sentinel test where only one row was
+# This closes a gap left by the zero-valued FK test where only one row was
 # given a bad value; here all rows receive `missing` for the nullable column.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Bulk Update all-missing optional FK column nulls every row" begin

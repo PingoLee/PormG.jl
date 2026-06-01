@@ -849,6 +849,10 @@ Config.objects.create("settings" => Dict("theme"=>"dark", "notifications"=>true)
 
 **Use Cases**: Categories, users, parent-child relationships.
 
+**FK Value Contract**:
+- ForeignKey fields accept scalar primary-key values, including `0`, when that key exists in the referenced table.
+- Use `nothing` or `missing` to write SQL `NULL` on nullable FK columns.
+
 ```julia
 # Blog system
 Article = Models.Model(

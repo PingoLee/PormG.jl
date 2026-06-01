@@ -1509,12 +1509,10 @@ end
         @test bulk_profiles[:operation] === :insert
     end
 
-    @testset "FK zero-sentinel rejection (db_constraint=true)" begin
-        # db_constraint=true (default) — 0 is not a valid FK value and must be
-        # rejected by the ORM before any SQL is generated. Passing 0 as a FK id
-        # would silently insert a dangling reference on databases that do not
-        # enforce constraints on that value, or produce a cryptic FK violation
-        # elsewhere. The correct call is nothing/missing for NULL.
+    @testset "FK zero primary keys are valid scalar references" begin
+        # Foreign keys validate scalar shape only. Some schemas legitimately use
+        # primary key 0, so the ORM must pass it through and let the database
+        # constraint decide whether the referenced row exists.
 
         ZeroSentinelModel = Models.Model_Type(
             name = "zero_sentinel_test",
@@ -1529,46 +1527,18 @@ end
             connect_key = "default"
         )
 
-        # Integer 0 — rejected on constrained FK fields
-        err_int = try
-            validate_field_data(ZeroSentinelModel, "required_fk", 0, "insert")
-            nothing
-        catch e
-            e
-        end
-        @test err_int !== nothing
-        @test occursin("0 sentinel", sprint(showerror, err_int))
-
-        # Integer 0 on nullable FK — also rejected (NULL must be expressed as nothing/missing)
-        err_nullable = try
-            validate_field_data(ZeroSentinelModel, "optional_fk", 0, "insert")
-            nothing
-        catch e
-            e
-        end
-        @test err_nullable !== nothing
-        @test occursin("0 sentinel", sprint(showerror, err_nullable))
-
-        # String "0" — treated as zero sentinel and rejected
-        err_str = try
-            validate_field_data(ZeroSentinelModel, "required_fk", "0", "insert")
-            nothing
-        catch e
-            e
-        end
-        @test err_str !== nothing
-        @test occursin("0 sentinel", sprint(showerror, err_str))
-
-        # db_constraint=false — zero sentinel check does NOT apply; 0 is allowed
-        # (the application is responsible for referential integrity when constraints
-        # are disabled, e.g. for bulk imports that re-link rows in a second pass).
+        # 0 can be a real primary key, including on nullable FKs. NULL must still
+        # be expressed as nothing/missing.
+        @test validate_field_data(ZeroSentinelModel, "required_fk", 0, "insert") === true
+        @test validate_field_data(ZeroSentinelModel, "optional_fk", 0, "insert") === true
+        @test validate_field_data(ZeroSentinelModel, "required_fk", "0", "insert") === true
         @test validate_field_data(ZeroSentinelModel, "no_constraint_fk", 0, "insert") === true
 
         # Valid positive integer FKs still pass
         @test validate_field_data(ZeroSentinelModel, "required_fk", 1, "insert") === true
         @test validate_field_data(ZeroSentinelModel, "required_fk", 9999, "insert") === true
 
-        # nothing/missing pass through (NULL path, not the zero sentinel path)
+        # nothing/missing pass through as NULL.
         @test validate_field_data(ZeroSentinelModel, "optional_fk", nothing, "insert") === true
         @test validate_field_data(ZeroSentinelModel, "optional_fk", missing, "insert") === true
     end

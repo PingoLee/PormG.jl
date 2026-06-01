@@ -18,6 +18,8 @@ Scenarios covered:
       returned Dict on both backends
   — Bulk Insert with Manual Mappings: the columns= keyword restricts which DataFrame
       columns are written; Pair mappings survive multi-chunk execution
+  — Bulk scratch payload (Bulk_update_*_scratch models): mixed nullable columns,
+      explicit PKs, chunking, and FK id 0 (parity with bulk_update in test_updates.jl)
 
 Run with:
   julia -t auto --project=. test/integration/runtests.jl
@@ -521,5 +523,144 @@ end
         cleanup = M.Django_contract_scratch.objects
         cleanup.filter("label__@in" => vcat(all_labels, ["explicit-pk-check-a", "explicit-pk-check-b"])).exists() &&
             cleanup.filter("label__@in" => vcat(all_labels, ["explicit-pk-check-a", "explicit-pk-check-b"])).delete()
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bulk scratch payload: bulk_insert on Bulk_update_*_scratch tables
+#
+# Uses shared helpers from common_bulk_scratch_setup.jl. bulk_update regressions
+# for the same models live in test_updates.jl.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Bulk scratch payload: bulk_insert" begin
+
+    @testset "combined explicit-id + DateTimeField + nullable IntegerField + FK + BooleanField" begin
+        _clear_bulk_update_scratch_rows!()
+
+        try
+            required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+                ["req-bi-combo"],
+                ["opt-bi-combo"],
+            )
+
+            explicit_ids = [990_100, 990_101, 990_102]
+
+            insert_df = DataFrame(
+                id                 = explicit_ids,
+                label              = ["bi-combo-a", "bi-combo-b", "bi-combo-c"],
+                required_parent_id = fill(required_ids["req-bi-combo"], 3),
+                optional_parent_id = Any[optional_ids["opt-bi-combo"], missing, optional_ids["opt-bi-combo"]],
+                event_date         = Any[Date(2024, 3, 1), Date(2024, 3, 2), missing],
+                is_active          = [true, false, true],
+                event_time         = Any[DateTime(2024, 3, 1, 9, 0, 0), missing, DateTime(2024, 3, 3, 10, 30, 0)],
+                nullable_int       = Any[7, missing, 77],
+            )
+
+            bulk_insert(
+                M.Bulk_update_payload_scratch.objects,
+                insert_df,
+                columns    = ["id", "label", "required_parent_id", "optional_parent_id",
+                              "event_date", "is_active", "event_time", "nullable_int"],
+                chunk_size = 2,
+            )
+
+            rows = M.Bulk_update_payload_scratch.objects.filter(
+                "label__@in" => ["bi-combo-a", "bi-combo-b", "bi-combo-c"]
+            ).order_by("id").values(
+                "id", "label", "required_parent_id", "optional_parent_id",
+                "event_date", "is_active", "event_time", "nullable_int"
+            ).list()
+
+            @test length(rows) == 3
+            @test Set(r[:id] for r in rows) == Set(explicit_ids)
+
+            by_label = Dict(r[:label] => r for r in rows)
+
+            ra = by_label["bi-combo-a"]
+            @test ra[:id] == 990_100
+            @test _bulk_update_scratch_to_bool(ra[:is_active]) == true
+            @test ra[:nullable_int] == 7
+            @test ra[:optional_parent_id] == optional_ids["opt-bi-combo"]
+            stored_a = ra[:event_time]
+            norm_a = if stored_a isa DateTime
+                stored_a
+            elseif stored_a isa AbstractString
+                DateTime(stored_a[1:19])
+            else
+                DateTime(string(stored_a)[1:19])
+            end
+            @test norm_a == DateTime(2024, 3, 1, 9, 0, 0)
+
+            rb = by_label["bi-combo-b"]
+            @test rb[:id] == 990_101
+            @test _bulk_update_scratch_to_bool(rb[:is_active]) == false
+            @test rb[:nullable_int] === nothing || ismissing(rb[:nullable_int])
+            @test rb[:event_time] === nothing || ismissing(rb[:event_time])
+            @test rb[:optional_parent_id] === nothing || ismissing(rb[:optional_parent_id])
+
+            rc = by_label["bi-combo-c"]
+            @test rc[:id] == 990_102
+            @test _bulk_update_scratch_to_bool(rc[:is_active]) == true
+            @test rc[:nullable_int] == 77
+            @test rc[:event_date] === nothing || ismissing(rc[:event_date])
+            stored_c = rc[:event_time]
+            norm_c = if stored_c isa DateTime
+                stored_c
+            elseif stored_c isa AbstractString
+                DateTime(stored_c[1:19])
+            else
+                DateTime(string(stored_c)[1:19])
+            end
+            @test norm_c == DateTime(2024, 3, 3, 10, 30, 0)
+
+        finally
+            _clear_bulk_update_scratch_rows!()
+        end
+    end
+
+    # Parity: test_updates.jl — "Bulk Update accepts zero-valued constrained FK columns".
+    @testset "accepts zero-valued constrained FK columns" begin
+        _clear_bulk_update_scratch_rows!()
+
+        try
+            required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+                ["req-bi-zero"],
+                ["opt-bi-nonzero"],
+            )
+
+            zero_parent = M.Bulk_update_optional_parent_scratch.objects.create(
+                "id" => 0,
+                "label" => "opt-bi-zero",
+            )
+            @test zero_parent[:id] == 0
+
+            insert_df = DataFrame(
+                id = [990_200],
+                label = ["bi-zero-fk"],
+                required_parent_id = [required_ids["req-bi-zero"]],
+                optional_parent_id = Any["0"],
+                event_date = Any[Date(2024, 6, 1)],
+                is_active = [true],
+                event_time = Any[missing],
+                nullable_int = Any[missing],
+            )
+
+            bulk_insert(
+                M.Bulk_update_payload_scratch.objects,
+                insert_df,
+                columns = [
+                    "id", "label", "required_parent_id", "optional_parent_id",
+                    "event_date", "is_active", "event_time", "nullable_int"
+                ],
+            )
+
+            persisted = M.Bulk_update_payload_scratch.objects.filter("id" => 990_200).list() |> first
+            @test persisted[:optional_parent_id] == 0
+            @test persisted[:label] == "bi-zero-fk"
+            @test _bulk_update_scratch_to_bool(persisted[:is_active]) == true
+        finally
+            _clear_bulk_update_scratch_rows!()
+        end
     end
 end

@@ -31,6 +31,8 @@ These work in both `filter()` and `values()`.
 | `@isnull` | `IS NULL / IS NOT NULL` | Null check | `"dob__@isnull" => true` |
 | `@contains` | `LIKE '%val%'` | Case-sensitive substring | `"name__@contains" => "Monaco"` |
 | `@icontains` | `ILIKE '%val%'` | Case-insensitive substring | `"name__@icontains" => "monaco"` |
+| `@iunaccent_contains` | `immutable_unaccent(col) ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring (PostgreSQL only) | `"surname__@iunaccent_contains" => "raikkonen"` |
+| `@iunaccent_exact` | `LOWER(immutable_unaccent(col)) = LOWER(immutable_unaccent(val))` | Accent- & case-insensitive equality (PostgreSQL only) | `"surname__@iunaccent_exact" => "raikkonen"` |
 
 ### Transform Functions (Modifiers)
 
@@ -114,6 +116,32 @@ count = query.count()
 
 > [!NOTE]
 > `@icontains` uses `ILIKE` on PostgreSQL. On SQLite (which is case-insensitive for ASCII by default), it uses `LIKE`.
+
+### Accent-Insensitive (`@iunaccent_contains`, `@iunaccent_exact`)
+
+**PostgreSQL only.** These lookups match while ignoring both diacritics and case, so an ASCII query finds accented data:
+
+```julia
+# Substring: finds "Räikkönen" from the ASCII spelling
+M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")
+
+# Equality: finds "Räikkönen" regardless of accents/case, but only as a whole value
+M.Driver.objects.filter("surname__@iunaccent_exact" => "RAIKKONEN")
+```
+
+They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#postgresql-extensions). On SQLite these lookups raise an `ArgumentError`.
+
+There is no `@iunaccent_in`; OR the equality lookup with [`Qor`](q_objects.md) for accent-insensitive set membership:
+
+```julia
+M.Driver.objects.filter(Qor(
+    "surname__@iunaccent_exact" => "raikkonen",
+    "surname__@iunaccent_exact" => "hakkinen",
+))
+```
+
+> [!NOTE]
+> `immutable_unaccent(col)` is not sargable without a matching index. For large tables add a `pg_trgm` GIN index (for `@iunaccent_contains`) or a btree on `lower(immutable_unaccent(col))` (for `@iunaccent_exact`) — see [PostgreSQL Extensions](../configuration/connection_yml.md#postgresql-extensions).
 
 ---
 

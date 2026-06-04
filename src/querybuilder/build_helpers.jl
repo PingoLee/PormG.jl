@@ -373,7 +373,7 @@ function _insert_join(
 end
 
 function _check_if_field_is_a_operator(field::String)
-  common_operators = ["exact", "iexact", "contains", "icontains", "in", "gt", "gte", "lt", "lte",
+  common_operators = ["exact", "iexact", "contains", "icontains", "iunaccent_contains", "iunaccent_exact", "in", "gt", "gte", "lt", "lte",
     "startswith", "istartswith", "endswith", "iendswith", "range", "date",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
     "hour", "minute", "second", "isnull", "regex", "iregex"]
@@ -883,7 +883,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       placeholders = nothing
       try
         # Determine if this is a LIKE-based operator and which wildcard pattern to use
-        is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
+        is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
         placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains=is_like_op, operator=v.operator)
       catch e
         @pormg_debug false
@@ -895,11 +895,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       end
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @pormg_debug false
-      is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
+      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
       placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
-      is_like_op = v.operator in ["contains", "icontains", "startswith", "endswith"]
+      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
@@ -926,7 +926,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     else
       throw("Error in operator: $(v.operator), the value must be a String or a Vector of Strings")
     end
-  elseif v.operator in ["contains", "icontains", "startswith", "endswith"]
+  elseif v.operator in ["contains", "icontains", "iunaccent_contains", "iunaccent_exact", "startswith", "endswith"]
     @pormg_debug false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else

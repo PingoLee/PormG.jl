@@ -140,6 +140,24 @@ const _R = _OperTestRace
     @test contains(r_ic[:sql_text], "ESCAPE")
     @test r_ic[:parameters] == ["%LEW%"] 
 
+    # iunaccent_contains → public.immutable_unaccent(column) ILIKE public.immutable_unaccent('%val%')
+    q_iua = _D.objects.filter("forename__@iunaccent_contains" => "sao jose")
+    r_iua = q_iua.list(show_query=:dict)
+    @test contains(r_iua[:sql_text], "public.immutable_unaccent")
+    @test contains(r_iua[:sql_text], "ILIKE")
+    @test contains(r_iua[:sql_text], "ESCAPE")
+    @test r_iua[:parameters] == ["%sao jose%"]
+
+    # iunaccent_exact → LOWER(immutable_unaccent(column)) = LOWER(immutable_unaccent('val'))
+    # Accent- and case-insensitive equality: no wildcards, no ESCAPE, value passed as-is.
+    q_iue = _D.objects.filter("forename__@iunaccent_exact" => "são josé")
+    r_iue = q_iue.list(show_query=:dict)
+    @test contains(r_iue[:sql_text], "public.immutable_unaccent")
+    @test contains(r_iue[:sql_text], "LOWER")
+    @test contains(r_iue[:sql_text], "=")
+    @test !contains(r_iue[:sql_text], "ESCAPE")
+    @test r_iue[:parameters] == ["são josé"]
+
     # startswith → LIKE 'val%'
     q_sw = _D.objects.filter("nationality__@startswith" => "Brit")
     r_sw = q_sw.list(show_query=:dict)

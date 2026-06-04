@@ -95,14 +95,14 @@ end
     _apply_like_wildcards(value::Any, operator::String)::Any
 
 Apply appropriate LIKE wildcards based on the operator:
-- contains/icontains: %value%
+- contains/icontains/iunaccent_contains: %value%
 - startswith: value%
 - endswith: %value
 - Other operators: no wildcards
 """
 function _apply_like_wildcards(value::Any, operator::String)::Any
   escaped = escape_like_pattern(string(value))
-  if operator in ["contains", "icontains"]
+  if operator in ["contains", "icontains", "iunaccent_contains"]
     return string("%", escaped, "%")
   elseif operator == "startswith"
     return string(escaped, "%")

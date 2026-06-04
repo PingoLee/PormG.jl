@@ -35,6 +35,18 @@ function _cleanup_configuration_test_keys(keys::Vector{String})
     return nothing
 end
 
+@testset "configured extensions normalize YAML values" begin
+    settings = PormG.Configuration.Settings()
+    settings.db_config_settings = Dict{String, Any}("extensions" => ["unaccent", " UnAccent ", ""])
+    @test PormG.Configuration._configured_extensions(settings) == ["unaccent"]
+
+    settings.db_config_settings = Dict{String, Any}("extensions" => "unaccent")
+    @test PormG.Configuration._configured_extensions(settings) == ["unaccent"]
+
+    settings.db_config_settings = Dict{String, Any}("extensions" => Dict("name" => "unaccent"))
+    @test_throws ArgumentError PormG.Configuration._configured_extensions(settings)
+end
+
 @testset "Explicit env reload keeps Settings synchronized" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")
@@ -106,5 +118,113 @@ end
         @test loaded.dynamic == false
 
         _cleanup_configuration_test_keys([db_dir])
+    end
+end
+
+@testset "before_connect hook runs when registered" begin
+    previous_hook = PormG.Configuration._BEFORE_CONNECT_HOOK[]
+    hook_calls = Ref(0)
+
+    try
+        PormG.Configuration.set_before_connect_hook() do key, settings
+            hook_calls[] += 1
+            @test key !== ""
+            return true
+        end
+
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db")
+            mkpath(db_dir)
+            _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
+
+            PormG.Configuration.load(db_dir; env="test")
+            @test PormG.Configuration.ping(db_dir)
+            @test hook_calls[] >= 1
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    finally
+        PormG.Configuration._BEFORE_CONNECT_HOOK[] = previous_hook
+    end
+end
+
+@testset "before_connect hook can block connections" begin
+    previous_hook = PormG.Configuration._BEFORE_CONNECT_HOOK[]
+
+    try
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db")
+            mkpath(db_dir)
+            _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
+
+            PormG.Configuration._BEFORE_CONNECT_HOOK[] = nothing
+            PormG.Configuration.load(db_dir; env="test")
+            @test PormG.Configuration.ping(db_dir)
+
+            PormG.Configuration.close_pool!(db_dir)
+            PormG.Configuration.set_before_connect_hook((key, settings) -> false)
+            @test PormG.Configuration.ping(db_dir) == false
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    finally
+        PormG.Configuration._BEFORE_CONNECT_HOOK[] = previous_hook
+    end
+end
+
+@testset "before_connect hook runs before reconnect" begin
+    previous_hook = PormG.Configuration._BEFORE_CONNECT_HOOK[]
+    hook_calls = Ref(0)
+
+    try
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db")
+            mkpath(db_dir)
+            _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
+
+            PormG.Configuration._BEFORE_CONNECT_HOOK[] = nothing
+            PormG.Configuration.load(db_dir; env="test")
+            pool = PormG.Configuration.get_settings(db_dir).connections
+            conn = PormG.ConnectionPool.acquire_connection(pool; mode=:read)
+
+            PormG.Configuration.set_before_connect_hook() do key, settings
+                hook_calls[] += 1
+                @test key == db_dir
+                return true
+            end
+
+            new_conn = PormG.ConnectionPool.reconnect_db(pool, conn)
+            @test new_conn !== nothing
+            @test hook_calls[] == 1
+
+            PormG.ConnectionPool.release_connection(pool, new_conn)
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    finally
+        PormG.Configuration._BEFORE_CONNECT_HOOK[] = previous_hook
+    end
+end
+
+@testset "before_connect hook can block reconnect" begin
+    previous_hook = PormG.Configuration._BEFORE_CONNECT_HOOK[]
+
+    try
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db")
+            mkpath(db_dir)
+            _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
+
+            PormG.Configuration._BEFORE_CONNECT_HOOK[] = nothing
+            PormG.Configuration.load(db_dir; env="test")
+            pool = PormG.Configuration.get_settings(db_dir).connections
+            conn = PormG.ConnectionPool.acquire_connection(pool; mode=:read)
+
+            PormG.Configuration.set_before_connect_hook((key, settings) -> false)
+            @test_throws ErrorException PormG.ConnectionPool.reconnect_db(pool, conn)
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    finally
+        PormG.Configuration._BEFORE_CONNECT_HOOK[] = previous_hook
     end
 end

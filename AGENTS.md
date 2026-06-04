@@ -1,6 +1,6 @@
 # PormG — agent instructions
 
-**PormG** is an async-first Julia ORM (Genie-compatible). Full standards live in [`.cursor/rules/pormg-general.mdc`](.cursor/rules/pormg-general.mdc). Read subsystem skills before changing those areas.
+**PormG** is an async-first Julia ORM (Genie-compatible). Full standards live in [`.github/instructions/general.instructions.md`](.github/instructions/general.instructions.md). Read subsystem skills before changing those areas.
 
 ## Non-negotiables
 
@@ -30,11 +30,11 @@ rows = M.Result.objects
 
 | When | Read |
 |------|------|
-| Public API, models, fields, integration tests, docs | [`.cursor/skills/pormg-public-api-development/SKILL.md`](.cursor/skills/pormg-public-api-development/SKILL.md) |
-| `src/querybuilder/`, `src/Dialect.jl`, SQL/parameters | [`.cursor/skills/pormg-querybuilder-internals/SKILL.md`](.cursor/skills/pormg-querybuilder-internals/SKILL.md) |
-| `src/migrations/`, `src/Migrations.jl`, migration CI | [`.cursor/skills/pormg-migrations-development/SKILL.md`](.cursor/skills/pormg-migrations-development/SKILL.md) |
-| Consumer usage, setup, query examples (no internals) | [`.cursor/skills/pormg-usage/SKILL.md`](.cursor/skills/pormg-usage/SKILL.md) |
-| Pre-push / pre-PR review | [`.cursor/skills/pormg-changed-code-review/SKILL.md`](.cursor/skills/pormg-changed-code-review/SKILL.md) |
+| Public API, models, fields, integration tests, docs | [`.github/skills/pormg-public-api-development/SKILL.md`](.github/skills/pormg-public-api-development/SKILL.md) |
+| `src/querybuilder/`, `src/Dialect.jl`, SQL/parameters | [`.github/skills/pormg-querybuilder-internals/SKILL.md`](.github/skills/pormg-querybuilder-internals/SKILL.md) |
+| `src/migrations/`, `src/Migrations.jl`, migration CI | [`.github/skills/pormg-migrations-development/SKILL.md`](.github/skills/pormg-migrations-development/SKILL.md) |
+| Consumer usage, setup, query examples (no internals) | [`.github/skills/pormg-usage/SKILL.md`](.github/skills/pormg-usage/SKILL.md) |
+| Pre-push / pre-PR review | [`.github/skills/pormg-changed-code-review/SKILL.md`](.github/skills/pormg-changed-code-review/SKILL.md) |
 
 Cross-cutting changes: public-API skill + the most specific subsystem skill. Reviews: review skill only.
 
@@ -58,5 +58,6 @@ Cross-cutting changes: public-API skill + the most specific subsystem skill. Rev
 
 ## Tool notes
 
-- **Cursor:** `.cursor/rules/`, `.cursor/skills/` (canonical). `.github/skills/` mirrors skills for GitHub/Copilot.
-- **Indexing:** large F1 CSVs, generated artifacts, and secrets are listed in [`.cursorignore`](.cursorignore).
+- **Canonical source:** `.github/instructions/` (general rules) and `.github/skills/` (subsystem skills) — readable by any agent.
+- **GitHub Copilot:** picks up `.github/instructions/general.instructions.md` automatically via `applyTo: '**'`.
+- **Exclude from indexing:** `db/`, `*connection.yml`, `.env*`, `test/integration/f1/*.csv`, `docs/build/`, `test/integration/db_sl/migrations/`, `test/integration/db_2/migrations/`, `test/integration/db_test_migration*/`, `.github/thinking/`.

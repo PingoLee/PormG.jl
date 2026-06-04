@@ -582,9 +582,9 @@ Apply pending migrations to a PostgreSQL database.
 - `dry_run_only::Bool=false`: if `true`, only analyze without applying (returns DryRunResult)
 - `name::String="pending_migration"`: name for this migration in the history table
 """
-function migrate(connection::PormGPostgres, settings::SQLConn; 
+function migrate(connection::PormGPostgres, settings::SQLConn;
                  path::String = "db/models/models.jl",
-                 interactive::Bool = true, 
+                 interactive::Bool = true,
                  destructive::Bool = false,
                  dry_run_only::Bool = false,
                  name::String = "pending_migration")
@@ -593,10 +593,16 @@ function migrate(connection::PormGPostgres, settings::SQLConn;
     @warn("The database is not set to change_db, so the migration plan will not be applied.")
     return nothing
   end
-  
+
   # Bootstrap history table
   init_migrations(connection)
-  
+
+  # Install any configured PostgreSQL extensions (e.g. unaccent + the immutable_unaccent
+  # helper). This is the deliberate, change_db-gated home for that DDL — never on app boot.
+  # Runs before the empty-plan early return so `migrate()` provisions extensions even when
+  # there is no schema diff. CREATE ... IF NOT EXISTS keeps it idempotent across runs.
+  Configuration._install_configured_extensions!(settings)
+
   # Load and order the plan
   migration_plan = _load_migration_plan(settings)
   ordered_statements, all_sql = _order_statements(migration_plan)

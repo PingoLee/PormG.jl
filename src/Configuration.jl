@@ -12,11 +12,34 @@ using Base.ScopedValues: ScopedValue, with
 
 export env, Settings, connection, close_pool!, get_settings
 export with_tx_context, in_transaction_context, register_connection, unregister_connection, set_connection_resolver
+export set_before_connect_hook, ensure_before_connect!
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 
 # Dynamic connection resolver hook
 const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)
+
+# Optional hook invoked before opening a physical connection (e.g. VPN, SSH tunnel).
+const _BEFORE_CONNECT_HOOK = Ref{Union{Nothing, Function}}(nothing)
+
+"""
+    set_before_connect_hook(f::Function)
+
+Register a callback invoked before PormG opens a physical database connection.
+The callback receives `(key::String, settings::Settings)` and must return `true`
+to proceed or `false` to abort the connection attempt.
+
+It runs only when a new connection must be opened (not on connection reuse) and
+is invoked outside the pool lock. Decide inside the callback which connections
+need setup, e.g. `basename(settings.db_def_folder) == "db_esus"`.
+
+Typical uses include VPN setup, credential refresh, or SSH tunnel activation.
+When no hook is registered, connections proceed normally.
+"""
+function set_before_connect_hook(f::Function)
+  _BEFORE_CONNECT_HOOK[] = f
+  return f
+end
 
 """
     set_connection_resolver(f::Function)
@@ -284,6 +307,124 @@ Dict{Any,Any} with 6 entries:
   "adapter"  => "PostgreSQL"
 ```
 """
+function _configured_extensions(settings::SQLConn)::Vector{String}
+  raw = get(settings.db_config_settings, "extensions", String[])
+  (raw === nothing || raw === missing) && return String[]
+
+  values = if raw isa AbstractString
+    [raw]
+  elseif raw isa AbstractVector
+    raw
+  else
+    throw(ArgumentError("The 'extensions' setting must be a string or a list of strings"))
+  end
+
+  normalized = String[]
+  for value in values
+    (value === nothing || value === missing) && continue
+    name = lowercase(strip(String(value)))
+    isempty(name) && continue
+    push!(normalized, name)
+  end
+  return unique(normalized)
+end
+
+# Detection-only check run at load() time. Installing extensions is DDL and is
+# handled by the migration runner (gated on change_db, deliberate operator step),
+# never on app boot. Here we only probe pg_extension and warn on misconfiguration
+# so a missing extension is visible before the first query fails.
+function _check_configured_extensions!(settings::SQLConn)::Nothing
+  extensions = _configured_extensions(settings)
+  isempty(extensions) && return nothing
+
+  adapter = get(settings.db_config_settings, "adapter", nothing)
+  if adapter != "PostgreSQL"
+    @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter extensions=extensions db_def_folder=settings.db_def_folder
+    return nothing
+  end
+
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  for extension in extensions
+    if extension == "unaccent"
+      # Literal name only — never interpolate the raw YAML value into SQL.
+      installed = try
+        LibPQ.num_rows(CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
+      catch e
+        @warn "Could not verify PostgreSQL extension state" extension=extension db_def_folder=settings.db_def_folder exception=e
+        continue
+      end
+      installed || @warn "Configured PostgreSQL extension is not installed; run PormG.migrate(...) to install it and the public.immutable_unaccent helper" extension=extension db_def_folder=settings.db_def_folder
+    else
+      @warn "Unsupported PostgreSQL extension configured; it will be ignored" extension=extension supported=["unaccent"] db_def_folder=settings.db_def_folder
+    end
+  end
+  return nothing
+end
+
+function _install_configured_extensions!(settings::SQLConn)::Nothing
+  extensions = _configured_extensions(settings)
+  isempty(extensions) && return nothing
+
+  adapter = get(settings.db_config_settings, "adapter", nothing)
+  if adapter != "PostgreSQL"
+    @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter extensions=extensions db_def_folder=settings.db_def_folder
+    return nothing
+  end
+
+  for extension in extensions
+    if extension == "unaccent"
+      _install_postgres_extension!(settings, "unaccent")
+      _install_immutable_unaccent!(settings)
+    else
+      throw(ArgumentError("Unsupported PostgreSQL extension '$(extension)'. Supported extensions: unaccent"))
+    end
+  end
+
+  return nothing
+end
+
+function _install_postgres_extension!(settings::SQLConn, extension::String)::Nothing
+  safe_extensions = Set(["unaccent"])
+  extension in safe_extensions || throw(ArgumentError("Unsupported PostgreSQL extension '$(extension)'"))
+
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  sql = "CREATE EXTENSION IF NOT EXISTS $(extension) WITH SCHEMA public;"
+
+  try
+    CP.fetch(settings, sql)
+  catch e
+    throw(ArgumentError(
+      "Could not install PostgreSQL extension '$(extension)' for $(settings.db_def_folder). " *
+      "Run this once as the database owner: $(sql) Original error: $(sprint(showerror, e))"
+    ))
+  end
+
+  return nothing
+end
+
+# PostgreSQL's one-argument unaccent(text) is only STABLE (it depends on the
+# default text-search config), so it cannot back a functional index. Wrap the
+# two-argument form with an explicit dictionary, which is safe to mark IMMUTABLE,
+# so iunaccent_contains can be backed by an expression index — e.g. a pg_trgm
+# GIN index on public.immutable_unaccent(column).
+function _install_immutable_unaccent!(settings::SQLConn)::Nothing
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  sql = "CREATE OR REPLACE FUNCTION public.immutable_unaccent(text) " *
+        "RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE " *
+        "AS \$\$ SELECT public.unaccent('public.unaccent', \$1) \$\$;"
+
+  try
+    CP.fetch(settings, sql)
+  catch e
+    throw(ArgumentError(
+      "Could not create helper function public.immutable_unaccent for $(settings.db_def_folder). " *
+      "Run this once as the database owner: $(sql) Original error: $(sprint(showerror, e))"
+    ))
+  end
+
+  return nothing
+end
+
 function read_db_connection_data(path::String, settings::SQLConn) :: Dict{String,Any}
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME) 
 
@@ -363,6 +504,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   settings.db_config_settings = read_db_connection_data(path, settings)
 
   _build_connection_pool!(settings, path)
+  _check_configured_extensions!(settings)
   return nothing
 end
 
@@ -623,6 +765,29 @@ mutable struct Settings <: SQLConn
       time_zone,
       django_prefix
   )
+end
+
+"""
+    ensure_before_connect!(pool) -> Bool
+
+Run the registered `before_connect` hook before opening a physical connection.
+When no hook is registered, connection setup proceeds normally.
+"""
+function ensure_before_connect!(pool::Union{PormGPostgres, PormGSQLite})::Bool
+  hook = _BEFORE_CONNECT_HOOK[]
+  hook === nothing && return true
+
+  key = connection_key_for_pool(pool)
+  key === nothing && return true
+
+  settings = config[key]
+
+  try
+    return hook(key, settings) === true
+  catch e
+    @error "before_connect hook failed" key=key db_def_folder=settings.db_def_folder exception=(e, catch_backtrace())
+    return false
+  end
 end
 
 # Add this to your module cleanup if needed

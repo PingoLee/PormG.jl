@@ -1035,6 +1035,35 @@ function icontains(conn::PormGAbstractType, column::String, value)
   return nothing
 end
 
+function iunaccent_contains(conn::PormGPostgres, column::String, value::String)::String
+  # Uses the IMMUTABLE wrapper (see Configuration._install_immutable_unaccent!) so the
+  # expression can be backed by a functional/pg_trgm index on large tables.
+  return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
+end
+function iunaccent_contains(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+  return nothing
+end
+function iunaccent_contains(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function iunaccent_exact(conn::PormGPostgres, column::String, value::String)::String
+  # Accent- and case-insensitive equality. Uses the IMMUTABLE wrapper (see
+  # Configuration._install_immutable_unaccent!) so it can be backed by a functional
+  # index on LOWER(public.immutable_unaccent(column)).
+  return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
+end
+function iunaccent_exact(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+  return nothing
+end
+function iunaccent_exact(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
 function startswith(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end

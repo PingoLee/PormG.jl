@@ -14,12 +14,25 @@ export is_connection_alive, reconnect_db, is_connection_error
 export libpq_execute, libpq_execute_async
 
 # Import transaction context helpers from Configuration
-import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings
+import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 const _SQLITE_LOCK_RETRY_MAX_ATTEMPTS = 20
 const _SQLITE_LOCK_RETRY_BASE_DELAY = 0.005
 const _SQLITE_LOCK_RETRY_MAX_DELAY = 0.25
+
+# Sentinel returned by the locked acquire block when a new physical connection
+# must be opened. The before_connect hook then runs OUTSIDE the lock and the
+# block is re-entered. Keeps long hooks (VPN, tunnels) off the pool lock.
+const _BEFORE_CONNECT_PENDING = :__pormg_before_connect_pending__
+
+function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
+  if !ensure_before_connect!(pool)
+    key = something(connection_key_for_pool(pool), "?")
+    throw(ErrorException("before_connect hook aborted the connection for '$(key)'"))
+  end
+  return nothing
+end
 
 """
     redact_secret(conn_str::String)
@@ -194,7 +207,10 @@ end
 function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_retries::Int = 300)
   start_time = time()
   retry_count = 0
-  
+  # Tracks whether the before_connect hook already ran for this acquire call, so
+  # it runs at most once even across retries.
+  before_connect_done = false
+
   while retry_count < max_retries && (time() - start_time) < timeout_seconds
     connection = Base.lock(pool.lock) do
       # Look for an available connection
@@ -205,8 +221,11 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
             pool.available[i] = false
             return pool.connections[i]
           end
-          
-          # Create new connection if slot is empty or dead
+
+          # Slot is empty or dead: a new physical connection is required. Defer
+          # to the outer loop so the before_connect hook runs outside the lock.
+          before_connect_done || return _BEFORE_CONNECT_PENDING
+
           try
             new_conn = LibPQ.Connection(pool.connection_string)
             pool.connections[i] = new_conn
@@ -219,10 +238,11 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
           end
         end
       end
-      
+
       # If we reach here, no available connections found
       # Try to expand the pool if we haven't reached the limit
       if length(pool.connections) < (pool.pool_size * 5)
+        before_connect_done || return _BEFORE_CONNECT_PENDING
         try
           new_conn = LibPQ.Connection(pool.connection_string)
           push!(pool.connections, new_conn)
@@ -233,16 +253,23 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
           @error "Failed to expand PG pool: $e"
         end
       end
-      
+
       # Return nothing if no connection could be acquired
       return nothing
     end
-    
+
+    # A new connection is needed: run the before_connect hook off the lock.
+    if connection === _BEFORE_CONNECT_PENDING
+      _run_before_connect!(pool)
+      before_connect_done = true
+      continue
+    end
+
     # If we got a connection, return it
     if connection !== nothing
       return connection
     end
-    
+
     # No connection available, wait and retry
     retry_count += 1
     @info "No available PG connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
@@ -262,6 +289,9 @@ end
 function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_retries::Int = 300, mode::Symbol = :any)
   start_time = time()
   retry_count = 0
+  # See PormGPostgres acquire_connection: run the before_connect hook outside the
+  # lock, at most once per acquire call.
+  before_connect_done = false
 
   mode in (:any, :read, :write) || throw(ArgumentError("Invalid SQLite acquire mode: $(mode). Expected :any, :read or :write."))
   
@@ -277,8 +307,10 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
             pool.available[i] = false
             return pool.connections[i]
           end
-          
-          # Create new connection if slot is empty or dead
+
+          # Slot is empty or dead: defer creation so the hook runs off the lock.
+          before_connect_done || return _BEFORE_CONNECT_PENDING
+
           try
             is_reader_slot = pool.split_read_write && i != pool.writer_slot
             new_conn = _create_sqlite_connection(pool.connection_string; read_only = is_reader_slot)
@@ -296,6 +328,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
       # Expand pool logic
       can_expand = !pool.split_read_write && length(pool.connections) < (pool.pool_size * 5)
       if can_expand
+        before_connect_done || return _BEFORE_CONNECT_PENDING
         try
           new_conn = _create_sqlite_connection(pool.connection_string)
           push!(pool.connections, new_conn)
@@ -309,7 +342,13 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
       
       return nothing
     end
-    
+
+    if connection === _BEFORE_CONNECT_PENDING
+      _run_before_connect!(pool)
+      before_connect_done = true
+      continue
+    end
+
     if connection !== nothing
       return connection
     end
@@ -375,6 +414,8 @@ function is_connection_alive(conn::SQLite.DB)
 end
 
 function reconnect_db(pool::PormGPostgres, conn::LibPQ.Connection)
+  _run_before_connect!(pool)
+
   reconnect = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
@@ -385,7 +426,7 @@ function reconnect_db(pool::PormGPostgres, conn::LibPQ.Connection)
         catch e
           @error "Failed to reset PG connection $i: $e"
         end
-        # If reset fails, create a new connection
+        # If reset fails, create a new connection.
         try
           new_conn = LibPQ.Connection(pool.connection_string)
           pool.connections[i] = new_conn
@@ -402,6 +443,8 @@ function reconnect_db(pool::PormGPostgres, conn::LibPQ.Connection)
 end
 
 function reconnect_db(pool::PormGSQLite, conn::SQLite.DB)
+  _run_before_connect!(pool)
+
   reconnect = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn

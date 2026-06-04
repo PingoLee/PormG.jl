@@ -33,8 +33,9 @@ include("common_bulk_scratch_setup.jl")
     @testset "Updates"                      begin include("test_updates.jl")            end
     @testset "Deletes"                      begin include("test_deletes.jl")            end
     @testset "Bulk copy"                    begin include("test_bulk_copy.jl")          end
-    @testset "SQL Functions"                begin include("test_sql_functions.jl")      end  
+    @testset "SQL Functions"                begin include("test_sql_functions.jl")      end
     @testset "Window Functions"             begin include("test_window_functions.jl")   end
+    @testset "Unaccent Extension"           begin include("test_unaccent_extension.jl") end
 
     # ── Phase 3: Advanced Features ───────────────────────────────────
     @testset "Reverse Joins & on()"         begin include("test_reverse_joins.jl")      end

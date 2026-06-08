@@ -130,7 +130,7 @@ end
 
 
 # Build the SELECT part of the string final query
-function _query_select(array::Vector{SQLTypeField})
+function _query_select(array::Vector{SQLTypeField}, connection)
   if !isassigned(array, 1, 1)
     return "*"
   else
@@ -146,9 +146,9 @@ function _query_select(array::Vector{SQLTypeField})
         if field._as == "*" || endswith(field_str, ".*") || field_str == "*"
           push!(colect, field_str)
         elseif isa(field, SQLField) && field.custom_as !== nothing
-          push!(colect, "$(field_str) as $(field.custom_as)")
+          push!(colect, "$(field_str) as $(quote_identifier(field.custom_as, connection))")
         elseif field._as !== nothing && field._as != ""
-          push!(colect, "$(field_str) as $(field._as)")
+          push!(colect, "$(field_str) as $(quote_identifier(field._as, connection))")
         else
           push!(colect, field_str)
         end

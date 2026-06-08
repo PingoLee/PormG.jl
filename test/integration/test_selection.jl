@@ -16,6 +16,69 @@ end
   @test JSON.parse(dict_json)[1]["resultid"] == 26745
 end
 
+# PostgreSQL folds unquoted aliases to lowercase; quote_identifier prevents that.
+@testset "values pair aliases preserve mixed case" begin
+  query = M.Driver.objects.filter("driverref" => "hamilton")
+  query.values("Escala" => "surname")
+
+  inspection = PormG.QueryBuilder.inspect_query(query)
+  @test occursin(" as \"Escala\"", inspection[:sql_text])
+  @test !occursin(" as Escala", inspection[:sql_text])
+
+  rows = query.list(:dict)
+  @test length(rows) == 1
+  @test haskey(rows[1], :Escala)
+  @test !haskey(rows[1], :escala)
+  @test rows[1][:Escala] == "Hamilton"
+end
+
+@testset "values pair aliases preserve unicode letters" begin
+  query = M.Driver.objects.filter("driverref" => "hamilton")
+  query.values("localização" => "surname")
+
+  inspection = PormG.QueryBuilder.inspect_query(query)
+  @test occursin(" as \"localização\"", inspection[:sql_text])
+
+  rows = query.list(:dict)
+  @test length(rows) == 1
+  @test haskey(rows[1], Symbol("localização"))
+  @test !haskey(rows[1], :localizao)
+  @test rows[1][Symbol("localização")] == "Hamilton"
+end
+
+@testset "values plain field names are quoted in SELECT (_as branch)" begin
+  # Covers the _as branch (non-Pair string in values()) — quote_identifier is
+  # applied there too so future mixed-case _as values won't regress.
+  inspection = PormG.QueryBuilder.inspect_query(
+    M.Driver.objects.filter("driverref" => "hamilton").values("surname")
+  )
+  @test occursin(" as \"surname\"", inspection[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DataFrame alias quoting: mixed-case and unicode aliases survive the DataFrame
+# construction path. Column names come from Tables.rowtable key coercion, which
+# is independent of PormG's dict-result path — so this covers the real consumer
+# pattern (Base.invokelatest(DataFrame, query.values(alias => field))).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "DataFrame column names preserve mixed-case aliases" begin
+  df = M.Driver.objects.filter("driverref" => "hamilton").
+    values("Escala" => "surname") |> DataFrame
+  @test df isa DataFrame
+  @test "Escala" in names(df)
+  @test !("escala" in names(df))
+  @test df[1, :Escala] == "Hamilton"
+end
+
+@testset "DataFrame column names preserve unicode aliases" begin
+  df = M.Driver.objects.filter("driverref" => "hamilton").
+    values("localização" => "surname") |> DataFrame
+  @test df isa DataFrame
+  @test "localização" in names(df)
+  @test !("localizao" in names(df))
+  @test df[1, Symbol("localização")] == "Hamilton"
+end
+
 @testset ".exists() and .count() guard patterns" begin
   # These are read-side terminal methods and fit better in the selection suite
   # than in a generic production-pattern file.

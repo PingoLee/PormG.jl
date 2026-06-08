@@ -217,10 +217,11 @@ end
     # Test basic identifier quoting
     @test quote_identifier("valid_field", nothing) == "\"valid_field\""
     @test quote_identifier("field_with_123", nothing) == "\"field_with_123\""
+    @test quote_identifier("localização", nothing) == "\"localização\""
     
-    # Test malicious identifier cleaning
-    @test quote_identifier("field'; DROP TABLE users; --", nothing) == "\"fieldDROPTABLEusers\""
-    @test quote_identifier("field OR 1=1", nothing) == "\"fieldOR11\""
+    # Test malicious identifiers are rejected instead of silently rewritten
+    @test_throws ArgumentError quote_identifier("field'; DROP TABLE users; --", nothing)
+    @test_throws ArgumentError quote_identifier("field OR 1=1", nothing)
     
     # Test table name sanitization
     @test safe_table_identifier("users", nothing) == "\"users\""
@@ -322,19 +323,16 @@ end
     import PormG.QueryBuilder: quote_identifier
     
     # Empty identifier
-    @test quote_identifier("", nothing) == "\"\"" 
+    @test_throws ArgumentError quote_identifier("", nothing)
     
     # Double quotes inside (attempt to break the identifier)
-    @test quote_identifier("column\"name", nothing) == "\"columnname\"" # or "\"column\"\"name\"" depending on your logic
+    @test_throws ArgumentError quote_identifier("column\"name", nothing)
     
     # SQL comments
-    @test quote_identifier("admin--", nothing) == "\"admin\"" 
+    @test_throws ArgumentError quote_identifier("admin--", nothing)
     
-    # Whitespace (should be preserved if valid or removed if it's an injection?)
-    # "user name" is valid in SQL when quoted. 
-    # "user name; drop" is not.
-    safe = quote_identifier("user name", nothing)
-    @test startswith(safe, "\"") && endswith(safe, "\"")
+    # Whitespace is not part of PormG's identifier contract.
+    @test_throws ArgumentError quote_identifier("user name", nothing)
   end
 
 

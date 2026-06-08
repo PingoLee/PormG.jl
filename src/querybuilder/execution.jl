@@ -207,7 +207,7 @@ function query(q::SQLObjectHandler;
   if q.object.distinct
     print(io, "DISTINCT ")
   end
-  print(io, _query_select(instruction.select))
+  print(io, _query_select(instruction.select, instruction.connection))
   print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
   
   for j in instruction.join

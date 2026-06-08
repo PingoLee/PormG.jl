@@ -49,7 +49,7 @@ WindowSlResult.connect_key = "window_sl"
   @test contains(sql, "RANK() OVER")
   @test contains(sql, "PARTITION BY \"Tb\".\"constructorid\"")
   @test contains(sql, "ORDER BY \"Tb\".\"points\" DESC, \"Tb\".\"resultid\" ASC")
-  @test contains(sql, "as team_rank")
+  @test contains(sql, "as \"team_rank\"")
   @test !contains(sql, "GROUP BY")
 end
 
@@ -176,7 +176,7 @@ end
   # Aggregate and window both appear in SELECT
   @test contains(sql, "COUNT(")
   @test contains(sql, "RANK() OVER")
-  @test contains(sql, "as top_rank")
+  @test contains(sql, "as \"top_rank\"")
 
   # GROUP BY must be present (because Count is an aggregate) and include raceid (position 1).
   # It must NOT include position 3 (the window alias) — that would be invalid SQL.

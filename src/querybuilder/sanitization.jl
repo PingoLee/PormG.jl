@@ -1,18 +1,25 @@
 
+const SAFE_IDENTIFIER_PATTERN = r"^[\p{L}_][\p{L}\p{M}\p{N}_]*$"
+
+function _validate_identifier(identifier::String)::String
+    if !occursin(SAFE_IDENTIFIER_PATTERN, identifier)
+        throw(ArgumentError("Invalid SQL identifier: $identifier"))
+    end
+    return identifier
+end
+
 """
 Sanitize SQL identifiers (table names, column names) to prevent injection.
-Only allows alphanumeric characters, underscores, and validates against model schema.
+Only allows Unicode letters, combining marks, numbers, underscores, and validates
+against model schema.
 """
 function sanitize_identifier(identifier::String, valid_identifiers::Vector{String})::String
-    # Remove any non-alphanumeric/underscore characters
-    clean_id = replace(identifier, r"[^a-zA-Z0-9_]" => "")
-    
     # Validate against whitelist
-    if !(clean_id in valid_identifiers)
+    if !(identifier in valid_identifiers)
         throw(ArgumentError("Invalid identifier: $identifier"))
     end
     
-    return "\"$clean_id\""  # Quote the identifier
+    return quote_identifier(identifier, nothing)
 end
 
 """
@@ -30,21 +37,14 @@ end
 Quote SQL identifiers based on database type
 """
 function quote_identifier(identifier::String, conn)::String
-    clean_id = replace(identifier, r"[^a-zA-Z0-9_]" => "")
-    return "\"$clean_id\""
+    return "\"$(_validate_identifier(identifier))\""
 end
 
 """
 Validate and quote table name
 """
 function safe_table_identifier(table_name::String, conn)::String
-    clean_name = replace(table_name, r"[^a-zA-Z0-9_]" => "")
-    
-    if clean_name != table_name
-        @warn "Table name contains invalid characters, sanitized: $table_name -> $clean_name"
-    end
-    
-    return quote_identifier(clean_name, conn)
+    return quote_identifier(table_name, conn)
 end
 
 """

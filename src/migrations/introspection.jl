@@ -108,8 +108,11 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   end
 
   
-  # Extend regex to capture PRIMARY KEY and FOREIGN KEY constraints
-  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[^,]*))?", sql)
+  # Extend regex to capture PRIMARY KEY and FOREIGN KEY constraints.
+  # The type group allows a trailing UNSIGNED so the two-word declared type of
+  # PositiveIntegerField ("INTEGER UNSIGNED") round-trips instead of degrading
+  # to IntegerField.
+  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+(?: UNSIGNED)?)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[^,]*))?", sql)
   # Initialize fields dictionary
   fields_dict = Dict{Symbol, Any}()
   str_fields_dict = Dict{String, Any}()
@@ -307,6 +310,17 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
         WHERE NOT i.indisprimary
         GROUP BY i.indrelid
+    ),
+    non_negative_checks AS (
+        SELECT
+            con.conrelid AS table_oid,
+            array_agg(a.attname) AS check_cols
+        FROM pg_constraint con
+        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+        WHERE con.contype = 'c'
+          AND array_length(con.conkey, 1) = 1
+          AND pg_get_constraintdef(con.oid) LIKE '%>= 0%'
+        GROUP BY con.conrelid
     )
     SELECT
         n.nspname AS table_schema,
@@ -320,6 +334,11 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             || CASE
                 WHEN array_length(u.unique_cols, 1) = 1
                      AND a.attname = ANY(u.unique_cols) THEN ' UNIQUE'
+                ELSE ''
+               END
+            || CASE
+                WHEN nn.check_cols IS NOT NULL
+                     AND a.attname = ANY(nn.check_cols) THEN ' NON_NEGATIVE_CHECK'
                 ELSE ''
                END
         ), ', ') AS columns,
@@ -345,12 +364,13 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     LEFT JOIN foreign_keys fk ON fk.conrelid = c.oid
     LEFT JOIN indexes ix ON ix.table_oid = c.oid
     LEFT JOIN unique_constraints u ON u.table_oid = c.oid
+    LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
     WHERE c.relkind = 'r'
       $(schema === nothing ? "" : "AND n.nspname = '$(schema)'")
       $(table === nothing ? "" : "AND c.relname = '$(table)'")
       AND a.attnum > 0
       AND NOT a.attisdropped
-    GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, fk.referenced_primary_keys, fk.deferrable, fk.initially_deferred, ix.index_columns, ix.index_names, u.unique_cols
+    GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, fk.referenced_primary_keys, fk.deferrable, fk.initially_deferred, ix.index_columns, ix.index_names, u.unique_cols, nn.check_cols
     ORDER BY table_schema, table_name;
     """
 
@@ -457,6 +477,33 @@ function get_constraints_unique(conn::PormGPostgres, table_name::String, field_n
   return result[1, :constraint_name]
 end
 
+# Find the non-negative CHECK constraint backing a positive integer column.
+# PostgreSQL has no unsigned integer type, so PormG enforces `col >= 0` with a
+# CHECK constraint; on a type transition away from a positive integer field the
+# migration engine needs the constraint's auto-generated name to drop it. We
+# match by column and the `>= 0` clause rather than assuming a name, so it works
+# even for constraints PormG created anonymously at CREATE TABLE time. Returns
+# `nothing` when no such constraint exists.
+function get_constraints_check(conn::PormGPostgres, table_name::String, field_name::String)
+  query = """
+  SELECT tc.constraint_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.constraint_column_usage ccu
+    ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+  JOIN information_schema.check_constraints cc
+    ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
+  WHERE tc.table_name = '$table_name'
+    AND tc.constraint_type = 'CHECK'
+    AND ccu.column_name = '$field_name'
+    AND cc.check_clause ILIKE '%>= 0%';
+  """
+  result = fetch(conn, query) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :constraint_name]
+end
+
 function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::String)::String
   query = """
   SELECT pg_get_serial_sequence('$table_name', '$field_name');
@@ -544,8 +591,14 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         end
       end
       
-      # Determine field type
+      # Determine field type. format_type() reports a PositiveIntegerField column as
+      # plain "integer", so the schema query appends a NON_NEGATIVE_CHECK marker when
+      # the column carries a `>= 0` CHECK constraint — that marker is what tells a
+      # PositiveIntegerField apart from an IntegerField on round-trip.
       field_type = getfield(Models, haskey(type_map, col_type) ? type_map[col_type] : :TextField)
+      if col_type == "integer" && occursin("NON_NEGATIVE_CHECK", col)
+        field_type = Models.PositiveIntegerField
+      end
       
       # Determine field constraints
       primary_key::Bool = col_name in pk_set

@@ -177,7 +177,7 @@ df   = query |> DataFrame   # DataFrames.DataFrame
 | Method | Description |
 | :--- | :--- |
 | `.filter(key => value, ...)` | Add WHERE conditions (AND). Multiple pairs are ANDed. |
-| `.values("field", ...)` | Select specific columns. `"*"` = all main-table columns. |
+| `.values("field", ...)` | Select specific columns. `"*"` = all main-table columns. `"alias" => "field"` renames the output column. |
 | `.order_by("field", "-field")` | Sort. Prefix `-` for descending. |
 | `.limit(n)` | Limit rows returned. |
 | `.offset(n)` | Skip first `n` rows. |
@@ -432,6 +432,20 @@ PormG.Configuration.load_many(["db/conn_primary.yml", "db/conn_replica.yml"])
 ---
 
 ## 14. Anti-Patterns
+
+### Alias identifier rules
+
+Aliases in `values("alias" => "field")` are always double-quoted in the generated SQL, so mixed case and Unicode letters are preserved verbatim in DataFrame columns and result dicts:
+
+```julia
+# Column comes back as :Surname and Symbol("localização"), not :surname or :localizao
+df = M.Driver.objects.filter("driverref" => "hamilton").
+    values("Surname" => "surname", "localização" => "nationality") |> DataFrame
+```
+
+Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases with spaces or punctuation throw `ArgumentError` at query-build time — they are never silently mangled.
+
+---
 
 | Anti-Pattern | Preferred Alternative |
 | :--- | :--- |

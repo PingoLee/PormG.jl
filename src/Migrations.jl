@@ -25,7 +25,7 @@ import PormG: @pormg_debug
 
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
-import PormG: connection, config, get_constraints_pk, get_constraints_unique
+import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check
 import PormG: PormGModel, PormGField, SQLConn, PormGPostgres, PormGSQLite
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table
 import PormG: MODEL_PATH, SQLConn, DB_PATH
@@ -45,7 +45,7 @@ export import_models_from_postgres, import_models_from_sqlite, import_models_fro
 export django_to_string
 export convertSQLToModel, convert_schema_to_models, get_database_schema
 export get_migration_plan, get_all_models, get_all_dicts
-export get_constraints_fk, get_constraints_index, get_constraints_pk, get_constraints_unique, get_sequence_name
+export get_constraints_fk, get_constraints_index, get_constraints_pk, get_constraints_unique, get_constraints_check, get_sequence_name
 
 # Exports — new migration lifecycle APIs (Phases 1–7)
 export init_migrations, status, dry_run

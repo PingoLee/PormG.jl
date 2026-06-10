@@ -6,7 +6,7 @@ using LibPQ
 import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
-import PormG: get_constraints_pk, get_constraints_unique
+import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name
 
 import PormG: @pormg_debug
@@ -445,7 +445,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField
 
 function _format_default_sql_value(default_value)
   if default_value isa AbstractString
@@ -462,7 +462,7 @@ end
 function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
   column_ref = "\"$(field_name)\""
 
-  if old_field isa Union{sFloatField, sDecimalField, sIntegerField, sBigIntegerField}
+  if old_field isa Union{sFloatField, sDecimalField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField}
     return "make_interval(secs => $(column_ref)::double precision)"
   elseif old_field isa sTimeField
     return "($(column_ref)::text)::interval"
@@ -490,6 +490,10 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
   elseif field isa sIntegerField
     return type_map[field.type]
   elseif field isa sBigIntegerField
+    return type_map[field.type]
+  elseif field isa sPositiveSmallIntegerField
+    return type_map[field.type]
+  elseif field isa sPositiveIntegerField
     return type_map[field.type]
   elseif field isa sFloatField
     return type_map[field.type]
@@ -534,7 +538,7 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sBooleanField
     return sql_type
-  elseif field isa sIntegerField || field isa sBigIntegerField
+  elseif field isa sIntegerField || field isa sBigIntegerField || field isa sPositiveSmallIntegerField || field isa sPositiveIntegerField
     return sql_type
   elseif field isa sFloatField
     return sql_type
@@ -566,6 +570,17 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return "TEXT"
   end
 end
+
+# Positive integer fields require a non-negative CHECK on PostgreSQL and SQLite
+# because neither backend has an unsigned integer type (unlike MySQL, where Django
+# uses an UNSIGNED column instead of a CHECK). Centralizing the predicate here lets
+# the CHECK logic generalize automatically if PormG later adds
+# PositiveBigIntegerField — add the new struct type to this Union.
+_requires_non_negative_check(field::PormGField)::Bool = field isa Union{sPositiveSmallIntegerField, sPositiveIntegerField}
+
+# The non-negative CHECK clause emitted both at CREATE TABLE and when a column's
+# type transitions into a positive integer field on ALTER.
+_non_negative_check_clause(col_name)::String = "CHECK (\"$(col_name)\" >= 0)"
 
 function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any=nothing)::String
   # Determine the base SQL type
@@ -602,6 +617,10 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
     end
   end
 
+  # Non-negative CHECK for positive integer fields. On ALTER, alter_field diffs this
+  # against the old field and adds/drops the constraint so it tracks the model state.
+  _requires_non_negative_check(field) && push!(constraints, _non_negative_check_clause(col_name))
+
   # Combine everything into a single string: "col_name base_type constraints..."
   return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
 end
@@ -635,6 +654,10 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
     default_value = field.default !== nothing ? field.default : temporary_default
     push!(constraints, "DEFAULT $(_format_default_sql_value(default_value))")
   end
+
+  # Non-negative CHECK for positive integer fields. SQLite's alter_field recreates the
+  # table from current model state, so this clause is re-derived automatically on ALTER.
+  _requires_non_negative_check(field) && push!(constraints, _non_negative_check_clause(col_name))
 
   # Combine everything into a single string: "col_name base_type constraints..."
   return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
@@ -731,6 +754,19 @@ end
 function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
   sql_statements = []
 
+  # Non-negative CHECK constraint diffing on a type transition (Django-style).
+  # PostgreSQL has no unsigned integer type, so positive integer fields are backed by a
+  # CHECK (col >= 0). When the column type changes into or out of a positive integer
+  # field we add or drop that CHECK so it tracks the model rather than only the original
+  # CREATE TABLE. The DROP must precede the TYPE change (an incompatible cast would
+  # otherwise be blocked by the stale `>= 0` clause); the ADD must follow it.
+  new_needs_check = _requires_non_negative_check(new_field)
+  old_needs_check = old_field !== nothing && _requires_non_negative_check(old_field)
+  if :type in colect_not_equal && old_needs_check && !new_needs_check
+    constraint = get_constraints_check(conn, string(table_name), string(field_name))
+    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(constraint)";""")
+  end
+
   # Alter column type
   if any(attr -> attr in colect_not_equal, [:type, :max_length, :max_digits, :decimal_places])
     if new_field isa sCharField
@@ -755,6 +791,12 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE $(_get_column_type(new_field, conn));""")
     end
+  end
+
+  # Add the non-negative CHECK after the type change when the column became a positive
+  # integer field (see the DROP counterpart above for the rationale and ordering).
+  if :type in colect_not_equal && new_needs_check && !old_needs_check
+    push!(sql_statements, """ALTER TABLE "$table_name" ADD $(_non_negative_check_clause(field_name));""")
   end
 
   # Set NOT NULL if specified

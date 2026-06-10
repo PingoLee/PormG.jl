@@ -40,6 +40,8 @@ end
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
     @testset "Postgres Sequence Sync" include("unit/test_sequence_sync.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
+    @testset "Django Model Importer" include("unit/test_import_django_models.jl")
+    @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
     # include("unit/test_migration_planner.jl")
 end
 

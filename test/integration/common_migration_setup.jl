@@ -227,6 +227,29 @@ function column_nullable(pool::PormG.PormGPostgres, table_name::String, col_name
 end
 
 """
+    column_has_nonneg_check(pool, table_name::String, col_name::String) → Bool
+
+Return `true` if the column is guarded by a non-negative (`>= 0`) CHECK constraint.
+Used to assert PositiveSmallIntegerField's CHECK is added/dropped as a column's type
+transitions into or out of the field across migrations.
+"""
+function column_has_nonneg_check(pool::PormG.PormGSQLite, table_name::String, col_name::String)::Bool
+  # SQLite keeps the full CREATE TABLE text in sqlite_master; the CHECK is re-derived
+  # on every table recreation, so a substring match on the stored DDL is sufficient.
+  rows = PormG.ConnectionPool.fetch(pool,
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='$table_name';") |> DataFrame
+  isempty(rows) && return false
+  ddl = rows[1, 1]
+  return ddl !== missing && occursin("CHECK (\"$col_name\" >= 0)", ddl)
+end
+
+function column_has_nonneg_check(pool::PormG.PormGPostgres, table_name::String, col_name::String)::Bool
+  # Reuse the production introspection path so the test exercises the same query the
+  # migration engine uses to locate the constraint for dropping it.
+  return PormG.get_constraints_check(pool, table_name, col_name) !== nothing
+end
+
+"""
     index_names(pool, table_name::String) → Vector{String}
 
 Return the names of all indexes on `table_name`.

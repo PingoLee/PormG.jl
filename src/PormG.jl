@@ -75,6 +75,7 @@ include("constants.jl")
 # upper functions
 function get_constraints_pk end
 function get_constraints_unique end
+function get_constraints_check end
 
 include("Generator.jl")
 using .Generator

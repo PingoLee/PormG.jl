@@ -53,12 +53,12 @@ PormG generates:
 
 ```sql
 SELECT 
-    "Tb"."resultid" as resultid,
-    "Tb_1"."forename" as driverid__forename,
-    "Tb_2"."name" as constructorid__name,
-    "Tb_3"."status" as statusid__status,
-    "Tb"."grid" as grid,
-    "Tb"."laps" as laps
+    "Tb"."resultid" as "resultid",
+    "Tb_1"."forename" as "driverid__forename",
+    "Tb_2"."name" as "constructorid__name",
+    "Tb_3"."status" as "statusid__status",
+    "Tb"."grid" as "grid",
+    "Tb"."laps" as "laps"
 FROM "result" as "Tb"
     INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
     INNER JOIN "constructor" AS "Tb_2" ON "Tb"."constructorid" = "Tb_2"."constructorid"
@@ -221,6 +221,20 @@ query.values(
     "bonus" => F("points") * 0.1
 )
 ```
+
+### Mixed-Case and Unicode Aliases
+
+All aliases are quoted in the generated SQL (`AS "alias"`), so the exact name you provide is preserved — including uppercase letters and Unicode characters:
+
+```julia
+df = M.Driver.objects.filter("driverref" => "hamilton").
+    values("Surname" => "surname", "localização" => "nationality") |> DataFrame
+# DataFrame columns: :Surname, Symbol("localização")
+# PostgreSQL would fold these to lowercase without quoting
+```
+
+> [!NOTE]
+> Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases containing spaces, punctuation, or other special characters throw an `ArgumentError` at query-build time.
 
 > [!TIP]
 > Aliasing happens at the SQL level (`SELECT "field" AS "alias"`). This is more efficient than renaming columns in a Julia DataFrame after the query.

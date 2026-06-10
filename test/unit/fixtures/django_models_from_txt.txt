@@ -1,0 +1,83 @@
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+from django.db.models.deletion import RESTRICT
+
+class Dim_servidor(models.Model):
+    nome = models.CharField(max_length=250)
+    host = models.CharField(max_length=250)
+    port = models.CharField(max_length=250)
+    user = models.CharField(max_length=250)
+    password = models.CharField(max_length=250)
+
+class Dim_municipio(models.Model):
+    nome = models.CharField(max_length=250, blank=True, null=True)
+    ativo = models.BooleanField(default=True)
+    atualizacao = models.DateField(null=True, blank=True)
+    cibge = models.BigIntegerField(null=True)
+    servidor = models.ForeignKey(Dim_servidor, on_delete=models.RESTRICT, null=True, db_constraint=False)
+    extrato = models.IntegerField(null=True)
+
+class Dim_CNES(models.Model):
+    ibge = models.ForeignKey(Dim_municipio, on_delete=models.CASCADE, db_constraint=False)
+    no_cnes = models.CharField(max_length=250, blank=True, null=True)
+    obs_lot = models.TextField(null=True)
+    nu_cnes_temp = models.ForeignKey("Dim_CNES", on_delete=models.SET_NULL, null=True, related_name="unidades_abrigadas", db_constraint=False)
+    agendamento_online = models.CharField(default="0", choices=(("0", "Nao implantado"), ("1", "Em implantacao"), ("2", "Implantado")), max_length=1)
+    vaccine_def = models.JSONField(null=True, blank=True)
+
+class CustomUser(AbstractUser):
+    user_type = models.CharField(default=3, choices=((1, "HOD"), (2, "Consultor"), (3, "Gestor")), max_length=10)
+    municipio = models.ForeignKey(Dim_municipio, on_delete=models.RESTRICT, default=0, null=False, blank=False, db_constraint=False)
+    unidade = models.ForeignKey(Dim_CNES, on_delete=RESTRICT, default=0, null=False, blank=False, db_constraint=False)
+    atualizacao = models.DateField(null=True, blank=True)
+    visualizador = models.BooleanField(default=False)
+
+class PasswordResetToken(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="password_reset_tokens")
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used = models.BooleanField(default=False)
+
+class ReporteProblema(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="reportes_problema")
+    ibge = models.ForeignKey(Dim_municipio, on_delete=models.RESTRICT, blank=True, null=True, related_name="reportes_problema")
+    tipo = models.CharField(max_length=20, choices=(("BUG", "Bug"), ("SUGESTAO", "Sugestao")), default="BUG")
+    status = models.CharField(max_length=20, choices=(("PENDENTE", "Pendente"), ("RESOLVIDO", "Resolvido")), default="PENDENTE")
+    descricao = models.TextField()
+    imagem = models.FileField(upload_to="reportes/", null=True, blank=True)
+    retorno = models.TextField(blank=True, default="")
+    retorno_at = models.DateTimeField(null=True, blank=True)
+    usuario_lido_em = models.DateTimeField(null=True, blank=True)
+    retorno_por = models.ForeignKey("CustomUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="reportes_respondidos")
+    data_criacao = models.DateTimeField(auto_now_add=True)
+
+class Cust_adminHOD(models.Model):
+    id = models.AutoField(primary_key=True)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, db_constraint=False)
+    criado_em = models.DateTimeField(auto_now=True)
+    objects = models.Manager()
+
+class Prod_antropometria(models.Model):
+    ibge = models.ForeignKey(Dim_municipio, on_delete=models.CASCADE)
+    nu_peso = models.FloatField(null=True)
+    nu_altura = models.FloatField(null=True)
+    hora_ag = models.TimeField(null=True)
+    tempo_atendimento = models.DurationField(null=True)
+
+class Dim_cnes_grupo(models.Model):
+    ibge = models.ForeignKey(Dim_municipio, on_delete=models.CASCADE, db_constraint=False, related_name="grupos_unidades")
+    nome = models.CharField(max_length=120)
+    publico = models.BooleanField(default=False)
+    criado_por = models.ForeignKey("CustomUser", on_delete=models.SET_NULL, null=True, blank=True, db_constraint=False, related_name="grupos_unidades")
+    unidades = models.ManyToManyField(Dim_CNES, blank=True, related_name="grupos_unidades")
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+class Dim_interacao_programa(models.Model):
+    cod_programa = models.CharField(max_length=50, unique=True, db_index=True)
+    nome = models.CharField(max_length=150)
+    ativo = models.BooleanField(default=True)
+    nivel_destino = models.PositiveSmallIntegerField(default=3)
+    tipos_permitidos = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

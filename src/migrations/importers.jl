@@ -182,7 +182,7 @@ Imports Django models from a given `model.py` file content string and generates 
 
 # Arguments
 - `model_py_string::String`: The content of the `model.py` file as a string; user django_to_string(path) to read the file; or insert the file path.
-- `db::Union{PormGSQLite, PormGPostgres}`: The database connection object. Defaults to `connection()`.
+- `db::String`: The configuration key used to resolve settings (usually the db folder path). The generated file is written to that configuration's `db_def_folder`. Defaults to `DB_PATH`.
 - `force_replace::Bool`: If `true`, forces replacement of the existing models file. Defaults to `false`.
 - `ignore_table::Vector{String}`: Tables to ignore during the import process. Defaults to `postgres_ignore_table`.
 - `file::String`: The name of the file to save the generated models. Defaults to `"automatic_models.jl"`.
@@ -213,18 +213,24 @@ function import_models_from_django(
     return
   end
 
-  # Check if db/models/automatic_models.jl exists
-  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
+  # `db` is the config key; the output directory comes from the resolved settings,
+  # matching import_models_from_postgres. Key and folder usually coincide, but
+  # manually registered Settings may point elsewhere.
+  model_path = settings.db_def_folder
+  model_output_path = joinpath(model_path, file)
+
+  # Check if the generated models file already exists.
+  if isfile(model_output_path) && !force_replace
       @warn(
-          "The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it"
+          "The file '$(model_output_path)' already exists, use force_replace=true to replace it"
       )
       return
-  elseif !ispath(joinpath(MODEL_PATH))
-      mkdir(joinpath(MODEL_PATH))
+  elseif !ispath(model_path)
+      mkpath(model_path)
   end
 
   # check if model_py_string is a path to file and if yes, call django_to_string
-  if isfile(model_py_string)
+  if !occursin('\n', model_py_string) && isfile(model_py_string)
     model_py_string = django_to_string(model_py_string)
   end
 
@@ -248,13 +254,13 @@ function import_models_from_django(
 
     # Initialize fields_dict
     fields_dict = Dict{Symbol, Any}()
-    has_primary_key = false  # Flag to check if a primary key exists
+    has_primary_key = Ref(false)  # Flag to check if a primary key exists
 
     # Process fields separately
-    process_class_fields!(fields_dict, class_content, class_name, base_class, has_primary_key, autofields_ignore, parameters_ignore) && continue
+    process_class_fields!(fields_dict, class_content, class_name, base_class, has_primary_key, autofields_ignore, parameters_ignore)
 
     # Insert IDField if no primary key is defined
-    if !has_primary_key
+    if !has_primary_key[]
         # println("No primary key found in class '$class_name'. Adding an IDField named 'id'.")
         fields_dict[:id] = Models.IDField()
     end
@@ -266,7 +272,7 @@ function import_models_from_django(
     
   end
 
-  generate_models_from_db(file, Instructions, settings, path=db)
+  generate_models_from_db(file, Instructions, settings, path=model_path)
 end
 
 function parse_class(model_py_string::String)
@@ -306,10 +312,10 @@ function parse_class(model_py_string::String)
   return class_colector
 end
 
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{Any}, class_name::AbstractString, base_class::AbstractString, has_primary_key::Bool, autofields_ignore::Vector{String}, parameters_ignore::Vector{String})  
+function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{Any}, class_name::AbstractString, base_class::AbstractString, has_primary_key::Base.RefValue{Bool}, autofields_ignore::Vector{String}, parameters_ignore::Vector{String})
   # Initialize fields for AbstractUser
   if base_class == "AbstractUser"
-      has_primary_key = true
+      has_primary_key[] = true
       fields_dict[:id] = Models.IDField()
       fields_dict[:password] = Models.CharField()
       fields_dict[:last_login] = Models.DateTimeField()
@@ -329,12 +335,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
 
 
   # Iterate over the fields in the class content
-  pass = false
   for field_line in class_content
     field_match = match(field_regex, field_line)
     if field_match !== nothing
       field_name = field_match.captures[1]
-      field_type = field_match.captures[2]
+      field_type = django_field_type(field_match.captures[2])
       field_args_str = field_match.captures[3]
 
       # Parse field arguments
@@ -342,20 +347,21 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
       
       # Check for primary key
       if haskey(options, :primary_key) && options[:primary_key] == true
-          has_primary_key = true
+          has_primary_key[] = true
       end         
 
       # Instantiate the field
       try
         # println(field_type)
         if field_type in autofields_ignore
-          pass = true
           continue
-        elseif field_type in ["ForeignKey", "OneToOneField" ]
+        elseif field_type in ["ForeignKey", "OneToOneField"]
           # Add "_id" suffix for foreign keys
           field_key = Symbol("$(field_name)_id")              
           # println(related_model, " ", related_model |> typeof)
           fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
+        elseif field_type == "ManyToManyField"
+          fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; options...)
         else
           fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
         end
@@ -367,8 +373,12 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     end
   end
 
-  return pass
+  return nothing
 
+end
+
+function django_field_type(field_type::AbstractString)::String
+  return String(field_type)
 end
 
 function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String})
@@ -385,16 +395,43 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           value = strip(key_value[2])
           value_parsed = parse_value(value)
           # println(value_parsed)
-          key in parameters_ignore && continue          
+          field_type == "ManyToManyField" && key == "blank" && continue
+          key in parameters_ignore && continue
+          # Django callable datetime defaults (e.g. default=timezone.now) have no
+          # literal equivalent in PormG. Map them to auto_now_add, which sets the
+          # column to the current timestamp on creation — the closest semantics.
+          if key == "default" && field_type in DATETIME_FIELD_TYPES && is_current_time_default(value)
+              options[:auto_now_add] = true
+              continue
+          end
           options[Symbol(key)] = value_parsed
       else
-        if field_type in ["ForeignKey", "OneToOneField" ]
-          related_model = replace(key_value[1], "\"" => "") |> string
-          options[:pk_field] = "id"
+        if field_type in ["ForeignKey", "OneToOneField", "ManyToManyField"]
+          related_model = replace(key_value[1], "\"" => "", "'" => "") |> string
+          field_type in ["ForeignKey", "OneToOneField"] && (options[:pk_field] = "id")
         end
       end
   end
   return options, related_model
+end
+
+# Django field types that map to PormG date/time fields carrying auto_now_add.
+const DATETIME_FIELD_TYPES = ["DateTimeField", "DateField", "TimeField"]
+
+# Django callables that resolve to "the current moment" at row creation. Used as
+# field defaults (e.g. default=timezone.now); they have no literal value to import.
+const CURRENT_TIME_CALLABLES = Set([
+  "timezone.now",
+  "django.utils.timezone.now",
+  "datetime.now",
+  "datetime.datetime.now",
+  "now",
+])
+
+function is_current_time_default(value::AbstractString)::Bool
+  # Accept both `timezone.now` (callable reference) and `timezone.now()` (call).
+  normalized = replace(strip(value), r"\(\s*\)$" => "")
+  return normalized in CURRENT_TIME_CALLABLES
 end
 
 function parse_value(value::AbstractString)
@@ -403,15 +440,19 @@ function parse_value(value::AbstractString)
       return true
   elseif value == "False"
       return false
+  elseif value == "list"
+      return "[]"
+  elseif value == "dict"
+      return "{}"
   elseif occursin(r"^\d+$", value)
       return parse(Int, value)
-  elseif startswith(value, "\"") && endswith(value, "\"")
-      return value[2:end-1]  # Remove surrounding quotes
+  elseif (startswith(value, "\"") && endswith(value, "\"")) || (startswith(value, "'") && endswith(value, "'"))
+      return String(value[2:end-1])  # Remove surrounding quotes
   elseif startswith(value, "(") && endswith(value, ")")
       # Handle nested tuples (e.g., choices)
       return parse_choices(value)
   else
-      return value  # Return as string or handle other types as needed
+      return String(value)  # Return as string or handle other types as needed
   end
 end
 

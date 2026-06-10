@@ -83,6 +83,18 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🛠 Project Infrastructure & Quality
 
+- [ ] **Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)**
+  - **Context**: The migration edge-case suite in `test/integration/test_migration_bootstrap.jl` (Phase C) needs a throwaway database. When `test/integration/db_test_migration_pg/connection.yml` is absent, it falls back to hydrating from the *selected* integration DB and runs `_reset_postgres!`, which **drops every table in `public`** ([test_migration_bootstrap.jl:180](test/integration/test_migration_bootstrap.jl#L180)). Running the Postgres edge-case suite against the shared `db_2` (`pormg_teste`) would therefore wipe it.
+  - **Goal**: Commit a `db_test_migration_pg/connection.yml` pointing at a dedicated, disposable PostgreSQL database (separate from `db_2`) so the full Postgres edge-case suite — including the `PositiveSmallIntegerField` CHECK lifecycle (Phase 8a2) — runs in isolation without risking the shared integration DB.
+  - **Status**: The CHECK lifecycle is already verified — through the real `makemigrations`/`migrate` engine on SQLite (Phase 8a2 passes), and via the live `get_constraints_check` / `alter_field` introspection paths on PostgreSQL. This item only tracks wiring the isolated fixture so Phase 8a2 also runs end-to-end on Postgres in CI.
+
+
+- [ ] **Investigate PG pool exhaustion under remote-latency integration runs**
+  - **Symptom**: Running `test/integration/runtests.jl` against the remote `db_2` (`pormg_teste` @ 187.121.224.221) logs `PG pool expanded beyond initial size (current_size=15, initial_size=3)` followed by repeated `No available PG connections, retrying (N/300)`.
+  - **Root cause (current understanding)**: The `dev` section of [test/integration/db_2/connection.yml](test/integration/db_2/connection.yml) sets no `pool_size`, so it defaults to **3** ([Configuration.jl:221](src/Configuration.jl#L221)); the hard expansion cap is `pool_size * 5` = **15** ([ConnectionPool.jl:244](src/ConnectionPool.jl#L244)). The async-first suite saturates the small pool against a high-latency remote DB and parks callers in the 100ms retry loop. All release paths (`await_result`/`run_in_transaction` `finally`, `fetch_async` error path) appear correct — this looks like sizing/contention, not a leak.
+  - **To verify**: Confirm whether the suite ever reaches `300/300` and throws (genuine starvation) vs. recovering after a few retries (transient backpressure). If it only recovers, the warnings are cosmetic; if it throws/hangs, sizing is mandatory.
+  - **Likely fix**: Add `pool_size: 15` (or higher) under the `dev` section so the initial pool is large enough that it never expands, and the cap rises accordingly. Consider lowering the `@warn`/retry noise or making expansion silent up to the cap.
+  - **Also audit**: whether any code path calls `fetch_async` without an `await_result` (would leak a connection), and whether `bulk_*`/`inspect_query`/COPY paths always release.
 
 ## 🏗 Phase 2: Operational Maturity
 

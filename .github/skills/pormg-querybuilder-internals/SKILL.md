@@ -89,6 +89,18 @@ Testing boundary:
 - use integration tests for user-visible semantics such as HAVING alias promotion correctness or join behavior against real data
 - if a bug spans both layers, add one narrow integration regression and one deterministic unit alignment test
 
+### Identifier sanitization contract
+
+`sanitization.jl` uses a **fail-closed** model — never a silent-stripping one:
+
+- `_validate_identifier(id)` validates against `SAFE_IDENTIFIER_PATTERN` (`^[\p{L}_][\p{L}\p{M}\p{N}_]*$`) and throws `ArgumentError` on invalid input; it never silently removes characters.
+- `quote_identifier(id, conn)` calls `_validate_identifier` then wraps in double-quotes, preserving exact case and Unicode letters.
+- `sanitize_identifier(id, valid_ids)` checks the raw identifier against the whitelist (no pre-stripping), then delegates quoting to `quote_identifier`.
+- `safe_table_identifier(name, conn)` delegates directly to `quote_identifier` — no silent sanitize-and-warn fallback.
+- All SELECT aliases (`custom_as` and `_as`) are quoted via `quote_identifier` in `_query_select`, preserving mixed case and Unicode characters verbatim.
+
+When adding any new identifier-quoting path, go through `quote_identifier` — never strip-and-quote.
+
 ### Query generation
 
 Focus on:
@@ -177,3 +189,4 @@ julia -t auto --project=. test/integration/test_cte.jl
 - Do not fix SQL shape bugs only by changing test expectations without validating semantics
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
+- Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — the contract is fail-closed: validate via `_validate_identifier`, then quote; never silently rewrite an identifier

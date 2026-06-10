@@ -1144,7 +1144,217 @@ function IntegerField(; kwargs...)
     editable,
     "INTEGER",
     format_number_sql
-  )  
+  )
+end
+
+mutable struct sPositiveSmallIntegerField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+end
+
+# Upper bound of a signed 2-byte integer; matches Django's PositiveSmallIntegerField range (0..32767).
+const POSITIVE_SMALL_INTEGER_MAX = 32767
+
+"""
+    PositiveSmallIntegerField(; kwargs...)
+
+A field for storing small, non-negative whole numbers, equivalent to PostgreSQL's
+SMALLINT columns guarded by a `CHECK (col >= 0)` constraint. Mirrors Django's
+`PositiveSmallIntegerField`.
+
+Values are restricted to the range 0..32767. On PostgreSQL the column is declared
+`smallint`; on SQLite it is declared `SMALLINT` (INTEGER affinity), which preserves
+the declared type so the migration engine round-trips the field without drift. The
+non-negative constraint is enforced both at construction (rejecting negative
+defaults) and at the database level via a `CHECK` constraint. The migration engine
+keeps that constraint in sync with the model: on PostgreSQL it is added or dropped
+when a column's type transitions into or out of this field, and on SQLite it is
+re-derived whenever the table is recreated during an alter.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{Int64, Nothing} = nothing`: Default value for the field (must be 0..32767)
+- `editable::Bool = false`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: SMALLINT + `CHECK ("col" >= 0)`
+- **SQLite Type**: SMALLINT (INTEGER affinity) + `CHECK ("col" >= 0)`
+- **Range**: 0 to 32767
+
+# Examples
+```julia
+Standing = Models.Model(
+    _id = IDField(),
+    position = PositiveSmallIntegerField(default=1),
+    points = PositiveSmallIntegerField(default=0)
+)
+```
+"""
+function PositiveSmallIntegerField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for PositiveSmallIntegerField. It will be ignored." field="PositiveSmallIntegerField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+
+  # Validate default using validate_default, then enforce the non-negative range
+  default = validate_default(default, Union{Int64, Nothing}, "PositiveSmallIntegerField", format2int64)
+  if default !== nothing && !(0 <= default <= POSITIVE_SMALL_INTEGER_MAX)
+    throw(ArgumentError("The default value for PositiveSmallIntegerField must be between 0 and $(POSITIVE_SMALL_INTEGER_MAX), got: $default"))
+  end
+
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+
+  return sPositiveSmallIntegerField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "SMALLINT",
+    format_number_sql
+  )
+end
+
+mutable struct sPositiveIntegerField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  default::Union{Int64, Nothing}
+  editable::Bool
+  type::String
+  formater::Function
+end
+
+# Upper bound of a signed 4-byte integer; matches Django's PositiveIntegerField range (0..2147483647).
+const POSITIVE_INTEGER_MAX = 2147483647
+
+"""
+    PositiveIntegerField(; kwargs...)
+
+A field for storing non-negative whole numbers, equivalent to PostgreSQL's
+INTEGER columns guarded by a `CHECK (col >= 0)` constraint. Mirrors Django's
+`PositiveIntegerField`.
+
+Values are restricted to the range 0..2147483647. On PostgreSQL the column is
+declared `integer`; on SQLite it is declared `INTEGER UNSIGNED` (INTEGER affinity),
+which keeps the declared type distinct from `IntegerField` so the migration engine
+round-trips the field without drift. On PostgreSQL the introspection layer instead
+detects the column's non-negative CHECK constraint to tell the two fields apart.
+The non-negative constraint is enforced both at construction (rejecting negative
+defaults) and at the database level via a `CHECK` constraint, which the migration
+engine adds or drops when a column's type transitions into or out of this field.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default::Union{Int64, Nothing} = nothing`: Default value for the field (must be 0..2147483647)
+- `editable::Bool = false`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: INTEGER + `CHECK ("col" >= 0)`
+- **SQLite Type**: INTEGER UNSIGNED (INTEGER affinity) + `CHECK ("col" >= 0)`
+- **Range**: 0 to 2147483647
+
+# Examples
+```julia
+Lap_times = Models.Model(
+    _id = IDField(),
+    lap = PositiveIntegerField(default=1),
+    milliseconds = PositiveIntegerField()
+)
+```
+"""
+function PositiveIntegerField(; kwargs...)
+  # List of accepted parameters
+  accepted = Set([
+      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+  ])
+  # Check for unexpected parameters
+  for (k, v) in kwargs
+      if !(k in accepted)
+          @warn "Unexpected parameter for PositiveIntegerField. It will be ignored." field="PositiveIntegerField" param=k value=v
+      end
+  end
+  # Extract parameters with defaults
+  verbose_name = get(kwargs, :verbose_name, nothing)
+  unique = get(kwargs, :unique, false)
+  blank = get(kwargs, :blank, false)
+  null = get(kwargs, :null, false)
+  db_index = get(kwargs, :db_index, false)
+  default = get(kwargs, :default, nothing)
+  editable = get(kwargs, :editable, false)
+
+  # Validate verbose_name
+  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+
+  # Validate default using validate_default, then enforce the non-negative range
+  default = validate_default(default, Union{Int64, Nothing}, "PositiveIntegerField", format2int64)
+  if default !== nothing && !(0 <= default <= POSITIVE_INTEGER_MAX)
+    throw(ArgumentError("The default value for PositiveIntegerField must be between 0 and $(POSITIVE_INTEGER_MAX), got: $default"))
+  end
+
+  # Validate other parameters
+  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+
+  return sPositiveIntegerField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    default,
+    editable,
+    "INTEGER UNSIGNED",
+    format_number_sql
+  )
 end
 
 mutable struct sBigIntegerField <: PormGField

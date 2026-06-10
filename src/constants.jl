@@ -69,7 +69,11 @@ const PormGTypeField = Dict{String,Symbol}(
 # I whant work with dictionary to handle pool connections
 
 const sqlite_type_map = Dict{String, Symbol}(
-  "INTEGER" => :IntegerField, 
+  "INTEGER" => :IntegerField,
+  # Django-style declared type for PositiveIntegerField (INTEGER affinity); the
+  # distinct spelling is what lets SQLite introspection round-trip the field.
+  "INTEGER UNSIGNED" => :PositiveIntegerField,
+  "SMALLINT" => :PositiveSmallIntegerField,
   "INT" => :BigIntegerField,
   "TEXT" => :CharField,
   "NUMERIC" => :FloatField,
@@ -88,6 +92,7 @@ const sqlite_type_map = Dict{String, Symbol}(
 
 const postgres_type_map = Dict{String, Symbol}(
   "integer" => :IntegerField,
+  "smallint" => :PositiveSmallIntegerField,
   "bigint" => :BigIntegerField,
   "boolean" => :BooleanField,
   "date" => :DateField,
@@ -126,6 +131,8 @@ const sqlite_type_map_reverse = Dict{String, String}(
   "CHAR" => "TEXT",
   "TEXT" => "TEXT",
   "INTEGER" => "INTEGER",
+  "INTEGER UNSIGNED" => "INTEGER UNSIGNED",
+  "SMALLINT" => "SMALLINT",
   "BIGINT" => "INTEGER",
   "FLOAT" => "REAL",
   "DECIMAL" => "DECIMAL",
@@ -146,6 +153,9 @@ const postgres_type_map_reverse = Dict{String, String}(
   "SERIAL" => "serial",
   "BIGINT" => "bigint",
   "INTEGER" => "integer",
+  # PostgreSQL has no unsigned type: PositiveIntegerField renders as plain integer
+  # and is distinguished on introspection by its non-negative CHECK constraint.
+  "INTEGER UNSIGNED" => "integer",
   "SMALLINT" => "smallint",
   "DECIMAL" => "decimal",
   "FLOAT" => "float",

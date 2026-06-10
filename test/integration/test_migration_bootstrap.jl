@@ -339,6 +339,111 @@ end
     @test "created_at" in cols
   end
 
+  # ── Phase 8a2: PositiveSmallIntegerField non-negative CHECK lifecycle ──
+  # Regression test for Django-style CHECK constraint diffing. Neither PostgreSQL
+  # nor SQLite has an unsigned integer type, so a PositiveSmallIntegerField is a
+  # SMALLINT guarded by `CHECK (col >= 0)`. The engine must keep that constraint in
+  # sync with the model as a column's type transitions in and out of the field:
+  #   IntegerField → PositiveSmallIntegerField  adds the CHECK
+  #   PositiveSmallIntegerField → IntegerField  drops it
+  # On PostgreSQL the DROP path runs the real get_constraints_check introspection
+  # against information_schema; on SQLite the CHECK is re-derived on table recreation.
+  # MigrationTest and TypesTable must stay in every model file written by the
+  # 8a2/8a3 lifecycle phases: the destructive migrate would otherwise DROP them
+  # and break the Phase 8b baseline, which expects migrationtest to survive
+  # from earlier phases.
+  phase8_models = """
+  MigrationTest = Models.Model(
+      id = Models.IDField(),
+      fullname = Models.CharField(null=true)
+  )
+  TypesTable = Models.Model(
+      id = Models.IDField(),
+      is_active = Models.BooleanField(default=true),
+      score = Models.DecimalField(max_digits=5, decimal_places=2, null=true),
+      created_at = Models.DateTimeField(null=true)
+  )
+  """
+
+  @testset "Phase 8a2: PositiveSmallIntegerField CHECK lifecycle" begin
+    # Start with a plain IntegerField column — no CHECK expected.
+    write_edge_models(phase8_models * """
+    PosIntCheck = Models.Model(
+        id = Models.IDField(),
+        level = Models.IntegerField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test "level" in column_names(pool, "posintcheck")
+    @test !column_has_nonneg_check(pool, "posintcheck", "level")
+
+    # Transition into PositiveSmallIntegerField — the CHECK must now exist.
+    write_edge_models(phase8_models * """
+    PosIntCheck = Models.Model(
+        id = Models.IDField(),
+        level = Models.PositiveSmallIntegerField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test column_has_nonneg_check(pool, "posintcheck", "level")
+
+    # Transition back out to IntegerField — the CHECK must be dropped. On PostgreSQL
+    # this exercises the get_constraints_check + DROP CONSTRAINT path end to end.
+    write_edge_models(phase8_models * """
+    PosIntCheck = Models.Model(
+        id = Models.IDField(),
+        level = Models.IntegerField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test !column_has_nonneg_check(pool, "posintcheck", "level")
+  end
+
+  # ── Phase 8a3: PositiveIntegerField CHECK lifecycle and round-trip ──
+  # PositiveIntegerField renders as plain `integer` on PostgreSQL (only the CHECK
+  # distinguishes it from IntegerField) and as `INTEGER UNSIGNED` on SQLite. Besides
+  # the CHECK lifecycle, this phase locks the round-trip: after migrating, a second
+  # makemigrations must see the introspected column as PositiveIntegerField again and
+  # report no pending changes — otherwise every run would emit a spurious ALTER.
+  @testset "Phase 8a3: PositiveIntegerField CHECK lifecycle" begin
+    # Transition the column into PositiveIntegerField — the CHECK must exist.
+    write_edge_models(phase8_models * """
+    PosIntCheck = Models.Model(
+        id = Models.IDField(),
+        level = Models.PositiveIntegerField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test "level" in column_names(pool, "posintcheck")
+    @test column_has_nonneg_check(pool, "posintcheck", "level")
+
+    # Round-trip guard: with the model unchanged, makemigrations must not plan any
+    # change for posintcheck — an introspection mismatch would emit a spurious ALTER
+    # on every run. Scoped to this table because unrelated pre-existing drift exists
+    # (e.g. DecimalField max_digits is not recovered by SQLite PRAGMA introspection,
+    # so typestable is re-planned chronically).
+    pending_path = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    @assert !isfile(pending_path) "migrate should have archived pending_migrations.jl"
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending_path) || !occursin("posintcheck", lowercase(read(pending_path, String)))
+
+    # Transition back out to IntegerField — same column type on PostgreSQL, so this
+    # exercises the CHECK drop without a type cast masking it.
+    write_edge_models(phase8_models * """
+    PosIntCheck = Models.Model(
+        id = Models.IDField(),
+        level = Models.IntegerField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test !column_has_nonneg_check(pool, "posintcheck", "level")
+  end
+
   # ── Phase 8b: Add DateTimeField / DateField to existing table ──────
   # Regression test for the bug where `_add_new_field` called
   # `Dialect.alter_field(conn, model_name::Symbol, ...)` instead of

@@ -136,6 +136,7 @@ Always re-read `.github/instructions/general.instructions.md` (step 1 of Review 
 - Flag migration changes that weaken destructive safeguards or skip `dry_run()` discipline
 - Flag docs or examples that regress to generic domains instead of Formula 1 scenarios
 - When a new subsystem file appears in `src/` that is not yet listed in `general.instructions.md`, flag it as an architecture-checkpoint gap
+- Flag any reintroduction of silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")` before quoting) — the correct contract is fail-closed: `_validate_identifier` throws on invalid input and never silently rewrites identifiers
 
 ## After Reporting Findings
 

@@ -77,7 +77,8 @@ df_upd = DataFrames.DataFrame(
         res = bulk_update(
             Metric.objects, df_upd,
             columns    = ["weight", "score"],
-            filters    = ["id", "city_id" => 141341324],
+            match_on   = ["id"],
+            filters    = ["city_id" => 141341324],
             show_query = :dict
         )
         sql = res[:sql_text]
@@ -112,7 +113,8 @@ df_upd = DataFrames.DataFrame(
         res = bulk_update(
             Metric.objects, df_upd,
             columns    = ["weight", "score"],
-            filters    = ["id", "city_id" => 141341324],
+            match_on   = ["id"],
+            filters    = ["city_id" => 141341324],
             show_query = :dict
         )
         sql = res[:sql_text]
@@ -152,7 +154,8 @@ df_upd = DataFrames.DataFrame(
         res = bulk_update(
             Metric.objects, df_upd,
             columns    = ["weight", "score"],
-            filters    = ["id", "city_id" => 141341324],
+            match_on   = ["id"],
+            filters    = ["city_id" => 141341324],
             show_query = :dict
         )
         # The exact parameter order matters:
@@ -186,7 +189,8 @@ df_upd = DataFrames.DataFrame(
         res_missing_requested = bulk_update(
             Metric.objects, df_missing_requested,
             columns    = ["weight", "result_value"],
-            filters    = ["id", "city_id" => 141341324],
+            match_on   = ["id"],
+            filters    = ["city_id" => 141341324],
             show_query = :dict
         )
         sql_missing_requested = res_missing_requested[:sql_text]
@@ -235,7 +239,7 @@ end
         res_ts = bulk_update(
             Metric_ts.objects, df_ts,
             columns    = ["weight"],
-            filters    = ["id"],
+            match_on   = ["id"],
             show_query = :dict
         )
         sql_ts = res_ts[:sql_text]
@@ -255,7 +259,7 @@ end
         res_auto = bulk_update(
             Metric.objects, df_upd,
             # no columns= argument → all DF columns that match model fields
-            filters    = ["id"],
+            match_on   = ["id"],
             show_query = :dict
         )
         sql_auto = res_auto[:sql_text]
@@ -338,4 +342,243 @@ end
     @test occursin("\"result_value\"", sql_copy)
     @test res_copy[:parameter_count] == 0
     @test isempty(res_copy[:parameters])
+end
+
+# ------------------------------------------------------------------
+# match_on / filters separation contract.
+#
+#   match_on = per-row merge keys (df_col => model_field), always dynamic.
+#   filters  = constant predicates (model_field => value), always static.
+#
+# The legacy single-`filters` dynamic usage is rejected with a migration
+# error so call sites move loudly rather than silently misbehaving.
+# ------------------------------------------------------------------
+@testset "bulk_update: match_on / filters separation" begin
+
+    # match_on accepts a "df_col" => "model_field" mapping just like columns.
+    @testset "match_on supports df_col => model_field mapping" begin
+        custom_df = DataFrames.DataFrame(
+            record_id = [4606],
+            new_w     = [9],
+        )
+        res = bulk_update(
+            Metric.objects, custom_df,
+            columns    = ["new_w" => "weight"],
+            match_on   = ["record_id" => "id"],
+            show_query = :dict
+        )
+        sql = res[:sql_text]
+
+        # WHERE merges on the model field id against the mapped source column.
+        @test occursin("\"Tb\".\"id\" = source.\"id\"", sql)
+        set_text = match(r"SET(.*?)FROM"s, sql).captures[1]
+        @test occursin("\"weight\"", set_text)
+        # Source order: update column first, then the match key.
+        @test res[:parameters] == Any[9, 4606]
+    end
+
+    # When match_on is given, filters are ALWAYS static — no content heuristic.
+    @testset "filters is static-only when match_on is provided" begin
+        res = bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            match_on   = ["id"],
+            filters    = ["city_id" => 141341324],
+            show_query = :dict
+        )
+        @test occursin(r"AND\s+\"Tb\"\.\"city_id\"\s*=\s*\$1", res[:sql_text])
+    end
+
+    # A bare string in filters cannot be a constant predicate once match_on is set.
+    @testset "bare-string filter with match_on is rejected" begin
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            match_on   = ["id"],
+            filters    = ["city_id"],
+            show_query = :dict
+        )
+    end
+
+    # Legacy dynamic-in-filters usage (no match_on) must raise a migration error,
+    # and that error must actually guide the caller to `match_on=` — the whole
+    # point of the temporary deprecation shim is an actionable message.
+    @testset "legacy bare-string filter raises migration error" begin
+        err = try
+            bulk_update(
+                Metric.objects, df_upd,
+                columns    = ["weight"],
+                filters    = ["id"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("match_on", sprint(showerror, err))
+    end
+
+    @testset "legacy df_col => field filter raises migration error" begin
+        custom_df = DataFrames.DataFrame(record_id = [4606], weight = [1])
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, custom_df,
+            columns    = ["weight"],
+            filters    = ["record_id" => "id"],
+            show_query = :dict
+        )
+    end
+
+    # A match_on column absent from the DataFrame is a hard error, never a
+    # silent fall-through.
+    @testset "missing match_on column raises" begin
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            match_on   = ["does_not_exist" => "id"],
+            show_query = :dict
+        )
+    end
+
+    # An explicit match_on pair with a typoed source column must raise even when
+    # the target field is already mapped by columns= — the typo must not be
+    # silently swallowed by reusing the columns= mapping.
+    @testset "explicit match_on typo raises even when field is mapped by columns" begin
+        custom_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, custom_df,
+            columns    = ["new_w" => "weight", "record_id" => "id"],
+            match_on   = ["typo_id" => "id"],
+            show_query = :dict
+        )
+    end
+
+    # No match_on and no filters => fall back to the model primary key.
+    @testset "no match_on falls back to primary key" begin
+        res = bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            show_query = :dict
+        )
+        @test occursin("\"Tb\".\"id\" = source.\"id\"", res[:sql_text])
+    end
+
+    # Composite match keys produce one merge condition per key, AND'd together,
+    # and the source column list includes every key in SET-fields-then-keys order.
+    @testset "composite match_on builds multiple AND'd merge conditions" begin
+        res = bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            match_on   = ["id", "city_id"],
+            show_query = :dict
+        )
+        sql = res[:sql_text]
+        @test occursin("\"Tb\".\"id\" = source.\"id\"", sql)
+        @test occursin("\"Tb\".\"city_id\" = source.\"city_id\"", sql)
+        # The two key conditions are AND'd, not OR'd or comma-joined.
+        @test occursin(r"source\.\"id\".*AND.*source\.\"city_id\""s, sql) ||
+              occursin(r"source\.\"city_id\".*AND.*source\.\"id\""s, sql)
+        # Source column list: SET field first, then both keys.
+        source_cols = match(r"AS source \(([^)]+)\)", sql).captures[1]
+        @test occursin("\"weight\"", source_cols)
+        @test occursin("\"id\"", source_cols)
+        @test occursin("\"city_id\"", source_cols)
+        # Params follow the source order: weight, id, city_id.
+        @test res[:parameters] == Any[1, 4606, 141341324]
+    end
+
+    # Duplicate detection must consider the full composite key tuple, not just one.
+    @testset "composite match_on rejects duplicate key tuples" begin
+        dup_df = DataFrames.DataFrame(
+            id      = [1, 1],
+            city_id = [5, 5],
+            weight  = [10, 20],
+        )
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, dup_df,
+            columns    = ["weight"],
+            match_on   = ["id", "city_id"],
+            show_query = :dict
+        )
+        # Distinct tuples on the same first key must NOT be rejected.
+        ok_df = DataFrames.DataFrame(
+            id      = [1, 1],
+            city_id = [5, 6],
+            weight  = [10, 20],
+        )
+        res = bulk_update(
+            Metric.objects, ok_df,
+            columns    = ["weight"],
+            match_on   = ["id", "city_id"],
+            show_query = :dict
+        )
+        @test res isa Dict || res isa Vector
+    end
+
+    # A match_on key that is not a model field is a hard error (covers both the
+    # bare-key and the explicit-pair target-field validation branch).
+    @testset "match_on referencing a non-field raises" begin
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            match_on   = ["not_a_field"],
+            show_query = :dict
+        )
+        @test_throws ArgumentError bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            match_on   = ["id" => "not_a_field"],
+            show_query = :dict
+        )
+    end
+
+    # Explicit-pair match_on resolves case-insensitively against DataFrame columns.
+    @testset "explicit match_on pair resolves case-insensitively" begin
+        ci_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+        res = bulk_update(
+            Metric.objects, ci_df,
+            columns    = ["new_w" => "weight"],
+            match_on   = ["RECORD_ID" => "id"],   # different case than the df column
+            show_query = :dict
+        )
+        @test occursin("\"Tb\".\"id\" = source.\"id\"", res[:sql_text])
+        @test res[:parameters] == Any[9, 4606]
+    end
+
+    # Constant filters work with the PK fallback when no match_on is supplied.
+    @testset "static filters combine with PK fallback (no match_on)" begin
+        res = bulk_update(
+            Metric.objects, df_upd,
+            columns    = ["weight"],
+            filters    = ["city_id" => 141341324],
+            show_query = :dict
+        )
+        sql = res[:sql_text]
+        @test occursin("\"Tb\".\"id\" = source.\"id\"", sql)            # PK merge
+        @test occursin(r"AND\s+\"Tb\"\.\"city_id\"\s*=\s*\$1", sql)     # static guard
+        @test res[:parameters] == Any[141341324, 1, 4606]
+    end
+
+    # A model with no primary key and no match_on cannot identify rows: hard error.
+    @testset "no match_on and no primary key raises" begin
+        NoPk = PormG.Models.Model_Type(
+            name = "no_pk_scope_model",
+            fields = Dict(
+                "a" => IntegerField(),
+                "b" => IntegerField(),
+            ),
+            field_names = ["a", "b"],
+            connect_key = "default",
+        )
+        nopk_df = DataFrames.DataFrame(a = [1], b = [2])
+        err = try
+            bulk_update(NoPk.objects, nopk_df, columns = ["b"], show_query = :dict)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("primary key", lowercase(sprint(showerror, err)))
+    end
+
 end

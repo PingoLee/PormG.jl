@@ -390,15 +390,17 @@ result = bulk_insert(M.Driver, df)
 Updates multiple records in a single operation.
 
 ```julia
-bulk_update(M.Result.objects, df_with_changes, columns=["points"], filters=["resultid"])
+bulk_update(M.Result.objects, df_with_changes, columns=["points"], match_on=["resultid"])
 ```
 
 Key contracts:
 
-- DataFrame columns are matched case-insensitively for both `columns` and dynamic `filters`.
-- If `filters` is omitted, PormG infers the model primary key columns and uses those to identify rows.
-- `bulk_update()` rebuilds the `WHERE` clause from `filters=` and does not preserve filters that were already attached to the handler.
-- Static lookup filters on base-table columns are supported, but relation traversals that would require JOINs are rejected.
+- `columns=` sets fields; `match_on=` gives the per-row keys that identify each row; `filters=` are constant predicates applied to every row.
+- DataFrame columns are matched case-insensitively for both `columns` and `match_on`.
+- If `match_on` is omitted, PormG infers the model primary key columns and uses those to identify rows.
+- A per-row match key passed in `filters=` (a bare string or `"df_col" => "field"` pair) raises a migration error directing you to `match_on=`; there is no silent fallback. This migration error is a temporary deprecation aid and will be removed in a future release.
+- `bulk_update()` rebuilds the `WHERE` clause from `match_on=` and `filters=` and does not preserve filters that were already attached to the handler.
+- Constant lookup filters on base-table columns are supported, but relation traversals that would require JOINs are rejected.
 - Foreign-key columns accept scalar primary-key values, including `0` when that referenced row exists; use `nothing` or `missing` to write SQL `NULL` on nullable FK columns.
 - The same dry-run modes available elsewhere apply here: `:sql`, `:dict`, `:inspection`, `:params`, and `:none`.
 

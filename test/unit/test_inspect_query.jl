@@ -105,7 +105,7 @@ PormG.config["default"] = MockSettings
     @test contains(res_bulk_insert[:sql_text], "INSERT")
 
     # Test: bulk_update(show_query=:dict) returns :operation => :update
-    res_bulk_update = bulk_update(DriverModel.objects, df, columns=["forename"], filters=["surname"], show_query=:dict)
+    res_bulk_update = bulk_update(DriverModel.objects, df, columns=["forename"], match_on=["surname"], show_query=:dict)
     @test res_bulk_update[:operation] === :update
     @test res_bulk_update[:model] == "drivers"
     @test contains(res_bulk_update[:sql_text], "UPDATE")

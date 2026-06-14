@@ -462,6 +462,142 @@ function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
   return nothing
 end
 
+# Map one match key into mapping / fields_df / dynamic_filters. Unlike the legacy
+# `filters=` path, a missing DataFrame column is a hard error rather than a silent
+# fall-through to a static predicate.
+#
+# `allow_reuse` lets a bare key (and the PK fallback) fall back to a mapping already
+# established by `columns=` when `df_col` is not a DataFrame column on its own. It MUST
+# stay `false` for an explicit `"df_col" => "field"` pair, otherwise a typoed source
+# column would be silently swallowed by the existing `columns=` mapping instead of
+# raising the documented hard error.
+function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
+  mapping::Dict{String, String}, fields_df::Vector{String},
+  dynamic_filters::Vector{String}, field::String, df_col::String;
+  kind::String="match_on", allow_reuse::Bool=true)
+
+  field in model.field_names ||
+    throw(ArgumentError("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
+
+  resolved = if df_col in names(df)
+    df_col
+  else
+    idx = findfirst(c -> lowercase(c) == lowercase(df_col), names(df))
+    if idx !== nothing
+      names(df)[idx]
+    elseif allow_reuse && haskey(mapping, field)
+      mapping[field]                      # bare key / PK fallback: reuse the columns= mapping
+    else
+      throw(ArgumentError("bulk_update: $(kind) column \e[4m\e[31m$(df_col)\e[0m not found in the DataFrame (columns: $(names(df)))"))
+    end
+  end
+
+  mapping[field] = resolved
+  field in fields_df || push!(fields_df, field)
+  field in dynamic_filters || push!(dynamic_filters, field)
+  return nothing
+end
+
+# ============================================================================
+# DEPRECATION SHIM — TEMPORARY (remove once the pre-`match_on` API is retired)
+#
+# Before `match_on=` existed, `bulk_update(filters=...)` carried BOTH per-row
+# match keys and constant predicates. The two helpers below exist only to turn
+# that now-removed usage into an actionable migration error. The PERMANENT
+# contract is simply: `filters=` entries are constant `field => value` predicates
+# (enforced by `_bulk_update_static_only_msg`).
+#
+# TO REMOVE after the deprecation window:
+#   1. delete `_is_legacy_dynamic_filter` and `_bulk_update_migration_msg`;
+#   2. delete the marked shim block in `_resolve_bulk_update_keys!`.
+# After that, a bare string or dynamic pair in `filters=` falls through to the
+# generic static-only error, which is the intended end state.
+# ============================================================================
+function _is_legacy_dynamic_filter(f, df::DataFrames.DataFrame, model::PormGModel)
+  f isa Pair || return true                       # a bare string was always a dynamic key
+  return f.second isa AbstractString &&
+         !occursin("__", f.first) &&              # not a lookup such as points__@in
+         f.first in names(df) &&
+         f.second in model.field_names
+end
+
+function _bulk_update_migration_msg(f)
+  shown = f isa Pair ? "\"$(f.first)\" => \"$(f.second)\"" : "\"$(f)\""
+  return """
+  bulk_update: `filters=` no longer accepts per-row match keys (DEPRECATED API).
+  $(shown) references a DataFrame column, so it is a match key — move it to `match_on=`.
+  `filters=` is now for constant predicates only.
+
+    Change:  filters  = [$(shown)]
+    To:      match_on = [$(shown)]
+
+  Use `filters=` only for constant predicates, e.g. filters = ["category_id" => 172100].
+  This migration error is temporary and will be removed in a future release.
+  """
+end
+# ============================================================================
+# end deprecation shim
+# ============================================================================
+
+_bulk_update_static_only_msg(f) =
+  "bulk_update: `filters=` entry $(repr(f)) is not a constant predicate. " *
+  "Every `filters=` entry must be `field => value`; move row-matching columns to `match_on=`."
+
+# Classify `match_on` into per-row merge keys (dynamic_filters) and `filters` into
+# constant predicates (static_filters). Returns (dynamic_filters, static_filters).
+#
+# - `match_on` resolves to per-row merge keys; explicit pairs must exist in the df.
+# - `filters` entries are constant `field => value` predicates.
+# - When `match_on` is omitted and no key is produced, the model primary key(s) are used.
+# - TEMPORARY: when `match_on` is absent, the old dynamic-in-`filters` usage raises a
+#   migration error (see the deprecation-shim banner above).
+function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
+  mapping::Dict{String, String}, fields_df::Vector{String},
+  match_on::Vector{Union{String, Pair{String, String}}},
+  filters::Vector{Union{String, Pair{String, <:Any}}},
+  pks::Vector{String})
+
+  dynamic_filters = String[]
+  static_filters = Pair{String, Any}[]
+  match_on_given = !isempty(match_on)
+
+  # match_on: always per-row merge keys ("df_col" => "model_field")
+  for key in match_on
+    if key isa Pair
+      # Explicit column: it must exist in the DataFrame — no reuse of a columns= mapping.
+      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, key.second, key.first; allow_reuse=false)
+    else
+      # Bare key: match on this field using whatever column already maps to it.
+      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, key, key; allow_reuse=true)
+    end
+  end
+
+  # filters: permanent contract is constant `field => value` predicates.
+  for f in filters
+    # ── TEMPORARY deprecation shim (see banner above; delete with the helpers) ──
+    # Only meaningful when match_on is absent: turn the old dynamic-in-`filters`
+    # usage into an actionable migration error instead of the generic one.
+    if !match_on_given && _is_legacy_dynamic_filter(f, df, model)
+      throw(ArgumentError(_bulk_update_migration_msg(f)))
+    end
+    # ── end shim ───────────────────────────────────────────────────────────────
+
+    f isa Pair || throw(ArgumentError(_bulk_update_static_only_msg(f)))
+    push!(static_filters, f.first => f.second)
+  end
+
+  # Fallback: nothing to match on => use the model primary key(s)
+  if isempty(dynamic_filters)
+    isempty(pks) && throw(ArgumentError(
+      "bulk_update: no match_on= given and model $(model.name) has no primary key to match on"))
+    for pk in pks
+      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, pk, pk; kind="primary key")
+    end
+  end
+
+  return dynamic_filters, static_filters
+end
+
 
 """
 Inserts multiple rows into the database in bulk from a DataFrame.
@@ -778,32 +914,42 @@ Performs a bulk update operation on a database table using the provided `DataFra
 # Arguments
 - `objct::SQLObjectHandler`: The database handler object.
 - `df::DataFrames.DataFrame`: The DataFrame containing the data to be used for the update.
-- `columns`: (Optional) Specifies which columns to update. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, no columns are specified.
-- `filters`: (Optional) Specifies the filters to apply for the update. Can be a `String`, a `Pair{String, T}` where `T` is `String`, `Integer`, `Bool`, `Date`, or `DateTime`, or a `Vector` of these. If `nothing`, no filters are applied.
+- `columns`: (Optional) Which columns to **SET**. Each entry is a `String` (DataFrame column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the DataFrame.
+- `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.df_col`). Same grammar as `columns`: a `String` or `"df_col" => "model_field"`. If omitted, the model primary key(s) are used and must be present in the DataFrame.
+- `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
 - `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
 - `copy::Bool`: (Optional) If `true`, creates a copy of the DataFrame before processing. Defaults to `true`. Set to `false` to modify the original DataFrame and improve performance, but this may lead to unintended side effects when the operation is performed in asynchronous contexts.
 
 # Example
 ```julia
-# Update the columns of the DataFrame df if df contains the primary key of the table
+# Update by primary key inferred from the DataFrame
 bulk_update(objct, df)
-# Update the name and dof columns for the security_id in the DataFrame df
-bulk_update(objct, df, columns=["security_id", "name", "dof"], filters=["security_id"])
+
+# Set name/dof, matching rows on security_id
+bulk_update(objct, df, columns=["name", "dof"], match_on=["security_id"])
+
+# Map differing DataFrame names and add a constant scope guard
+bulk_update(objct, df,
+    columns  = ["new_score" => "points"],   # df "new_score" → field "points"
+    match_on = ["record_id" => "id"],        # match Tb.id = source.record_id
+    filters  = ["category_id" => 172100])    # constant: only this category
 ```
 """
-function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame; 
-    columns=nothing, 
-    filters=nothing, 
-    show_query::Symbol=:execute, 
+function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
+    columns=nothing,
+    match_on=nothing,
+    filters=nothing,
+    show_query::Symbol=:execute,
     chunk_size::Integer=1000,
     copy::Bool=true)
 
-  _columns = _normalize_bulk_columns(columns)
-  _filters = _normalize_bulk_filters(filters)
+  _columns  = _normalize_bulk_columns(columns)
+  _match_on = _normalize_bulk_columns(match_on)   # same grammar as columns: "df_col" => "model_field"
+  _filters  = _normalize_bulk_filters(filters)
 
-  _bulk_update(objct, df, _columns, _filters, show_query, chunk_size, copy)
-  
+  _bulk_update(objct, df, _columns, _match_on, _filters, show_query, chunk_size, copy)
+
 end
 bulk_update(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_update(model |> object, df; kwargs...)
 bulk_update(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_update(objct, df; kwargs...)
@@ -811,6 +957,7 @@ bulk_update(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_update(objct, df;
 
 function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},
+  match_on::Vector{Union{String, Pair{String, String}}},
   filters::Vector{Union{String, Pair{String, <:Any}}},
   show_query::Symbol,
   chunk_size::Integer=1000,
@@ -836,61 +983,10 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   # Prepare columns and DataFrame using centralized helpers
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
 
-  # colect the filters
-  pks = [field for field in keys(model.fields) if model.fields[field].primary_key]
-  dinanic_filters::Vector{String} = []
-  static_filters::Vector{Pair{String, Any}} = []
-  if !isempty(filters)
-    for filter in filters
-      if filter isa Pair && filter.second isa String && filter.first in names(df) && filter.second in model.field_names
-        # Dynamic filter with mapping: df_col => table_field
-        push!(dinanic_filters, filter.second)
-        mapping[filter.second] = filter.first
-        push!(fields_df, filter.second)
-      elseif filter isa Pair
-        # Static filter: table_field => value
-        push!(static_filters, filter)
-      else
-        push!(dinanic_filters, filter)
-        if !(filter in fields_df)
-          # Ensure filter column is mapped even if not in update 'columns'
-          if filter in names(df)
-            mapping[filter] = filter
-            push!(fields_df, filter)
-          else
-            # Try case-insensitive matching for filters too
-            found = false
-            for col in names(df)
-              if col |> lowercase == filter |> lowercase
-                mapping[filter] = col
-                push!(fields_df, filter)
-                found = true
-                break
-              end
-            end
-            found || throw(ArgumentError("Filter column '$(filter)' not found in DataFrame"))
-          end
-        end
-      end
-    end
-  else
-    dinanic_filters = pks    
-    # Ensure all PKs are in the mapping
-    for pk in pks
-        if !haskey(mapping, pk)
-            found = false
-            for col in names(df)
-                if col |> lowercase == pk |> lowercase
-                    mapping[pk] = col
-                    push!(fields_df, pk)
-                    found = true
-                    break
-                end
-            end
-            found || throw(ArgumentError("Primary key column '$(pk)' required for bulk_update not found in DataFrame"))
-        end
-    end
-  end  
+  # Resolve row-matching keys (match_on) and static predicates (filters).
+  pks = [field for field in model.field_names if model.fields[field].primary_key]
+  dinanic_filters, static_filters =
+    _resolve_bulk_update_keys!(df, model, mapping, fields_df, match_on, filters, pks)
 
   _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
 
@@ -898,9 +994,9 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   if size(static_filters, 1) > 0
     for filter in static_filters
       objct.filter(filter)
-    end    
+    end
   end
-  instruction = build(objct.object, connection=connection) 
+  instruction = build(objct.object, connection=connection)
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]

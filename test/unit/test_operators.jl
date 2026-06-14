@@ -292,9 +292,9 @@ const _R = _OperTestRace
     res_proj = q_proj.list(show_query=:dict)
     sql_proj = res_proj[:sql_text]
     @test contains(sql_proj, "SELECT")
-    @test contains(sql_proj, "\"Tb\".\"surname\" as surname")
-    @test contains(sql_proj, "\"Tb\".\"number\" as number")
-    @test contains(sql_proj, "(\"Tb\".\"number\" & \$1::bigint) as is_odd")
+    @test contains(sql_proj, "\"Tb\".\"surname\" as \"surname\"")
+    @test contains(sql_proj, "\"Tb\".\"number\" as \"number\"")
+    @test contains(sql_proj, "(\"Tb\".\"number\" & \$1::bigint) as \"is_odd\"")
     @test contains(sql_proj, "FROM \"drivers\" as \"Tb\"")
     @test res_proj[:parameters] == [1]
 
@@ -352,7 +352,7 @@ const _R = _OperTestRace
     res_left_shl = q_left_shl.list(show_query=:dict)
     sql_left_shl = res_left_shl[:sql_text]
     @test contains(sql_left_shl, "SELECT")
-    @test contains(sql_left_shl, "(\$1::integer << \"Tb\".\"number\") as index_mask")
+    @test contains(sql_left_shl, "(\$1::integer << \"Tb\".\"number\") as \"index_mask\"")
     @test res_left_shl[:parameters] == [1]
   end
 

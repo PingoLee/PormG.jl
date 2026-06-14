@@ -4,9 +4,14 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 
 ## 🚀 High Priority: Core ORM Parity
 
-- [ ] **Bulk Operation API Refactoring**
-  - **Context**: Currently, `bulk_update(filters=...)` handles both DataFrame column mapping and static SQL filters. While flexible, this leads to ambiguity and potential breaking changes if column names overlap with model fields.
-  - **Goal**: Introduce a clearer separation (e.g., `mapping` vs `filters` or explicitly typed objects) to improve type safety and readability without breaking legacy support.
+- [x] **Bulk Operation API Refactoring** — Split `bulk_update` row-matching from constant predicates: row-matching keys now live in `match_on=` (`"df_col" => "model_field"`, same grammar as `columns=`), while `filters=` is constant predicates only (`"model_field" => value`). When `match_on=` is provided there is no content-based guessing; legacy dynamic-in-`filters` usage raises a migration error pointing to `match_on=`. A missing `match_on` column now errors instead of silently degrading to a static filter. PK fallback still applies when `match_on=` is omitted. Aligns with SQL `MERGE ... ON` / Rails `unique_by` / dbt `unique_key` vocabulary and is forward-compatible with a future `bulk_upsert`.
+
+- [ ] **Make bulk DataFrame→field matching case-sensitive (abandon case-insensitive matching)**
+  - **Context**: The bulk path (`bulk_insert`, `bulk_copy`, `bulk_update`) currently matches DataFrame columns to model fields case-insensitively (lowercase fold). This predates and now conflicts with commit `9958a16` ("mandatory quoting to support Unicode and mixed-case identifiers"): once a model legitimately has a mixed-case field/column (e.g. `RaceId`, `"MyCol"`), case-folding can map the wrong column or mask a real mismatch. It is also a silent, order-dependent failure when two DataFrame columns differ only in case (`findfirst` picks the first). Both points run against the explicitness goal of the `match_on=` refactor.
+  - **Goal**: Make matching **exact/case-sensitive** across the whole bulk path, but **fail loudly**: when an exact match fails and a column differing only in case exists, raise an error that names the candidate and suggests the fix (`rename!(df, lowercase.(names(df)))` or an explicit `"DF_COL" => "field"` mapping).
+  - **Scope**: three spots — `_prepare_bulk_df!` (auto-detect path with `columns=nothing`, and the explicit-`columns=` fallback) and `_resolve_match_column!` (the `match_on=` fallback) in `src/querybuilder/execution_bulk.jl`. All-or-nothing: CI `columns=` with exact `match_on=` would be incoherent. Affects `bulk_insert`/`bulk_copy` too, not just `bulk_update`.
+  - **Migration**: behavior change for consuming apps' data-loading code. Document the `rename!(df, lowercase.(names(df)))` one-liner (already used in the F1 CSV examples) and the explicit-mapping alternative. Land as a **separate commit** from the `match_on` work.
+  - **Optional lower-risk first step**: keep CI but add an `@warn` when a case-insensitive match is ambiguous (more than one DataFrame column matches), to scout whether any app actually relies on case-folding before removing it.
 
 - [/] **Advanced Query Expressions**
   - [x] Support for **Subqueries** (using `OuterRef`). — Correlated `Exists(subquery)`, `OuterRef("field")`, and `__@in` subquery membership tests are fully implemented and tested. Gaps: no scalar subqueries, no UNION/set operations.
@@ -82,6 +87,44 @@ This document tracks missing features and planned improvements for PormG.jl, wit
   - [ ] ORM lookups for `search`, `rank`, and `headline`.
 
 ## 🛠 Project Infrastructure & Quality
+
+> ⚠️ **Pre-publish window** — the items marked *do BEFORE the first General-registry publish* lock in contracts that are cheap to settle now (zero published users) but become breaking/irreversible afterward. Tier 1 (migration format, schema conventions) touches **user data / live databases** — a version bump cannot fix an already-migrated production DB. Tier 2 (loading contract, export surface) is code-fixable in a 0.x bump but breaks every user's `using` at once. The adapter decoupling and export curation are coupled — do them together.
+
+- [ ] **Freeze & document the migration file + tracking-table contract** ⚠️ *do BEFORE the first General-registry publish* — **Tier 1 (user data, irreversible)**
+  - **Why now**: Once a user generates migration files with 0.1.0, commits them, and applies them to a production DB (recorded in the migrations bookkeeping table), that history is frozen **on disk and in their database**. If a later release changes the migration file structure, the checksum/`compute_checksum` scheme, or the tracking-table schema, the existing applied history breaks — and no version pin can repair an already-migrated prod DB.
+  - **Goal (decide & lock, not necessarily rewrite)**: Pin and document, as a stability contract: (1) the on-disk migration file format/layout, (2) the checksum algorithm (`compute_checksum`), (3) the migrations tracking-table name + columns, (4) the recorded state representation. Add a documented format/version marker so future changes can be migrated forward instead of silently breaking.
+  - **Deliverable**: a "Migration format stability" section in the docs + a format-version field; a test that reads a committed 0.1.0-era migration fixture and asserts it still applies/validates.
+
+- [ ] **Freeze & document the generated DB schema conventions** ⚠️ *do BEFORE the first General-registry publish* — **Tier 1 (user data, irreversible)**
+  - **Why now**: The moment a user runs `migrate`, these naming choices are **physically in their database**. Changing them later means the ORM no longer matches the user's existing schema, with no version-pin escape.
+  - **Conventions to pin & document**: table pluralization (Inflector), FK column spelling (README/examples use `driverid`, not `driver_id` — confirm this is the intended, final convention), implicit PK / `id` field, auto timestamp/`created`/`modified` fields, default `on_delete`, identifier quoting/case rules.
+  - **Goal**: settle each convention now and document it as stable; where a convention is genuinely undecided, decide it before publish rather than after. (Django froze these on day one and never moved them.)
+
+- [ ] **Curate the public export surface** ⚠️ *do BEFORE the first General-registry publish* — **Tier 2 (breaks every user's `using` at once); coupled with adapter decoupling**
+  - **Why now**: Un-exporting a name after publish breaks all `using PormG`-based user code. The current surface was never curated — decide the public/internal boundary before anyone depends on it.
+  - **Problems in the current surface**:
+    - **Collision-prone generic names** dumped into `Main`: `Sum, Avg, Count, Max, Min, F, Q, Value, Case, When, Rank, Extract, Lag, Lead, Round, Floor, Ceil, Sqrt, Exp, Ln, Mod, Abs, Length, Power, Replace, Trim, With, OP`. Consider namespacing (`PormG.Sum`) or a submodule (`using PormG.Functions`) instead of flooding the user namespace.
+    - **`fetch` is exported but does not extend `Base.fetch`** (only `first, get` are imported from Base at [src/QueryBuilder.jl:17](src/QueryBuilder.jl#L17)) — so `using PormG` shadows `Base.fetch` and forces qualification. Audit every export that collides with Base; either `import Base: x` to extend, or rename/un-export.
+    - **Driver internals are exported**: `libpq_execute`, `libpq_execute_async`, `is_connection_alive`, `reconnect_db`. This is incoherent with the adapter-decoupling item — a core-exported `libpq_execute` cannot survive `LibPQ` moving to an extension. **Curate exports and decouple adapters in the same pass.**
+    - **Duplicate exports** to clean up: `close_pool!`, `with_advisory_lock`, `with_savepoint`, `fetch_async`/`await_result`/`FetchTask` are each exported more than once.
+  - **Goal**: produce an explicit, documented list of public symbols; move everything else to internal (unexported). Add an Aqua/test check that the public export list matches the documented API.
+  - **Related**: settle the `list()` default return shape (`Vector{PormGRow}`) as a documented contract — see *Strongly Typed Model Returns* under Performance & Type Stability.
+
+- [ ] **Decouple SQL adapters into weakdeps + extensions** ⚠️ *do BEFORE the first General-registry publish*
+  - **Why now**: Moving `LibPQ`/`SQLite` from `[deps]` to `[weakdeps]` changes the user-facing loading contract (`using PormG` → `using PormG, LibPQ`). With zero published users the migration cost is zero; after the first release it becomes a breaking change forced on every adopter. The 0.1.0 publish window is the right (and cheapest) time.
+  - **Chosen model**: Weakdeps + extensions in this repo (single package). `LibPQ` and `SQLite` become `[weakdeps]`; driver code moves into `ext/PormGLibPQExt.jl` and `ext/PormGSQLiteExt.jl` (machinery already exists — see `PormGReviseExt`, `PormGTachikomaExt`). User opts in with `using PormG, LibPQ` / `using PormG, SQLite`. (Rejected: separate backend packages, asymmetric SQLite-bundled.)
+  - **Key insight — the real driver surface is small**: Of the ~27 files referencing `SQLite`, most are **SQL-string generation (dialect)** that never touch the driver package and can stay in core. The code that genuinely needs the driver package is concentrated in ~4 places: `src/ConnectionPool.jl`, `src/querybuilder/execution*.jl`, and the one version probe `SQLite.C.sqlite3_libversion_number()` in `src/Dialect.jl`. Split "dialect" (pure SQL, stays in core) from "driver" (open/execute/release, moves to extension).
+  - **Hard blocker to clear first — core structs name concrete driver types**: extensions can add methods to core generics but core cannot reference names defined in an extension. These must stop naming `LibPQ.Connection` / `SQLite.DB`:
+    - `PostgresConnectionPool.connections::Vector{Union{Nothing, LibPQ.Connection}}` ([ConnectionPool.jl:88-89](src/ConnectionPool.jl#L88-L89))
+    - `SQLiteConnectionPool.connections::Vector{Union{Nothing, SQLite.DB}}` ([ConnectionPool.jl:96-97](src/ConnectionPool.jl#L96-L97))
+    - Driver-typed method signatures: `release_connection`, `is_connection_alive`, `reconnect_db`, `libpq_execute`/`sqlite_execute`, `libpq_execute_async`/`sqlite_execute_async`, `_create_sqlite_connection`, `close_pool!` (all in `ConnectionPool.jl`).
+  - **Ordered plan**:
+    1. Define backend interface as empty generics in core: connection open, `execute`, `execute_async`, `release`, `is_alive`, `reconnect`, plus the SQLite version probe. Keep dispatch keyed on the existing `PormGPostgres`/`PormGSQLite` abstract types.
+    2. Erase concrete driver types from core: make the pool generic (`Pool{C}`) or store connections behind an abstract `AbstractDBConnection` wrapper so core never writes `SQLite.DB` / `LibPQ.Connection`.
+    3. Move all `LibPQ.*` / `SQLite.*` method bodies into `ext/PormGLibPQExt.jl` / `ext/PormGSQLiteExt.jl`; add the two `[extensions]` entries and move both packages to `[weakdeps]` in `Project.toml`.
+    4. Keep dialect/SQL-string code in core untouched (no driver dependency there).
+    5. Update docs + README install/quick-start to show `using PormG, LibPQ` (and SQLite equivalent); document the backend interface as the official path for a future 3rd backend (MySQL/DuckDB).
+    6. Add a CI job (or test) that loads PormG **without** each driver to prove core has no hard driver reference, and one per backend that loads the driver and runs the existing suite.
 
 - [ ] **Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)**
   - **Context**: The migration edge-case suite in `test/integration/test_migration_bootstrap.jl` (Phase C) needs a throwaway database. When `test/integration/db_test_migration_pg/connection.yml` is absent, it falls back to hydrating from the *selected* integration DB and runs `_reset_postgres!`, which **drops every table in `public`** ([test_migration_bootstrap.jl:180](test/integration/test_migration_bootstrap.jl#L180)). Running the Postgres edge-case suite against the shared `db_2` (`pormg_teste`) would therefore wipe it.

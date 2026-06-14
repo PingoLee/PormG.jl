@@ -4,7 +4,7 @@ Bulk operations are designed for high-performance data manipulation of large dat
 
 - **`bulk_insert()`**: Standard SQL-based insertion with automatic chunking.
 - **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion.
-- **`bulk_update()`**: Efficient multi-row updates from a DataFrame using a mapping key.
+- **`bulk_update()`**: Efficient multi-row updates from a DataFrame using `match_on=` keys.
 
 All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:inspection`, `show_query=:params`, or `show_query=:none` to inspect the generated SQL without executing it. See [Query Inspection](../read/index.md#query-inspection) for a full description of each mode.
 
@@ -296,7 +296,18 @@ bulk_copy(M.Result.objects, results_df, chunk_size=10000)
 
 ## Bulk Update
 
-`bulk_update()` updates multiple rows from a `DataFrame`. PormG matches update columns and row-identifying filters against model fields, validates every row up front, and then emits a multi-row `UPDATE` using a `VALUES` source (PostgreSQL) or `WITH source(...) AS (VALUES ...)` form (SQLite).
+`bulk_update()` updates multiple rows from a `DataFrame`. It separates three concerns:
+
+- **`columns=`** — the fields to **SET** (`"df_col" => "model_field"`, or a bare string when the names match).
+- **`match_on=`** — the **per-row match keys** that identify which row each DataFrame row updates (the merge condition `Tb.field = source.df_col`). Same grammar as `columns=`. If omitted, the model primary key(s) are used.
+- **`filters=`** — **constant** predicates AND'd onto every row's `WHERE` (`"model_field" => value`), e.g. `"category_id" => 172100` or `"points__@in" => [18, 25]`.
+
+PormG validates every row up front, then emits a multi-row `UPDATE` using a `VALUES` source (PostgreSQL) or `WITH source(...) AS (VALUES ...)` form (SQLite).
+
+!!! note "Migrated from a single `filters=` argument"
+    Earlier versions packed both row-matching keys and constant predicates into `filters=`. Row matching now lives in `match_on=`. Passing a per-row match key in `filters=` (a bare string, or a `"df_col" => "model_field"` pair) raises an error telling you to move it to `match_on=` — there is no silent fallback.
+
+    This migration error is a **temporary deprecation aid** and will be removed in a future release; once your call sites use `match_on=`, you will not see it again.
 
 ### Basic Usage
 
@@ -310,25 +321,26 @@ for row in eachrow(df)
     row.points = row.points + 1
 end
 
-# Bulk update specifying columns to update and keys to use as identifiers
-# You can map DataFrame columns to model fields for both SET values and FILTERS
-bulk_update(query, df, 
-    columns=["points"],                      # Auto-matches 'points' in DF
-    filters=["resultid"]                    # Auto-matches 'resultid' in DF
+# Bulk update specifying the columns to SET and the keys that identify each row
+bulk_update(query, df,
+    columns=["points"],       # SET: auto-matches 'points' in the DataFrame
+    match_on=["resultid"]     # match key: auto-matches 'resultid' in the DataFrame
 )
 ```
 
 **Generated SQL (PostgreSQL):**
 ```sql
 UPDATE "result" AS "Tb" 
-SET "points" = "source"."points" 
+SET "points" = source."points"::double precision 
 FROM (VALUES 
-  (1::bigint, 26.0::double precision), 
-  (2::bigint, 19.0::double precision),
+  (26.0::double precision, 1::bigint), 
+  (19.0::double precision, 2::bigint),
   -- ... (chunked multi-row values)
-) AS "source"("resultid", "points") 
-WHERE "Tb"."resultid" = "source"."resultid"
+) AS source ("points", "resultid") 
+WHERE "Tb"."resultid" = source."resultid"::bigint
 ```
+
+The `VALUES` source columns are always the **model field names** (`points`, `resultid`), in SET-fields-then-match-keys order — never the DataFrame column names. The DataFrame mapping is applied when reading the values into the parameters, so the SQL you inspect is always expressed in model terms.
 
 ```julia
 # Using explicit mapping (Adaptor style)
@@ -339,31 +351,67 @@ custom_df = DataFrame(
 )
 
 bulk_update(query, custom_df,
-    columns=["new_score" => "points"],      # Map 'new_score' to table field 'points'
-    filters=["record_id" => "id"]           # Map 'record_id' to table field 'id'
+    columns=["new_score" => "points"],      # SET: map 'new_score' to field 'points'
+    match_on=["record_id" => "id"]          # match key: map 'record_id' to field 'id'
 )
 ```
 
-**Generated SQL (PostgreSQL):**
+**Generated SQL (PostgreSQL):** the mapped DataFrame names (`new_score`, `record_id`) do **not** appear — the source is named with the model fields they map to (`points`, `id`):
 ```sql
 UPDATE "result" AS "Tb" 
-SET "points" = "source"."new_score" 
+SET "points" = source."points"::integer 
 FROM (VALUES 
-  (1::bigint, 25::integer), 
-  (2::bigint, 18::integer), 
-  (3::bigint, 15::integer)
-) AS "source"("record_id", "new_score") 
-WHERE "Tb"."id" = "source"."record_id"
+  (25::integer, 1::bigint), 
+  (18::integer, 2::bigint), 
+  (15::integer, 3::bigint)
+) AS source ("points", "id") 
+WHERE "Tb"."id" = source."id"::bigint
 ```
 
 ### Matching and Execution Rules
 
-- **Case-insensitive DataFrame matching**: PormG resolves `columns` and dynamic `filters` against `DataFrame` column names case-insensitively, so `ID` and `POINTS` work for model fields `id` and `points`.
-- **Primary key fallback**: If you omit `filters=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame`.
-- **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `filters=`. Pass every predicate you need through `filters=` rather than relying on prior `query.filter(...)` state.
+- **Case-insensitive DataFrame matching**: PormG resolves `columns` and `match_on` against `DataFrame` column names case-insensitively, so `ID` and `POINTS` work for model fields `id` and `points`.
+- **Primary key fallback**: If you omit `match_on=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame`.
+- **Missing match column errors**: A `match_on` column that is absent from the `DataFrame` raises an `ArgumentError` rather than silently degrading to a constant filter.
+- **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `match_on=` and `filters=`. Pass every predicate you need through those arguments rather than relying on prior `query.filter(...)` state.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
 - **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.
 - **Nullable columns accept all-`missing` batches**: If a nullable update column is `missing` for every targeted row, PormG writes SQL `NULL` for every row in that column.
+
+### Migrating existing `bulk_update()` calls
+
+If you have application code written against the older single-`filters=` API, update
+each call by splitting `filters=` into **`match_on=`** (row-matching keys) and
+**`filters=`** (constant predicates). The transformation is mechanical:
+
+| Old call | New call |
+|----------|----------|
+| `filters=["id"]` | `match_on=["id"]` |
+| `filters=["record_id" => "id"]` | `match_on=["record_id" => "id"]` |
+| `filters=["id", "category_id" => 172100]` | `match_on=["id"], filters=["category_id" => 172100]` |
+| `filters=["category_id" => 172100]` *(constant only)* | unchanged — stays in `filters=` |
+| `filters=[]` or `filters` omitted | unchanged — the primary key is inferred |
+
+**Rule of thumb:**
+
+- If an entry references a **DataFrame column** — a bare string (`"id"`) or a
+  `"df_col" => "field"` pair — it is a per-row key → move it to `match_on=`.
+- If an entry is `"field" => value` with a **literal value** (number, string, bool,
+  array, `__@` lookup) → it is a constant predicate → leave it in `filters=`.
+
+**How to update your apps:** search each project for `bulk_update(` and inspect its
+`filters=`. The fastest path is to **run the app or its tests** — every old per-row
+key still passed in `filters=` now raises an `ArgumentError` that names the offending
+key and tells you to move it to `match_on=`. Fix them one at a time until the errors
+stop. Calls that only ever passed constant `field => value` predicates (or no
+`filters=` at all) need no change.
+
+!!! warning "The migration error is temporary"
+    The `ArgumentError` that detects the old per-row-key-in-`filters=` usage is a
+    transitional aid for updating existing call sites. Once your applications are
+    migrated it can be removed from PormG (see the `DEPRECATION SHIM` block in
+    `src/querybuilder/execution_bulk.jl`); after removal, the same mistake surfaces
+    as a generic "filters entry is not a constant predicate" error instead.
 
 ### Use Cases
 
@@ -394,47 +442,45 @@ end
 
 # Bulk update all adjustments in one transaction
 PormG.run_in_transaction("db_2") do
-    bulk_update(query, df, columns=["points"], filters=["resultid"])
+    bulk_update(query, df, columns=["points"], match_on=["resultid"])
 end
 ```
 
-### Mixed Filters (Static and Dynamic)
+### Match Keys and Constant Filters
 
-`bulk_update()` supports a powerful mix of **dynamic filters** (based on DataFrame values) and **static filters** (applying the same value to all rows).
+`bulk_update()` combines **per-row match keys** (`match_on=`, driven by DataFrame values) with **constant filters** (`filters=`, the same value for every row).
 
-- **Dynamic**: `filters=["id"]` or `filters=["record_id" => "id"]`. PormG looks for the key in the DataFrame.
-- **Static**: `filters=["status" => "active"]`. If the key is **not** in the DataFrame but exists in the model, PormG treats it as a static filter for the query.
+- **`match_on=`**: `["id"]` or `["record_id" => "id"]`. Always resolved against the DataFrame; identifies which row each DataFrame row updates.
+- **`filters=`**: `["status" => "active"]`. Always a constant predicate AND'd onto the `WHERE` clause for every row.
 
 ```julia
-# Mixed filters example
+# Per-row match key + constant scope guard
 bulk_update(query, df,
     columns=["new_points" => "points"],
-    filters=[
-        "record_id" => "id",      # Dynamic: Match DB 'id' with DF 'record_id'
-        "category_id" => 172100   # Static: Only update records where DB 'category_id' is 172100
-    ]
+    match_on=["record_id" => "id"],   # match DB 'id' against DF 'record_id'
+    filters=["category_id" => 172100] # constant: only rows where category_id is 172100
 )
 ```
 
-**Generated SQL (PostgreSQL):**
+**Generated SQL (PostgreSQL):** again the source columns are the model fields (`points`, `id`), not the DataFrame names (`new_points`, `record_id`):
 ```sql
 UPDATE "result" AS "Tb" 
-SET "points" = "source"."new_points" 
+SET "points" = source."points"::integer 
 FROM (VALUES 
-  (1::bigint, 25::integer), 
-  (2::bigint, 18::integer)
-) AS "source"("record_id", "new_points") 
-WHERE "Tb"."id" = "source"."record_id" 
+  (25::integer, 1::bigint), 
+  (18::integer, 2::bigint)
+) AS source ("points", "id") 
+WHERE "Tb"."id" = source."id"::bigint 
   AND "Tb"."category_id" = 172100
 ```
 
-The `filters=` argument is the whole contract for the bulk-update `WHERE` clause. If you already used `query.filter(...)` to prepare the `DataFrame`, switch back to a fresh handler for the write or repeat the predicate in `filters=`.
+Together, `match_on=` and `filters=` are the whole contract for the bulk-update `WHERE` clause. If you already used `query.filter(...)` to prepare the `DataFrame`, switch back to a fresh handler for the write or repeat the predicate in `filters=`.
 
 ### Join Limits
 
 - **Base-table lookup operators are supported**: Static filters such as `"points__@in" => [18, 25]` or `"statusid__@isnull" => true` are valid as long as they only reference columns on the model being updated.
-- **Relation traversals that require JOINs are rejected**: Filters such as `"statusid__status" => "Finished"` or `"raceid__circuitid__country" => "Italy"` are not allowed on `bulk_update()` because the `VALUES`-driven mutation path cannot safely merge in joined query state.
-- **Workaround**: Read the target rows through a normal joined query, mutate the resulting `DataFrame`, then write back through a fresh handler using primary-key filters only.
+- **Relation traversals that require JOINs are rejected**: Constant filters such as `"statusid__status" => "Finished"` or `"raceid__circuitid__country" => "Italy"` are not allowed on `bulk_update()` because the `VALUES`-driven mutation path cannot safely merge in joined query state.
+- **Workaround**: Read the target rows through a normal joined query, mutate the resulting `DataFrame`, then write back through a fresh handler matching on the primary key only.
   
 ```julia
 df = M.Result.objects.filter("statusid__status" => "Finished") |> DataFrame
@@ -446,7 +492,7 @@ end
 
 # Bulk update by primary key on a fresh handler.
 # Do not rely on the earlier .filter(...) state surviving into bulk_update.
-bulk_update(M.Result.objects, df, columns=["points"], filters=["resultid"])
+bulk_update(M.Result.objects, df, columns=["points"], match_on=["resultid"])
 ```
 
 ### Performance Characteristics
@@ -461,6 +507,6 @@ bulk_update(M.Result.objects, df, columns=["points"], filters=["resultid"])
 for chunk_df in Iterators.partition(eachrow(df), 10000)
     chunk = DataFrame(chunk_df)
     # Modify chunk
-    bulk_update(query, chunk, columns=["points"], filters=["resultid"])
+    bulk_update(query, chunk, columns=["points"], match_on=["resultid"])
 end
 ```

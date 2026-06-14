@@ -362,7 +362,7 @@ PormG.config["default"] = MockSettings
             DateTimeModel.objects, 
             df_datetime_updates, 
             columns=["event_time"], 
-            filters=["id"],
+            match_on=["id"],
             show_query=:dict
         )
         @test res_bulk_update_dt[:operation] === :update
@@ -464,7 +464,7 @@ PormG.config["default"] = MockSettings
             DateModel.objects,
             df_date_updates,
             columns=["race_day"],
-            filters=["id"],
+            match_on=["id"],
             show_query=:dict
         )
         @test bulk_update_date[:operation] === :update
@@ -521,9 +521,10 @@ end
         BoundaryModel = Models.Model_Type(
             name = "boundary_test",
             fields = Dict(
+                "id"    => Models.IDField(),
                 "price" => Models.DecimalField(max_digits=12, decimal_places=2)
             ),
-            field_names = ["price"],
+            field_names = ["id", "price"],
             connect_key = "default"
         )
         
@@ -683,13 +684,14 @@ end
         
         # Test 30: Bulk update with boundary values
         df_update_boundary = DataFrame(
+            id    = [1, 2],
             price = [5000.00, 9999999999.99]
         )
         res_bulk_update_boundary = bulk_update(
-            BoundaryModel.objects, 
-            df_update_boundary, 
-            columns=["price"], 
-            filters=[],
+            BoundaryModel.objects,
+            df_update_boundary,
+            columns=["price"],
+            match_on=["id"],
             show_query=:dict
         )
         @test res_bulk_update_boundary[:operation] === :update
@@ -915,7 +917,7 @@ end
         @test res_bulk[:parameter_count] == 10 # 2 rows * 5 columns
         
         # Test Bulk Update inspection
-        res_bulk_upd = bulk_update(BulkModel.objects, df, columns=["salary"], filters=["name"], show_query=:dict)
+        res_bulk_upd = bulk_update(BulkModel.objects, df, columns=["salary"], match_on=["name"], show_query=:dict)
         
         @test res_bulk_upd[:operation] === :update
         @test contains(res_bulk_upd[:sql_text], "UPDATE")
@@ -1243,7 +1245,7 @@ end
             TzModel.objects,
             df_tz_update,
             columns=["aware_timestamp"],
-            filters=["id"],
+            match_on=["id"],
             show_query=:dict
         )
         @test res_bulk_tz_update[:operation] === :update
@@ -1377,7 +1379,7 @@ end
             DateFormatModel.objects,
             df_bulk_update_dates,
             columns=["event_date"],
-            filters=["id"],
+            match_on=["id"],
             show_query=:dict
         )
         @test res_bulk_update_dates[:operation] === :update
@@ -1861,7 +1863,7 @@ end
             BoolModel.objects,
             df_bool_update,
             columns=["is_active"],
-            filters=["id"],
+            match_on=["id"],
             show_query=:dict
         )
         @test update_bulk_bool[:operation] === :update

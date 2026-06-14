@@ -288,6 +288,235 @@ M.Result.objects.filter(
 
 ---
 
+## Bitwise Operations
+
+PormG supports direct database-side bitwise operations on integer columns through `F()` expressions, aggregate `FObject`s, and `WindowFunction`s. This is extremely useful for atomic updates, bitwise filtering, and projection of bitmask or flag fields directly within the database without transferring entire tables into memory.
+
+### What is a Bitmask?
+
+A **bitmask** is a technique that uses the individual bits of a single integer value to store multiple, independent boolean flags (yes/no states) simultaneously. Since each bit can be either `0` or `1`, an 8-bit integer can store 8 separate flags, and a 64-bit integer can store 64 flags!
+
+Each flag is assigned a specific bit position corresponding to a power of 2:
+* **Bit 1** (value $1 = 2^0$): Flag A (e.g. `is_active`)
+* **Bit 2** (value $2 = 2^1$): Flag B (e.g. `is_verified`)
+* **Bit 3** (value $4 = 2^2$): Flag C (e.g. `is_admin`)
+* **Bit 4** (value $8 = 2^3$): Flag D (e.g. `has_billing`)
+
+#### How Binary Columns Work Under the Hood
+
+In standard decimal (base-10), we count using powers of 10 (ones, tens, hundreds, thousands...). In binary (base-2), computers count using powers of 2. 
+
+An 8-bit integer is represented as 8 binary slots counted from right to left:
+
+```text
+Bit Position:    8th   7th   6th   5th   4th   3rd   2nd   1st
+Power of 2:      2^7   2^6   2^5   2^4   2^3   2^2   2^1   2^0
+Decimal Value:   128    64    32    16     8     4     2     1
+               ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+Binary Slots:  │  0  │  0  │  0  │  0  │  1  │  0  │  0  │  0  │
+               └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+                                          ▲
+                                      This is Bit 4!
+                                      (Value = 8)
+```
+
+If a user has both `is_active` (value `1`) and `has_billing` (value `8`) enabled, their `status` integer value in the database will be:
+$$8 + 1 = 9$$
+
+In binary representation, `status = 9` looks like this:
+```text
+Bit Position:    8th   7th   6th   5th   4th   3rd   2nd   1st
+Decimal Value:   128    64    32    16     8     4     2     1
+               ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+User's Status: │  0  │  0  │  0  │  0  │  1  │  0  │  0  │  1  │
+               └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+                                          ▲                 ▲
+                                      has_billing       is_active
+                                        (True)           (True)
+```
+
+#### How We Operate on Bitmasks:
+
+1. **Checking flags (Bitwise AND - `&`)**: To isolate and read a specific bit, we perform a bitwise AND between the integer column and the flag value.
+   - For example, checking if a user has billing: `status & 8`.
+   - If `status = 9` (binary `00001001`): `9 & 8` $\rightarrow$ `00001001 & 00001000` = `00001000` (decimal `8`). Since `8 > 0`, the flag is active.
+   - If `status = 5` (binary `00000101` - active and admin, no billing): `5 & 8` $\rightarrow$ `00000101 & 00001000` = `00000000` (decimal `0`). The flag is inactive.
+
+2. **Setting flags (Bitwise OR - `|`)**: To turn a specific flag ON without affecting other flags, we use bitwise OR with the flag value.
+   - For example, enabling billing: `status | 8`.
+   - If `status = 5` (active and admin): `5 | 8` $\rightarrow$ `13` (binary `00001101` $\rightarrow$ active, admin, AND has billing).
+
+3. **Toggling flags (Bitwise XOR - `xor` / `⊻`)**: To flip a flag from 0 to 1 or 1 to 0, we use bitwise XOR.
+   - For example, toggling billing: `status ⊻ 8`.
+   - If `status = 9` (active and billing): `9 ⊻ 8` $\rightarrow$ `1` (binary `00000001` $\rightarrow$ active, billing disabled).
+   - If `status = 1` (active, no billing): `1 ⊻ 8` $\rightarrow$ `9` (binary `00001001` $\rightarrow$ active, billing enabled).
+
+All examples in this section are **100% real and executable** directly against the standard Formula 1 dataset schema using the `Driver` model's `number` integer field.
+
+### Supported Operators
+
+| Julia | SQL | Description |
+| :--- | :--- | :--- |
+| `&` | `&` | Bitwise AND |
+| `\|` | `\|` | Bitwise OR |
+| `~` | `~` | Unary Bitwise NOT (negation) |
+| `<<` | `<<` | Bitwise Shift Left |
+| `>>` | `>>` | Bitwise Shift Right |
+| `xor` / `⊻` | `#` (Postgres) / emulated (SQLite) | Bitwise XOR |
+
+> [!NOTE]
+> **XOR Dialect Support:**
+> - In standard Julia, `^` represents exponentiation, which aligns with PostgreSQL's `^`. PormG preserves this by keeping `^` for mathematical exponentiation.
+> - For bitwise XOR, PormG overloads Julia's idiomatic `xor` and `⊻` functions.
+> - PormG handles dialect differences transparently: rendering `(a # b)` on PostgreSQL, and emulating it via `((a | b) - (a & b))` on SQLite while correctly duplicating any internal parameters to preserve positional alignment.
+
+### Real-World F1 Case Study: The "Clean vs. Dirty" Grid Side Analysis
+
+In Formula 1, starting grid slots are staggered in two rows:
+* **Clean Side (Odd grid positions: 1, 3, 5, 7...)**: Positioned directly on the racing line where high rubber laydown provides maximum traction at the start.
+* **Dirty Side (Even grid positions: 2, 4, 6, 8...)**: Positioned off the racing line where dust, marbles, and debris significantly reduce launching grip.
+
+By checking the lowest bit of the `grid` integer column (`grid & 1`), you can instantly classify clean/odd vs. dirty/even grid starts directly in the database.
+
+For example, to find all podium finishers (top 3) who successfully fought their way up from a **dirty starting slot** (where `(grid & 1) == 0`):
+
+```julia
+query = M.Result.objects.values(
+    "raceid__name",
+    "driverid__surname",
+    "grid",
+    "position"
+).filter(
+    "position__@lte" => 3,     # Podium finisher
+    (F("grid") & 1) == 0      # Started on the dirty (even) side
+);
+df = query |> DataFrame
+@info (query |> inspect_query)[:sql_text]
+```
+
+**Generated PostgreSQL SQL:**
+```sql
+SELECT
+    "Tb_1"."name" as raceid__name,
+    "Tb_2"."surname" as driverid__surname,
+    "Tb"."grid" as grid,
+    "Tb"."position" as position
+FROM "result" as "Tb"
+ INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+ INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb"."position" <= $1 AND (("Tb"."grid" & $2::bigint) = $3::bigint)
+-- Parameters: $1 = 3 (Podium), $2 = 1 (Bitmask), $3 = 0 (Dirty side)
+```
+
+### Dynamic Bitmasks & Scalar Left-Shift Operations
+
+In advanced status and permission query models, you may store a **bit index** (an integer like $0, 1, 2...$) representing a flag's index, rather than storing a pre-computed bitmask. 
+
+PormG fully supports **left-hand scalar bitwise shifts** (e.g. `1 << F("field")`) to dynamically generate one-hot bitmasks directly on the database server:
+
+```julia
+# Dynamically generate a bitmask from a stored bit index column:
+query = M.Driver.objects.values(
+    "surname",
+    "index_mask" => 1 << F("number")
+)
+@info (query |> inspect_query)[:sql_text]
+```
+
+**Generated PostgreSQL SQL:**
+```sql
+SELECT
+    "Tb"."surname" as surname,
+    ($1::integer << "Tb"."number") as index_mask
+FROM "drivers" as "Tb"
+-- Parameters: $1 = 1
+```
+
+> [!TIP]
+> **Dialect Optimization:**
+> When generating left-hand shifts (`<<` or `>>`), PormG automatically types the left-side scalar parameter as `integer` (4-byte) on PostgreSQL, avoiding type-signature compiler mismatch errors.
+
+### In Projections (`values()`)
+
+Mask or extract bits dynamically in a SELECT statement:
+
+```julia
+# Project a boolean column indicating if the driver has an odd racing number
+query = M.Driver.objects.values(
+    "surname",
+    "number",
+    "is_odd" => F("number") & 1
+);
+df = query |> DataFrame
+@info (query |> inspect_query)[:sql_text]
+```
+
+**Generated PostgreSQL SQL:**
+```sql
+SELECT
+    "Tb"."surname" as surname,
+    "Tb"."number" as number,
+    ("Tb"."number" & $1::bigint) as is_odd
+FROM "drivers" as "Tb"
+-- Parameters: $1 = 1
+```
+
+### In Filters (`filter()`)
+
+Filter rows directly on server-side bitmasks:
+
+```julia
+# Find all drivers with odd racing numbers
+query = M.Driver.objects.filter(
+    (F("number") & 1) > 0
+)
+df = query |> DataFrame
+@info (query |> inspect_query)[:sql_text]
+```
+
+**Generated PostgreSQL SQL:**
+```sql
+SELECT *
+FROM "drivers" as "Tb"
+WHERE (("Tb"."number" & $1::bigint) > $2::bigint)
+-- Parameters: $1 = 1, $2 = 0
+```
+
+### In Atomic Updates (`update()`)
+
+Atomically update bitmask columns:
+
+```julia
+# Toggle the lowest bit of a driver's racing number:
+@info M.Driver.objects.
+    filter("driverid" => 1).
+    update("number" => F("number") ⊻ 1, show_query = :dict)[:sql_text]
+```
+
+**Generated PostgreSQL SQL:**
+```sql
+UPDATE "drivers" AS "Tb"
+SET "number" = ("Tb"."number" # $2::bigint)
+WHERE "Tb"."driverid" = $1
+-- Parameters: $1 = 1 (driverId), $2 = 1 (xor mask)
+```
+
+```julia
+# Ensure the racing number is odd by setting the lowest bit:
+M.Driver.objects.
+    filter("driverId" => 2).
+    update("number" => F("number") | 1)
+```
+
+**Generated PostgreSQL SQL:**
+```sql
+UPDATE "drivers" AS "Tb"
+SET "number" = ("Tb"."number" | $2::bigint)
+WHERE "Tb"."driverid" = $1
+-- Parameters: $1 = 2 (driverId), $2 = 1 (or mask)
+```
+---
+
 ## Summary
 
 | Feature | Example | Where |

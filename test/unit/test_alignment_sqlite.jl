@@ -620,6 +620,68 @@ end
     @test contains(sql, "grid")
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Bitwise Alignment: SQLite Bitwise AND, OR, NOT, Shifts, and XOR Emulation
+# Verifies that SQLite bitwise operations are aligned positionally with ? placeholders,
+# and specifically verifies SQLite XOR emulated parameter duplication for:
+#   1. Scalar RHS: F("points") ⊻ 4
+#   2. Nested parameterized expression: (F("points") & 7) ⊻ 4
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - SQLite Bitwise Operations & XOR Duplication" begin
+    # Test values(), filter(), and update() contexts
+    
+    # 1. values() with AND
+    q_val = M.Result.objects.values("res" => F("points") & 4)
+    insp_val = q_val |> inspect_query
+    @test contains(insp_val[:sql_text], "&")
+    @test insp_val[:parameters] == [4]
+    
+    # 2. filter() with AND
+    q_filt = M.Result.objects.filter((F("points") & 4) > 0)
+    insp_filt = q_filt |> inspect_query
+    @test contains(insp_filt[:sql_text], "&")
+    @test insp_filt[:parameters] == [4, 0]
+    
+    # 3. update() with OR
+    q_upd = M.Result.objects.filter("resultid" => 1)
+    insp_upd = q_upd.update("points" => F("points") | 2, show_query=:inspection)
+    @test contains(insp_upd[:sql_text], "|")
+    @test insp_upd[:parameter_buckets][:update] == [2]
+
+    # 3b. values() with scalar-left shifts must keep the literal parameterized.
+    q_shift_left = M.Result.objects.values("res" => 1 << F("points"))
+    insp_shift_left = q_shift_left |> inspect_query
+    @test contains(insp_shift_left[:sql_text], "<<")
+    @test count(==('?'), insp_shift_left[:sql_text]) == 1
+    @test insp_shift_left[:parameters] == [1]
+
+    q_shift_right = M.Result.objects.values("res" => 8 >> F("points"))
+    insp_shift_right = q_shift_right |> inspect_query
+    @test contains(insp_shift_right[:sql_text], ">>")
+    @test count(==('?'), insp_shift_right[:sql_text]) == 1
+    @test insp_shift_right[:parameters] == [8]
+    
+    # 4. XOR Emulation with Scalar RHS: F("points") ⊻ 4
+    # Emulated SQL: ((points | 4) - (points & 4))
+    # Positional parameters: [4, 4]
+    q_xor = M.Result.objects.values("res" => F("points") ⊻ 4)
+    insp_xor = q_xor |> inspect_query
+    sql_xor = insp_xor[:sql_text]
+    @test contains(sql_xor, "|") && contains(sql_xor, "&") && contains(sql_xor, "-")
+    @test count(==('?'), sql_xor) == 2
+    @test insp_xor[:parameters] == [4, 4]
+    
+    # 5. XOR Emulation with Nested Expression: (F("points") & 7) ⊻ 4
+    # Emulated SQL: (((points & 7) | 4) - ((points & 7) & 4))
+    # Positional parameters: [7, 4, 7, 4]
+    q_nested = M.Result.objects.values("res" => (F("points") & 7) ⊻ 4)
+    insp_nested = q_nested |> inspect_query
+    sql_nested = insp_nested[:sql_text]
+    @test count(==('?'), sql_nested) == 4
+    @test insp_nested[:parameters] == [7, 4, 7, 4]
+end
+
+
 @testset "Alignment Verification - Wildcard/LIKE Operators" begin
     # Test @contains (LIKE) operator
     q = M.Result.objects.filter("raceid__name__@contains" => "Grand Prix")

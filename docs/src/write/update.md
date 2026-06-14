@@ -77,7 +77,8 @@ df = query |> DataFrame
 # Row 1: nationality="British"
 
 # Perform update
-query.update("nationality" => "Xylos")
+updated = query.update("nationality" => "Xylos")
+# updated == 1
 ```
 
 **Generated SQL (PostgreSQL):**
@@ -87,6 +88,8 @@ SET "nationality" = $2
 WHERE "Tb"."forename" = $1
 -- Parameters: ["Lewis", "Xylos"]
 ```
+
+`.update()` returns an `Integer` with the number of rows matched by the `WHERE` clause, following Django's update contract. This can be `0` when no rows match. A matched row is counted even if the assigned value is identical to the existing value.
 
 ```julia
 # Verify the update

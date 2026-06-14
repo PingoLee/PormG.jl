@@ -36,7 +36,8 @@ using Pkg
 Pkg.develop(url="https://github.com/PingoLee/PormG.jl")
 ```
 
-> **Note:** Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
+> [!NOTE]
+> Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
 
 ---
 
@@ -79,7 +80,19 @@ env: dev
 dev:
   adapter: SQLite
   database: 'my_app.db'
+  config:
+    change_db: true      # allow schema migrations
+    change_data: true    # allow data mutations
 ```
+
+> [!WARNING]
+> **Implicit Defaults & The Omitted `config:` Gotcha:**
+> If the `config:` block is omitted or left empty under an environment, PormG applies strict safety-first defaults:
+> * **`change_db` defaults to `false`**: Database migrations and schema modifications (`makemigrations` / `migrate`) are disabled.
+> * **`change_data` defaults to `false`**: All data modifications (creates, updates, deletes) are disabled at the query layer.
+> * **`time_zone` defaults to `"UTC"`**: Default database timezone.
+>
+> To perform migrations or modify data, you **must** explicitly define `config:` and set these settings to `true` in your active environment.
 
 ### 3. Define Your Models
 
@@ -199,6 +212,21 @@ df = M.Result.objects.filter(
     ).order_by("-wins") |> DataFrame
 ```
 
+> [!IMPORTANT]
+> **Julia Method Chain Syntax Gotcha:** Multi-line method chains must use **trailing-dot** syntax (the `.` must be at the end of the line) or stay completely inline. Placing the dot at the start of the next line (leading-dot syntax) will cause a Julia `ParseError`.
+> 
+> ```julia
+> # ✓ CORRECT: Trailing dot or inline
+> df = M.Driver.objects.
+>     filter("nationality" => "Brazilian").
+>     list()
+> 
+> # ✗ INCORRECT (ParseError): Leading dot
+> df = M.Driver.objects
+>     .filter("nationality" => "Brazilian")
+>     .list()
+> ```
+
 ### 8. Update and Delete
 
 ```julia
@@ -229,24 +257,15 @@ PormG is designed to be fully wire-format compatible with tables managed by Djan
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Your Application                  │
-│  M.Driver.objects.filter(...).values(...).list()     │
-├─────────────────────────────────────────────────────┤
-│                  Query Builder (Functor API)         │
-│  filter · values · order_by · limit · cjoin · on    │
-├─────────────────────────────────────────────────────┤
-│                 Dialect Layer                         │
-│          PostgreSQL ←→ SQL Generation ←→ SQLite      │
-├─────────────────────────────────────────────────────┤
-│              Connection Pool (Async-First)            │
-│    LibPQ.async_execute  ·  SQLite.execute            │
-├─────────────────────────────────────────────────────┤
-│               Configuration & Multi-Tenancy          │
-│  load · load_many · register_connection · resolver   │
-└─────────────────────────────────────────────────────┘
-```
+PormG is structured into five distinct, decoupled layers, ensuring a clean separation of concerns, high-performance execution, and cross-database dialect compatibility:
+
+| Layer | Responsibility | Key Components & Files |
+| :--- | :--- | :--- |
+| **1. Application** | High-level user interface. Developers define models and write fluent queries. | `M.Driver.objects.filter(...)`<br>• [Models.jl](file:///c:/Sistemas/PormG.jl/src/Models.jl) |
+| **2. Query Builder** | Fluent Functor API. Resolves chaining, table joins (`__` notation), and subqueries into an abstract AST. | `filter`, `values`, `order_by`, `cjoin`<br>• [QueryBuilder.jl](file:///c:/Sistemas/PormG.jl/src/QueryBuilder.jl) |
+| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL vs. SQLite translation<br>• [Dialect.jl](file:///c:/Sistemas/PormG.jl/src/Dialect.jl) |
+| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`<br>• [ConnectionPool.jl](file:///c:/Sistemas/PormG.jl/src/ConnectionPool.jl) |
+| **5. Config & Tenants** | Multi-database and multi-tenancy registry. Loads configurations and maps active tenant resolvers. | `load`, `load_many`, `resolver`<br>• [Configuration.jl](file:///c:/Sistemas/PormG.jl/src/Configuration.jl) |
 
 ---
 
@@ -261,21 +280,21 @@ This documentation is organized into the following sections:
 | [Fields](fields.md) | Comprehensive field type reference: text, numeric, date, boolean, relationships. |
 | [Migrations](migrations/index.md) | `makemigrations`, `migrate`, `dry_run`, history table, destructive guards. |
 | **Writing** | |
-| &nbsp;&nbsp;[Overview](write/index.md) | Async-first write philosophy and performance comparison. |
-| &nbsp;&nbsp;[Creating Records](write/create.md) | Single-record `create()` patterns. |
-| &nbsp;&nbsp;[Updating Records](write/update.md) | `update()` with filters and F-expressions. |
-| &nbsp;&nbsp;[Deleting Records](write/delete.md) | Safe record deletion with cascading. |
-| &nbsp;&nbsp;[Bulk Operations](write/bulk.md) | `bulk_insert`, `bulk_copy`, and `bulk_update`. |
-| &nbsp;&nbsp;[Transactions](write/transaction.md) | `run_in_transaction`, async context propagation, savepoints. |
+|  [Overview](write/index.md) | Async-first write philosophy and performance comparison. |
+|  [Creating Records](write/create.md) | Single-record `create()` patterns. |
+|  [Updating Records](write/update.md) | `update()` with filters and F-expressions. |
+|  [Deleting Records](write/delete.md) | Safe record deletion with cascading. |
+|  [Bulk Operations](write/bulk.md) | `bulk_insert`, `bulk_copy`, and `bulk_update`. |
+|  [Transactions](write/transaction.md) | `run_in_transaction`, async context propagation, savepoints. |
 | **Reading** | |
-| &nbsp;&nbsp;[Overview](read/index.md) | Query execution, output formats, and query styles. |
-| &nbsp;&nbsp;[Values and Joins](read/values_and_joins.md) | Column selection, `__` join traversal, aliases. |
-| &nbsp;&nbsp;[Custom Joins](read/custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
-| &nbsp;&nbsp;[Filters and Aggregates](read/filters_and_aggregates.md) | Lookup operators, grouping, and `HAVING`. |
-| &nbsp;&nbsp;[Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
-| &nbsp;&nbsp;[Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries and `With(...)` CTEs. |
-| &nbsp;&nbsp;[Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
-| &nbsp;&nbsp;[Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
+|  [Overview](read/index.md) | Query execution, output formats, and query styles. |
+|  [Values and Joins](read/values_and_joins.md) | Column selection, `__` join traversal, aliases. |
+|  [Custom Joins](read/custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
+|  [Filters and Aggregates](read/filters_and_aggregates.md) | Lookup operators, grouping, and `HAVING`. |
+|  [Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
+|  [Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries and `With(...)` CTEs. |
+|  [Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
+|  [Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |
 | [Advisory Locks](advisory_lock.md) | Distributed locking with `with_advisory_lock`. |
 | [Contributing](contributing.md) | Development workflow, `@pormg_debug` breakpoints, and testing conventions. |

@@ -596,56 +596,95 @@ function _set_update_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc)
 end
 
+function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction)
+  if isa(operand, FExpression)
+    return _set_update_query(operand, instruc)
+  elseif isa(operand, SQLTypeFunction)
+    return _get_select_query(operand, instruc)
+  elseif isa(operand, String)
+    # Check if it's a field reference
+    if contains(operand, "__") || operand in instruc.object.model.field_names
+      return _set_update_query(FExpression(field_name = operand, function_name = "F", column = operand), instruc)
+    else
+      # Keep scalar literals parameterized with an explicit SQL type on PostgreSQL so
+      # expressions like integer_column / 2.0 don't get inferred back to integer.
+      return add_parameter!(instruc, operand; sql_type=_infer_parameter_sql_type(operand, instruc))
+    end
+  elseif isa(operand, Integer)
+    # SECURITY: Handle integer operands for date arithmetic and bitwise shifts
+    sql_type = (operation in ["<<", ">>"]) ? "integer" : _infer_parameter_sql_type(operand, instruc)
+    placeholder = add_parameter!(instruc, operand; sql_type=sql_type)
+    if operation in ["+", "-"] && (field_name isa String && _is_date_field(field_name, instruc))
+      if instruc.connection isa PormGSQLite
+        # SQLite handles date arithmetic via functions, but for the infix expression
+        # we just return the placeholder and handle the wrapper in the final return
+        return placeholder
+      else
+        # Convert integer days to interval for date arithmetic (PostgreSQL)
+        return "($placeholder || ' days')::interval"
+      end
+    else
+      return placeholder
+    end
+  else
+    # SECURITY: Use parameterized query for other numeric values
+    return add_parameter!(instruc, operand; sql_type=_infer_parameter_sql_type(operand, instruc))
+  end
+end
+
+function _set_update_query_left(value::Any, operation::String, instruc::SQLInstruction)
+  if value isa String
+    return _get_filter_query(value, instruc)
+  elseif value isa Integer
+    sql_type = (operation in ["<<", ">>"]) ? "integer" : _infer_parameter_sql_type(value, instruc)
+    return add_parameter!(instruc, value; sql_type=sql_type)
+  elseif value isa FExpression
+    return _set_update_query(value, instruc)
+  elseif value isa SQLTypeFunction
+    return _get_select_query(value, instruc)
+  else
+    return _set_update_query(value, instruc)
+  end
+end
+
 function _set_update_query(v::FExpression, instruc::SQLInstruction)
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
     if v.field_name isa String
       return _get_filter_query(v.field_name, instruc)
+    elseif v.field_name isa Integer
+      return add_parameter!(instruc, v.field_name; sql_type=_infer_parameter_sql_type(v.field_name, instruc))
     else
       # Recursive call for nested expressions
       return _set_update_query(v.field_name, instruc)
     end
+  elseif v.operation == "~"
+    # Unary NOT operator
+    left_side = _set_update_query_left(v.field_name, v.operation, instruc)
+    return "~($(left_side))"
+  elseif v.operation == "xor"
+    if instruc.connection isa PormGPostgres
+      left_side = _set_update_query_left(v.field_name, v.operation, instruc)
+      right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
+      return "($(left_side) # $(right_side))"
+    elseif instruc.connection isa PormGSQLite
+      # Positional Parameter Alignment: render each side twice to duplicate any embedded parameters
+      left_side1 = _set_update_query_left(v.field_name, v.operation, instruc)
+      right_side1 = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
+
+      left_side2 = _set_update_query_left(v.field_name, v.operation, instruc)
+      right_side2 = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
+
+      return "((($(left_side1)) | ($(right_side1))) - (($(left_side2)) & ($(right_side2))))"
+    else
+      throw("Unsupported connection type")
+    end
   else
     # Field with operation - handle nesting and date arithmetic properly
-    left_side = if v.field_name isa String
-      _get_filter_query(v.field_name, instruc)
-    else
-      _set_update_query(v.field_name, instruc)
-    end
+    left_side = _set_update_query_left(v.field_name, v.operation, instruc)
 
     # @pormg_debug
-    right_side = if isa(v.operand, FExpression)
-      _set_update_query(v.operand, instruc)
-    elseif isa(v.operand, SQLTypeFunction)
-      _get_select_query(v.operand, instruc)
-    elseif isa(v.operand, String)
-      # Check if it's a field reference
-      if contains(v.operand, "__") || v.operand in instruc.object.model.field_names
-        _set_update_query(FExpression(field_name = v.operand, function_name = "F", column = v.operand), instruc)
-      else
-        # Keep scalar literals parameterized with an explicit SQL type on PostgreSQL so
-        # expressions like integer_column / 2.0 don't get inferred back to integer.
-        add_parameter!(instruc, v.operand; sql_type=_infer_parameter_sql_type(v.operand, instruc))
-      end
-    elseif isa(v.operand, Integer)
-      # SECURITY: Handle integer operands for date arithmetic
-      placeholder = add_parameter!(instruc, v.operand; sql_type=_infer_parameter_sql_type(v.operand, instruc))
-      if v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
-        if instruc.connection isa PormGSQLite
-          # SQLite handles date arithmetic via functions, but for the infix expression
-          # we just return the placeholder and handle the wrapper in the final return
-          placeholder
-        else
-          # Convert integer days to interval for date arithmetic (PostgreSQL)
-          "($placeholder || ' days')::interval"
-        end
-      else
-        placeholder
-      end
-    else
-      # SECURITY: Use parameterized query for other numeric values
-      add_parameter!(instruc, v.operand; sql_type=_infer_parameter_sql_type(v.operand, instruc))
-    end
+    right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc)
     
     if instruc.connection isa PormGSQLite && v.operation in ["+", "-"] && (v.field_name isa String && _is_date_field(v.field_name, instruc))
       op_sign = v.operation == "+" ? "+" : "-"
@@ -771,6 +810,22 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     ))
   end
 
+  if real_obj.distinct
+    throw(ArgumentError(
+      "Cannot call update() on a query with distinct(). " *
+      "DISTINCT collapses the result set, which would cause UPDATE to target " *
+      "different rows than intended. Remove distinct() or filter by primary key."
+    ))
+  end
+
+  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.agregate, real_obj.values)
+    throw(ArgumentError(
+      "Cannot call update() on a query with group_by() / annotate aggregations. " *
+      "GROUP BY collapses rows, making the UPDATE target ambiguous. " *
+      "Remove the aggregation or filter by primary key."
+    ))
+  end
+
   instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 
   # Don't allow to update a field without filter
@@ -872,25 +927,39 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
 
   # return nothing
 
-  # Execute with parameters
+  # Execute with parameters and return affected row count (Django matched-rows semantics).
   try
     if connection isa PormGPostgres
-      fetch(settings, sql, parameters)
+      # LibPQ.Result exposes num_affected_rows which counts matched rows.
+      result = fetch(settings, sql, parameters)
+      return LibPQ.num_affected_rows(result)
     elseif connection isa PormGSQLite
-      # SQLite: use fetch() to properly acquire/release from pool
-      fetch(settings, sql, parameters)
+      # SQLite changes() must run on the same connection as the UPDATE.
+      # If we are already inside a transaction context, fetch() reuses the
+      # pinned connection so a subsequent SELECT changes() is safe.
+      tx_conn = transaction_connection_for(settings)
+      if tx_conn !== nothing
+        fetch(settings, sql, parameters)
+        changes_result = fetch(settings, "SELECT changes()")
+        rows = changes_result |> DataFrames.DataFrame
+        return Int(rows[1, 1])
+      else
+        # No active transaction — wrap in run_in_transaction to pin the
+        # connection for both the UPDATE and SELECT changes().
+        return run_in_transaction(settings) do
+          fetch(settings, sql, parameters)
+          changes_result = fetch(settings, "SELECT changes()")
+          rows = changes_result |> DataFrames.DataFrame
+          return Int(rows[1, 1])
+        end
+      end
     else
       throw("Unsupported connection type")
     end
-    
-    # @info "Update completed successfully"
-    
   catch e
     @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql
     rethrow(e)
   end
-
-  return nothing
 end
 
 

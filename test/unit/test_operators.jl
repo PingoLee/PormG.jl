@@ -221,4 +221,139 @@ const _R = _OperTestRace
     @test "%brit%" in res[:parameters]
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Bitwise Operators: F-Expression Bitwise Operations
+  # Verifies that bitwise overloads (&, |, ~, <<, >>, xor/⊻) on F-Expressions,
+  # WindowFunctions, and FObjects produce correct bitwise SQL tokens on PostgreSQL.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Bitwise Operators on F-Expressions" begin
+    # AND, OR, Left Shift, Right Shift
+    q_and = _D.objects.values("res" => F("id") & 4)
+    res_and = q_and.list(show_query=:dict)
+    @test contains(res_and[:sql_text], "&")
+    @test res_and[:parameters] == [4]
+
+    q_or = _D.objects.values("res" => F("id") | 2)
+    res_or = q_or.list(show_query=:dict)
+    @test contains(res_or[:sql_text], "|")
+    @test res_or[:parameters] == [2]
+
+    q_not = _D.objects.values("res" => ~F("id"))
+    res_not = q_not.list(show_query=:dict)
+    @test contains(res_not[:sql_text], "~")
+
+    q_shl = _D.objects.values("res" => F("id") << 1)
+    res_shl = q_shl.list(show_query=:dict)
+    @test contains(res_shl[:sql_text], "<<")
+    @test res_shl[:parameters] == [1]
+
+    q_shr = _D.objects.values("res" => F("id") >> 2)
+    res_shr = q_shr.list(show_query=:dict)
+    @test contains(res_shr[:sql_text], ">>")
+    @test res_shr[:parameters] == [2]
+
+    q_shl_left = _D.objects.values("res" => 1 << F("id"))
+    res_shl_left = q_shl_left.list(show_query=:dict)
+    @test contains(res_shl_left[:sql_text], "<<")
+    @test contains(res_shl_left[:sql_text], "\$1::integer << \"Tb\".\"id\"")
+    @test res_shl_left[:parameters] == [1]
+
+    q_shr_left = _D.objects.values("res" => 8 >> F("id"))
+    res_shr_left = q_shr_left.list(show_query=:dict)
+    @test contains(res_shr_left[:sql_text], ">>")
+    @test contains(res_shr_left[:sql_text], "\$1::integer >> \"Tb\".\"id\"")
+    @test res_shr_left[:parameters] == [8]
+
+    # XOR / ⊻
+    q_xor = _D.objects.values("res" => F("id") ⊻ 4)
+    res_xor = q_xor.list(show_query=:dict)
+    # On PostgreSQL mock connection, it should render native XOR '#'
+    @test contains(res_xor[:sql_text], "#")
+    @test res_xor[:parameters] == [4]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Bitwise Documentation Examples SQL Verification (PostgreSQL Syntax)
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Bitwise Documentation Examples - PostgreSQL SQL Verification" begin
+    _DocDriver = Model("drivers",
+      id = IDField(),
+      surname = CharField(),
+      number = IntegerField(null=true)
+    )
+    _DocDriver.connect_key = "default"
+
+    # 1. Projection values()
+    q_proj = _DocDriver.objects.values(
+      "surname",
+      "number",
+      "is_odd" => F("number") & 1
+    )
+    res_proj = q_proj.list(show_query=:dict)
+    sql_proj = res_proj[:sql_text]
+    @test contains(sql_proj, "SELECT")
+    @test contains(sql_proj, "\"Tb\".\"surname\" as surname")
+    @test contains(sql_proj, "\"Tb\".\"number\" as number")
+    @test contains(sql_proj, "(\"Tb\".\"number\" & \$1::bigint) as is_odd")
+    @test contains(sql_proj, "FROM \"drivers\" as \"Tb\"")
+    @test res_proj[:parameters] == [1]
+
+    # 2. Filtering filter()
+    q_filt = _DocDriver.objects.filter(
+      (F("number") & 1) > 0
+    )
+    res_filt = q_filt.list(show_query=:dict)
+    sql_filt = res_filt[:sql_text]
+    @test contains(sql_filt, "WHERE ((\"Tb\".\"number\" & \$1::bigint) > \$2::bigint)")
+    @test res_filt[:parameters] == [1, 0]
+
+    # 3. Update with XOR
+    # Toggle lowest bit: update("number" => F("number") ⊻ 1)
+    q_upd_xor = _DocDriver.objects.filter("id" => 1)
+    res_upd_xor = q_upd_xor.update("number" => F("number") ⊻ 1, show_query=:inspection)
+    @test contains(res_upd_xor[:sql_text], "UPDATE \"drivers\" AS \"Tb\"")
+    @test contains(res_upd_xor[:sql_text], "SET \"number\" = (\"Tb\".\"number\" # \$2::bigint)")
+    @test contains(res_upd_xor[:sql_text], "WHERE \"Tb\".\"id\" = \$1")
+    @test res_upd_xor[:parameters] == [1, 1]
+
+    # 4. Update with OR
+    # Set lowest bit: update("number" => F("number") | 1)
+    q_upd_or = _DocDriver.objects.filter("id" => 2)
+    res_upd_or = q_upd_or.update("number" => F("number") | 1, show_query=:inspection)
+    @test contains(res_upd_or[:sql_text], "UPDATE \"drivers\" AS \"Tb\"")
+    @test contains(res_upd_or[:sql_text], "SET \"number\" = (\"Tb\".\"number\" | \$2::bigint)")
+    @test contains(res_upd_or[:sql_text], "WHERE \"Tb\".\"id\" = \$1")
+    @test res_upd_or[:parameters] == [2, 1]
+
+    # 5. F1 Clean vs Dirty Grid Side Case Study
+    _DocResult = Model("results",
+      resultid = IDField(),
+      grid = IntegerField(),
+      position = IntegerField(null=true)
+    )
+    _DocResult.connect_key = "default"
+
+    q_case = _DocResult.objects.values("grid", "position").filter(
+      "position__@lte" => 3,
+      (F("grid") & 1) == 0
+    )
+    res_case = q_case.list(show_query=:dict)
+    sql_case = res_case[:sql_text]
+    @test contains(sql_case, "WHERE")
+    @test contains(sql_case, "\"Tb\".\"position\" <= \$1")
+    @test contains(sql_case, "((\"Tb\".\"grid\" & \$2::bigint) = \$3::bigint)")
+    @test res_case[:parameters] == [3, 1, 0]
+
+    # 6. Left-hand shift scalar parameterized and typed verification
+    q_left_shl = _DocDriver.objects.values(
+      "surname",
+      "index_mask" => 1 << F("number")
+    )
+    res_left_shl = q_left_shl.list(show_query=:dict)
+    sql_left_shl = res_left_shl[:sql_text]
+    @test contains(sql_left_shl, "SELECT")
+    @test contains(sql_left_shl, "(\$1::integer << \"Tb\".\"number\") as index_mask")
+    @test res_left_shl[:parameters] == [1]
+  end
+
 end  # end "PormGsuffix — Operator SQL Generation"

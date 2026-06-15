@@ -183,6 +183,12 @@ Issues identified during the code review of recent main changes
 
   - [ ] **Category 2/3 comment is mis-indented** — the `# === CATEGORY 2: Terminal methods ===` comment sits inside the `elseif sym === :copy` block due to indentation, making the structure misleading when reading the file. Cosmetic but confusing.
 
+- [ ] **Centralize ANSI color in error/log messages behind a TTY check**
+  - **Context**: Error and log strings hardcode raw ANSI escape codes (`\e[4m\e[31m…\e[0m`) to emphasize values — ~28 occurrences across 9 files (`src/querybuilder/execution_bulk.jl`, `execution.jl`, `deletion.jl`, `ctes.jl`, `many_to_many.jl`, `build_*.jl`, `migrations/planner.jl`). There is no TTY guard anywhere, so the codes are emitted unconditionally.
+  - **Problem**: The codes only render as color on a real terminal. In any non-TTY sink — log files, CI logs, the IDE output panel, `sprint(showerror, e)`, serialized error reports — they appear as literal garbage (`^[[4m^[[31mpoints^[[0m`). Thrown `ArgumentError`/`ErrorException` messages are the worst offenders, since `showerror` re-displays them in many non-TTY contexts (test-failure dumps, captured strings).
+  - **Goal**: Add one helper (e.g. `emph(x; color=:red, underline=true)`) that colors only when `get(stderr, :color, false)` is true and returns plain text otherwise; route all call sites through it. Honors Julia's `--color` flag and `NO_COLOR`.
+  - **Scope**: prioritize the exception call sites over `@warn`/`@error` logs. Add a regression test asserting no `\e[` leaks into a message when color is disabled.
+
 - [ ] **`deepcopy(ctes)` → `copy(ctes)` shared-state risk**
   - **Location**: `src/querybuilder/types.jl`, `Base.deepcopy(::SQLObjectQuery)`.
   - **Issue**: Two query objects created via `deepcopy(query)` now share CTE sub-query internal state (filters, values). Mutating a CTE after the copy affects both queries.

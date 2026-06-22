@@ -185,7 +185,7 @@ end
     row.name = "test_bulk_update_$(index)"
   end
   try
-    sql_bulk = bulk_update(query, df, columns=["name"], filters=["id"], show_query=:sql)
+    sql_bulk = bulk_update(query, df, columns=["name"], match_on=["id"], show_query=:sql)
     @test sql_bulk isa String || sql_bulk isa Vector{String}
   catch e
     @error "Error during bulk_update with show_query" error=e

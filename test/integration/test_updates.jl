@@ -23,7 +23,7 @@ end
   for (index, row) in enumerate(eachrow(df))
       row.name = "test_update_$(index)"
   end
-  bulk_update(query, df, columns=["name"], filters=["id"])
+  bulk_update(query, df, columns=["name"], match_on=["id"])
   query = M.Just_a_test_deletion.objects
   query.filter("name" => "test_update_1")
   @test query.count() == 1
@@ -34,13 +34,13 @@ end
   for (index, row) in enumerate(eachrow(df))
       row.name = "test_bulk_update"
   end
-  bulk_update(query, df, columns=["name"], filters=["id", "test_result" => 1], show_query=:execute)
+  bulk_update(query, df, columns=["name"], match_on=["id"], filters=["test_result" => 1], show_query=:execute)
   query = M.Just_a_test_deletion.objects
   query.filter("name" => "test_bulk_update")
   @test query.count() == 1
 
   # Removing the static filter restores the ability to update every row again
-  bulk_update(query, df, columns=["name"], filters=["id"], show_query=:execute)
+  bulk_update(query, df, columns=["name"], match_on=["id"], show_query=:execute)
   query = M.Just_a_test_deletion.objects
   query.filter("name" => "test_bulk_update")
   @test query.count() == 3
@@ -552,7 +552,7 @@ end
             df[2, :name] = "a"^300 # Triggers max_length validation on the second row
 
             err = try
-                bulk_update(M.Just_a_test_deletion.objects, df, columns=["name"], filters=["id"])
+                bulk_update(M.Just_a_test_deletion.objects, df, columns=["name"], match_on=["id"])
                 nothing
             catch e
                 e
@@ -586,7 +586,7 @@ end
         )
 
         err = try
-          bulk_update(M.Just_a_test_deletion.objects, dup_df, columns = ["name"], filters = ["id"])
+          bulk_update(M.Just_a_test_deletion.objects, dup_df, columns = ["name"], match_on = ["id"])
           nothing
         catch e
           e
@@ -641,7 +641,7 @@ end
             # Use 'filters' to specify which fields identify the row
             bulk_update(M.Just_a_test_deletion, update_df, 
                 columns=["update_val" => "test_result", "record_id" => "id"], 
-                filters=["id"])
+                match_on=["id"])
             
             res1 = M.Just_a_test_deletion.objects.filter("name" => "Mapped1").list() |> first
             @test res1[:test_result] == 101
@@ -682,10 +682,8 @@ end
             # Update points for specific IDs BUT only if category is Cat1
             bulk_update(query, df,
                 columns=["new_val" => "test_result"],
-                filters=[
-                    "df_id" => "id",    # Dynamic (Mapping)
-                    "name" => "Cat1"    # Static (Query criteria)
-                ]
+                match_on=["df_id" => "id"],   # Dynamic (Mapping)
+                filters=["name" => "Cat1"]    # Static (Query criteria)
             )
             
             # Verify with a fresh query to include all categories
@@ -719,7 +717,8 @@ end
 
               bulk_update(M.Just_a_test_deletion.objects, df,
                 columns=["name"],
-                filters=["id", "test_result2__@isnull" => true, "test_result__@in" => [2, 3]])
+                match_on=["id"],
+                filters=["test_result2__@isnull" => true, "test_result__@in" => [2, 3]])
 
               row1 = M.Just_a_test_deletion.objects.filter("test_result" => 1).list() |> first
               row2 = M.Just_a_test_deletion.objects.filter("test_result" => 2).list() |> first
@@ -788,7 +787,7 @@ end
                     M.Bulk_update_payload_scratch.objects,
                     update_df,
                     columns = ["label", "required_parent_id", "optional_parent_id", "event_date", "is_active"],
-                    filters = ["id"],
+                    match_on = ["id"],
                 )
 
                 persisted_rows = M.Bulk_update_payload_scratch.objects.order_by("id").list()
@@ -856,7 +855,7 @@ end
                     M.Bulk_update_payload_scratch.objects,
                     update_df,
                     columns = ["label", "required_parent_id", "optional_parent_id", "event_date", "is_active"],
-                    filters = ["id"],
+                    match_on = ["id"],
                     chunk_size = 2,
                 )
 
@@ -932,7 +931,7 @@ end
                     M.Bulk_update_payload_scratch.objects,
                     zero_update,
                     columns = ["optional_parent_id"],
-                    filters = ["id"],
+                    match_on = ["id"],
                 )
 
                 persisted = M.Bulk_update_payload_scratch.objects.filter("id" => seeded[:id]).list() |> first
@@ -950,7 +949,7 @@ end
         #   bulk_update(Model.objects, df0,
         #     columns=[..., "dt_fim", "dt_inicio", ..., "st_fechado_automaticamente",
         #              "nu_responsavel_anterior", ..., "st_registro_tardio", ...],
-        #     filters=["id", "ibge_id" => IBGE]
+        #     match_on=["id"], filters=["ibge_id" => IBGE]
         #   )
         # The key scenarios are:
         #   - A DateTime value lands correctly in a nullable DateTimeField column
@@ -1006,7 +1005,8 @@ end
                     M.Bulk_update_payload_scratch.objects,
                     update_df,
                     columns = ["event_time", "nullable_int", "is_active"],
-                    filters = ["id", "label__@in" => ["combo-a", "combo-b"]],
+                    match_on = ["id"],
+                    filters = ["label__@in" => ["combo-a", "combo-b"]],
                 )
 
                 persisted = M.Bulk_update_payload_scratch.objects.order_by("id").list()
@@ -1150,7 +1150,8 @@ end
         M.Just_a_test_deletion.objects,
         df,
         columns=["name"],
-        filters=["id", "test_result__positionorder" => 1]
+        match_on=["id"],
+        filters=["test_result__positionorder" => 1]
       )
         nothing
     catch e
@@ -1289,7 +1290,7 @@ end
         M.Just_a_test_deletion.objects,
         empty_df,
         columns = ["name"],
-        filters = ["id"],
+        match_on = ["id"],
     )
 
     # Must return nothing — the empty path must not raise.
@@ -1303,12 +1304,11 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bulk Update: filters=nothing auto-detects the model primary key
+# Bulk Update: match_on omitted auto-detects the model primary key
 #
-# When no filters are passed, the implementation falls through to:
-#   dinanic_filters = pks
-# and infers the row identity from the model's primary key field(s). This is
-# the simplest caller shape. Use upper-case DataFrame columns here so the test
+# When no match_on= is passed, the implementation falls back to the model's
+# primary key field(s) and infers the row identity from them. This is the
+# simplest caller shape. Use upper-case DataFrame columns here so the test
 # also proves the case-insensitive PK fallback branch.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Bulk Update auto-PK filter inference is case-insensitive" begin
@@ -1362,7 +1362,7 @@ end
         M.Just_a_test_deletion.objects,
         df,
         columns = ["name"],
-        filters = ["id"],
+        match_on = ["id"],
     )
 
     rows = M.Just_a_test_deletion.objects.order_by("id").list()
@@ -1376,8 +1376,8 @@ end
 # Bulk Update: missing DataFrame columns fail with clear caller-facing errors
 #
 # Both error branches are important in practice:
-#   1. explicit filters=["id"] but the DF has no id column
-#   2. filters omitted, so PK inference runs, but the DF still has no id column
+#   1. explicit match_on=["id"] but the DF has no id column
+#   2. match_on omitted, so PK inference runs, but the DF still has no id column
 # Neither path should touch the database.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Bulk Update missing filter and PK columns error clearly" begin
@@ -1392,7 +1392,7 @@ end
                 M.Just_a_test_deletion.objects,
                 missing_filter_df,
                 columns = ["name"],
-                filters = ["id"],
+                match_on = ["id"],
             )
             nothing
         catch e
@@ -1400,7 +1400,7 @@ end
         end
 
         @test err_filter isa ArgumentError
-        @test occursin("filter column", lowercase(sprint(showerror, err_filter)))
+        @test occursin("match_on column", lowercase(sprint(showerror, err_filter)))
         @test occursin("id", lowercase(sprint(showerror, err_filter)))
 
         missing_pk_df = DataFrame(name = ["should-not-land-either"])
@@ -1456,7 +1456,8 @@ end
             stale_query,
             df,
             columns = ["name"],
-            filters = ["id", "test_result__@in" => [2, 3]],
+            match_on = ["id"],
+            filters = ["test_result__@in" => [2, 3]],
         )
 
         rows = M.Just_a_test_deletion.objects.order_by("test_result").list()
@@ -1496,7 +1497,7 @@ end
             M.Django_contract_scratch.objects,
             df_safe,
             columns = ["price"],
-            filters = ["id"],
+            match_on = ["id"],
             copy    = true,
         )
 
@@ -1514,7 +1515,7 @@ end
             M.Django_contract_scratch.objects,
             df_inplace,
             columns = ["price"],
-            filters = ["id"],
+            match_on = ["id"],
             copy    = false,
         )
 
@@ -1571,7 +1572,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns    = ["label"],
-            filters    = ["id"],
+            match_on    = ["id"],
             show_query = :dict,
         )
         # Single chunk → direct Dict, not Vector{Dict}
@@ -1584,7 +1585,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns    = ["label"],
-            filters    = ["id"],
+            match_on    = ["id"],
             show_query = :inspection,
         )
         @test inspection_result isa Dict
@@ -1600,7 +1601,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns    = ["label"],
-            filters    = ["id"],
+            match_on    = ["id"],
             show_query = :dict,
             chunk_size = 1,   # forces 3 separate chunks → Vector of 3 dicts
         )
@@ -1613,7 +1614,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns    = ["label"],
-            filters    = ["id"],
+            match_on    = ["id"],
             show_query = :sql,
         )
         @test sql_result isa String
@@ -1624,7 +1625,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns    = ["label"],
-            filters    = ["id"],
+            match_on    = ["id"],
             show_query = :params,
         )
         @test params_result isa Vector
@@ -1636,7 +1637,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns    = ["label"],
-            filters    = ["id"],
+            match_on    = ["id"],
             show_query = :none,
         )
         @test isnothing(none_result)
@@ -1688,7 +1689,7 @@ end
             M.Bulk_update_payload_scratch.objects,
             df,
             columns = ["optional_parent_id"],
-            filters = ["id"],
+            match_on = ["id"],
         )
 
         persisted = M.Bulk_update_payload_scratch.objects.order_by("id").list()

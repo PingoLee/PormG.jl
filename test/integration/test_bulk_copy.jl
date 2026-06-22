@@ -28,7 +28,7 @@ end
                 id = Int64[],
                 name = String[]
             )
-            @test isnothing(bulk_update(query, empty_update, columns = ["name"], filters = ["id"]))
+            @test isnothing(bulk_update(query, empty_update, columns = ["name"], match_on = ["id"]))
 
             persisted = M.Just_a_test_deletion.objects.filter("name" => "empty-bulk-sentinel").list() |> first
             @test persisted[:name] == "empty-bulk-sentinel"
@@ -100,14 +100,14 @@ end
 
         current = M.Just_a_test_deletion.objects.filter("name" => "update-target") |> DataFrame
         nullable_update = DataFrames.DataFrame(id = current.id, test_result2 = [missing])
-        bulk_update(query, nullable_update, columns = ["test_result2", "id"], filters = ["id"])
+        bulk_update(query, nullable_update, columns = ["test_result2", "id"], match_on = ["id"])
 
         updated = M.Just_a_test_deletion.objects.filter("name" => "update-target").list() |> first
         @test ismissing(updated[:test_result2]) || isnothing(updated[:test_result2])
 
         bad_update = DataFrames.DataFrame(id = current.id, test_result = [22.0])
         err = try
-            bulk_update(query, bad_update, columns = ["test_result", "id"], filters = ["id"])
+            bulk_update(query, bad_update, columns = ["test_result", "id"], match_on = ["id"])
             nothing
         catch e
             e

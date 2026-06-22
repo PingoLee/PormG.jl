@@ -200,7 +200,7 @@ end
                 event_time = Any[aware_update, missing, naive_update],
             ),
             columns = ["event_time", "id"],
-            filters = ["id"],
+            match_on = ["id"],
         )
 
         updated_rows = M.Django_contract_scratch.objects.filter(

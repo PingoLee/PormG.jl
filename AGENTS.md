@@ -4,6 +4,7 @@
 
 ## Non-negotiables
 
+- **Pre-publish (not yet on Julia General; single maintainer, ~4 internal apps, no external users):** breaking changes are cheap — get the API/schema/naming *right* over backward compatibility; deprecation shims (e.g. the `bulk_update` legacy-`filters` error) are internal migration aids to remove before publish; release-gating decisions are tagged `⚠️ do BEFORE the first General-registry publish` in [`TODO.md`](TODO.md). *(Remove this bullet once published.)*
 - Use the ORM surface (`M.Model.objects`, fluent terminals). No raw SQL in docs, examples, or integration tests unless the feature requires it.
 - **Julia chains:** multi-line method chains must use **trailing-dot** syntax (`.` at end of line) or stay inline — leading-dot lines are a `ParseError`.
 - Parameterized queries only; never interpolate user input into SQL strings.

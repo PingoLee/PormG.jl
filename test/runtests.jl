@@ -31,27 +31,41 @@ end
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")
+    @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
+    @testset "Reserved-word / Underscore Field Names" include("unit/test_reserved_word_fields.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
-    @testset "Postgres Sequence Sync" include("unit/test_sequence_sync.jl")
+    @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
+    @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
+    @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")
+    @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
+    @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
+    @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
     # include("unit/test_migration_planner.jl")
 end
 
-# # Check for PORMG_INTEGRATION_TESTS environment variable
-# if get(ENV, "PORMG_INTEGRATION_TESTS", "false") == "true"
-#     @testset "PormG Integration Tests" begin
-#         # These require a real database (Postgres/SQLite)
-#         # include("integration/runtests.jl")
-#     end
-# end
+# Integration tests require a live database (Postgres/SQLite) and are opt-in:
+# default `Pkg.test()` / CI runs (env var unset) skip this block, so behaviour there
+# is unchanged. Run them with a configured DB to exercise the runtime-only contracts
+# the unit suite cannot reach — e.g. run_in_transaction commit/rollback semantics
+# (test/integration/test_transactions.jl).
+#
+#     PORMG_INTEGRATION_TESTS=true julia -t auto --project=. test/runtests.jl
+if get(ENV, "PORMG_INTEGRATION_TESTS", "false") == "true"
+    @testset "PormG Integration Tests" begin
+        # These require a real database (Postgres/SQLite)
+        include("integration/runtests.jl")
+    end
+end
 
 
 # julia -t auto --project=. test/runtests.jl

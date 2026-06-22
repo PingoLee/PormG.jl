@@ -36,6 +36,8 @@ function _normalize_sqlite_default(default_val, type_sym::Symbol)
 
   if length(stripped) >= 2 && startswith(stripped, "'") && endswith(stripped, "'")
     return replace(stripped[2:end-1], "''" => "'")
+  elseif length(stripped) >= 2 && startswith(stripped, "\"") && endswith(stripped, "\"")
+    return replace(stripped[2:end-1], "\"\"" => "\"")
   end
 
   return stripped
@@ -125,7 +127,7 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
     if haskey(pk_map, column_name)
       field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
     elseif haskey(fk_map, column_name)
-      field_instance = Models.ForeignKey(fk_map[column_name]["fk_table"] |> string; pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
+      field_instance = Models.ForeignKey(uppercasefirst(fk_map[column_name]["fk_table"] |> string); pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
       on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
     else
       field_instance = getfield(Models, type_sym)(null=!(nullable === nothing), default=normalized_default)
@@ -169,7 +171,7 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         field = Models.IDField(null=false, primary_key=true, auto_increment=(base_type == "INTEGER"))
     elseif haskey(fk_map, col_name)
         fk_info = fk_map[col_name]
-        field = Models.ForeignKey(fk_info.table; pk_field=fk_info.to, on_delete=fk_info.on_delete, null=nullable)
+        field = Models.ForeignKey(uppercasefirst(fk_info.table); pk_field=fk_info.to, on_delete=fk_info.on_delete, null=nullable)
     else
         type_sym = get(type_map, base_type, :TextField)
         # Handle decimal precision if present
@@ -188,6 +190,8 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
 end
 
 function convert_schema_to_models(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema, include_table::Union{Vector{String}, Nothing} = nothing)
+  # Always skip consumer-registered framework tables (e.g. Nitro's), on top of the caller's list.
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
   # Query the sqlite_master table to get the table names
   tables_query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
   tables = fetch(db, tables_query) |> DataFrame
@@ -227,6 +231,8 @@ Convert the database schema to models.
 This function retrieves the database schema and converts it to models. It collects all create instructions and skips tables specified in the `ignore_table` vector. The function prints the type of each schema and returns the schema for debugging purposes. It stops processing after the fifth schema.
 """
 function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table, include_table::Union{Vector{String}, Nothing} = nothing)
+  # Always skip consumer-registered framework tables (e.g. Nitro's), on top of the caller's list.
+  ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
   # Get all schema
   schemas = get_database_schema(db)
   # Colect all create instructions
@@ -651,7 +657,10 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         field_type(unique=unique, null=!not_null, default=default_value, db_index=db_index)
       end
 
-      if max_length !== nothing
+      # Only fields that actually carry these attributes get them. A primary-key column
+      # is mapped to an IDField (above), which has no max_length/max_digits — guard the
+      # assignments so such columns don't raise FieldError during introspection.
+      if max_length !== nothing && hasfield(typeof(field), :max_length)
         if max_length > 255
           # CharField only supports max_length <= 255, use TextField for longer strings
           field = Models.TextField(unique=unique, null=!not_null, default=default_value, db_index=db_index)
@@ -660,7 +669,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         end
       end
 
-      if max_digits !== nothing
+      if max_digits !== nothing && hasfield(typeof(field), :max_digits)
         field.max_digits = max_digits
         field.decimal_places = decimal_places
       end

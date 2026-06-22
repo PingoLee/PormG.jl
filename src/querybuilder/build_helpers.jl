@@ -94,9 +94,9 @@ function _check_function(x::Vector{String})
       if haskey(PormGsuffix, x[end])
         yes = "you can use \"column__@\e[32m$(x[end])\e[0m\""
         not = "you can not use \"column__\e[31m@$(x[end])__@function\e[0m\". valid functions are:\n$(joined_keys_with_prefix_func)\e[0m\nvalid operators are:\n$(joined_keys_with_prefix_oper)\e[0m"
-        throw(ArgumentError("\e[4m\e[31m$(x[end])\e[0m is not allowed.\n$yes\n$not"))
+        throw(_argerr("\e[4m\e[31m$(x[end])\e[0m is not allowed.\n$yes\n$not"))
       else
-        throw(ArgumentError("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid;\n please use a valid function:\n  - $(joined_keys_with_prefix_func)\e[0m\nor a valid operator:\n  - $(joined_keys_with_prefix_oper)\e[0m"))
+        throw(_argerr("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid;\n please use a valid function:\n  - $(joined_keys_with_prefix_func)\e[0m\nor a valid operator:\n  - $(joined_keys_with_prefix_oper)\e[0m"))
       end
     end
   end
@@ -137,7 +137,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
     # @pormg_debug
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
+    throw(_argerr("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
@@ -165,14 +165,14 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Mis
     end
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in, nin and range'\e[0m is allowed with a vector of values"))
+    throw(_argerr("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in, nin and range'\e[0m is allowed with a vector of values"))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
   if x.first[end] == "range"
     return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(ArgumentError("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'range'\e[0m is allowed with a tuple of values"))
+    throw(_argerr("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'range'\e[0m is allowed with a tuple of values"))
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Date})
@@ -378,7 +378,7 @@ function _check_if_field_is_a_operator(field::String)
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
     "hour", "minute", "second", "isnull", "regex", "iregex"]
   if field in common_operators
-    throw(ArgumentError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
+    throw(_argerr("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
   end
 end
 
@@ -422,7 +422,7 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   if !(field in model.field_names)
     _check_if_field_is_a_operator(field)
     @pormg_debug false
-    throw(ArgumentError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
+    throw(_argerr("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
 
@@ -776,7 +776,7 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
       # We need to construct the format_dict if needed, but for date parts it's simple
       text = getfield(Dialect, func_name)(text, Dict{String,Any}(), instruc.connection)
     else
-      throw(ArgumentError("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
+      throw(_argerr("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
     end
   end
   return text
@@ -888,7 +888,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       catch e
         @pormg_debug false
         if contains(string(e), "The date") && contains(string(e), "is invalid")
-          throw(ArgumentError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
+          throw(_argerr("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
         @pormg_debug false
         rethrow(e)

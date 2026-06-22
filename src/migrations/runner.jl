@@ -941,3 +941,60 @@ function remove_migration_record(db::String, version::String; config::Dict{Strin
   settings = config[db]
   remove_migration_record(settings.connections, settings, version)
 end
+
+"""
+    discard_pending_migration(settings; backup=true) -> NamedTuple | Nothing
+    discard_pending_migration(db::String; config=config, backup=true) -> NamedTuple | Nothing
+
+Discard the un-applied pending migration draft (`migrations/pending_migrations.jl`) for this
+connection — e.g. a `makemigrations` plan you generated and then regretted.
+
+A pending migration is only a file with no database state behind it, so this is
+filesystem-only: it never touches the `pormg_migrations` history table or the schema (unlike
+`remove_migration_record` / `migrate_to`, which mutate applied state). That makes discarding
+a draft the one inherently safe, reversible migration op.
+
+When `backup=true` (default) the file is renamed to `pending_migrations.jl.discarded`
+(overwriting any previous discard) so the draft can be recovered; otherwise it is deleted.
+`makemigrations` overwrites the pending file anyway, so a later regenerate is unaffected.
+
+Returns `(discarded=true, path, backup, tables, statements)` describing what was thrown away,
+or `nothing` when there is no pending migration. Pairs with [`status`](@ref), which reports
+whether a pending file exists.
+"""
+function discard_pending_migration(settings::SQLConn; backup::Bool = true)
+  pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
+  if !isfile(pending_path)
+    @info("\e[32mNo pending migration to discard.\e[0m")
+    return nothing
+  end
+
+  # Best-effort summary of what we're discarding. Never let a parse error block the discard —
+  # getting rid of a bad/unwanted draft is exactly the point of this function.
+  tables = 0
+  statements = 0
+  try
+    plan = _load_migration_plan(settings)
+    tables = length(plan)
+    statements = sum(length(d) for d in plan; init = 0)
+  catch
+    # leave counts at 0; the file is still discarded below
+  end
+
+  backup_path = nothing
+  if backup
+    backup_path = pending_path * ".discarded"
+    mv(pending_path, backup_path; force = true)
+  else
+    rm(pending_path)
+  end
+
+  @info("\e[33mDiscarded pending migration ($(tables) table(s), $(statements) statement(s)).\e[0m" *
+        (backup ? " Backup saved to $(backup_path)." : ""))
+  return (discarded = true, path = pending_path, backup = backup_path, tables = tables, statements = statements)
+end
+
+function discard_pending_migration(db::String; config::Dict{String,SQLConn} = config, backup::Bool = true)
+  settings = config[db]
+  discard_pending_migration(settings; backup = backup)
+end

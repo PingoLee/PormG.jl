@@ -27,7 +27,7 @@ import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check
 import PormG: PormGModel, PormGField, SQLConn, PormGPostgres, PormGSQLite
-import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table
+import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
 import PormG: MODEL_PATH, SQLConn, DB_PATH
 import PormG.AdvisoryLock
 
@@ -49,7 +49,7 @@ export get_constraints_fk, get_constraints_index, get_constraints_pk, get_constr
 
 # Exports — new migration lifecycle APIs (Phases 1–7)
 export init_migrations, status, dry_run
-export migrate_to, mark_applied, mark_failed, remove_migration_record
+export migrate_to, mark_applied, mark_failed, remove_migration_record, discard_pending_migration
 export MigrationStatus, DryRunResult
 export compute_checksum, is_destructive, total_statements, detect_destructive_actions
 

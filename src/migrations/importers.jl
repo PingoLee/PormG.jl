@@ -8,34 +8,79 @@
 # Dialect Importers (SQLite / Postgres)
 # ---
 
-function import_models_from_sqlite(;db::PormGSQLite = connection(), 
-                                  force_replace::Bool=false, 
+"""
+    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema::Vector{String}=sqlite_ignore_schema, include_table=nothing, file::String="automatic_models.jl")
+
+Import models from a SQLite database and generate a Julia file with model definitions.
+
+# Arguments
+- `db::String="db"`: The database key from the configuration (must resolve to a registered SQLite connection).
+- `force_replace::Bool=false`: Whether to overwrite the file if it already exists.
+- `ignore_schema::Vector{String}=sqlite_ignore_schema`: Table name patterns to ignore.
+- `include_table::Union{Vector{String},Nothing}=nothing`: When set, only these tables are imported.
+- `file::String="automatic_models.jl"`: The output filename for the generated models.
+
+# Description
+Symmetric with [`import_models_from_postgres`](@ref): the database **key** resolves to its settings
+via `Configuration.get_settings`, the output directory comes from that connection's `db_def_folder`,
+and the connection object is taken from the same settings — so the key and its settings can never
+drift apart. A missing/unregistered key raises a clear `ArgumentError` from `get_settings` (no silent
+`MODEL_PATH` fallback); a key bound to a non-SQLite connection is rejected explicitly.
+
+# Example
+```julia
+using PormG
+
+# Load the SQLite configuration
+PormG.Configuration.load("db_sl")
+
+# Import models from the database
+PormG.Migrations.import_models_from_sqlite("db_sl")
+```
+"""
+function import_models_from_sqlite(db::String = "db";
+                                  force_replace::Bool=false,
                                   ignore_schema::Vector{String} = sqlite_ignore_schema,
+                                  include_table::Union{Vector{String}, Nothing} = nothing,
                                   file::String="automatic_models.jl")
 
-  # check if db/models/automatic_models.jl exists
-  if isfile(joinpath(MODEL_PATH, file)) && !force_replace
-    @warn("The file 'db/models/automatic_models.jl' already exists, use force_replace=true to replace it")
-    return
-  elseif !ispath(joinpath(MODEL_PATH))
-    mkdir(joinpath(MODEL_PATH))
-  end
-  
-  # Get all schema
-  schemas = get_database_schema(db)
+  # Resolve the connection from its config key (mirrors import_models_from_postgres):
+  # a missing/unregistered key throws a clear ArgumentError from get_settings, and the
+  # output folder comes from the resolved connection's settings — never a hardcoded path.
+  settings = Configuration.get_settings(db)
+  conn = settings.connections
+  conn isa PormGSQLite || throw(ArgumentError(
+    "Connection '$(db)' is not a SQLite connection (got $(typeof(conn))). Use import_models_from_postgres for PostgreSQL."))
+  model_path = settings.db_def_folder
 
-  # Colect all create instructions
+  # check if file already exists
+  if isfile(joinpath(model_path, file)) && !force_replace
+    @warn("The file '$(joinpath(model_path, file))' already exists, use force_replace=true to replace it")
+    return nothing
+  elseif !ispath(model_path)
+    mkpath(model_path)
+  end
+
+  # Convert the database schema to models
+  models_array = convert_schema_to_models(conn, ignore_table=ignore_schema, include_table=include_table)
+
+  if isempty(models_array)
+    @warn("No tables found in the database to import.")
+    return nothing
+  end
+
+  # Collect all create instructions
   Instructions::Vector{Any} = []
-  for schema in schemas
-    schema[2]["type"] == "index" && continue    
-    schema[1] in ignore_schema && continue
-    # println(schema[2]["sql"])
-    push!(Instructions, convertSQLToModel(schema[2]["sql"]) |> Models.Model_to_str)
+  for model in models_array
+    push!(Instructions, Models.Model_to_str(model, settings))
   end
 
-  generate_models_from_db(db, file, Instructions)
+  generate_models_from_db(file, Instructions, settings; path=model_path)
 
+  @info("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m")
+  @info("The models have been saved to '$(joinpath(model_path, file))'.")
 
+  return nothing
 end
 
 """

@@ -47,7 +47,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       v_copy.field = _get_select_query(v_copy.field, instruc, _as=v_copy._as)
       instruc.select[i] = v_copy
       if v_copy._as === nothing
-        throw(ArgumentError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
+        throw(_argerr("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
       instruc.cache[v_copy._as] = instruc.select[i]
     end

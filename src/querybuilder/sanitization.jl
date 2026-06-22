@@ -401,8 +401,9 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
         _validate_json_value(model, field, value, operation)
     end
     
-    # 6. Max length validation (Strings)
-    if hasfield(typeof(f_meta), :max_length) && isa(value, AbstractString)
+    # 6. Max length validation (Strings). A CharField with no max_length (nothing) is
+    #    unlimited (TEXT), so skip the check rather than comparing length against nothing.
+    if hasfield(typeof(f_meta), :max_length) && isa(value, AbstractString) && f_meta.max_length !== nothing
         if length(value) > f_meta.max_length
             _validation_error(operation, model, field, "max_length is $(f_meta.max_length), but the provided value has length $(length(value))")
         end

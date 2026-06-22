@@ -14,8 +14,9 @@ Why a dedicated file?
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField
+using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTimeField
 using PormG.QueryBuilder: Q
+using Dates
 
 # ---------------------------------------------------------------------------
 # Minimal test models — same shape as test_complex_queries.jl so both files
@@ -37,6 +38,13 @@ if !isdefined(Main, :_OperTestDriver)
   )
   _OperTestRace.connect_key = "default"
 
+  _OperTestEvent = Model("events",
+    id        = IDField(),
+    happened  = DateField(),
+    logged_at = DateTimeField()
+  )
+  _OperTestEvent.connect_key = "default"
+
   struct _MockPostgresOper <: PormG.PormGPostgres end
   _MockSettingsOper = PormG.Configuration.Settings(
     connections  = _MockPostgresOper(),
@@ -48,6 +56,7 @@ end
 # Shorthand aliases kept local to this module's scope
 const _D = _OperTestDriver
 const _R = _OperTestRace
+const _E = _OperTestEvent
 
 @testset "PormGsuffix — Operator SQL Generation" begin
 
@@ -70,6 +79,30 @@ const _R = _OperTestRace
       @test contains(res[:sql_text], sql_op)  # "@$suffix must emit '$sql_op' in SQL"
       @test res[:parameters] == [42]          # "@$suffix must bind value 42"
     end
+  end
+
+  # =========================================================================
+  # 1b. Temporal scalar comparison values (Date / DateTime)
+  # =========================================================================
+  @testset "Scalar Date/DateTime comparison values" begin
+    # Regression: a *scalar* Date/DateTime must be accepted as a filter value.
+    # OperObject.values previously allowed Dates.TimeType only inside a Vector,
+    # so `filter("field__@lte" => now())` threw a convert MethodError.
+    d  = Date(2026, 6, 15)
+    dt = DateTime(2026, 6, 15, 18, 30, 0)
+
+    # The value is accepted and bound (normalized to an ISO string parameter); before
+    # the fix, building the filter threw before reaching parameter binding.
+    q_d = _E.objects.filter("happened__@lte" => d)
+    res_d = q_d.list(show_query=:dict)
+    @test contains(res_d[:sql_text], "<=")
+    @test res_d[:parameters] == ["2026-06-15"]
+
+    q_dt = _E.objects.filter("logged_at__@gte" => dt)
+    res_dt = q_dt.list(show_query=:dict)
+    @test contains(res_dt[:sql_text], ">=")
+    @test length(res_dt[:parameters]) == 1
+    @test startswith(res_dt[:parameters][1], "2026-06-15T18:30:00")
   end
 
   # =========================================================================

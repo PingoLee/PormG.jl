@@ -31,6 +31,7 @@ If you are new to Django-style ORMs, the migration APIs map directly to standard
 | `migrate("db")` | `migrate` | **Schema Deployment / Execution** (applies the DDL scripts to the live database). |
 | `init_migrations("db")` | — | **Bootstrap / Initialization** (registers/creates history tables on an existing database). |
 | `dry_run("db")` | — | **Dry Run / Plan Preview** (previews the DDL statements without executing them). |
+| `discard_pending_migration("db")` | — | **Discard Generated Script** (deletes the un-applied `pending_migrations.jl` draft; no DB state changes). |
 
 ---
 

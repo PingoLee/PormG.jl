@@ -51,14 +51,14 @@ This document tracks missing features and planned improvements for PormG.jl, wit
 ## 🐘 PostgreSQL Specific Enhancements
 
 - [ ] **JSONB Support**
-  - [ ] Implement `JSONField`.
+  - [x] Implement `JSONField`.
   - [ ] Support for JSON lookups (`data__key`, `data__0__key`).
   - [ ] JSON containment and overlap operators (`@>`, `?`, `?|`, `?&`).
 
 - [ ] **Specialized Data Types**
-  - [ ] `UUIDField` (using native `uuid` type).
+  - [x] `UUIDField` (using native `uuid` type).
   - [ ] `ArrayField` (PostgreSQL native arrays).
-  - [ ] `IntervalField` (PostgreSQL `interval`).
+  - [x] `IntervalField` (PostgreSQL `interval`). — implemented as `DurationField` (renders to `INTERVAL`).
   - [ ] `INET`/`CIDR` Fields for network addresses.
 
 - [ ] **Advanced Indexing**
@@ -153,14 +153,62 @@ Issues identified during the code review of recent main changes
     )
 
 
+## 🔗 Custom Join (`cjoin`) Gaps
+
+Features needed to express complex join patterns (e.g., self-joins with multi-OR ON clauses, field-to-field comparisons, SQL functions in ON) without falling back to raw SQL.
+
+### Motivation: Target Raw SQL
+The following self-join query is currently impossible to represent natively in PormG due to the complex `OR` logic, cross-table comparisons, and string/date formatting functions directly in the `ON` clause:
+
+```sql
+SELECT
+    b1."index" as id1,
+    b2."index" as id2,
+    b1.nome as nome1,
+    b2.nome as nome2,
+    b1.nome_mae as nm_m1,
+    b2.nome_mae as nm_m2,
+    b1.dn as dn1,
+    b2.dn as dn2
+FROM b1_proc as b1            
+INNER JOIN b2_proc as b2 ON b2.dn = b1.dn OR 
+    (b2.sxpn = b1.sxpn AND b2.sxun = b1.sxun AND b2.sxpnm = b1.sxpnm AND NOT b2.sxpnm IS NULL) OR
+    (b2.sxpn = b1.sxpn AND b2.sxsn = b1.sxsn AND b2.sexo = b1.sexo) OR
+    (b2.sxun = b1.sxun AND strftime('%Y', b2.dn) = strftime('%Y', b1.dn))
+WHERE
+    b1."index" >= $inicio AND b1."index" <= $fim AND
+    NOT b1."index" IS NULL AND NOT b2."index" IS NULL
+ORDER BY id1, id2
+```
+
+- [ ] **Arbitrary ON clauses in `cjoin`**
+  - **Context**: `cjoin` always establishes a single equi-join anchor (`main.field = target.pk_field`) and appends user filters with AND. Queries where the entire ON clause is a custom disjunction (e.g., 4 independent OR branches comparing different column pairs) cannot be expressed.
+  - **Goal**: Allow `Qor()` / `Q()` / `F()` expressions to **fully replace** the default equi-join condition, not just append to it. Possibly via a `on_replace=true` flag or a new `cjoin` overload that accepts only filter expressions as the join condition.
+  - **Example that should work**:
+    ```julia
+    # Self-join b1_proc ↔ b2_proc with pure OR logic in ON
+    query = M.B1_proc.objects
+    query.cjoin("index" => "B2_proc",
+        on=[Qor(
+            F("b2.dn") == F("b1.dn"),
+            Q(F("b2.sxpn") == F("b1.sxpn"), F("b2.sxun") == F("b1.sxun"), ...),
+            ...
+        )],
+        join_type="INNER"
+    )
+    ```
+
+- [ ] **Cross-table F-expressions in ON clauses**
+  - **Context**: `F()` expressions currently work in `filter()` (WHERE) and `values()` (SELECT), but `cjoin` filters do not support `F()` for field-to-field comparisons across both sides of the join (e.g., `F("b2.sxpn") == F("b1.sxpn")`). The filter normalization in `_prefix_join_filter` only handles the joined model's fields.
+  - **Goal**: Support `F()` references that resolve to columns on **either** side of the join inside ON-clause predicates. Requires the SQL renderer to alias-qualify both left and right sides correctly.
+  - **Touches**: `src/querybuilder/ctes.jl` (`_prefix_join_filter`, `cjoin`), `src/querybuilder/build_joins.jl` (ON clause rendering), `src/Dialect.jl` (alias resolution).
+
+- [ ] **SQL functions in join conditions (e.g., `strftime`, `EXTRACT`)**
+  - **Context**: Date transforms like `__@year` exist for WHERE/SELECT, but they are not recognized inside ON clauses. Queries that join on `strftime('%Y', b2.dn) = strftime('%Y', b1.dn)` or `EXTRACT(YEAR FROM ...)` cannot be expressed in `cjoin` filters.
+  - **Goal**: Allow date transforms (`__@year`, `__@month`, etc.) and possibly arbitrary SQL functions to work inside `cjoin` filter expressions, generating the correct dialect-aware SQL in the ON clause.
+  - **Dialect note**: SQLite uses `strftime('%Y', col)`, PostgreSQL uses `EXTRACT(YEAR FROM col)` — the existing `__@year` transform already handles this divergence in WHERE; the same logic needs to be reachable from ON-clause rendering.
+
 ## Future Considerations
 - [ ] **Parameterize LIMIT/OFFSET (Future)**
   - **Context**: Currently, `LIMIT` and `OFFSET` are rendered as literal integers in the SQL string. This is safe (Julia enforces `Int` types), but parameterizing them would enable prepared statement caching across different page sizes and improve consistency with the bucket strategy.
   - **Task**: Add a `:limit` bucket to `PormGPositionalParam`, render `LIMIT ?` / `OFFSET ?`, and append values at the tail of `get_final_parameters` (after `:having`).
-  
-# Better then echo """
-Write-Output @'
-'@ 
-
-# how review
-@workspace /review  review unstaged changes before push

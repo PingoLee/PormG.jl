@@ -213,6 +213,36 @@ query.values(
 df = query |> DataFrame
 ```
 
+### With a Scalar Constant
+
+An aggregate can also be combined with a plain number, and the math still runs in the database. Build the aggregate first, then apply the operator to the result:
+
+```julia
+# Total points per constructor, minus a flat 10-point penalty
+query = M.Result.objects
+query.values(
+    "constructorid__name",
+    "net_points" => Sum("points") - 10
+)
+df = query |> DataFrame
+```
+
+Generated SQL (PostgreSQL):
+```sql
+SELECT
+    "Tb_1"."name" as "constructorid__name",
+    (SUM("Tb"."points") - $1::bigint) as "net_points"
+FROM "result" as "Tb"
+INNER JOIN "constructor" AS "Tb_1" ON "Tb"."constructorid" = "Tb_1"."constructorid"
+GROUP BY 1
+-- Parameters: [10]
+```
+
+The constant is **parameterized** (`$1`), never interpolated into the SQL string — so it stays safe even when the value comes from user input. (On SQLite the placeholder is `?` instead of `$1`.)
+
+> [!IMPORTANT]
+> Do **not** wrap the aggregated column in `F()` for this. `F("points") - 10` renders `points - 10` (a row-level column expression), whereas `Sum("points") - 10` renders `SUM(points) - 10` (arithmetic on the aggregate). Reach for the aggregate constructor — `Sum`, `Max`, `Min`, `Count`, `Avg` — whenever the math should apply to the *aggregated* value, and pass the column as a plain string: `Max("points")`, not `Max(F("points"))`.
+
 ### In Filters (Auto-HAVING)
 
 When a filter references an aggregate alias, PormG moves it to the `HAVING` clause:

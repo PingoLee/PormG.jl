@@ -101,6 +101,17 @@ Testing boundary:
 
 When adding any new identifier-quoting path, go through `quote_identifier` — never strip-and-quote.
 
+### Error message construction
+
+Error messages may colorize the offending token with ANSI for the REPL, but they **must** degrade off-TTY. Construct `ArgumentError`s via `_argerr(msg)` (defined in `querybuilder/exceptions.jl`), or wrap a raw `throw`/`error` string with `_emsg(...)`:
+
+- `_emsg(msg)` keeps ANSI when `Base.have_color` is true and strips every `\e[..m` code otherwise (CI, file logs, structured logging) — the same flag Julia uses to colorize its own error displays.
+- `_argerr(msg) = ArgumentError(_emsg(msg))` is the common case: a call site changes only `ArgumentError(` → `_argerr(` (paren structure unchanged).
+- Never write `throw(ArgumentError("...\e[31m..."))` directly — raw escape codes leak as noise into non-TTY sinks.
+- *Logging* macros (`@info` / `@warn` / `@error`) may keep raw ANSI, since they write to a TTY.
+
+Scope: `_argerr`/`_emsg` are QueryBuilder-internal, so this contract applies to `src/querybuilder/`. If colored errors are ever needed in `Migrations`/`Models`, promote the helper to a shared module (e.g. `Utils.jl`) and import it — don't re-embed raw ANSI.
+
 ### Query generation
 
 Focus on:
@@ -190,3 +201,4 @@ julia -t auto --project=. test/integration/test_cte.jl
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
 - Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — the contract is fail-closed: validate via `_validate_identifier`, then quote; never silently rewrite an identifier
+- Do not embed raw ANSI (`\e[...`) in a `throw`/`error` message — route through `_argerr`/`_emsg` so color degrades off-TTY (logging macros may keep ANSI)

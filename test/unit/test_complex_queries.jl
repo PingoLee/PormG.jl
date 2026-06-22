@@ -326,6 +326,21 @@ ResultCamelDjangoModel._module = Main
     @test res_json isa Dict
   end
 
+  # ===== Section 8b: get() single-row SELECT generation =====
+  @testset "get() SQL generation" begin
+    # .get(filters...) builds a SELECT with the filter predicate plus a small LIMIT
+    # (to detect MultipleObjectsReturned) — inspected here without executing.
+    res = DriverModel.objects.get("id" => 42, show_query=:dict)
+
+    @test res isa Dict
+    @test contains(res[:sql_text], "SELECT")
+    @test contains(res[:sql_text], "WHERE")
+    @test contains(res[:sql_text], "\"id\" = \$1")
+    @test contains(res[:sql_text], "LIMIT")
+    @test res[:parameters] == [42]
+    @test res[:operation] === :select
+  end
+
   # ===== Section 9: Bulk Insert with show_query =====
   @testset "Bulk Operations" begin
     # Test: bulk_insert with show_query returns structured data

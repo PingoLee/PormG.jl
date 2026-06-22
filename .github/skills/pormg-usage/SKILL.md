@@ -1,6 +1,6 @@
 ---
 name: pormg-usage
-description: Answer PormG usage questions and write consumer-style examples for model definitions, @import_models, migration flow, fluent queries, joins, F/Q/Qor expressions, and bulk operations.
+description: Answer PormG usage questions and write consumer-style examples for model definitions, @import_models, migration flow, fluent queries, joins, F/Q/Qor expressions, aggregations, and bulk operations.
 ---
 
 # PormG.jl — AI Usage Guide
@@ -13,6 +13,17 @@ PormG exposes a fluent, expressive query API. Your default posture is:
 - Write through `M.Model.objects` and chainable methods — never raw SQL.
 - Use parameterized queries. Never interpolate user data into SQL strings.
 - Prefer `DataFrame` output for analytics; prefer `list()` for programming logic.
+
+## Supporting files (load on demand)
+
+This skill is split so the common read/query path stays lean. Read these sibling files **only when the task needs them**:
+
+- **[`reference.md`](reference.md)** — full field-type table, field parameters, and `on_delete` options. Load when *defining models* or choosing a field type.
+- **[`writing.md`](writing.md)** — migrations flow, create/update/delete, bulk insert/copy/update, and transactions. Load when *changing data or schema*.
+
+> Building a **package on top of** PormG (extension hooks like `register_ignore_tables!`, `set_before_connect_hook`, the package-extension pattern)? That's a framework-author topic — see `docs/src/extending.md`, not this skill.
+
+Everything below covers setup and the read/query surface.
 
 ---
 
@@ -84,79 +95,20 @@ Models.set_models(@__MODULE__, @__DIR__)  # Always required at end
 end
 ```
 
+> Full field-type table, parameters, and `on_delete` options: see [`reference.md`](reference.md).
+
 ### Naming Conventions (Mandatory)
 - **Models**: Capitalized, singular, snake_case for multi-word: `Driver`, `Race`, `Order_item`
 - **Field names**: Lowercase, snake_case: `first_name`, `created_at`
 - **Never use `__`** in field or table names — reserved for ORM join traversal
 - Prefix reserved Julia keywords: `_id`, `_type`, `_end`
+- **In query operations, field paths are lowercase** (`constructorid__name`), even when the model declares camelCase fields — camelCase join paths throw at build time.
+
+> Migrations, create/update/delete, bulk operations, and transactions live in [`writing.md`](writing.md).
 
 ---
 
-## 3. Field Types Reference
-
-| Field | DB Type (PG/SQLite) | Key Parameters |
-| :--- | :--- | :--- |
-| `IDField()` | `BIGINT IDENTITY` / `INTEGER PK` | `generated_always` |
-| `AutoField()` | `INTEGER SERIAL` / `INTEGER PK` | — |
-| `CharField(max_length)` | `VARCHAR(n)` | `max_length`, `choices`, `default` |
-| `TextField()` | `TEXT` | `null`, `blank` |
-| `EmailField()` | `VARCHAR` | `max_length=254` |
-| `URLField()` | `VARCHAR` | `max_length=200` |
-| `SlugField()` | `VARCHAR` | `max_length=50`, defaults `db_index=true` |
-| `UUIDField()` | `UUID` / `TEXT` | `auto_add=true` for auto-generation |
-| `IntegerField()` | `INTEGER` | `default`, `null` |
-| `BigIntegerField()` | `BIGINT` | — |
-| `FloatField()` | `DOUBLE PRECISION` | rejects `Inf`, `NaN` |
-| `DecimalField(...)` | `NUMERIC(p,s)` | `max_digits`, `decimal_places` |
-| `BooleanField()` | `BOOLEAN` | `default` |
-| `DateField()` | `DATE` | `auto_now_add`, `auto_now` |
-| `DateTimeField()` | `TIMESTAMPTZ` | `auto_now_add`, `auto_now`, `type="TIMESTAMP"` |
-| `TimeField()` | `TIME` | — |
-| `DurationField()` | `INTERVAL` | — |
-| `JSONField()` | `JSONB` / `TEXT` | accepts `Dict`, `Vector`, scalars |
-| `ForeignKey(model)` | `BIGINT` + FK constraint | `on_delete`, `related_name` |
-| `OneToOneField(model)` | `BIGINT` UNIQUE + FK | `on_delete` |
-| `PasswordField()` | `VARCHAR(128)` | `auto_hash=true` — never stores plaintext |
-| `ImageField()` | `VARCHAR` | stores file path |
-| `BinaryField()` | `BYTEA` | — |
-
-**Common parameters (all fields):** `null=false`, `blank=false`, `unique=false`, `default=nothing`, `db_index=false`, `db_column=nothing`, `editable=true`
-
-**`on_delete` options:** `"CASCADE"`, `"RESTRICT"`, `"PROTECT"`, `"SET_NULL"`, `"SET_DEFAULT"`, `"DO_NOTHING"`
-
----
-
-## 4. Migrations
-
-Always follow this ordered flow:
-
-```julia
-using PormG
-
-# 1. First-time initialization (safe to run on existing DBs)
-PormG.Migrations.init_migrations("db")
-
-# 2. Check current state
-PormG.Migrations.status("db")
-
-# 3. Generate migration plan from current models
-PormG.Migrations.makemigrations("db")
-
-# 4. Dry-run: review SQL before executing (check for destructive ops)
-PormG.Migrations.dry_run("db")
-
-# 5. Apply migrations
-PormG.Migrations.migrate("db")
-
-# For destructive changes (column drops, renames), opt in explicitly:
-PormG.Migrations.migrate("db", destructive=true)
-```
-
-> **Never** skip `dry_run()` before a destructive migration. If it reports DROP columns, require explicit approval.
-
----
-
-## 5. Reading Data — Query Patterns
+## 3. Reading Data — Query Patterns
 
 ### Core pattern
 
@@ -199,10 +151,10 @@ df   = query |> DataFrame   # DataFrames.DataFrame
 
 ---
 
-## 6. Joins and Lookups
+## 4. Joins and Lookups
 
 ### Relationship traversal
-Use `__` to traverse ForeignKey relationships:
+Use `__` to traverse ForeignKey relationships (lowercase field paths):
 
 ```julia
 # Filter by joined field
@@ -246,7 +198,7 @@ Append `__@operator` to any field path:
 
 ---
 
-## 7. Complex Filters: Q Objects
+## 5. Complex Filters: Q Objects
 
 Use `Q()` for AND logic and `Qor()` for OR logic when `.filter()` pairs are insufficient:
 
@@ -265,7 +217,7 @@ M.Result.objects.filter(
 
 ---
 
-## 8. F-Expressions
+## 6. F-Expressions
 
 `F("fieldname")` creates a database-side field reference. Use for atomic updates and computed columns.
 
@@ -295,99 +247,56 @@ M.Result.objects.filter(
 
 ---
 
-## 9. Writing Data
+## 7. Aggregations
 
-### Create a single record
+Aggregate constructors: `Count`, `Sum`, `Avg`, `Max`, `Min`. Use them inside `values()` with an alias. PormG auto-generates `GROUP BY` from the **non-aggregate** columns — never write `GROUP BY` yourself.
+
 ```julia
-driver = M.Driver.objects.create(
-    "forename"    => "Ayrton",
-    "surname"     => "Senna",
-    "nationality" => "Brazilian",
-    "driverref"   => "senna"
-)
-# Returns Dict with all fields including the new PK
-```
+using PormG: Count, Sum, Max, Min
 
-### Update matching records
-```julia
-M.Driver.objects.
-    filter("driverid" => 1).
-    update("nationality" => "Brazil")
-
-# With F-expression (atomic)
+# Wins per constructor — grouped by the plain column, COUNT aggregated
 M.Result.objects.
-    filter("resultid__@in" => [1, 2, 3]).
-    update("points" => F("points") * 1.1)
+    filter("positionorder" => 1).
+    values("constructorid__name", "wins" => Count("resultid")).
+    order_by("-wins")
 ```
 
-### Delete records
+### No grouping → single row (Django `.aggregate()` equivalent)
+
+When **every** `values()` column is an aggregate, there are no non-aggregate columns to group by, so PormG emits **no `GROUP BY`** and returns one summary row over the whole (optionally filtered) table:
+
 ```julia
-# Delete with filter
-M.Result.objects.filter("raceid__year__@lt" => 1960).delete()
-
-# Inspect before deleting (never executes)
-sql = M.Result.objects.filter("raceid" => 999).delete(show_query=:sql)
-
-# Delete all (requires explicit opt-in to prevent accidents)
-M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+M.Result.objects.
+    filter("constructorid" => 131).
+    values(
+        "max_points"    => Max("points"),
+        "min_points"    => Min("points"),
+        "total_results" => Count("resultid"),
+    )   # → one-row result; WHERE still filters rows before aggregation
 ```
+
+### Aggregate arithmetic — and when NOT to use `F`
+
+Aggregates take part in arithmetic; the result stays database-side and constants are parameterized (`$1` / `?`), not interpolated:
+
+```julia
+"net_points" => Sum("points") - 10      # SUM(points) - 10
+"id_span"    => Max("id") - Min("id")   # MAX(id) - MIN(id)
+```
+
+Pass the column to the aggregate as a **plain string**, and apply the math to the aggregate object — do **not** wrap the column in `F()`:
+
+- `Max("points") - 5` → `MAX(points) - 5` (math on the aggregate) ✅
+- `F("points") - 5` → `points - 5` (row-level column expression) — different meaning
+- `Max(F("points"))` → unnecessary; use `Max("points")`
+
+Filtering on an aggregate alias auto-promotes the condition to `HAVING` (e.g. `filter("wins__@gt" => 5)`).
+
+Full SQL-shape examples: `docs/src/read/filters_and_aggregates.md` and `docs/src/read/field_expressions.md`.
 
 ---
 
-## 10. Bulk Operations
-
-For large datasets, always use bulk operations instead of loops:
-
-```julia
-using CSV, DataFrames
-
-# Standard batch insert (all dialects)
-df = CSV.File("drivers.csv") |> DataFrame
-bulk_insert(M.Driver.objects, df)
-bulk_insert(M.Driver.objects, df, chunk_size=500)  # custom chunk size
-
-# Ultra-fast COPY (PostgreSQL only — 10-100x faster than bulk_insert)
-bulk_copy(M.Driver.objects, df)
-bulk_copy(M.Driver.objects, df, chunk_size=10_000)
-
-# Map DataFrame columns to model fields
-bulk_copy(M.Driver.objects, df, columns=[
-    "first_name" => "forename",
-    "last_name"  => "surname"
-])
-
-# Batch update from DataFrame
-bulk_update(M.Result.objects, df,
-    columns = ["points"],     # fields to SET
-    filters = ["resultid"]    # fields to match on (WHERE)
-)
-```
-
-**Pre-process CSV nulls before bulk operations:**
-```julia
-for col in [:position, :milliseconds, :rank]
-    df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-end
-```
-
----
-
-## 11. Transactions
-
-```julia
-using PormG
-
-# Wrap multiple operations in a single atomic transaction
-PormG.run_in_transaction("db") do
-    M.Race.objects.create("year" => 2025, "name" => "New Race", "date" => today())
-    bulk_insert(M.Result.objects, results_df)
-end
-# All operations commit together, or all roll back on error
-```
-
----
-
-## 12. Query Inspection & Debugging
+## 8. Query Inspection & Debugging
 
 Every terminal method accepts `show_query`:
 
@@ -419,7 +328,7 @@ println(inspection[:dialect])
 
 ---
 
-## 13. Multi-Database & Multi-Tenancy
+## 9. Multi-Database & Multi-Tenancy
 
 ```julia
 # Route a single query to a different connection pool
@@ -431,7 +340,7 @@ PormG.Configuration.load_many(["db/conn_primary.yml", "db/conn_replica.yml"])
 
 ---
 
-## 14. Anti-Patterns
+## 10. Anti-Patterns
 
 ### Alias identifier rules
 
@@ -453,8 +362,11 @@ Alias identifiers must start with a Unicode letter or underscore, followed by le
 | `query \|> list` (free function) | `query.list()` |
 | `delete(query)` (free function) | `query.delete()` |
 | `SELECT *` across joins | `.values("*", "joined__field")` explicitly |
-| Loops for batch inserts | `bulk_insert()` or `bulk_copy()` |
+| camelCase join path in a query | lowercase path (`constructorid__name`) |
+| Loops for batch inserts | `bulk_insert()` or `bulk_copy()` (see `writing.md`) |
 | Python-style `annotate()` | `values("alias" => F("field") * 1.5)` |
 | `F("points") > 20` in filter | `"points__@gt" => 20` (suffix syntax) |
+| `Max(F("id")) - 5` for aggregate math | `Max("id") - 5` (string column; math on the aggregate) |
+| Expecting `GROUP BY` from an all-aggregate `values()` | One summary row is intended — `.aggregate()` style |
 | Modifying fixture data to fit model | Normalize at import time |
-| Skipping `dry_run()` before migrate | Always run `dry_run()` first |
+| Skipping `dry_run()` before migrate | Always run `dry_run()` first (see `writing.md`) |

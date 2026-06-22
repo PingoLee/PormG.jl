@@ -417,7 +417,7 @@ function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing
   accepted = Set([:filters, :field, :join_type, :warn])
   for k in keys(kwargs)
     if !(k in accepted)
-      throw(ArgumentError("Invalid keyword argument: \e[31m$k\e[0m. Accepted: \e[31m$(collect(accepted))\e[0m"))
+      throw(_argerr("Invalid keyword argument: \e[31m$k\e[0m. Accepted: \e[31m$(collect(accepted))\e[0m"))
     end
   end
   filters = get(kwargs, :filters, nothing)
@@ -533,7 +533,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
   end
 
   if !(func.function_name in ["COUNT", "SUM", "AVG", "MIN", "MAX"])
-    throw(ArgumentError("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not a recognized function. Allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX, CASE, WHEN\e[0m"))
+    throw(_argerr("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not a recognized function. Allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX, CASE, WHEN\e[0m"))
   end
 
   if func.function_name in ["COUNT", "SUM"]
@@ -559,7 +559,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
     elseif haskey(fields, field)
       return fields[field]
     else
-      throw(ArgumentError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m (base column: \e[31m$(base_col)\e[0m) not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
+      throw(_argerr("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m (base column: \e[31m$(base_col)\e[0m) not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
     end
   end
 
@@ -570,7 +570,7 @@ function _set_field_from_sql_function(func::String, field::String, instruct::SQL
   elseif haskey(instruct.object.model.fields, field)
     return instruct.object.model.fields[field]
   else
-    throw(ArgumentError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
+    throw(_argerr("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
   end
 end
 

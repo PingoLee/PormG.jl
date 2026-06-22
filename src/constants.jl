@@ -219,6 +219,34 @@ const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoind
 
 const postgres_ignore_table::Vector{String} = ["auth_", "django_", "social_", "account_", "allauth_", "admin_", "celery_", "django_celery_", "djcelery_", "kombu_", "pormg_migrations"]
 
+# Consumer-extensible ignore list. Downstream packages (e.g. Nitro) register their OWN
+# framework/infrastructure tables here — typically from a package extension's `__init__` —
+# so introspection / makemigrations skips them without those app-specific table names being
+# hardcoded into this general-purpose ORM. Merged into the per-call `ignore_table` inside
+# `convert_schema_to_models`, so it applies to every introspection path.
+const _EXTRA_IGNORE_TABLES = Ref{Vector{String}}(String[])
+
+"""
+    register_ignore_tables!(tables) -> Vector{String}
+
+Register table-name patterns that schema introspection (`convert_schema_to_models`,
+`import_models_from_*`, `makemigrations`) should always skip — e.g. a consumer framework's
+own infrastructure tables. Additive and idempotent (deduplicated); returns the full list.
+
+Intended to be called once at load time, typically from a package extension's `__init__`:
+
+```julia
+# in YourPkgPormGExt.__init__
+isdefined(PormG, :register_ignore_tables!) && PormG.register_ignore_tables!(["yourpkg_jobs"])
+```
+"""
+function register_ignore_tables!(tables::AbstractVector{<:AbstractString})
+  _EXTRA_IGNORE_TABLES[] = unique(vcat(_EXTRA_IGNORE_TABLES[], String.(tables)))
+  return _EXTRA_IGNORE_TABLES[]
+end
+
+export register_ignore_tables!
+
 # deletion functions handlers
 function CASCADE end
 function RESTRICT end

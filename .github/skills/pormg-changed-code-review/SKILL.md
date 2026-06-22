@@ -116,6 +116,7 @@ In the final pass, review `docs`, `ext`, `.github`, `.cursor`, `db`, and any rem
 - workflow or CI changes that hide failures or leak secrets
 - generated files that drift from source-of-truth files
 - configuration changes that alter runtime or migration behavior without matching tests
+- **changed query examples in `docs/`, `README.MD`, or `src/*.md`** that were not verified against the live `db_sl` data — confirm the SQL shape, execute the example, and cross-check the value per the verification recipe in [`../pormg-public-api-development/SKILL.md`](../pormg-public-api-development/SKILL.md) ("Verifying doc examples against the live database"). Flag camelCase join paths (`driverId__surname`) — query paths must be lowercase or they throw at build time.
 
 ## Review Method
 
@@ -137,6 +138,7 @@ Always re-read `.github/instructions/general.instructions.md` (step 1 of Review 
 - Flag docs or examples that regress to generic domains instead of Formula 1 scenarios
 - When a new subsystem file appears in `src/` that is not yet listed in `general.instructions.md`, flag it as an architecture-checkpoint gap
 - Flag any reintroduction of silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")` before quoting) — the correct contract is fail-closed: `_validate_identifier` throws on invalid input and never silently rewrites identifiers
+- Flag raw ANSI escape codes (`\e[`) embedded in `throw(...)` / `error(...)` messages — these must route through `_argerr` / `_emsg` (`src/querybuilder/exceptions.jl`) so color degrades off-TTY; `@info`/`@warn`/`@error` logging may keep ANSI
 
 ## After Reporting Findings
 

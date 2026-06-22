@@ -1,8 +1,8 @@
 using Test
 using DataFrames
 using PormG
-using PormG.Models: Model, CharField, IDField
-import PormG.ConnectionPool: fetch
+using PormG.Models: Model, CharField, IDField, IntegerField
+import PormG.ConnectionPool: fetch, SQLiteConnectionPool
 
 # Initialize a dummy model for testing sequence synchronization.
 SequenceDriver = Model("drivers",
@@ -111,4 +111,56 @@ end
   @test count(sql -> occursin("INSERT INTO", sql), SEQUENCE_SYNC_SQL) == 2
   @test any(sql -> occursin("pg_get_serial_sequence", sql), SEQUENCE_SYNC_SQL)
   @test any(sql -> occursin("setval('public.legacy_driver_id_seq'", sql), SEQUENCE_SYNC_SQL)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite Sequence Sync: tolerate non-integer MAX(pk) values
+# _update_sequence (SQLite) reads MAX(pk) and writes it into sqlite_sequence. A
+# non-integer maximum — a TEXT primary key, or a value SQLite hands back as a float —
+# previously crashed on `Int64(max_id)` (MethodError / InexactError) inside the insert
+# path. The coercion (`max_id isa Real ? floor(Int64, max_id) : tryparse(Int64, string(max_id))`)
+# now syncs any numeric maximum (integer or float) while turning a non-numeric one into a
+# safe skip. Hermetic temp SQLite — no external setup.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite _update_sequence tolerates non-integer MAX(pk)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "seq.sqlite"); pool_size = 1)
+    settings = PormG.Configuration.Settings(
+      connections   = pool,
+      db_def_folder = dir,
+      change_data   = true,
+    )
+
+    # (a) Integer AUTOINCREMENT PK: _update_sequence upserts MAX(id) into sqlite_sequence —
+    #     it corrects a deliberately stale value and, crucially, NEVER appends duplicate rows
+    #     even when called repeatedly. (The old INSERT OR REPLACE appended a row each time,
+    #     since sqlite_sequence.name has no UNIQUE constraint.)
+    fetch(pool, "CREATE TABLE seq_int (id INTEGER PRIMARY KEY AUTOINCREMENT, n INTEGER);")
+    fetch(pool, "INSERT INTO seq_int (id, n) VALUES (5, 1);")
+    fetch(pool, "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'seq_int';")   # deliberately stale
+
+    PormG.QueryBuilder._update_sequence(Model("seq_int", id=IDField(), n=IntegerField()), pool, ["id"], settings)
+    PormG.QueryBuilder._update_sequence(Model("seq_int", id=IDField(), n=IntegerField()), pool, ["id"], settings)  # idempotent
+
+    rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq_int';") |> DataFrame
+    @test nrow(rows) == 1        # upsert never appends duplicate rows (the quirk this guards)
+    @test rows[1, :seq] == 5     # stale value corrected to MAX(id)
+
+    # (b) TEXT PK: MAX(code) is non-numeric → tryparse returns nothing → must NOT throw (graceful skip).
+    fetch(pool, "CREATE TABLE seq_text (code TEXT PRIMARY KEY);")
+    fetch(pool, "INSERT INTO seq_text (code) VALUES ('abc');")
+
+    @test (PormG.QueryBuilder._update_sequence(Model("seq_text", code=CharField()), pool, ["code"], settings); true)
+
+    # (c) Float MAX (REAL column): a Real value is coerced via floor(Int64, …), not skipped —
+    #     `tryparse(Int64, "5.0")` would have returned nothing. Exercises the numeric branch.
+    fetch(pool, "CREATE TABLE seq_real (id REAL PRIMARY KEY);")
+    fetch(pool, "INSERT INTO seq_real (id) VALUES (5.0);")
+
+    PormG.QueryBuilder._update_sequence(Model("seq_real", id=IDField()), pool, ["id"], settings)
+
+    real_rows = fetch(pool, "SELECT seq FROM sqlite_sequence WHERE name = 'seq_real';") |> DataFrame
+    @test nrow(real_rows) == 1
+    @test real_rows[1, :seq] == 5    # 5.0 floored to an integer seq, not silently skipped
+  end
 end

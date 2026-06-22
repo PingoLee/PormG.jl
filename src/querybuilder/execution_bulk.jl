@@ -85,7 +85,7 @@ function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
       delete!(mapping, field)
       filter!(mapped_field -> mapped_field != field, fields_df)
     elseif any(blank_mask)
-      throw(ArgumentError("Error in bulk_$(operation), the auto-generated primary key field \e[4m\e[31m$(field)\e[0m has mixed blank and explicit values; either remove the column or provide a value for every row"))
+      throw(_argerr("Error in bulk_$(operation), the auto-generated primary key field \e[4m\e[31m$(field)\e[0m has mixed blank and explicit values; either remove the column or provide a value for every row"))
     end
   end
 
@@ -165,7 +165,7 @@ end
 function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; clone::Bool=true)
   model = objct.object.model
   settings, connection, conn_key = get_settings(objct)
-  !settings.change_data && throw(ArgumentError("Error in allocate_primary_keys, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_argerr("Error in allocate_primary_keys, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   df = clone ? Base.copy(df_o) : df_o
   n = DataFrames.nrow(df)
@@ -401,7 +401,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         elseif f_meta.primary_key
           # It's a PK, we'll collect it later
         elseif !f_meta.null && operation in [:insert, :copy]
-          throw(ArgumentError("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m does not allow null and has no default value"))
+          throw(_argerr("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m does not allow null and has no default value"))
         end
       end
 
@@ -434,7 +434,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   
   # Final sanity check for fields_df existence in model
   for field in fields_df
-    in(field, fields) || throw("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m")
+    in(field, fields) || throw(_emsg("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m"))
   end
 
   # Return fields_df cleaned up (unique and existing in mapping)
@@ -514,7 +514,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_argerr("Error in bulk_insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -617,7 +617,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   !(connection isa PormGPostgres) && throw(ArgumentError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_copy, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_argerr("Error in bulk_copy, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -706,7 +706,7 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     try
       model.fields[field].formater(row[col_name])
     catch e
-      throw(ArgumentError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
+      throw(_argerr("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
     end
   end  
 end
@@ -823,7 +823,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   settings, connection, conn_key = get_settings(objct)
 
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in bulk_update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
+  !settings.change_data && throw(_argerr("Error in bulk_update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0

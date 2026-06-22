@@ -387,7 +387,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   set_context!(parameters, :select)
   
   # check if is allowed to insert
-  !settings.change_data && throw(ArgumentError("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_argerr("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
   
   # check if the fields are in objct.insert
   for field in fields
@@ -404,7 +404,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else
-        throw(ArgumentError("Error in insert, the field \e[4m\e[31m$(field)\e[0m not allow null"))
+        throw(_argerr("Error in insert, the field \e[4m\e[31m$(field)\e[0m not allow null"))
       end
     end
   end
@@ -570,8 +570,19 @@ function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::
     if size(df, 1) > 0
       max_id = df[1, :m]
       if !ismissing(max_id) && !isnothing(max_id)
-        update_sequence_sql = "INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES('$(safe_table_literal)', $(Int64(max_id)));"
-        fetch(settings, update_sequence_sql)
+        # MAX(pk) is normally an Int64, but coerce defensively: a Float ("5.0") must still
+        # resolve to its integer seq value instead of being silently skipped
+        # (tryparse(Int64, "5.0") === nothing). A non-numeric value yields `nothing` → skipped.
+        parsed_id = max_id isa Real ? floor(Int64, max_id) : tryparse(Int64, string(max_id))
+        if parsed_id !== nothing
+          # sqlite_sequence.name has no UNIQUE constraint, so `INSERT OR REPLACE` appends a
+          # duplicate row instead of overwriting. Upsert by hand: UPDATE the existing row
+          # (collapsing any duplicates a prior buggy run left, all to the same value), then
+          # INSERT only if no row exists yet.
+          fetch(settings, "UPDATE sqlite_sequence SET seq = $(parsed_id) WHERE name = '$(safe_table_literal)';")
+          fetch(settings, "INSERT INTO sqlite_sequence (name, seq) SELECT '$(safe_table_literal)', $(parsed_id) " *
+                          "WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = '$(safe_table_literal)');")
+        end
       end
     end
   end
@@ -794,7 +805,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   settings, connection, conn_key = get_settings(objct, connection=connection)
 
   # Check if is allowed to update
-  !settings.change_data && throw(ArgumentError("Error in update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
+  !settings.change_data && throw(_argerr("Error in update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
 
   # Guard: limit(), offset(), and order_by() cannot be combined with update().
   # Standard SQL UPDATE does not support these clauses. Silently dropping them

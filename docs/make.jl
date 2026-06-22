@@ -54,6 +54,7 @@ makedocs(
         "Import from Django" => "import_django.md",
 
         "Advisory Locks" => "advisory_lock.md",
+        "Extending PormG" => "extending.md",
         "Contributing" => "contributing.md",
         "API" => "api.md"
     ],

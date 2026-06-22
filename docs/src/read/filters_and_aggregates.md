@@ -411,6 +411,37 @@ You do **not** write `GROUP BY` manually — PormG handles it.
 > [!TIP]
 > Window functions (`Rank`, `RowNumber`, `Lag`, …) can coexist with aggregates in the same `values()` call. PormG keeps window aliases out of `GROUP BY` automatically. See [Window Functions](window_functions.md).
 
+### Aggregating Without Grouping
+
+When **every** column in `values()` is an aggregate, there are no non-aggregate columns to group by — so PormG emits **no `GROUP BY`** and the query collapses to a single summary row over the whole (optionally filtered) table. This is the equivalent of Django's `.aggregate()`.
+
+```julia
+# Highest score, lowest score, and number of results for one constructor
+query = M.Result.objects
+query.filter("constructorid" => 131)
+query.values(
+    "max_points"    => Max("points"),
+    "min_points"    => Min("points"),
+    "total_results" => Count("resultid")
+)
+df = query |> DataFrame   # one-row DataFrame
+```
+
+Generated SQL (PostgreSQL):
+```sql
+SELECT
+    MAX("Tb"."points") as "max_points",
+    MIN("Tb"."points") as "min_points",
+    COUNT("Tb"."resultid") as "total_results"
+FROM "result" as "Tb"
+WHERE "Tb"."constructorid" = $1
+-- Parameters: [131]
+```
+
+The `WHERE` filter still applies row-by-row *before* aggregation; it is the absence of plain (non-aggregate) **projection** columns that removes the `GROUP BY`. Add any plain column back into `values()` and PormG groups by it again, exactly as shown in the section above.
+
+These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid") - Min("resultid")`, or subtract a constant like `Max("resultid") - 1000`. See [Aggregate Arithmetic](field_expressions.md#aggregate-arithmetic).
+
 ---
 
 ## HAVING Clauses

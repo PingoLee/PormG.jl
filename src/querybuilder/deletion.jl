@@ -59,7 +59,7 @@ function delete(objct::SQLObjectHandler;
   settings, connection, conn_key = get_settings(objct, connection=connection)
     
   # check if is allowed to delete
-  !settings.change_data && throw(ArgumentError("Error in delete, the connection \e[4m\e[31m$conn_key\e[0m not allowed to delete"))
+  !settings.change_data && throw(_argerr("Error in delete, the connection \e[4m\e[31m$conn_key\e[0m not allowed to delete"))
 
   if objct.object.limit > 0 || objct.object.offset > 0 || !isempty(objct.object.order)
     throw(ArgumentError(
@@ -87,7 +87,13 @@ function delete(objct::SQLObjectHandler;
   end
 
   # don't allow to delete without filter
-  !allow_delete_all && objct.object.filter  |> isempty && throw("Error in delete, the delete must have a filter")
+  if !allow_delete_all && objct.object.filter |> isempty
+    throw(_argerr(
+      "Error in delete, the delete must have a filter. " *
+      "To delete every row, pass \e[4m\e[31mallow_delete_all = true\e[0m explicitly, e.g. " *
+      "Model.objects.delete(allow_delete_all = true) or delete(query; allow_delete_all = true)."
+    ))
+  end
   
   # If no objects to delete, return early (unless we're just inspecting the query)
   if show_query === :execute && objct |> !do_exists
@@ -318,13 +324,13 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
   elseif field.on_delete in [PROTECT, RESTRICT]    
     # More descriptive error with field name, constraint type, and sample IDs
     constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
-    throw(ArgumentError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
+    throw(_argerr("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
     @pormg_debug false
     # check if the field allow null
     if !field.null
-      throw(ArgumentError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
+      throw(_argerr("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
     end
 
     # Add field update to set field to NULL

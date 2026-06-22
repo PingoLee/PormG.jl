@@ -257,6 +257,25 @@ function set_models(_module::Module, path::String)::Nothing
 end
 
 """
+    _infer_self_heal_key(model::PormGModel, models_in_mod, config) -> String | Nothing
+
+Decide which connection key to self-heal `model` to by inference, or `nothing` when the
+choice would be ambiguous. SAFE-BY-DEFAULT: with more than one connection configured we
+refuse to guess — a wrong guess silently routes queries to the wrong database (e.g. binding
+`db`-models to `db_portalsus`). We infer a key only when there is exactly one connection AND
+`model` is actually one of the models defined in its module (`models_in_mod`).
+
+Pure by construction (no globals, no `set_models` side effects), so the "≥2 connections ⇒
+refuse" invariant is unit-testable in isolation. Callers pass `get_all_models(mod)` as
+`models_in_mod` and the global `config`.
+"""
+function _infer_self_heal_key(model::PormGModel, models_in_mod, config)
+    length(config) == 1 || return nothing                     # >1 connection → never guess
+    any(m === model for m in models_in_mod) || return nothing # model not defined in this module
+    return first(keys(config))
+end
+
+"""
     ensure_model_initialized(model::PormGModel)
 
 Checks if a model has been initialized (i.e., has a connect_key that exists in `config`).
@@ -299,24 +318,37 @@ function ensure_model_initialized(model::PormGModel)
         end
     end
 
-    # 2b. If the model has _module set (survives precompilation), try to re-register it directly.
-    #     The module's __init__ may not have fired yet, or may have failed because config wasn't loaded.
-    if !isnothing(model._module) && !isempty(config)
+    # 2b. If the model has _module set (survives precompilation), re-register it from the
+    #     module's OWN recorded source path (__pormg_init_path__, injected by
+    #     @import_models/@models_module). That path is authoritative — it binds the module
+    #     to the connection it was actually defined for. We must NOT guess by scanning
+    #     `config`: in a multi-connection setup the first entry iterated could be the wrong
+    #     database, silently routing queries there (e.g. binding `db`-models to `db_portalsus`).
+    if !isnothing(model._module)
         mod = model._module
-        # Try to find the matching config entry by checking db_def_folder patterns
-        for (k, v) in config
+        if isdefined(mod, :__pormg_init_path__)
             try
-                # Get all models in the module to check if model belongs to it
-                models_in_mod = get_all_models(mod)
-                if any(m === model for m in models_in_mod)
-                    @info "Self-healing: Re-registering module $(mod) with key '$k'"
-                    set_models(mod, v.db_def_folder)
+                set_models(mod, getfield(mod, :__pormg_init_path__))
+                if !isnothing(model.connect_key) && haskey(config, model.connect_key)
+                    @info "Self-healing: Re-registered $(model.name) from module $(mod) source path"
+                    return true
+                end
+            catch
+            end
+        end
+        # Fallback: infer the key from `config`, but only when unambiguous. The decision
+        # (refuse to guess with >1 connection) lives in `_infer_self_heal_key` so it can be
+        # tested in isolation; here we just act on its verdict.
+        if isnothing(model.connect_key)
+            try
+                inferred = _infer_self_heal_key(model, get_all_models(mod), config)
+                if inferred !== nothing
+                    set_models(mod, config[inferred].db_def_folder)
                     if !isnothing(model.connect_key) && haskey(config, model.connect_key)
                         return true
                     end
                 end
             catch
-                continue
             end
         end
     end
@@ -459,8 +491,9 @@ end
 Converts a model object to a string representation to create the model.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words)::String
+    Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; contants_julia::Vector{String}=reserved_words)::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
+- `settings::SQLConn`: Connection settings; supplies `django_prefix` and the target output folder.
 - `contants_julia::Vector{String}=reserved_words`: A vector of reserved words in Julia.
 
 # Returns

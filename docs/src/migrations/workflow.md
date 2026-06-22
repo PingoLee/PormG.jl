@@ -66,6 +66,34 @@ using PormG, Tachikoma
 PormG.tui("db")
 ```
 
+### Discarding a Pending Migration
+
+Reviewed the generated plan and decided you don't want it? Discard the draft before applying:
+
+```julia
+PormG.Migrations.discard_pending_migration("db")
+```
+
+This is the one inherently safe, reversible migration op: a pending migration is **only** the
+`db/migrations/pending_migrations.jl` file, with no database state behind it. Discarding it is
+**filesystem-only** — it never touches the `pormg_migrations` history table or the live schema
+(unlike `migrate` or `remove_migration_record`, which mutate applied state).
+
+By default the draft is **renamed** to `pending_migrations.jl.discarded` so it can be recovered.
+Pass `backup=false` to delete it outright:
+
+```julia
+# Keep a recoverable copy (default) → pending_migrations.jl.discarded
+PormG.Migrations.discard_pending_migration("db")
+
+# Delete the draft with no backup
+PormG.Migrations.discard_pending_migration("db", backup=false)
+```
+
+It returns a summary of what was thrown away — `(discarded=true, path, backup, tables, statements)` —
+or `nothing` when there was no pending migration. A later `makemigrations` overwrites the pending
+file anyway, so regenerating the plan afterwards is unaffected.
+
 ---
 
 ## Step 4: Check Status

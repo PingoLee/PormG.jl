@@ -122,6 +122,40 @@ Use internal or function-style helpers only when the test is explicitly about in
 - When documenting complex queries, briefly explain the generated SQL shape
 - Keep limitations explicit instead of implying unsupported features are complete
 
+### Verifying doc examples against the live database
+
+Every query example added or changed in `docs/`, `README.MD`, or `src/*.md` should be confirmed **two ways** before commit: the **generated SQL shape** (no DB needed) and the **actual result** against the preloaded F1 data. `test/integration/db_sl/f1.sqlite` ships with the full dataset, so this needs no setup.
+
+Run a scratch script placed under `test/integration/` (so `@import_models` resolves) or use absolute paths:
+
+```julia
+ENV["PORMG_ENV"] = "dev"            # never "test" — it breaks Generator scratch configs
+import Pkg; Pkg.activate(".")
+using PormG, DataFrames
+import PormG.QueryBuilder: Sum, Count, Max, Min, inspect_query
+cd("test/integration")
+PormG.Configuration.load("db_sl")               # local SQLite, F1 data preloaded
+PormG.@import_models "db_sl/models.jl" models
+import .models as M
+
+q = M.Result.objects.filter("constructorid" => 131).
+    values("max_points" => Max("points"), "n" => Count("resultid"))
+
+println(inspect_query(q)[:sql_text])            # 1. confirm SQL shape (returns before any DB call)
+df = q |> DataFrame                             # 2. execute against live data
+# 3. cross-check the value, not just that it ran:
+raw = (M.Result.objects.filter("constructorid" => 131).values("points") |> DataFrame).points
+@assert df[1, :max_points] == maximum(raw) && df[1, :n] == length(raw)
+```
+
+Rules and gotchas:
+
+- **Verify the value, not just execution.** For aggregates/computed columns, recompute the answer independently (raw row scan, plain `Sum`, etc.) and assert equality — a query that runs can still be wrong.
+- **Query field paths must be lowercase** (`constructorid__name`), even though models declare camelCase fields. CamelCase join paths throw at build time.
+- **`@import_models` resolves its path relative to the script file's directory** — keep the script in `test/integration/` or pass an absolute path.
+- **Dialect placeholders differ:** db_sl (SQLite) renders `?`, db_2 (PostgreSQL) renders `$1`. Doc SQL blocks conventionally show the PostgreSQL form; note the SQLite difference when it matters.
+- `inspect_query(q)[:sql_text]` (or `show_query=:sql`) renders before any DB round-trip, so the SQL-shape check works even without a live connection.
+
 ### Auxiliary mechanics-only models
 
 - `M.Just_a_test_deletion`: CRUD and deletion safety tests

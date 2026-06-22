@@ -36,7 +36,7 @@ rows = M.Result.objects
 | Consumer usage, setup, query examples (no internals) | [`.github/skills/pormg-usage/SKILL.md`](.github/skills/pormg-usage/SKILL.md) |
 | Pre-push / pre-PR review | [`.github/skills/pormg-changed-code-review/SKILL.md`](.github/skills/pormg-changed-code-review/SKILL.md) |
 
-Cross-cutting changes: public-API skill + the most specific subsystem skill. Reviews: review skill only.
+Cross-cutting changes: public-API skill + the most specific subsystem skill. Reviews: review skill only — **except doc-content reviews** ("review the doc/examples in …"), which read the review skill **and** the public-API skill, so the live-database example-verification recipe applies.
 
 ## Layout
 

@@ -84,8 +84,25 @@ PormG.config["default"] = MockSettings
         )
 
         @test validate_field_data(mock_str_model, "code", "abc", "insert") === true
-        
+        # Bounded CharField still enforces its limit (max_length=5).
+        @test_throws ErrorException validate_field_data(mock_str_model, "code", "toolong", "insert")
+
         @test validate_field_data(mock_str_model, "email", "test@example.com", "insert") === true
+
+        # Regression: a field whose `max_length` is `nothing` (e.g. BinaryField, the
+        # St_cruz.b1_n case) receiving a String value must SKIP the length check, not
+        # compare `length(value) > nothing` (which threw MethodError: isless(::Int, ::Nothing)).
+        mock_unbounded_model = Models.Model_Type(
+            name = "unbounded_len_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "blob" => Models.BinaryField()    # max_length defaults to nothing
+            ),
+            field_names = ["id", "blob"]
+        )
+        @test mock_unbounded_model.fields["blob"].max_length === nothing
+        @test validate_field_data(mock_unbounded_model, "blob", "36336", "update") === true
+        @test validate_field_data(mock_unbounded_model, "blob", "x"^10_000, "insert") === true
     end
 
     @testset "Numeric Fields: Comprehensive Type Handling" begin

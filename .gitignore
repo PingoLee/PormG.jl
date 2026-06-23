@@ -31,6 +31,9 @@ test/integration/db_sl/migrations/*
 test/integration/db_sl/f1.sqlite*
 test/performance/snoop_out/*
 
+# Reload unit-test scratch (generated at runtime by test_reload.jl)
+test/unit/db_r/
+
 # Migration edge-case test artifacts (generated at runtime, never committed)
 test/integration/db_test_migration/
 test/integration/db_test_migration_pg/models.jl

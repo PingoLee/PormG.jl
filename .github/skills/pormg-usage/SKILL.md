@@ -9,6 +9,8 @@ description: Answer PormG usage questions and write consumer-style examples for 
 
 Use this skill whenever you need to write, refactor, or debug code in a project that uses **PormG.jl** — a Django-inspired async-first ORM for Julia.
 
+**Audience: you are a PormG consumer** — writing application code in a project that *depends on* PormG, not editing the package itself. Changing PormG's own `src/`, in-repo `docs/`, or integration tests? Use `pormg-public-api-development` instead.
+
 PormG exposes a fluent, expressive query API. Your default posture is:
 - Write through `M.Model.objects` and chainable methods — never raw SQL.
 - Use parameterized queries. Never interpolate user data into SQL strings.

@@ -9,11 +9,11 @@ description: Implement or refactor user-visible PormG ORM behavior through M.Mod
 
 Use this skill when changing PormG behavior, adding regression coverage, or writing examples that should reflect how a real package user interacts with the ORM.
 
+**Audience: you are editing the PormG package itself** — its `src/`, its in-repo `docs/` and `README`, and its integration tests. Writing application code in a project that merely *consumes* PormG? Use `pormg-usage` instead.
+
 The core discipline is simple: prefer the public fluent API in user-facing code and integration tests, and only drop into internal helpers when the test is explicitly about internals.
 
-Use `pormg-migrations-development` instead when the task centers on `src/Migrations.jl` or `src/migrations/`.
-
-Use `pormg-querybuilder-internals` instead when the task centers on `src/QueryBuilder.jl`, files under `src/querybuilder/`, SQL rendering, or parameter bucket routing.
+Centering on the migration subsystem, or on low-level query-builder/SQL rendering, instead? Switch to `pormg-migrations-development` or `pormg-querybuilder-internals`. The skill index in [`general.instructions.md`](../../instructions/general.instructions.md) holds the authoritative path→skill mapping — keep boundaries conceptual here rather than re-listing paths.
 
 ## Use This Skill For
 
@@ -197,18 +197,7 @@ Add both:
 
 ## Test Writing Standard
 
-- **Use standardized block headers for all `@testset` blocks**:
-  ```julia
-  # ─────────────────────────────────────────────────────────────────────────────
-  # [Feature/Area]: [Specific scenario being tested]
-  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
-  # and why the behavior matters to users or future maintainers]
-  # ─────────────────────────────────────────────────────────────────────────────
-  @testset "..." begin
-  ```
-- Heavily comment test logic within the block
-- Prefer isolated setup and explicit cleanup over hidden shared state
-- Do not weaken model contracts just to accommodate dirty fixtures; normalize fixtures in the import layer instead
+Follow the canonical [PormG Test Writing Standard](../../instructions/test-writing.md): standardized `@testset` header comments, heavily commented test logic, isolated setup with explicit cleanup, and never weakening field contracts to fit dirty fixtures (normalize at the import/setup layer).
 
 ## Domain Rules
 

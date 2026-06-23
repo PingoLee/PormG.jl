@@ -1,3 +1,3 @@
 # Moved
 
-Migration edge-case planning notes live at [`.cursor/skills/pormg-migrations-development/migration-edge-cases-plan.md`](../../.cursor/skills/pormg-migrations-development/migration-edge-cases-plan.md).
+Migration edge-case planning notes live at [`migration-edge-cases-plan.md`](migration-edge-cases-plan.md) (same folder).

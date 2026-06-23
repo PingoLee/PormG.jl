@@ -97,16 +97,8 @@ Use unit tests when validating:
 
 ### Test Writing Standard
 
-- **Use standardized block headers for all `@testset` blocks**:
-  ```julia
-  # ─────────────────────────────────────────────────────────────────────────────
-  # [Feature/Area]: [Specific scenario being tested]
-  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
-  # and why the behavior matters to users or future maintainers]
-  # ─────────────────────────────────────────────────────────────────────────────
-  @testset "..." begin
-  ```
-- Heavily comment test logic within the block
+Follow the canonical [PormG Test Writing Standard](../../instructions/test-writing.md): standardized `@testset` header comments and heavily commented test logic.
+
 ## Documentation Rules
 
 - Keep migration docs synchronized with implementation in the same change when practical
@@ -138,7 +130,3 @@ julia --project=. docs/make.jl
 - Do not silently allow destructive SQL
 - Do not broaden docs ahead of implementation
 - Do not test unsupported migration targeting as if it were complete
-
-## Additional resources
-
-- Migration engine edge-case review and improvement plan: [migration-edge-cases-plan.md](migration-edge-cases-plan.md)

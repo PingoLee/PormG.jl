@@ -37,24 +37,15 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 ### Parameter routing
 
-For positional backends, preserve bucket semantics and flatten order:
+For positional backends, preserve bucket semantics and flatten order. The buckets below are the **single authoritative list** — `set_context!` sites and the `get_final_parameters` flatten order must agree with it; do not restate the list elsewhere:
 
-`cte -> select -> update -> join -> where -> having`
+`:cte → :select → :update → :join → :where → :having`
 
 Parameter collector model:
 
 - `AbstractPormGParam`: base abstraction for all collectors
 - `PormGPostgresParam`: linear collector for `$1`, `$2`, ... placeholders
 - `PormGPositionalParam`: bucketed collector for positional `?` placeholders
-
-Current positional buckets:
-
-- `:cte`
-- `:select`
-- `:update`
-- `:join`
-- `:where`
-- `:having`
 
 When changing parameter behavior, verify:
 
@@ -164,16 +155,7 @@ Integration regressions should still use the public fluent API unless the bug on
 
 ## Test Writing Standard
 
-- **Use standardized block headers for all `@testset` blocks**:
-  ```julia
-  # ─────────────────────────────────────────────────────────────────────────────
-  # [Feature/Area]: [Specific scenario being tested]
-  # [1-2 sentences explaining what the test verifies, the expected SQL shape, 
-  # and why the behavior matters to users or future maintainers]
-  # ─────────────────────────────────────────────────────────────────────────────
-  @testset "..." begin
-  ```
-- Heavily comment test logic within the block
+Follow the canonical [PormG Test Writing Standard](../../instructions/test-writing.md): standardized `@testset` header comments and heavily commented test logic.
 
 ## Workflow
 

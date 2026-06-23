@@ -202,6 +202,13 @@ Issues identified during the code review of recent main changes
     )
 
 
+- [/] **SQLite `INSERT ... RETURNING *` hang + worker/pool stability** (`src/querybuilder/execution.jl`, `src/ConnectionPool.jl`)
+  Surfaced running the SQLite integration suite (`PORMG_DB=db_sl julia -t 1 --project=. test/integration/runtests.jl`) on Windows + SQLite.jl 3.51.
+  - [x] **`create()` RETURNING hang** — `INSERT ... RETURNING *` spun indefinitely inside libsqlite3 for tables whose AUTOINCREMENT primary key migrations left in a non-first column position (e.g. `django_contract_scratch`, pk `id` at column 3). The old broad `catch` masked it by re-running a plain INSERT, which then tripped a spurious UNIQUE violation because the first INSERT had already written the row. **Fixed** (branch `fix/sqlite-insert-returning-hang`): plain INSERT + `SELECT * WHERE rowid = last_insert_rowid()` read-back on the same connection (pinned via `run_in_transaction`); broad catch removed; the returned Dict still carries all columns (matches the Postgres `RETURNING *` contract, incl. unset nullables).
+  - [ ] **Native segfault in the SQLite async worker** — intermittent `EXCEPTION_ACCESS_VIOLATION` in `sqlite3_bind_int64` during F1 fixture seeding (`test_database_setup.jl`); nondeterministic (GC-timed, did not recur on re-run). Suspect: the single global `Threads.@spawn` worker + GC finalizers racing on `SQLite.Stmt`/`SQLite.DB` objects.
+  - [ ] **SQLite connection-pool timeout in transactions** — "Timeout after 30s waiting for available SQLite connection" in `test_transactions.jl`; the pool grows past size 3 then exhausts after `run_in_transaction` exits. Runtime worker/pool accounting issue, not the query builder.
+  - **Note**: PostgreSQL (`db_2`) is the validated integration path (1349/1350 pass; the 1 error is a network connection-pool timeout to the remote host, not a code bug). Treat the two open items as a SQLite worker/pool-stability effort (async-worker/pool redesign or a SQLite.jl bump), not a quick patch.
+
 ## 🔗 Custom Join (`cjoin`) Gaps
 
 Features needed to express complex join patterns (e.g., self-joins with multi-OR ON clauses, field-to-field comparisons, SQL functions in ON) without falling back to raw SQL.

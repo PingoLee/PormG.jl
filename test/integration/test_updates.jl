@@ -651,15 +651,22 @@ end
             @test !("id" in names(update_df))
         end
         
-        @testset "Auto-lowercase mapping" begin
-            # Model field is 'name' (lowercase)
-            # DataFrame has 'NAME' (uppercase)
+        @testset "Auto-detect rejects case-only column mismatch" begin
+            # Model field is 'name' (lowercase); DataFrame has 'NAME' (uppercase).
+            # Auto-detect is case-sensitive: a column differing only in case no longer
+            # folds — it raises, and nothing is inserted.
             df = DataFrame("NAME" => ["CaseTest"], "TEST_RESULT" => [50])
-            
-            # Should auto-detect without explicit Pair
-            bulk_insert(M.Just_a_test_deletion, df)
-            
-            @test M.Just_a_test_deletion.objects.filter("name" => "CaseTest").count() == 1
+
+            err = try
+                bulk_insert(M.Just_a_test_deletion, df)   # columns=nothing → auto-detect
+                nothing
+            catch e
+                e
+            end
+            @test err isa ArgumentError
+            @test occursin("case", lowercase(sprint(showerror, err)))
+            # The failed call must not have inserted the row.
+            @test M.Just_a_test_deletion.objects.filter("name" => "CaseTest").count() == 0
             @test "NAME" in names(df)
         end
 
@@ -1307,25 +1314,24 @@ end
 # Bulk Update: match_on omitted auto-detects the model primary key
 #
 # When no match_on= is passed, the implementation falls back to the model's
-# primary key field(s) and infers the row identity from them. This is the
-# simplest caller shape. Use upper-case DataFrame columns here so the test
-# also proves the case-insensitive PK fallback branch.
+# primary key field(s) and infers row identity from them. This is the simplest
+# caller shape. DataFrame columns are matched exactly (case-sensitive), so the
+# read-back frame's lowercase "id"/"name" resolve directly against the model fields.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Bulk Update auto-PK filter inference is case-insensitive" begin
+@testset "Bulk Update auto-PK filter inference (PK fallback)" begin
     M.Just_a_test_deletion.objects.exists() &&
         M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 
     M.Just_a_test_deletion.objects.create("name" => "auto-pk-a", "test_result" => 1, "test_result_set_default" => nothing)
     M.Just_a_test_deletion.objects.create("name" => "auto-pk-b", "test_result" => 2, "test_result_set_default" => nothing)
 
-    # Read back so we have real PKs in the DataFrame, then rename columns to
-    # upper-case so bulk_update has to use its lowercase-matching fallback.
+    # Read back so we have real PKs in the DataFrame. Its columns are the model's
+    # lowercase field names, which bulk_update matches exactly.
     df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
-    rename!(df, "id" => "ID", "name" => "NAME")
-    df[1, "NAME"] = "auto-pk-a-updated"
-    df[2, "NAME"] = "auto-pk-b-updated"
+    df[1, "name"] = "auto-pk-a-updated"
+    df[2, "name"] = "auto-pk-b-updated"
 
-    # No filters= argument: the ORM must discover "id" as the PK automatically.
+    # No match_on= argument: the ORM must discover "id" as the PK automatically.
     bulk_update(
         M.Just_a_test_deletion.objects,
         df,
@@ -1340,13 +1346,15 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bulk Update: explicit columns and filters use case-insensitive DF matching
+# Bulk Update: column matching is case-sensitive (and the rename! migration fixes it)
 #
-# This covers the separate fallback branch where bulk_update must resolve both
-# an update column and a dynamic filter column from upper-case DataFrame names
-# while the caller still uses lower-case model field names.
+# A DataFrame whose columns differ only in case from the model fields (e.g. a
+# camelCase source renamed to ID/NAME) no longer folds: bulk_update raises a
+# case-mismatch ArgumentError and leaves the database untouched. Applying the
+# documented `rename!(df, lowercase.(names(df)))` one-liner makes the same call
+# succeed end to end with explicit columns= and match_on=.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Bulk Update explicit filters are case-insensitive against DataFrame columns" begin
+@testset "Bulk Update column matching is case-sensitive (migration)" begin
     M.Just_a_test_deletion.objects.exists() &&
         M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
 
@@ -1354,10 +1362,32 @@ end
     M.Just_a_test_deletion.objects.create("name" => "ci-filter-b", "test_result" => 2, "test_result_set_default" => nothing)
 
     df = M.Just_a_test_deletion.objects.order_by("id") |> DataFrame
-    rename!(df, "id" => "ID", "name" => "NAME")
+    rename!(df, "id" => "ID", "name" => "NAME")    # simulate a mixed-case source frame
     df[1, "NAME"] = "ci-filter-a-updated"
     df[2, "NAME"] = "ci-filter-b-updated"
 
+    # Upper-case columns differ only in case from "name"/"id": hard error, no DB write.
+    err = try
+        bulk_update(
+            M.Just_a_test_deletion.objects,
+            df,
+            columns = ["name"],
+            match_on = ["id"],
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("case", lowercase(sprint(showerror, err)))
+
+    # The failed call must not have touched the database.
+    untouched = M.Just_a_test_deletion.objects.order_by("id").list()
+    @test untouched[1][:name] == "ci-filter-a"
+    @test untouched[2][:name] == "ci-filter-b"
+
+    # The documented fix: normalize headers to the model's lowercase fields.
+    rename!(df, lowercase.(names(df)))
     bulk_update(
         M.Just_a_test_deletion.objects,
         df,

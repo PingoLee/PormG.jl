@@ -165,9 +165,13 @@ end
   @test M.Circuit.objects.exists()
   @test delete_queries isa String || delete_queries isa Vector{Any}
 
-  # Test 3: BULK_INSERT with show_query=:sql does not crash and returns SQL
+  # Test 3: BULK_INSERT with show_query=:sql does not crash and returns SQL.
+  # constructors.csv ships camelCase headers (constructorId, ...); bulk matching is
+  # case-sensitive, so normalize them to the model's lowercase fields first.
   query = M.Constructor.objects
-  sql_bulk = bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, show_query=:sql)
+  df = CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame
+  rename!(df, lowercase.(names(df)))
+  sql_bulk = bulk_insert(query, df, show_query=:sql)
   @test sql_bulk isa String || sql_bulk isa Vector{String}
 
   # Test 4: UPDATE with show_query=:sql returns SQL string

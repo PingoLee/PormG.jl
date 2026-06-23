@@ -13,7 +13,7 @@ All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
 - **Default-Safe**: With `copy=true` (the default), PormG deep-copies the input `DataFrame` before applying defaults, timestamps, or other ORM-side normalization.
 - **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
-- **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by name (case-insensitive).
+- **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by **exact, case-sensitive** name. A column differing only in case from a model field (e.g. `RaceId` vs `raceid`) raises an error instead of being silently folded — normalize first with `rename!(df, lowercase.(names(df)))` or map it explicitly.
 - **Centralized Validation**: Every row is automatically checked against the model's constraints (`max_length`, `nullability`, etc.) before reaching the database.
 - **Relation Value Semantics**: Foreign-key columns accept scalar key values (including `0` if present in the target table). Use `nothing` or `missing` when you want SQL `NULL` on nullable relation columns.
 
@@ -42,6 +42,9 @@ using CSV, DataFrames
 
 # Prepare data
 df = CSV.File("drivers.csv") |> DataFrame
+# The CSV ships camelCase headers (driverId, driverRef, ...); bulk matching is
+# case-sensitive, so normalize them to the model's lowercase field names first.
+rename!(df, lowercase.(names(df)))
 
 # Bulk insert from DataFrame
 query = M.Driver.objects
@@ -78,6 +81,7 @@ Use `allocate_primary_keys()` for this:
 
 ```julia
 drivers_df = CSV.File("f1/drivers.csv") |> DataFrame
+rename!(drivers_df, lowercase.(names(drivers_df)))   # camelCase headers → lowercase fields
 
 # Reserve ids from the database sequence without inserting yet.
 # After this call, drivers_df has an `id` column with integer values.
@@ -254,12 +258,16 @@ using CSV, DataFrames
 import PormG.models as M
 
 # Load initial reference data
+# The Ergast CSVs ship camelCase headers (circuitId, driverRef, ...); bulk matching is
+# case-sensitive, so normalize headers to the model's lowercase fields before loading.
 circuits_df = CSV.File("f1/circuits.csv") |> DataFrame
+rename!(circuits_df, lowercase.(names(circuits_df)))
 M.Circuit.objects.exists() && M.Circuit.objects.delete(allow_delete_all=true)
 bulk_copy(M.Circuit.objects, circuits_df)
 
 # Load drivers
 drivers_df = CSV.File("f1/drivers.csv") |> DataFrame
+rename!(drivers_df, lowercase.(names(drivers_df)))
 for col in [:number]
     drivers_df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, drivers_df[!, col])
 end
@@ -370,9 +378,9 @@ WHERE "Tb"."id" = source."id"::bigint
 
 ### Matching and Execution Rules
 
-- **Case-insensitive DataFrame matching**: PormG resolves `columns` and `match_on` against `DataFrame` column names case-insensitively, so `ID` and `POINTS` work for model fields `id` and `points`.
+- **Case-sensitive DataFrame matching**: PormG resolves `columns` and `match_on` against `DataFrame` column names **exactly**. A name that differs only in case from the model field (e.g. `ID` vs `id`) is rejected with an error that names the candidate column and suggests the fix — either `rename!(df, lowercase.(names(df)))` or an explicit `"DF_COL" => "field"` mapping. (An explicit `columns=` mapping is always honored, even when its source column differs in case from the field name.)
 - **Primary key fallback**: If you omit `match_on=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame`.
-- **Missing match column errors**: A `match_on` column that is absent from the `DataFrame` raises an `ArgumentError` rather than silently degrading to a constant filter.
+- **Missing column errors**: A `match_on` column absent from the `DataFrame` raises an `ArgumentError` rather than silently degrading to a constant filter. An explicit `columns=` mapping (`"df_col" => "field"`) whose source column is absent likewise raises — it is never silently bound to a non-existent column.
 - **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `match_on=` and `filters=`. Pass every predicate you need through those arguments rather than relying on prior `query.filter(...)` state.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
 - **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.

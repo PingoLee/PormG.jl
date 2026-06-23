@@ -464,19 +464,33 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
   elseif connection isa PormGSQLite
-    # SQLite: use fetch() to properly acquire/release from pool
-    # Use RETURNING * if supported (SQLite 3.35+)
-    try
-      result = fetch(settings, sql * " RETURNING *;", parameters)
-      pk_exist && _update_sequence(model, connection, pk_field, settings)
-      return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
-    catch e
-      # Fallback for older SQLite versions
+    # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
+    # indefinitely inside SQLite/libsqlite3 for some table shapes (observed: an
+    # AUTOINCREMENT primary key that migrations left in a non-first column
+    # position). The previous broad `catch` masked that hang/error by re-running a
+    # plain INSERT, which then tripped a spurious UNIQUE violation because the
+    # first INSERT had already written the row. Instead: run a plain INSERT, then
+    # read the full inserted row back with a SELECT on the SAME connection
+    # (last_insert_rowid() is per-connection session state). Reading the whole row
+    # keeps the returned Dict consistent with the Postgres `RETURNING *` path —
+    # all columns present, including nullable ones the caller did not set.
+    do_insert = () -> begin
       fetch(settings, sql, parameters)
-      pk_exist && _update_sequence(model, connection, pk_field, settings)
-      # Return the input data as a fallback (will lack auto-generated fields)
-      return Dict(Symbol(k) => v for (k, v) in pairs(real_obj.insert))
+      rows = fetch(settings,
+        "SELECT * FROM $(safe_table_name) WHERE rowid = last_insert_rowid();") |> Tables.rowtable
+      isempty(rows) ?
+        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
+        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(rows[1]))
     end
+
+    # INSERT and the row read-back must run on one connection (last_insert_rowid()
+    # is per-connection). Reuse the active transaction if there is one; otherwise
+    # pin a connection for the pair.
+    result_dict = transaction_connection_for(settings) !== nothing ?
+      do_insert() : run_in_transaction(do_insert, settings)
+
+    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    return result_dict
   else
     throw("Unsupported connection type")
   end

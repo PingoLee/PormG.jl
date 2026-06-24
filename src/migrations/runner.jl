@@ -184,7 +184,12 @@ function _record_migration(pool::PormGPostgres, version::String, name::String, c
   sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") 
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))', 
            '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr));"""
-  with_transaction(pool, sql, conn=conn)
+  # Release the connection iff we acquired it here (conn === nothing). When the
+  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
+  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
+  # mark_failed and the lifecycle failure paths) would acquire a write connection
+  # and never return it to the pool on success — a slow pool leak.
+  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
 end
 
 function _record_migration(pool::PormGSQLite, version::String, name::String, checksum::String, 
@@ -194,7 +199,12 @@ function _record_migration(pool::PormGSQLite, version::String, name::String, che
   sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") 
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))', 
            '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val));"""
-  with_transaction(pool, sql, conn=conn)
+  # Release the connection iff we acquired it here (conn === nothing). When the
+  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
+  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
+  # mark_failed and the lifecycle failure paths) would acquire a write connection
+  # and never return it to the pool on success — a slow pool leak.
+  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
 end
 
 """
@@ -205,7 +215,12 @@ Update the status of an existing migration record.
 function _update_migration_status(pool::Union{PormGPostgres, PormGSQLite}, version::String, new_status::String; 
                                   conn = nothing)
   sql = """UPDATE pormg_migrations SET "status" = '$(replace(new_status, "'" => "''"))' WHERE "version" = '$(replace(version, "'" => "''"))';"""
-  with_transaction(pool, sql, conn=conn)
+  # Release the connection iff we acquired it here (conn === nothing). When the
+  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
+  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
+  # mark_failed and the lifecycle failure paths) would acquire a write connection
+  # and never return it to the pool on success — a slow pool leak.
+  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
 end
 
 # ==============================================================================

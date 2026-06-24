@@ -836,7 +836,19 @@ end
   end
 
   # ── Phase 13: Repair operations ───────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Migrations: repair ops must not leak pool connections
+  # mark_applied/mark_failed route through _record_migration/_update_migration_status
+  # with no caller-owned connection. Those helpers must release the write connection
+  # they acquire (release_conn = conn === nothing); before that fix each successful
+  # call returned the connection in its result and dropped it on the floor, so every
+  # repair op permanently consumed a pool slot. We snapshot the pool's in-use count
+  # and assert it returns to baseline after the full repair sequence.
+  # ─────────────────────────────────────────────────────────────────────────────
   @testset "Phase 13: Repair Operations" begin
+    pool_in_use(p) = length(p.connections) - count(p.available)
+    in_use_before = pool_in_use(pool)
+
     Migrations.mark_applied(pool, edge_settings, "99990101000001", "manual_test_migration")
     st = Migrations.status(pool, edge_settings)
     @test "99990101000001" in [m[:version] for m in st.applied]
@@ -849,6 +861,9 @@ end
     st3 = Migrations.status(pool, edge_settings)
     all_versions = vcat([m[:version] for m in st3.applied], [m[:version] for m in st3.failed])
     @test !("99990101000001" in all_versions)
+
+    # No connection leaked across the repair + status calls (all synchronous).
+    @test pool_in_use(pool) == in_use_before
   end
 
   # ── Cleanup ─────────────────────────────────────────────────────────

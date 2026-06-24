@@ -785,36 +785,43 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn
                                       version::String, name::String, checksum::String, 
                                       has_destructive::Bool)
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
-  
-  # Begin transaction (IMMEDIATE for SQLite)
-  result, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
-  
-  try
-    # Execute all SQL statements
-    _execute_statements_sqlite(connection, ordered_statements; conn=conn)
-    
-    # Record in history table (within same transaction)
-    _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
-    
-    # Commit
-    with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
-    @info("\e[32mMigrations applied successfully. Version: $version\e[0m")
-  catch e
+
+  # Serialize the whole BEGIN..COMMIT against any concurrent SQLite writer, like
+  # run_in_transaction/delete(). Migrations normally run sequentially at startup,
+  # but if one is applied while app writes are in flight, two un-serialized
+  # `BEGIN IMMEDIATE`s would race and deadlock the single async worker. No-op on
+  # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
+  with_sqlite_write_lock(connection) do
+    # Begin transaction (IMMEDIATE for SQLite)
+    result, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
+
     try
-      with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
-    catch rollback_err
-      @error "Failed to rollback transaction" exception=rollback_err
+      # Execute all SQL statements
+      _execute_statements_sqlite(connection, ordered_statements; conn=conn)
+
+      # Record in history table (within same transaction)
+      _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
+
+      # Commit
+      with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
+      @info("\e[32mMigrations applied successfully. Version: $version\e[0m")
+    catch e
+      try
+        with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
+      catch rollback_err
+        @error "Failed to rollback transaction" exception=rollback_err
+      end
+
+      # Record failed status outside the rolled-back transaction
+      try
+        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
+      catch record_err
+        @error "Failed to record migration failure in history table" exception=record_err
+      end
+
+      @error "Error applying migrations" exception=e
+      rethrow(e)
     end
-    
-    # Record failed status outside the rolled-back transaction
-    try
-      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
-    catch record_err
-      @error "Failed to record migration failure in history table" exception=record_err
-    end
-    
-    @error "Error applying migrations" exception=e
-    rethrow(e)
   end
   
   # Archive files (post-commit, best-effort)

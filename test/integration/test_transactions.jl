@@ -178,6 +178,44 @@ settings = PormG.config[PORMG_DB_FOLDER]
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Transactions: concurrent writers exceeding the pool size must not deadlock
+  # Each create()/delete() outside an explicit transaction opens its own write
+  # transaction (SQLite: BEGIN IMMEDIATE). Before the writer-serialization fix,
+  # spawning more concurrent writers than pool_size let the losing BEGIN IMMEDIATEs
+  # block the single SQLite async worker on busy_timeout, starving the winner's
+  # COMMIT — a deadlock that surfaced as "Timeout after 30s waiting for available
+  # SQLite connection". ConnectionPool.with_sqlite_write_lock now serializes SQLite
+  # writers so exactly one BEGIN is ever outstanding; PostgreSQL relies on its own
+  # MVCC and treats the lock as a no-op. This regression deliberately uses far more
+  # writers than the default pool (3) and mixes inserts with a concurrent delete.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Concurrent writers exceed pool size without deadlock" begin
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+
+    # Seed one row so a concurrent delete has something to remove while inserts run.
+    M.Just_a_test_deletion.objects.create("name" => "seed-to-delete", "test_result" => 0)
+
+    # Deliberately exceed the default SQLite pool_size (3) to force write contention.
+    writer_count = 8
+    @sync begin
+      for i in 1:writer_count
+        @async M.Just_a_test_deletion.objects.create("name" => "cw-$(i)", "test_result" => 500 + i)
+      end
+      # A delete racing the inserts exercises the delete() write-transaction path,
+      # which is serialized by the same write lock as create()/run_in_transaction.
+      @async M.Just_a_test_deletion.objects.filter("name" => "seed-to-delete").delete()
+    end
+
+    # All inserts landed and the seed row was deleted — no lost writers, no deadlock.
+    q = M.Just_a_test_deletion.objects
+    @test q.count() == writer_count
+    names = sort(q.list() .|> x -> x[:name])
+    @test names == sort(["cw-$(i)" for i in 1:writer_count])
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+  end
+
   @testset "Multithreaded inserts with transactions" begin
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     thread_count = 5

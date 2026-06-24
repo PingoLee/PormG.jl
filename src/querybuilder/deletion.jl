@@ -154,17 +154,23 @@ function delete(objct::SQLObjectHandler;
         # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks
         "BEGIN IMMEDIATE TRANSACTION;"
     end
-    _, conn = with_transaction(settings, begin_sql)
-    try
-      with_tx_context(settings.connections, conn) do
-        run_deletions(conn)
+    # Serialize SQLite writers around the whole BEGIN..COMMIT, matching
+    # run_in_transaction, so a concurrent delete/create never races on
+    # `BEGIN IMMEDIATE` (which would deadlock the single async worker). No-op on
+    # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
+    with_sqlite_write_lock(settings) do
+      _, conn = with_transaction(settings, begin_sql)
+      try
+        with_tx_context(settings.connections, conn) do
+          run_deletions(conn)
+        end
+        # Commit transaction
+        with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
+      catch e
+        # Rollback on error
+        with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
+        rethrow(e)
       end
-      # Commit transaction
-      with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
-    catch e
-      # Rollback on error
-      with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
-      rethrow(e)
     end
   end
 

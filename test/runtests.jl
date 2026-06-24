@@ -50,6 +50,7 @@ end
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
+    @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     # include("unit/test_migration_planner.jl")
 end
 

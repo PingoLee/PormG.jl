@@ -1,13 +1,43 @@
 
 """
+    _emsg(msg; color = (Base.have_color === true))
+
+TTY-aware error-message colorizer. Many PormG error strings embed ANSI SGR codes
+(`\\e[31m…\\e[0m`) to highlight the offending token in the REPL. Those codes are
+helpful on a color terminal but leak as raw `\\e[..m` noise into non-TTY sinks
+(CI output, file logs, `sprint(showerror, e)`, structured logging).
+
+`_emsg` keeps the codes when `color` is true and strips every `\\e[..m` sequence
+otherwise. The default tracks `Base.have_color` — the same flag Julia consults to
+colorize its own error displays, so it honors the `--color` flag and `NO_COLOR`.
+The `color` keyword exists so tests can exercise both branches deterministically.
+
+This is the single shared definition; `QueryBuilder` (`_argerr`) and `Models` both
+import it rather than re-embedding the strip logic.
+"""
+_emsg(msg::AbstractString; color::Bool = (Base.have_color === true)) =
+  color ? String(msg) : replace(msg, r"\e\[[0-9;]*m" => "")
+
+"""
+    _emsg(io, msg)
+
+IO-aware variant of [`_emsg`](@ref) for use inside `show` / `print(io, …)` methods:
+it keeps ANSI only when the destination stream advertises color via its `:color`
+IOContext property. This is the correct signal for rendered output, because a
+non-color buffer (`sprint`, `repr`, a captured string, a file) must stay ANSI-free
+even when the process itself is attached to a color terminal.
+"""
+_emsg(io::IO, msg::AbstractString) = _emsg(msg; color = get(io, :color, false))
+
+"""
     setup(path::String = DB_PATH)
 
 Interactively setup the `connection.yml` file for PormG.
 This will prompt for database adapter, name, and connection details.
 """
 function setup(path::String = DB_PATH)
-    println("\e[34m--- PormG Database Setup ---\e[0m")
-    println("Setting up configuration in folder: \e[32m$path\e[0m")
+    println(_emsg("\e[34m--- PormG Database Setup ---\e[0m"))
+    println(_emsg("Setting up configuration in folder: \e[32m$path\e[0m"))
 
     read_input() = String(strip(readline()))
     
@@ -67,11 +97,11 @@ function setup(path::String = DB_PATH)
 
     Generator.create_models_jl(path, models_filename)
 
-    println("\e[32mConfiguration saved successfully to $(joinpath(path, "connection.yml"))\e[0m")
-    println("You can now load it using: \e[36mPormG.Configuration.load(\"$path\")\e[0m")
+    println(_emsg("\e[32mConfiguration saved successfully to $(joinpath(path, "connection.yml"))\e[0m"))
+    println(_emsg("You can now load it using: \e[36mPormG.Configuration.load(\"$path\")\e[0m"))
 
     println()
-    println("\e[34m--- AI Assistant Setup ---\e[0m")
+    println(_emsg("\e[34m--- AI Assistant Setup ---\e[0m"))
     println("PormG can install 'AI skills' (.cursor/skills) to help coding assistants")
     println("(Cursor and other agents) understand the PormG API in your project.")
     print("Do you want to install PormG AI skills? (Y/n) [Default Y]: ")
@@ -103,7 +133,7 @@ function install_ai_skills(target_dir::String = pwd())
 
         if isfile(skill_src)
             cp(skill_src, target_skill_file; force=true)
-            println("\e[32mPormG AI skill installed → $target_skill_file\e[0m")
+            println(_emsg("\e[32mPormG AI skill installed → $target_skill_file\e[0m"))
             println("Your coding assistant now understands PormG's query API, models, and migrations.")
         else
             @warn "Could not find PormG skill blueprint" expected_path=skill_src

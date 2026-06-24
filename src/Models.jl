@@ -6,6 +6,7 @@ using UUIDs
 import JSON
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
+import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
 import PormG: SQLConn, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 # import PormG: make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS
@@ -443,7 +444,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
 end
 function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
-  throw(ArgumentError("You need to add fields to the model, example: $example_usage"))
+  throw(ArgumentError(_emsg("You need to add fields to the model, example: $example_usage")))
 end
 function Model(; fields...)
   return Model("", fields |> Tuple)

@@ -307,7 +307,7 @@ function _resolve_table_fields(
     else       
       response = "no"
       if interactive
-        print("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':")
+        print(_emsg("Is the field \"\e[4m\e[31m$field_name\e[0m\" from table \"\e[4m\e[34m$model_name\e[0m\" the same as one of the following fields: \e[4m\e[33m$list_to_question\e[0m? If yes, please enter the corresponding number; otherwise, type 'no':"))
         response = readline()
         response = strip(lowercase(response))
       end
@@ -512,7 +512,7 @@ migration_plan = get_migration_plan(models_array, current_models, connection, se
 
 # store migration_plan as pending_migrations.jl file
 if migration_plan |> isempty
-  @info("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m")    
+  @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))    
 else     
   path = joinpath(settings.db_def_folder, "migrations")
   if !ispath(path)
@@ -520,7 +520,7 @@ else
   end
   generate_migration_plan("pending_migrations.jl", migration_plan, path)
   @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-  @info("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m")
+  @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
 end
 
 end
@@ -548,7 +548,7 @@ function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String
 
   # store migration_plan as pending_migrations.jl file
   if migration_plan |> isempty
-    @info("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m")    
+    @info(_emsg("\e[32mYour database schema is already up-to-date. No migrations are pending.\e[0m"))    
   else     
     path = joinpath(settings.db_def_folder, "migrations")
     if !ispath(path)
@@ -556,7 +556,7 @@ function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String
     end
     generate_migration_plan("pending_migrations.jl", migration_plan, path)
     @warn("The migration plan has been saved to '$(settings.db_def_folder)/migrations/pending_migrations.jl'. Review the plan before applying the migrations.")
-    @info("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m")
+    @info(_emsg("\e[32mMigration plan generated successfully. Run 'PormG.Migrations.migrate($( settings.db_def_folder == "db" ? "" : string("\"", settings.db_def_folder, "\"")))' to apply the migrations.\e[0m"))
   end
 end
 

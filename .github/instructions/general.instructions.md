@@ -44,6 +44,7 @@ rows = M.Result.objects
 | `src/migrations/`, `src/Migrations.jl`, migration CI | `.github/skills/pormg-migrations-development/SKILL.md` |
 | Consuming PormG in a downstream app — setup, queries, examples (no internals) | `.github/skills/pormg-usage/SKILL.md` |
 | Pre-push / pre-PR review | `.github/skills/pormg-changed-code-review/SKILL.md` |
+| Managing the backlog — creating/updating GitHub issues, migrating or syncing the `TODO.md` index | `.github/skills/pormg-issue-management/SKILL.md` |
 
 Cross-cutting changes: public-API skill + the most specific subsystem skill. Reviews: review skill only — **except doc-content reviews** ("review the doc/examples in …"), which read the review skill **and** the public-API skill, so the live-database example-verification recipe applies.
 

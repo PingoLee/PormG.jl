@@ -184,7 +184,12 @@ function _record_migration(pool::PormGPostgres, version::String, name::String, c
   sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") 
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))', 
            '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr));"""
-  with_transaction(pool, sql, conn=conn)
+  # Release the connection iff we acquired it here (conn === nothing). When the
+  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
+  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
+  # mark_failed and the lifecycle failure paths) would acquire a write connection
+  # and never return it to the pool on success — a slow pool leak.
+  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
 end
 
 function _record_migration(pool::PormGSQLite, version::String, name::String, checksum::String, 
@@ -194,7 +199,12 @@ function _record_migration(pool::PormGSQLite, version::String, name::String, che
   sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") 
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))', 
            '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val));"""
-  with_transaction(pool, sql, conn=conn)
+  # Release the connection iff we acquired it here (conn === nothing). When the
+  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
+  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
+  # mark_failed and the lifecycle failure paths) would acquire a write connection
+  # and never return it to the pool on success — a slow pool leak.
+  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
 end
 
 """
@@ -205,7 +215,12 @@ Update the status of an existing migration record.
 function _update_migration_status(pool::Union{PormGPostgres, PormGSQLite}, version::String, new_status::String; 
                                   conn = nothing)
   sql = """UPDATE pormg_migrations SET "status" = '$(replace(new_status, "'" => "''"))' WHERE "version" = '$(replace(version, "'" => "''"))';"""
-  with_transaction(pool, sql, conn=conn)
+  # Release the connection iff we acquired it here (conn === nothing). When the
+  # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
+  # frees it itself; without this, the fire-and-forget call sites (mark_applied /
+  # mark_failed and the lifecycle failure paths) would acquire a write connection
+  # and never return it to the pool on success — a slow pool leak.
+  with_transaction(pool, sql, conn=conn, release_conn = conn === nothing)
 end
 
 # ==============================================================================
@@ -785,36 +800,43 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn
                                       version::String, name::String, checksum::String, 
                                       has_destructive::Bool)
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
-  
-  # Begin transaction (IMMEDIATE for SQLite)
-  result, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
-  
-  try
-    # Execute all SQL statements
-    _execute_statements_sqlite(connection, ordered_statements; conn=conn)
-    
-    # Record in history table (within same transaction)
-    _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
-    
-    # Commit
-    with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
-    @info("\e[32mMigrations applied successfully. Version: $version\e[0m")
-  catch e
+
+  # Serialize the whole BEGIN..COMMIT against any concurrent SQLite writer, like
+  # run_in_transaction/delete(). Migrations normally run sequentially at startup,
+  # but if one is applied while app writes are in flight, two un-serialized
+  # `BEGIN IMMEDIATE`s would race and deadlock the single async worker. No-op on
+  # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
+  with_sqlite_write_lock(connection) do
+    # Begin transaction (IMMEDIATE for SQLite)
+    result, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
+
     try
-      with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
-    catch rollback_err
-      @error "Failed to rollback transaction" exception=rollback_err
+      # Execute all SQL statements
+      _execute_statements_sqlite(connection, ordered_statements; conn=conn)
+
+      # Record in history table (within same transaction)
+      _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
+
+      # Commit
+      with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
+      @info("\e[32mMigrations applied successfully. Version: $version\e[0m")
+    catch e
+      try
+        with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
+      catch rollback_err
+        @error "Failed to rollback transaction" exception=rollback_err
+      end
+
+      # Record failed status outside the rolled-back transaction
+      try
+        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
+      catch record_err
+        @error "Failed to record migration failure in history table" exception=record_err
+      end
+
+      @error "Error applying migrations" exception=e
+      rethrow(e)
     end
-    
-    # Record failed status outside the rolled-back transaction
-    try
-      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
-    catch record_err
-      @error "Failed to record migration failure in history table" exception=record_err
-    end
-    
-    @error "Error applying migrations" exception=e
-    rethrow(e)
   end
   
   # Archive files (post-commit, best-effort)

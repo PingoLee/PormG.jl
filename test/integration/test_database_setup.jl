@@ -114,8 +114,12 @@ end
 
   @testset "Simple Bulk Insertions" begin
     # Insert Circuits
+    # The CSV ships camelCase headers (circuitId, circuitRef, ...) and bulk column
+    # matching is case-sensitive, so normalize the headers to the model's lowercase fields.
     query = M.Circuit.objects
-    bulk_insert(query, CSV.File(joinpath("f1", "circuits.csv")) |> DataFrame)
+    df = CSV.File(joinpath("f1", "circuits.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    bulk_insert(query, df)
 
     # Bulk insert for Race with expected error
     query = M.Race.objects
@@ -143,8 +147,10 @@ end
     @test query.count() > 0
 
     # Insert Drivers
+    # camelCase headers (driverId, driverRef, ...) → lowercase to match model fields.
     query = M.Driver.objects
     df = CSV.File(joinpath("f1", "drivers.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
     for col in [:number]
         df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end
@@ -152,8 +158,11 @@ end
     @test query.count() == 861
 
     # Insert Constructors
+    # camelCase headers (constructorId, constructorRef, ...) → lowercase to match fields.
     query = M.Constructor.objects
-    bulk_insert(query, CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame, chunk_size=100)
+    df = CSV.File(joinpath("f1", "constructors.csv")) |> DataFrame
+    rename!(df, lowercase.(names(df)))
+    bulk_insert(query, df, chunk_size=100)
 
     query = M.Result.objects;
     df = CSV.File(joinpath("f1", "results.csv")) |> DataFrame

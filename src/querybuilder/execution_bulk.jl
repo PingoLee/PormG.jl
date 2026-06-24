@@ -279,6 +279,37 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   return collect((max_id + 1):new_max)
 end
 
+# ---
+# Case-sensitive bulk column matching
+#
+# Bulk operations match DataFrame columns to model fields EXACTLY (case-sensitive).
+# The helpers below turn a near-miss — a name that differs only in case — into a loud,
+# actionable error instead of a silent, order-dependent case-fold. This matters once a
+# model legitimately carries mixed-case identifiers (commit 9958a16, "mandatory quoting
+# to support Unicode and mixed-case identifiers"): folding case could map the wrong
+# column or mask a real mismatch, and `findfirst` would silently pick the first of two
+# columns differing only in case.
+
+# Return every name in `candidates` that differs from `target` ONLY by case — i.e. not
+# an exact match, but equal after lowercasing. Empty when the match is exact or nothing
+# is close.
+function _case_fold_candidates(target::AbstractString, candidates)
+  target_lc = lowercase(target)
+  return String[c for c in candidates if c != target && lowercase(c) == target_lc]
+end
+
+# Build the actionable error raised when bulk matching finds no exact match but a
+# case-only-differing name exists. `looked_for` is the name searched for, `candidates`
+# the case-only matches, and `map_hint` a ready-to-paste `"df_col" => "field"` example.
+function _bulk_case_mismatch_msg(operation::Symbol, looked_for::AbstractString,
+                                 candidates, map_hint::AbstractString)
+  names_str = join(("\e[4m\e[31m$(c)\e[0m" for c in candidates), ", ")
+  return """
+  Error in bulk_$(operation): bulk column matching is case-sensitive, and \e[4m\e[31m$(looked_for)\e[0m has no exact match — but these names differ only in case: $(names_str).
+  Fix it either by renaming so the names match exactly (e.g. rename!(df, lowercase.(names(df)))) or by mapping the column explicitly (e.g. $(map_hint)).
+  """
+end
+
 function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
                           normalized_columns::Vector, operation::Symbol,
                           settings=nothing)
@@ -323,44 +354,54 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   if !isempty(normalized_columns)
     for column in normalized_columns
       if column isa Pair
-        # column.first is DF col, column.second is model field
-        if !(column.first in names(df))
-          @error("""Error in bulk_$operation, the column \e[4m\e[31m$(column.first)\e[0m not found in the DataFrame, the dataframe has the columns: \e[4m\e[32m$(names(df))\e[0m""")
+        # Explicit "df_col" => "model_field" mapping. column.first is the DF column,
+        # column.second the model field. The source column must exist EXACTLY — a
+        # mismatch is a hard error, not a silent log (the old @error left a bad mapping
+        # in place and crashed cryptically downstream).
+        if column.first in names(df)
+          mapping[column.second] = column.first
+          push!(fields_df, column.second)
+        else
+          # Offer the case hint when the only near-miss differs solely in case,
+          # consistent with the string/auto-detect/match_on paths above.
+          candidates = _case_fold_candidates(column.first, names(df))
+          isempty(candidates) ||
+            throw(_argerr(_bulk_case_mismatch_msg(operation, column.first, candidates,
+              "\"$(candidates[1])\" => \"$(column.second)\"")))
+          throw(_argerr("Error in bulk_$(operation), the column \e[4m\e[31m$(column.first)\e[0m mapped to field \e[4m\e[31m$(column.second)\e[0m is not in the DataFrame; available columns: \e[4m\e[32m$(names(df))\e[0m"))
         end
-        mapping[column.second] = column.first
-        push!(fields_df, column.second)
       else
-        # If it's a string, try to find it in the DF
+        # String column: match the DataFrame column name EXACTLY (case-sensitive).
         if column in names(df)
           mapping[column] = column
           push!(fields_df, column)
         else
-          # Try case-insensitive matching if not found exactly
-          found = false
-          for col in names(df)
-            if col |> lowercase == column |> lowercase
-              mapping[column] = col
-              push!(fields_df, column)
-              found = true
-              break
-            end
-          end
-          # If still not found, it might be an auto-populated field we add later
-          if !found
-            push!(fields_df, column)
-          end
+          # No exact match. If a column differs only in case, fail loudly instead of
+          # silently case-folding (see the case-sensitive matching contract above).
+          candidates = _case_fold_candidates(column, names(df))
+          isempty(candidates) ||
+            throw(_argerr(_bulk_case_mismatch_msg(operation, column, candidates,
+              "\"$(candidates[1])\" => \"$(column)\"")))
+          # Truly absent — it may be an auto-populated field added later (e.g. updated_at).
+          push!(fields_df, column)
         end
       end
     end
   else
-    # Auto-detect based on DF column names matching model fields
+    # Auto-detect: a DataFrame column maps to a model field only on an EXACT
+    # (case-sensitive) name match. A column that differs only in case from a model
+    # field is a likely-intended typo, so fail loudly rather than fold or ignore it.
     for col_name in names(df)
-      fld_ = col_name |> lowercase
-      if fld_ in fields
-        mapping[fld_] = col_name
-        push!(fields_df, fld_)
+      if col_name in fields
+        mapping[col_name] = col_name
+        push!(fields_df, col_name)
+      else
+        candidates = _case_fold_candidates(col_name, fields)
+        isempty(candidates) ||
+          throw(_argerr(_bulk_case_mismatch_msg(operation, col_name, candidates,
+            "\"$(col_name)\" => \"$(candidates[1])\"")))
       end
-    end    
+    end
   end
 
   _drop_blank_auto_primary_keys!(df, model, fields_df, mapping, operation)
@@ -480,16 +521,17 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
     throw(ArgumentError("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
 
   resolved = if df_col in names(df)
-    df_col
+    df_col                                # exact (case-sensitive) match wins
+  elseif allow_reuse && haskey(mapping, field)
+    mapping[field]                        # bare key / PK fallback: reuse the columns= mapping
   else
-    idx = findfirst(c -> lowercase(c) == lowercase(df_col), names(df))
-    if idx !== nothing
-      names(df)[idx]
-    elseif allow_reuse && haskey(mapping, field)
-      mapping[field]                      # bare key / PK fallback: reuse the columns= mapping
-    else
-      throw(ArgumentError("bulk_update: $(kind) column \e[4m\e[31m$(df_col)\e[0m not found in the DataFrame (columns: $(names(df)))"))
-    end
+    # No exact match and nothing to reuse. A column differing only in case is a loud
+    # error, not a silent fold (see the case-sensitive matching contract above).
+    candidates = _case_fold_candidates(df_col, names(df))
+    isempty(candidates) ||
+      throw(_argerr(_bulk_case_mismatch_msg(:update, df_col, candidates,
+        "\"$(candidates[1])\" => \"$(field)\"")))
+    throw(_argerr("bulk_update: $(kind) column \e[4m\e[31m$(df_col)\e[0m not found in the DataFrame (columns: $(names(df)))"))
   end
 
   mapping[field] = resolved

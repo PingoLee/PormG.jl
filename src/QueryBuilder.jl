@@ -9,7 +9,7 @@ import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, SQLConn, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtransform, run_in_transaction
-import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, current_task
+import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task
 import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for,
 	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
 	get_settings as get_configuration_settings

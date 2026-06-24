@@ -532,17 +532,153 @@ end
         )
     end
 
-    # Explicit-pair match_on resolves case-insensitively against DataFrame columns.
-    @testset "explicit match_on pair resolves case-insensitively" begin
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Case-sensitive matching: match_on= explicit pair (Site C)
+    # Bulk column matching is exact/case-sensitive. An explicit match_on source column
+    # that differs only in case from a real DataFrame column must FAIL LOUDLY — naming
+    # the candidate and the fix — rather than silently case-fold (the pre-9958a16 risk
+    # of mapping the wrong mixed-case column). This is the inverse of the old contract.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "explicit match_on pair with case-only mismatch raises" begin
+        # df column is "record_id"; match_on asks for "RECORD_ID" — same name, wrong case.
         ci_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+        err = try
+            bulk_update(
+                Metric.objects, ci_df,
+                columns    = ["new_w" => "weight"],
+                match_on   = ["RECORD_ID" => "id"],   # differs only in case from "record_id"
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        # The error must name the case-only candidate and point at the case-sensitivity.
+        @test occursin("record_id", msg)
+        @test occursin("case", msg)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Case-sensitive matching: explicit columns= string (Site A)
+    # A bare string in columns= names both the model field and the expected DataFrame
+    # column. When the DataFrame carries the same name in a different case, that is a
+    # loud error (rename or map explicitly), not a silent fold.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "explicit columns= string with case-only mismatch raises" begin
+        # field "weight" requested; DataFrame only has "Weight".
+        df_case = DataFrames.DataFrame(id = [4606], Weight = [9])
+        err = try
+            bulk_update(
+                Metric.objects, df_case,
+                columns    = ["weight"],
+                match_on   = ["id"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        @test occursin("Weight", msg)
+        @test occursin("case", msg)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Case-sensitive matching: auto-detect path, columns=nothing (Site B)
+    # With no columns= the path auto-detects DataFrame columns against model fields by
+    # EXACT name. A column differing only in case from a model field is a likely-intended
+    # typo and must raise rather than be silently folded or ignored.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "auto-detect rejects a column differing only in case" begin
+        # "id" matches exactly; "Weight" differs only in case from field "weight".
+        df_auto_case = DataFrames.DataFrame(id = [4606], Weight = [9])
+        err = try
+            bulk_update(
+                Metric.objects, df_auto_case,
+                match_on   = ["id"],   # columns=nothing → auto-detect
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        # Auto-detect names the DataFrame column and the case-only model field it shadows.
+        @test occursin("Weight", msg)
+        @test occursin("weight", msg)
+        @test occursin("case", msg)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Case-sensitive matching: an EXPLICIT columns= mapping still wins (allow_reuse)
+    # A bare match_on key reuses the column mapping established by columns=, even when
+    # the mapped DataFrame column differs in case from the field name. The user already
+    # spelled out the mapping, so no case error fires — this guards the reorder that put
+    # the columns= reuse ahead of the case-mismatch check.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "bare match_on reuses an explicit columns= mapping across case" begin
+        # "ID" => "id" explicitly maps the mixed-case DataFrame column to field id.
+        df_reuse = DataFrames.DataFrame(ID = [4606], weight = [9])
         res = bulk_update(
-            Metric.objects, ci_df,
-            columns    = ["new_w" => "weight"],
-            match_on   = ["RECORD_ID" => "id"],   # different case than the df column
+            Metric.objects, df_reuse,
+            columns    = ["weight", "ID" => "id"],
+            match_on   = ["id"],   # bare key reuses the columns= mapping (df "ID")
             show_query = :dict
         )
         @test occursin("\"Tb\".\"id\" = source.\"id\"", res[:sql_text])
         @test res[:parameters] == Any[9, 4606]
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Case-sensitive matching: explicit columns= Pair (the fourth bulk path)
+    # An explicit "df_col" => "field" mapping naming a source column that differs only
+    # in case from a real DataFrame column raises the same case hint as the other paths
+    # — it must not silently bind a non-existent column.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "explicit columns= pair with case-only mismatch raises" begin
+        # df has "weight"; the mapping names "Weight" — same name, wrong case.
+        df_pair_case = DataFrames.DataFrame(id = [4606], weight = [9])
+        err = try
+            bulk_update(
+                Metric.objects, df_pair_case,
+                columns    = ["Weight" => "weight"],   # differs only in case from "weight"
+                match_on   = ["id"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        @test occursin("weight", msg)
+        @test occursin("case", msg)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Case-sensitive matching: explicit columns= Pair naming an absent column
+    # A Pair whose source column is genuinely missing (no case near-miss) must raise a
+    # clean ArgumentError, not merely log and bind a bad mapping that crashes later.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "explicit columns= pair naming an absent column raises" begin
+        df_pair_missing = DataFrames.DataFrame(id = [4606], weight = [9])
+        err = try
+            bulk_update(
+                Metric.objects, df_pair_missing,
+                columns    = ["totally_absent" => "weight"],
+                match_on   = ["id"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("totally_absent", sprint(showerror, err))
     end
 
     # Constant filters work with the PK fallback when no match_on is supplied.

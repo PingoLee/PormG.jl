@@ -16,7 +16,7 @@ using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
 import SHA
-import PormG.ConnectionPool: fetch, with_transaction
+import PormG.ConnectionPool: fetch, with_transaction, with_sqlite_write_lock
 import PormG.Configuration
 import PormG.Configuration: get_settings
 using Logging

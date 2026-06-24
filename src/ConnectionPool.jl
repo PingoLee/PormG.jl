@@ -102,6 +102,13 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   writer_slot::Int
   reader_cursor::Int
   lock::ReentrantLock  # For thread safety
+  # Serializes write transactions. SQLite permits only one writer per file, and
+  # all statements funnel through a single global async worker; two concurrent
+  # `BEGIN IMMEDIATE`s would deadlock (the losing BEGIN blocks the worker on
+  # busy_timeout, starving the winner's COMMIT). Held for the whole BEGIN..COMMIT
+  # so only one writer is ever outstanding. Distinct from `lock`, which only
+  # guards the pool slot bookkeeping. See `with_sqlite_write_lock`.
+  write_lock::ReentrantLock
 end
 
 function PostgresConnectionPool(connection_string::String; pool_size::Int = 3)
@@ -119,7 +126,7 @@ function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, spl
   if split_read_write && !effective_split
     @warn "SQLite split read/write mode requires pool_size > 1; falling back to shared pool" pool_size=pool_size
   end
-  SQLiteConnectionPool(connections, available, connection_string, pool_size, effective_split, 1, 0, lock)
+  SQLiteConnectionPool(connections, available, connection_string, pool_size, effective_split, 1, 0, lock, ReentrantLock())
 end
 
 function _create_sqlite_connection(connection_string::String; read_only::Bool = false)
@@ -935,6 +942,39 @@ function with_savepoint(f::Function, settings::SQLConn, name::String)
 end
 
 """
+    with_sqlite_write_lock(f::Function, pool)
+
+Run `f()` while holding the pool's write-serialization lock on SQLite; a no-op
+(just `f()`) on PostgreSQL.
+
+SQLite permits a single writer per database file, and PormG funnels every
+statement through one global async worker. If two write transactions issue
+`BEGIN IMMEDIATE` concurrently, the losing one blocks the worker inside
+libsqlite3 for `busy_timeout` (30 s), which starves the winning transaction's
+own INSERT/COMMIT on that same worker — a deadlock that surfaces as
+"Timeout waiting for available SQLite connection". Holding this lock for the
+whole `BEGIN..COMMIT/ROLLBACK` guarantees only one writer is ever outstanding,
+so `BEGIN IMMEDIATE` never contends. Concurrent reads (WAL) are unaffected.
+
+The lock is a `ReentrantLock`, so a task that already holds it (an outer
+write transaction) may re-enter without self-deadlock.
+
+!!! warning "Cross-task limitation"
+    Reentrancy is *per task*, not per call-tree. A task that holds this lock
+    (i.e. is inside `run_in_transaction`/`delete()`) and then `wait`s on a
+    *separate* task that issues its own SQLite write will deadlock: the child
+    blocks on the lock the parent holds while the parent blocks on the child.
+    SQLite cannot run two live write transactions on one file anyway, so this
+    pattern is unsupported — either schedule the write before opening the
+    transaction, or let the child inherit the transaction context (a `@async`
+    created *inside* the transaction reuses the pinned connection instead of
+    opening its own).
+"""
+with_sqlite_write_lock(f::Function, pool::PormGSQLite) = Base.lock(f, pool.write_lock)
+with_sqlite_write_lock(f::Function, pool::PormGPostgres) = f()
+with_sqlite_write_lock(f::Function, settings::SQLConn) = with_sqlite_write_lock(f, settings.connections)
+
+"""
     run_in_transaction(f::Function, pool::PormGPostgres) -> result
 
 Execute a function within a database transaction with proper connection context.
@@ -975,6 +1015,16 @@ end
 ```
 """
 function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite})
+  # Serialize SQLite writers around the whole BEGIN..COMMIT so concurrent write
+  # transactions never race on `BEGIN IMMEDIATE` (see `with_sqlite_write_lock`).
+  # Acquire the write lock BEFORE the pool connection so a waiting writer does not
+  # hold a pooled connection idle while blocked. No-op on PostgreSQL.
+  return with_sqlite_write_lock(pool) do
+    _run_in_transaction_impl(f, pool)
+  end
+end
+
+function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGSQLite})
   conn = if pool isa PormGSQLite
     acquire_connection(pool; mode=:write)
   else

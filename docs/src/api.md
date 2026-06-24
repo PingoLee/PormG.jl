@@ -396,7 +396,7 @@ bulk_update(M.Result.objects, df_with_changes, columns=["points"], match_on=["re
 Key contracts:
 
 - `columns=` sets fields; `match_on=` gives the per-row keys that identify each row; `filters=` are constant predicates applied to every row.
-- DataFrame columns are matched case-insensitively for both `columns` and `match_on`.
+- DataFrame columns are matched **case-sensitively** for both `columns` and `match_on`. A column that differs only in case from the model field (e.g. `RaceId` vs `raceid`) raises an error naming the candidate; normalize headers with `rename!(df, lowercase.(names(df)))` or map explicitly with `"DF_COL" => "field"`.
 - If `match_on` is omitted, PormG infers the model primary key columns and uses those to identify rows.
 - A per-row match key passed in `filters=` (a bare string or `"df_col" => "field"` pair) raises a migration error directing you to `match_on=`; there is no silent fallback. This migration error is a temporary deprecation aid and will be removed in a future release.
 - `bulk_update()` rebuilds the `WHERE` clause from `match_on=` and `filters=` and does not preserve filters that were already attached to the handler.

@@ -307,9 +307,12 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
     """
   query_result = fetch(settings, resposta, instruction.parameters)
-  # SQLite returns a Query iterator that doesn't support [row, col] indexing;
-  # convert to a rowtable first, then extract the scalar count value.
-  if query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int})
+  # PostgreSQL returns a LibPQ.Result that supports scalar [row, col] indexing.
+  # SQLite returns a materialized rowtable (Vector{<:NamedTuple}); a Vector *also* has a
+  # (Int, Int) getindex method (trailing-singleton dimension), so exclude vectors explicitly
+  # and take the Tables path, which extracts the scalar from the single COUNT row.
+  if !(query_result isa AbstractVector) &&
+     (query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int}))
     return query_result[1, 1]
   else
     row = Tables.rowtable(query_result) |> Base.first

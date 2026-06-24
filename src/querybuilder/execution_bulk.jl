@@ -475,7 +475,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   
   # Final sanity check for fields_df existence in model
   for field in fields_df
-    in(field, fields) || throw(_emsg("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m"))
+    in(field, fields) || throw(_argerr("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m"))
   end
 
   # Return fields_df cleaned up (unique and existing in mapping)
@@ -518,7 +518,7 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   kind::String="match_on", allow_reuse::Bool=true)
 
   field in model.field_names ||
-    throw(ArgumentError("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
+    throw(_argerr("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
 
   resolved = if df_col in names(df)
     df_col                                # exact (case-sensitive) match wins

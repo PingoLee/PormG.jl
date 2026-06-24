@@ -246,14 +246,14 @@ function Base.show(io::IO, s::MigrationStatus)
   println(io, "  History table: ", s.has_history_table ? "✓ exists" : "✗ not initialized (run init_migrations)")
   println(io, "  Applied: ", length(s.applied), " migration(s)")
   if !isempty(s.failed)
-    println(io, "  \e[31mFailed: ", length(s.failed), " migration(s)\e[0m")
+    println(io, _emsg(io, "  \e[31mFailed: $(length(s.failed)) migration(s)\e[0m"))
     for m in s.failed
       println(io, "    - v", m[:version], " ", m[:name])
     end
   end
-  println(io, "  Pending file: ", s.pending ? "\e[33myes (review and run migrate)\e[0m" : "none")
+  println(io, "  Pending file: ", _emsg(io, s.pending ? "\e[33myes (review and run migrate)\e[0m" : "none"))
   if !isempty(s.drift_signals)
-    println(io, "  \e[33mDrift signals:\e[0m")
+    println(io, _emsg(io, "  \e[33mDrift signals:\e[0m"))
     for d in s.drift_signals
       println(io, "    ⚠ ", d)
     end
@@ -420,14 +420,14 @@ function Base.show(io::IO, r::DryRunResult)
   println(io, "  Checksum: ", r.checksum[1:min(16, length(r.checksum))], "...")
   println(io, "  Total statements: ", total_statements(r))
   if is_destructive(r)
-    println(io, "  \e[31m⚠ DESTRUCTIVE: ", length(r.destructive_statements), " destructive statement(s)\e[0m")
+    println(io, _emsg(io, "  \e[31m⚠ DESTRUCTIVE: $(length(r.destructive_statements)) destructive statement(s)\e[0m"))
     for s in r.destructive_statements
       # Show first 120 chars of each destructive statement
       display_s = length(s) > 120 ? s[1:120] * "..." : s
       println(io, "    → ", display_s)
     end
   else
-    println(io, "  \e[32m✓ Safe (no destructive operations)\e[0m")
+    println(io, _emsg(io, "  \e[32m✓ Safe (no destructive operations)\e[0m"))
   end
   println(io, "\n  SQL statements:")
   for (i, s) in enumerate(r.statements)
@@ -623,7 +623,7 @@ function migrate(connection::PormGPostgres, settings::SQLConn;
   ordered_statements, all_sql = _order_statements(migration_plan)
   
   if isempty(ordered_statements)
-    @info("\e[32mNo SQL statements to execute.\e[0m")
+    @info(_emsg("\e[32mNo SQL statements to execute.\e[0m"))
     return nothing
   end
   
@@ -639,8 +639,8 @@ function migrate(connection::PormGPostgres, settings::SQLConn;
   
   # Destructive guard
   if has_destructive && !destructive
-    @error("\e[31mMigration contains $(length(destructive_stmts)) destructive operation(s). " *
-           "Pass `destructive=true` to confirm.\e[0m")
+    @error(_emsg("\e[31mMigration contains $(length(destructive_stmts)) destructive operation(s). " *
+           "Pass `destructive=true` to confirm.\e[0m"))
     for s in destructive_stmts
       display_s = length(s) > 120 ? s[1:120] * "..." : s
       @error("  → $display_s")
@@ -651,10 +651,10 @@ function migrate(connection::PormGPostgres, settings::SQLConn;
   # Interactive confirmation
   if interactive
     if has_destructive
-      @info("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m")
+      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m"))
     end
-    @info("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m")
-    print("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m")
+    @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
+    print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
     response = readline()
     response = strip(lowercase(response))
     if !(response in ["yes", "y"])
@@ -700,7 +700,7 @@ function migrate(connection::PormGSQLite, settings::SQLConn;
   ordered_statements, all_sql = _order_statements(migration_plan)
   
   if isempty(ordered_statements)
-    @info("\e[32mNo SQL statements to execute.\e[0m")
+    @info(_emsg("\e[32mNo SQL statements to execute.\e[0m"))
     return nothing
   end
   
@@ -716,8 +716,8 @@ function migrate(connection::PormGSQLite, settings::SQLConn;
   
   # Destructive guard
   if has_destructive && !destructive
-    @error("\e[31mMigration contains $(length(destructive_stmts)) destructive operation(s). " *
-           "Pass `destructive=true` to confirm.\e[0m")
+    @error(_emsg("\e[31mMigration contains $(length(destructive_stmts)) destructive operation(s). " *
+           "Pass `destructive=true` to confirm.\e[0m"))
     for s in destructive_stmts
       display_s = length(s) > 120 ? s[1:120] * "..." : s
       @error("  → $display_s")
@@ -728,10 +728,10 @@ function migrate(connection::PormGSQLite, settings::SQLConn;
   # Interactive confirmation
   if interactive
     if has_destructive
-      @info("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m")
+      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m"))
     end
-    @info("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m")
-    print("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m")
+    @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
+    print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
     response = readline()
     response = strip(lowercase(response))
     if !(response in ["yes", "y"])
@@ -767,7 +767,7 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::SQLCo
     
     # Commit
     with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
-    @info("\e[32mMigrations applied successfully. Version: $version\e[0m")
+    @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
   catch e
     # Rollback and record failure
     try
@@ -819,7 +819,7 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn
 
       # Commit
       with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
-      @info("\e[32mMigrations applied successfully. Version: $version\e[0m")
+      @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
     catch e
       try
         with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
@@ -987,7 +987,7 @@ whether a pending file exists.
 function discard_pending_migration(settings::SQLConn; backup::Bool = true)
   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
   if !isfile(pending_path)
-    @info("\e[32mNo pending migration to discard.\e[0m")
+    @info(_emsg("\e[32mNo pending migration to discard.\e[0m"))
     return nothing
   end
 
@@ -1011,8 +1011,8 @@ function discard_pending_migration(settings::SQLConn; backup::Bool = true)
     rm(pending_path)
   end
 
-  @info("\e[33mDiscarded pending migration ($(tables) table(s), $(statements) statement(s)).\e[0m" *
-        (backup ? " Backup saved to $(backup_path)." : ""))
+  @info(_emsg("\e[33mDiscarded pending migration ($(tables) table(s), $(statements) statement(s)).\e[0m" *
+        (backup ? " Backup saved to $(backup_path)." : "")))
   return (discarded = true, path = pending_path, backup = backup_path, tables = tables, statements = statements)
 end
 

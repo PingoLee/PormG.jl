@@ -6,6 +6,7 @@ import PormG: @pormg_debug
 
 import SQLite
 import LibPQ
+import Tables
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, with_savepoint, with_savepoint
@@ -501,14 +502,51 @@ function libpq_execute(conn::LibPQ.Connection, sql::String, params::Vector{Any})
 end
 libpq_execute(conn::LibPQ.Connection, sql::String, params::PormGPostgresParam) = libpq_execute(conn, sql, params.parameters)
 
+# Prepare an UNREGISTERED statement, execute it, fully materialize the result rows into a
+# connection-independent rowtable, and finalize the statement deterministically.
+#
+# Why not `SQLite.DBInterface.execute(conn, sql, params)` directly: that path
+# (`execute(prepare(conn, sql), params)`) *registers* the `SQLite.Stmt` in the DB's
+# `WeakKeyDict` and returns a *lazy* cursor whose backing `sqlite3_stmt` is finalized only
+# when the GC later runs the `Stmt` finalizer — on an arbitrary thread, at an arbitrary
+# safepoint. Two consequences, both observed as instability on SQLite:
+#
+#   1. The lazy cursor outlived its pool lease: `await_result` releases the connection as
+#      soon as `fetch` returns, but callers materialized the rows (`Tables.rowtable`, etc.)
+#      afterwards — stepping a cursor on a connection that had already been handed back to
+#      the pool and possibly reused by another statement.
+#   2. Under bulk seeding, thousands of registered `Stmt`s accumulate, each with a pending
+#      `sqlite3_finalize` finalizer. Those fire while the single async worker is mid
+#      `bind`/`step` on the same connection. SQLite is built serialized (THREADSAFE=1) so a
+#      well-formed concurrent call is mutex-safe, but combined with the non-idempotent
+#      explicit-close paths this opened a use-after-free / double-free window that surfaced
+#      as an intermittent `EXCEPTION_ACCESS_VIOLATION` in `sqlite3_bind_int64`.
+#
+# Preparing with `register = false` keeps the statement out of the `WeakKeyDict` (so a DB
+# close never double-finalizes it), `Tables.rowtable` materializes every row while the
+# connection is still leased on the worker, and the explicit `close!` finalizes the
+# statement immediately instead of deferring to the GC. The returned rowtable is a plain
+# `Vector{<:NamedTuple}` that is safe to hand back across the response channel.
+function _sqlite_execute_materialized(conn::SQLite.DB, sql::String, params)
+  stmt = SQLite.Stmt(conn, sql; register = false)
+  try
+    cursor = params === nothing ?
+      SQLite.DBInterface.execute(stmt) :
+      SQLite.DBInterface.execute(stmt, params)
+    return Tables.rowtable(cursor)
+  finally
+    SQLite.DBInterface.close!(stmt)
+  end
+end
+
 function sqlite_execute(conn::SQLite.DB, sql::String, params::Nothing)
-  return _sqlite_with_retry(() -> SQLite.DBInterface.execute(conn, sql))
+  return _sqlite_with_retry(() -> _sqlite_execute_materialized(conn, sql, nothing))
 end
 function sqlite_execute(conn::SQLite.DB, sql::String, params::Vector{Any})
-  return _sqlite_with_retry(() -> SQLite.DBInterface.execute(conn, sql, params))
+  return _sqlite_with_retry(() -> _sqlite_execute_materialized(conn, sql, params))
 end
 function sqlite_execute(conn::SQLite.DB, sql::String, params::PormGSQLiteParam)
-  return _sqlite_with_retry(() -> SQLite.DBInterface.execute(conn, sql, params.parameters))
+  return _sqlite_with_retry(() -> _sqlite_execute_materialized(conn, sql, params.parameters))
 end
 
 mutable struct SQLiteAsyncWorkItem

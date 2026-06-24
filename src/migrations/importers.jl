@@ -77,7 +77,7 @@ function import_models_from_sqlite(db::String = "db";
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
 
-  @info("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m")
+  @info(_emsg("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m"))
   @info("The models have been saved to '$(joinpath(model_path, file))'.")
 
   return nothing
@@ -148,7 +148,7 @@ function import_models_from_postgres(db::String;
   # Generate the models file
   generate_models_from_db(file, Instructions, settings, path=model_path)
   
-  @info("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m")
+  @info(_emsg("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m"))
   @info("The models have been saved to '$(joinpath(model_path, file))'.")
   
   return nothing
@@ -186,7 +186,7 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   # Generate the models file
   generate_models_from_db(file, Instructions, settings, path=model_path)
   
-  @info("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m")
+  @info(_emsg("\e[32mSuccessfully imported $(length(models_array)) models from the database.\e[0m"))
   @info("The models have been saved to '$(joinpath(model_path, file))'.")
   
   return nothing

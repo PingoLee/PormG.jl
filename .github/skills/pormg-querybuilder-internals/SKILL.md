@@ -96,12 +96,13 @@ When adding any new identifier-quoting path, go through `quote_identifier` — n
 
 Error messages may colorize the offending token with ANSI for the REPL, but they **must** degrade off-TTY. Construct `ArgumentError`s via `_argerr(msg)` (defined in `querybuilder/exceptions.jl`), or wrap a raw `throw`/`error` string with `_emsg(...)`:
 
-- `_emsg(msg)` keeps ANSI when `Base.have_color` is true and strips every `\e[..m` code otherwise (CI, file logs, structured logging) — the same flag Julia uses to colorize its own error displays.
+- `_emsg(msg; color = Base.have_color === true)` is the single shared helper, defined in `src/tools.jl` (the `PormG` namespace). It keeps ANSI when color is on and strips every `\e[..m` code otherwise (CI, file logs, structured logging) — `Base.have_color` is the same flag Julia uses to colorize its own error displays, so it honors `--color` and `NO_COLOR`. The `color` keyword exists for deterministic testing.
 - `_argerr(msg) = ArgumentError(_emsg(msg))` is the common case: a call site changes only `ArgumentError(` → `_argerr(` (paren structure unchanged).
 - Never write `throw(ArgumentError("...\e[31m..."))` directly — raw escape codes leak as noise into non-TTY sinks.
-- *Logging* macros (`@info` / `@warn` / `@error`) may keep raw ANSI, since they write to a TTY.
+- `_emsg(io, msg)` is the IO-aware overload for `show` / `print(io, …)` methods: it keys off the destination stream's `:color` IOContext property (`get(io, :color, false)`) rather than the global flag, so a non-color buffer (`sprint`, `repr`, a file) stays clean even on a color terminal.
+- *Logging* macros (`@info` / `@warn` / `@error`) and interactive `print`/`println` also route their colored messages through `_emsg(…)` — this keeps log files and captured output ANSI-free when redirected (Julia clears `Base.have_color` for non-TTY stdout). Don't add a new `@info("…\e[31m…")` without the `_emsg` wrapper.
 
-Scope: `_argerr`/`_emsg` are QueryBuilder-internal, so this contract applies to `src/querybuilder/`. If colored errors are ever needed in `Migrations`/`Models`, promote the helper to a shared module (e.g. `Utils.jl`) and import it — don't re-embed raw ANSI.
+Scope: `_emsg` is shared (`src/tools.jl`, `PormG` namespace, both string and `IO`-aware methods); `QueryBuilder`, `Models`, and `Migrations` all `import PormG: _emsg`. `_argerr` is the QueryBuilder-internal convenience wrapper. Any submodule that needs colored errors/logs should import `_emsg` from `PormG` rather than re-embedding raw ANSI. Regression coverage: `test/unit/test_error_message_ansi.jl`.
 
 ### Query generation
 
@@ -183,4 +184,4 @@ julia -t auto --project=. test/integration/test_cte.jl
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
 - Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — the contract is fail-closed: validate via `_validate_identifier`, then quote; never silently rewrite an identifier
-- Do not embed raw ANSI (`\e[...`) in a `throw`/`error` message — route through `_argerr`/`_emsg` so color degrades off-TTY (logging macros may keep ANSI)
+- Do not embed raw ANSI (`\e[...`) in a `throw`/`error`/`@info`/`@warn`/`@error`/`print` message — route through `_argerr`/`_emsg` (or `_emsg(io, …)` inside `show` methods) so color degrades off-TTY

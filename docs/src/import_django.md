@@ -184,6 +184,14 @@ user_type = models.CharField(
 - **Primary Key**: If no primary key is defined, `id = Models.IDField()` is automatically added
 - **AbstractUser**: For models inheriting from `AbstractUser`, additional fields like `date_joined` are added
 
+!!! note "Django-import conventions differ from native PormG"
+    The importer deliberately matches **Django's** schema conventions, not PormG's: it auto-adds an
+    implicit `id` primary key and appends `_id` to foreign-key columns (`category` → `category_id`).
+    Native PormG models do neither — you declare the `IDField` and FK columns are verbatim. The
+    importer matches Django because Django owns that schema and PormG reads it (ETL); it does not run
+    migrations for imported models. See [Schema Conventions](schema_conventions.md) for the full
+    native contract and this asymmetry.
+
 
 ## Limitations and Considerations
 

@@ -47,8 +47,11 @@ Each migration record contains:
 - **applied_at**: Timestamp of when the migration was applied
 - **status**: One of `applied`, `failed`
 - **is_destructive**: Whether the migration contained DROP operations
+- **format_version**: The frozen migration-format contract version (see [Migration Format Stability](stability.md))
 
 Filesystem archives (`applied_migrations/`) remain useful for version control and review, but the history table is authoritative.
+
+The exact on-disk file layout, checksum algorithm, and tracking-table columns are a stability contract — see [Migration Format Stability](stability.md).
 
 ## Database-Specific Behavior
 

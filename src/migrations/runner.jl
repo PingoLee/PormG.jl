@@ -42,6 +42,20 @@ end
 # ==============================================================================
 
 """
+    MIGRATION_FORMAT_VERSION
+
+Version of PormG's frozen migration **format contract** — the on-disk migration-file layout, the
+checksum algorithm, and the `pormg_migrations` tracking-table schema. Every record this engine
+writes is stamped with this value (the `format_version` column), and generated migration files
+carry it as a `# pormg-migration-format: N` header. It is the single source of truth referenced
+wherever the format version is written.
+
+`1` is the contract documented under *Migrations → Format Stability*. Bump this only alongside a
+documented forward-migration path; never repurpose an existing version number.
+"""
+const MIGRATION_FORMAT_VERSION = 1
+
+"""
     compute_checksum(sql_content::String) -> String
 
 Compute a SHA-256 hex digest of the SQL content for integrity verification.
@@ -101,12 +115,37 @@ invoked explicitly for bootstrapping.
 function init_migrations(connection::PormGPostgres)
   ddl = Dialect.create_migrations_table(connection)
   fetch(connection, ddl)
+  _ensure_format_version_column(connection)
   nothing
 end
 
 function init_migrations(connection::PormGSQLite)
   ddl = Dialect.create_migrations_table(connection)
   fetch(connection, ddl)
+  _ensure_format_version_column(connection)
+  nothing
+end
+
+"""
+    _ensure_format_version_column(connection)
+
+Idempotently add the `format_version` column to a `pormg_migrations` table that predates it.
+
+Brand-new tables already include the column via `create_migrations_table`; this only matters for
+databases initialized by a pre-`format_version` PormG release, where `CREATE TABLE IF NOT EXISTS`
+is a no-op and the column must be added in place. Existing rows backfill to `1` via the column
+DEFAULT — they were written under the v1 format contract.
+
+The column is probed first (`migrations_table_info_sql`) so the `ALTER` runs only when genuinely
+absent. SQLite *requires* this — re-adding a column is a hard error — and on PostgreSQL it avoids a
+routine `NOTICE: column already exists` on every `init_migrations` call (which `migrate`, `status`,
+and `mark_applied` all trigger). The PostgreSQL `ALTER` additionally keeps `IF NOT EXISTS` to stay
+safe against a concurrent migration adding the column between this probe and the `ALTER`.
+"""
+function _ensure_format_version_column(connection::Union{PormGPostgres, PormGSQLite})
+  cols = DataFrame(fetch(connection, Dialect.migrations_table_info_sql(connection)))
+  has_col = nrow(cols) > 0 && "format_version" in string.(cols.name)
+  has_col || fetch(connection, Dialect.add_format_version_column_sql(connection))
   nothing
 end
 
@@ -181,9 +220,9 @@ Insert a migration record into the history table within an existing transaction 
 function _record_migration(pool::PormGPostgres, version::String, name::String, checksum::String, 
                            sql_content::String, status::String, is_destr::Bool; 
                            conn::Union{Nothing, LibPQ.Connection} = nothing)
-  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") 
-           VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))', 
-           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr));"""
+  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version")
+           VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',
+           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr), $(MIGRATION_FORMAT_VERSION));"""
   # Release the connection iff we acquired it here (conn === nothing). When the
   # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
   # frees it itself; without this, the fire-and-forget call sites (mark_applied /
@@ -196,9 +235,9 @@ function _record_migration(pool::PormGSQLite, version::String, name::String, che
                            sql_content::String, status::String, is_destr::Bool; 
                            conn::Union{Nothing, SQLite.DB} = nothing)
   is_destr_val = is_destr ? 1 : 0
-  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") 
-           VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))', 
-           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val));"""
+  sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version")
+           VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',
+           '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr_val), $(MIGRATION_FORMAT_VERSION));"""
   # Release the connection iff we acquired it here (conn === nothing). When the
   # caller supplies a `conn` it owns the connection (e.g. the migration tx) and
   # frees it itself; without this, the fire-and-forget call sites (mark_applied /

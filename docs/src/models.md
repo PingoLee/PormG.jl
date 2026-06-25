@@ -5,6 +5,11 @@ PormG models describe the structure of your database tables using Julia code, in
 ## What is a Model?
 A model is a Julia object that defines the fields (columns) and their types for a database table. Each model maps directly to a table in your PostgreSQL or SQLite database.
 
+!!! note "How model and field names become a schema"
+    The rules that turn a model into table/column names — table naming, foreign-key columns, primary
+    keys, default `on_delete`, and identifier quoting — are a frozen contract documented in
+    [Schema Conventions](schema_conventions.md).
+
 ## Creating a Model
 
 1. **Edit Your Models File**

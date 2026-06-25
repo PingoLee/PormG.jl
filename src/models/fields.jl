@@ -831,7 +831,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 - `blank::Bool = false`: Whether the field can be left blank in forms
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
-- `db_column::Union{String, Nothing} = nothing`: Custom database column name (defaults to field name)
+- `db_column::Union{String, Nothing} = nothing`: Accepted but not currently honored by schema generation; the generated column is the field name
 - `default::Union{String, Nothing} = nothing`: Default value for the field
 - `choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} = nothing`: Restricted set of valid values
 - `editable::Bool = true`: Whether the field should be editable in forms
@@ -873,15 +873,14 @@ Order = Models.Model(
 )
 ```
 
-Optional field with custom database column:
+Field with a human-readable label (the column name follows the field name, "sku"):
 ```julia
 Product = Models.Model(
     _id = IDField(),
     name = CharField(max_length=200),
     sku = CharField(
-        max_length=50, 
-        unique=true, 
-        db_column="product_sku",
+        max_length=50,
+        unique=true,
         verbose_name="Stock Keeping Unit"
     )
     category = CharField(max_length=100, null=true, blank=true)
@@ -942,7 +941,7 @@ Task = Models.Model(
 - **Increasing Length**: Safe operation
 - **Decreasing Length**: Requires data validation
 - **Adding Choices**: Application-level change only
-- **Changing Column Name**: Use `db_column` parameter
+- **Changing Column Name**: rename the field — the column follows the field name; `db_column` is not currently honored by schema generation
 
 # Notes
 - The field uses VARCHAR type which is efficient for short to medium strings

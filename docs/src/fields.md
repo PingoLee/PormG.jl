@@ -18,7 +18,7 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 ### Database Column Mapping
 - **Field names automatically become lowercase** in the database
 - **PormG handles the conversion**: `firstName` → `firstname` in database
-- **Use `db_column` parameter** for custom database column names if needed
+- **Column names follow the field name** (lowercased, otherwise verbatim); the schema generator does not currently rename columns via `db_column` — see [Schema Conventions](schema_conventions.md)
 
 ### Examples of Good Naming
 
@@ -198,14 +198,13 @@ Order = Models.Model(
     )
 )
 
-# Optional field with custom database column
+# Field with a human-readable label (the column name follows the field name: "sku")
 Product = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     sku = Models.CharField(
         max_length=50, 
         unique=true, 
-        db_column="product_sku",
         verbose_name="Product SKU"
     )
 )
@@ -993,7 +992,7 @@ All field types support these common parameters:
 
 ### Database Options
 - `db_index::Bool = false`: Create database index for faster queries
-- `db_column::Union{String, Nothing} = nothing`: Custom database column name
+- `db_column::Union{String, Nothing} = nothing`: Accepted but **not currently honored** by schema generation — the column name is the field name (see [Schema Conventions](schema_conventions.md))
 - `db_constraint::Bool = true`: Create database constraints (for relationships)
 
 ### Example with All Common Options

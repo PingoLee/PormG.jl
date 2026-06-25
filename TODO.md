@@ -26,12 +26,11 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 > ⚠️ **do BEFORE the first General-registry publish** — the items below lock in contracts that are
 > cheap to settle now (zero published users) but become breaking/irreversible afterward.
-> **Sequence:** (1) freeze migration contract → (2) freeze schema conventions → (3) decouple
-> adapters → (4) curate exports. Items 1–2 are **Tier 1** (irreversible user-data — settle first);
-> 3–4 are the coupled **Tier 2** pair, adapter-decoupling first (export-curation depends on it).
+> **Sequence:** **Tier 1** (irreversible user-data) is settled — the migration-format /
+> tracking-table contract and the generated schema conventions are now frozen and documented.
+> Remaining: the coupled **Tier 2** pair — (3) decouple adapters → (4) curate exports
+> (adapter-decoupling first, since export-curation depends on it).
 
-- [#32](https://github.com/PingoLee/PormG.jl/issues/32) — ⚠️ **[Tier 1]** Freeze & document the migration file + tracking-table contract
-- [#33](https://github.com/PingoLee/PormG.jl/issues/33) — ⚠️ **[Tier 1]** Freeze & document the generated DB schema conventions
 - [#34](https://github.com/PingoLee/PormG.jl/issues/34) — ⚠️ **[Tier 2]** Decouple SQL adapters into weakdeps + extensions
 - [#35](https://github.com/PingoLee/PormG.jl/issues/35) — ⚠️ **[Tier 2]** Curate the public export surface
 - [#36](https://github.com/PingoLee/PormG.jl/issues/36) — Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)
@@ -49,6 +48,7 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 - [#42](https://github.com/PingoLee/PormG.jl/issues/42) — `ObjectHandler` getproperty cleanup (`:inspect` alias, `:count`/`:exists` ignore `show_query`, `args...` type instability)
 - [#43](https://github.com/PingoLee/PormG.jl/issues/43) — `deepcopy(ctes)` → `copy(ctes)` shared-state risk
 - [#44](https://github.com/PingoLee/PormG.jl/issues/44) — CTE ergonomics: reference CTE fields via `F()` in the main query
+- [#50](https://github.com/PingoLee/PormG.jl/issues/50) — Make `db_column` authoritative for generated DDL (currently inert; accepted but ignored by schema generation)
 
 ## 🔗 Custom Join (`cjoin`) Gaps
 

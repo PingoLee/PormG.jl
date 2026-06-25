@@ -1169,7 +1169,8 @@ function create_migrations_table(conn::PormGPostgres)::String
   "sql_content" TEXT NOT NULL DEFAULT '',
   "applied_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
-  "is_destructive" BOOLEAN NOT NULL DEFAULT FALSE
+  "is_destructive" BOOLEAN NOT NULL DEFAULT FALSE,
+  "format_version" INTEGER NOT NULL DEFAULT 1
 );"""
 end
 
@@ -1187,7 +1188,8 @@ function create_migrations_table(conn::PormGSQLite)::String
   "sql_content" TEXT NOT NULL DEFAULT '',
   "applied_at" DATETIME NOT NULL DEFAULT (datetime('now')),
   "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
-  "is_destructive" BOOLEAN NOT NULL DEFAULT 0
+  "is_destructive" BOOLEAN NOT NULL DEFAULT 0,
+  "format_version" INTEGER NOT NULL DEFAULT 1
 );"""
 end
 
@@ -1197,7 +1199,7 @@ end
 Returns parameterized INSERT for recording an applied migration (PostgreSQL).
 """
 function insert_migration_record_sql(conn::PormGPostgres)::String
-  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") VALUES (\$1, \$2, \$3, \$4, \$5, \$6);"""
+  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version") VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7);"""
 end
 
 """
@@ -1206,7 +1208,7 @@ end
 Returns parameterized INSERT for recording an applied migration (SQLite).
 """
 function insert_migration_record_sql(conn::PormGSQLite)::String
-  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive") VALUES (?, ?, ?, ?, ?, ?);"""
+  return """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version") VALUES (?, ?, ?, ?, ?, ?, ?);"""
 end
 
 """
@@ -1233,7 +1235,7 @@ end
 Returns SQL to select all migration records ordered by version.
 """
 function select_all_migrations_sql(conn::Union{PormGPostgres, PormGSQLite})::String
-  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive" FROM pormg_migrations ORDER BY "version" ASC;"""
+  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive", "format_version" FROM pormg_migrations ORDER BY "version" ASC;"""
 end
 
 """
@@ -1242,7 +1244,7 @@ end
 Returns parameterized SQL to select a single migration by version (PostgreSQL).
 """
 function select_migration_by_version_sql(conn::PormGPostgres)::String
-  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive" FROM pormg_migrations WHERE "version" = \$1;"""
+  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive", "format_version" FROM pormg_migrations WHERE "version" = \$1;"""
 end
 
 """
@@ -1251,7 +1253,7 @@ end
 Returns parameterized SQL to select a single migration by version (SQLite).
 """
 function select_migration_by_version_sql(conn::PormGSQLite)::String
-  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive" FROM pormg_migrations WHERE "version" = ?;"""
+  return """SELECT "id", "version", "name", "checksum", "sql_content", "applied_at", "status", "is_destructive", "format_version" FROM pormg_migrations WHERE "version" = ?;"""
 end
 
 """
@@ -1288,6 +1290,52 @@ Returns SQL to check if pormg_migrations table exists (SQLite).
 """
 function migrations_table_exists_sql(conn::PormGSQLite)::String
   return """SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pormg_migrations';"""
+end
+
+"""
+    add_format_version_column_sql(conn::PormGPostgres) -> String
+
+DDL that backfills the `format_version` column onto a pre-existing `pormg_migrations` table.
+Callers gate this on `migrations_table_info_sql` (see `_ensure_format_version_column`) so it does
+not emit a `NOTICE: column already exists` on every `init_migrations` call; the `IF NOT EXISTS`
+clause additionally keeps it safe against the rare race where a concurrent migration adds the column
+between the probe and this `ALTER`.
+"""
+function add_format_version_column_sql(conn::PormGPostgres)::String
+  return """ALTER TABLE pormg_migrations ADD COLUMN IF NOT EXISTS "format_version" INTEGER NOT NULL DEFAULT 1;"""
+end
+
+"""
+    add_format_version_column_sql(conn::PormGSQLite) -> String
+
+DDL that adds the `format_version` column to an existing `pormg_migrations` table. SQLite has no
+`IF NOT EXISTS` for `ADD COLUMN` and errors if the column already exists, so callers MUST gate this
+on `migrations_table_info_sql` first (see `_ensure_format_version_column`).
+"""
+function add_format_version_column_sql(conn::PormGSQLite)::String
+  return """ALTER TABLE pormg_migrations ADD COLUMN "format_version" INTEGER NOT NULL DEFAULT 1;"""
+end
+
+"""
+    migrations_table_info_sql(conn::PormGPostgres) -> String
+
+Returns SQL listing the `pormg_migrations` columns (one row per column, in a `name` column) so
+`_ensure_format_version_column` can check whether `format_version` already exists before issuing the
+`ALTER`. Mirrors the column-name shape of the SQLite `PRAGMA table_info` result.
+"""
+function migrations_table_info_sql(conn::PormGPostgres)::String
+  return """SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'pormg_migrations';"""
+end
+
+"""
+    migrations_table_info_sql(conn::PormGSQLite) -> String
+
+Returns SQL to introspect the `pormg_migrations` columns (used to check whether `format_version`
+already exists before attempting an idempotent `ALTER TABLE ... ADD COLUMN`). The result set has a
+`name` column listing each existing column.
+"""
+function migrations_table_info_sql(conn::PormGSQLite)::String
+  return """PRAGMA table_info(pormg_migrations);"""
 end
 
 end

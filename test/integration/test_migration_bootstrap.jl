@@ -182,10 +182,10 @@ end
 # index_names, all_table_names).
 # ==============================================================================
 
-# Conditional imports: SQLite.jl is only needed for the SQLite adapter path
-if adapter_name == "SQLite"
-  using SQLite
-end
+# SQLite.jl is a weak dependency since #34 and cannot be `using`-ed directly under
+# `--project=.`. It is loaded and bound in Main by test/load_drivers.jl (included from
+# common_setup.jl), so the qualified `SQLite.*` calls in the column-introspection helpers
+# resolve to that binding for the SQLite adapter path.
 
 # Determine the temp DB folder based on the adapter
 edge_db_name = adapter_name == "SQLite" ? "db_test_migration" : "db_test_migration_pg"

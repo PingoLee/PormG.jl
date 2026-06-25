@@ -31,8 +31,10 @@ export @pormg_debug
 
 import DataFrames, OrderedCollections, Dates, Logging, Millboard, YAML
 
-using SQLite
-using LibPQ
+# NOTE: LibPQ and SQLite are weak dependencies (Project.toml `[weakdeps]`). Core never
+# names a concrete driver type; all driver work goes through the backend generics in
+# `Backend.jl`, whose methods live in `ext/PormGLibPQExt.jl` / `ext/PormGSQLiteExt.jl`
+# and load on `using LibPQ` / `using SQLite`.
 
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
@@ -71,6 +73,10 @@ if !haskey(ENV, "PORMG_ENV")
 end
 
 include("constants.jl")
+
+# Backend interface (empty generics + friendly fallbacks); driver bodies live in the
+# weakdep extensions. Must precede Configuration/ConnectionPool, which call the generics.
+include("Backend.jl")
 
 # upper functions
 function get_constraints_pk end

@@ -21,6 +21,60 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 ---
 
+## Driver loading — `LibPQ`/`SQLite` are now weak dependencies (load the driver yourself)
+
+- **PormG ref**: issue #34 (Tier 2 pre-publish · decouple SQL adapters); [src/Backend.jl](src/Backend.jl), [ext/PormGLibPQExt.jl](ext/PormGLibPQExt.jl), [ext/PormGSQLiteExt.jl](ext/PormGSQLiteExt.jl), [Project.toml](Project.toml)
+- **Recorded**: 2026-06-25
+- **Severity**: **breaking** — `using PormG` no longer loads any SQL driver. The first database operation raises a clear error until the driver is loaded.
+
+### What changed
+
+`LibPQ` and `SQLite` moved from `[deps]` to `[weakdeps]` and their driver code now lives in package extensions (`ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl`). Core no longer references any concrete driver type; it dispatches through the `backend_*` generics in `src/Backend.jl`, whose methods are supplied by the extension that loads when you run `using LibPQ` / `using SQLite`.
+
+Consequence: **each app must load the driver(s) it uses**, and **declare them as direct dependencies** (they no longer arrive transitively through PormG).
+
+### How to find the calls to migrate
+
+The app starts fine but the first query/connection throws:
+
+```text
+PormG: the PostgreSQL backend requires LibPQ. Run `using LibPQ` (or `using PormG, LibPQ`) so the PostgreSQL extension loads.
+```
+
+(or the `SQLite` variant). Grep the app's startup for `using PormG`.
+
+### Migrate your app
+
+1. Add the driver to your app's `Project.toml` (`] add LibPQ` and/or `] add SQLite`).
+2. Load it alongside PormG:
+
+```julia
+# ✗ before — driver came in transitively
+using PormG
+
+# ✓ after — PostgreSQL app
+using PormG, LibPQ
+
+# ✓ after — SQLite app
+using PormG, SQLite
+
+# ✓ after — app that talks to both backends
+using PormG, LibPQ, SQLite
+```
+
+Also note: a handful of driver internals are **no longer exported** — `libpq_execute`, `libpq_execute_async`, `is_connection_alive`, `reconnect_db`, `is_connection_error`. They became internal `backend_*` generics inside the extensions. Apps that reached for them (rare) should use the public API (`PormG.fetch`, `run_in_transaction`, …) instead.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
 ## `bulk_update` — `match_on=` replaces dynamic match keys in `filters=`
 
 - **PormG ref**: "Bulk Operation API Refactoring" in [TODO.md](TODO.md#L7); implemented in [src/querybuilder/execution_bulk.jl](src/querybuilder/execution_bulk.jl)

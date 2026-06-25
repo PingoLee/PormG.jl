@@ -11,8 +11,6 @@ using DataFrames
 using CSV
 using Dates
 using JSON
-using SQLite
-using LibPQ
 import OrderedCollections: OrderedDict
 import Random: randstring
 import SHA

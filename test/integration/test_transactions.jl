@@ -194,7 +194,10 @@ settings = PormG.config[PORMG_DB_FOLDER]
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
 
     # Seed one row so a concurrent delete has something to remove while inserts run.
-    M.Just_a_test_deletion.objects.create("name" => "seed-to-delete", "test_result" => 0)
+    # test_result is a nullable FK to result(resultid); the seed's FK value is irrelevant to this
+    # test (the row is deleted by name), so leave it NULL. A literal 0 violates the FK on PostgreSQL
+    # (which enforces it) while passing on SQLite (FK enforcement off) — see the create() below.
+    M.Just_a_test_deletion.objects.create("name" => "seed-to-delete", "test_result" => nothing)
 
     # Deliberately exceed the default SQLite pool_size (3) to force write contention.
     writer_count = 8

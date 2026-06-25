@@ -65,6 +65,78 @@ using OrderedCollections
   @info "Migration preflight passed" adapter=adapter_name applied=length(st2.applied)
 end
 
+# ─── Phase A2: format_version backfill on a legacy history table ─────────────
+# Goal: prove init_migrations() idempotently upgrades a `pormg_migrations` table created by a
+#       PRE-`format_version` PormG release. The column must be added in place (not via a failed
+#       CREATE) and legacy rows must backfill to 1 (issue #32). Runs on both SQLite and PostgreSQL.
+@testset "Format-version backfill ($(PORMG_DB_FOLDER))" begin
+  settings = PormG.config[PORMG_DB_FOLDER]
+  conn = settings.connections
+  is_pg = conn isa PormG.PormGPostgres
+
+  # Recreate pormg_migrations WITHOUT format_version, mimicking an older release's schema.
+  PormG.ConnectionPool.fetch(conn, "DROP TABLE IF EXISTS pormg_migrations;")
+  legacy_ddl = is_pg ?
+    """CREATE TABLE pormg_migrations (
+      "id" SERIAL PRIMARY KEY,
+      "version" VARCHAR(17) NOT NULL UNIQUE,
+      "name" VARCHAR(255) NOT NULL,
+      "checksum" VARCHAR(64) NOT NULL,
+      "sql_content" TEXT NOT NULL DEFAULT '',
+      "applied_at" TIMESTAMP NOT NULL DEFAULT NOW(),
+      "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
+      "is_destructive" BOOLEAN NOT NULL DEFAULT FALSE
+    );""" :
+    """CREATE TABLE pormg_migrations (
+      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+      "version" VARCHAR(17) NOT NULL UNIQUE,
+      "name" VARCHAR(255) NOT NULL,
+      "checksum" VARCHAR(64) NOT NULL,
+      "sql_content" TEXT NOT NULL DEFAULT '',
+      "applied_at" DATETIME NOT NULL DEFAULT (datetime('now')),
+      "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
+      "is_destructive" BOOLEAN NOT NULL DEFAULT 0
+    );"""
+  PormG.ConnectionPool.fetch(conn, legacy_ddl)
+
+  # A legacy applied record, written before the column existed.
+  PormG.ConnectionPool.fetch(conn,
+    """INSERT INTO pormg_migrations ("version", "name", "checksum", "status")
+       VALUES ('20250101000000000', 'legacy_init', 'deadbeef', 'applied');""")
+
+  # Backend-neutral "does format_version exist?" probe via the system catalog (returns 0/1 rows; no
+  # reliance on a SELECT raising). Avoids the SQLite-only `column_names` helper, whose `using SQLite`
+  # import only loads later in Phase C.
+  format_version_present() = begin
+    sql = is_pg ?
+      "SELECT 1 FROM information_schema.columns WHERE table_name = 'pormg_migrations' AND column_name = 'format_version';" :
+      "SELECT 1 FROM pragma_table_info('pormg_migrations') WHERE name = 'format_version';"
+    nrow(DataFrame(PormG.ConnectionPool.fetch(conn, sql))) > 0
+  end
+
+  # The column is absent before the upgrade.
+  @test format_version_present() == false
+
+  # init_migrations() must add it idempotently — a second call must not fail.
+  init_migrations(conn)
+  init_migrations(conn)
+
+  # The column now exists and the legacy row backfilled to 1 via the DEFAULT.
+  @test format_version_present() == true
+  legacy = DataFrame(PormG.ConnectionPool.fetch(conn,
+    """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000000000';"""))
+  @test nrow(legacy) == 1
+  @test legacy[1, :format_version] == 1
+
+  # A migration recorded AFTER the upgrade is stamped with the current format version.
+  Migrations.mark_applied(conn, settings, "20250101000001000", "after_upgrade")
+  fresh = DataFrame(PormG.ConnectionPool.fetch(conn,
+    """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000001000';"""))
+  @test fresh[1, :format_version] == Migrations.MIGRATION_FORMAT_VERSION
+
+  @info "Format-version backfill passed" adapter=adapter_name
+end
+
 # ─── Phase B: Real Schema Bootstrap ─────────────────────────────────────────
 # Goal: wipe any residue left by the preflight, run the full migration
 #       lifecycle with the real models, and leave the DB in the exact schema

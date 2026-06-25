@@ -173,6 +173,10 @@ using SQLite
             @test occursin("\"applied_at\"", ddl)
             @test occursin("\"status\"", ddl)
             @test occursin("\"is_destructive\"", ddl)
+            # format_version pins the frozen migration-format contract (issue #32); every
+            # freshly-created tracking table carries it with a DEFAULT of 1.
+            @test occursin("\"format_version\"", ddl)
+            @test occursin("INTEGER NOT NULL DEFAULT 1", ddl)
         end
 
         # PostgreSQL should use SERIAL and TIMESTAMP

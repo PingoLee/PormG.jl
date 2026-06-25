@@ -17,6 +17,7 @@ makedocs(
         "Home" => "index.md",
         "Models" => "models.md",
         "Fields" => "fields.md",
+        "Schema Conventions" => "schema_conventions.md",
         "Many-to-Many" => "many_to_many.md",
         "Configuration" => [
             "Overview" => "configuration/index.md",
@@ -29,6 +30,7 @@ makedocs(
         "Migrations" => [
             "Overview" => "migrations/index.md",
             "Workflow" => "migrations/workflow.md",
+            "Format Stability" => "migrations/stability.md",
             "Advanced" => "migrations/advanced.md",
             # "Tachikoma Dashboard" => "migrations/tachikoma.md",
         ],

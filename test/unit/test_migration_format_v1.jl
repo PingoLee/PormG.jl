@@ -57,8 +57,10 @@ const _MANUAL_DIGEST    = "ee7ee5c8ede0b94b23ff384d1f9b2e2f9ac9d87c3be23647d032a
         text = read(fixture_file, String)
 
         # 1. The on-disk format marker is present and parses to version 1 (read by line-scan, exactly
-        #    as a future engine would detect the format before executing the file).
-        m = match(r"(?m)^# pormg-migration-format: (\d+)$", text)
+        #    as a future engine would detect the format before executing the file). The optional `\r?`
+        #    keeps the scan line-ending agnostic: a committed migration may be checked out with CRLF on
+        #    Windows (core.autocrlf), and the trailing CR would otherwise defeat the `$` anchor.
+        m = match(r"(?m)^# pormg-migration-format: (\d+)\r?$", text)
         @test m !== nothing
         @test parse(Int, m.captures[1]) == 1
 
@@ -87,7 +89,7 @@ const _MANUAL_DIGEST    = "ee7ee5c8ede0b94b23ff384d1f9b2e2f9ac9d87c3be23647d032a
 
             # Header present, parses to the current format version.
             @test occursin("# pormg-migration-format: $(Migrations.MIGRATION_FORMAT_VERSION)", text)
-            m = match(r"(?m)^# pormg-migration-format: (\d+)$", text)
+            m = match(r"(?m)^# pormg-migration-format: (\d+)\r?$", text)
             @test m !== nothing
             @test parse(Int, m.captures[1]) == Migrations.MIGRATION_FORMAT_VERSION
 

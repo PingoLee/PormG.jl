@@ -181,4 +181,4 @@ end
     # save() must detect pk_field === nothing and throw ArgumentError
     # instead of building a filter on the literal string "nothing".
     @test_throws ArgumentError row.save()
-end
+end

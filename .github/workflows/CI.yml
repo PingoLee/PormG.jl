@@ -62,14 +62,21 @@ jobs:
           julia --project=. -e '
             using PormG
             # No `using LibPQ` / `using SQLite`: the backend generics must fall back.
-            pool = PormG.ConnectionPool.PostgresConnectionPool("dummy"; pool_size=1)
-            threw = false
-            try
-              PormG.backend_connect(pool)
-            catch e
-              threw = true
-              @assert occursin("requires LibPQ", sprint(showerror, e)) "unexpected error: $(sprint(showerror, e))"
+            # Assert inside a FUNCTION (hard scope). In a `julia -e` script, assigning a
+            # flag from inside a `try`/`catch` hits soft scope and silently creates a new
+            # local, so an outer `@assert flag` would fail even when the error was raised.
+            function expect_friendly(pool, needle)
+              try
+                PormG.backend_connect(pool)
+              catch e
+                msg = sprint(showerror, e)
+                @assert occursin(needle, msg) "unexpected error for $(typeof(pool)): $msg"
+                return
+              end
+              error("backend_connect should have thrown for $(typeof(pool)) when its driver is not loaded")
             end
-            @assert threw "backend_connect should error when LibPQ is not loaded"
-            println("OK: PormG loads without drivers and fails friendly on backend use")
+            # Both backends must fail friendly, symmetrically.
+            expect_friendly(PormG.ConnectionPool.PostgresConnectionPool("dummy"; pool_size=1), "requires LibPQ")
+            expect_friendly(PormG.ConnectionPool.SQLiteConnectionPool("dummy.sqlite"; pool_size=1), "requires SQLite")
+            println("OK: PormG loads without drivers and both backends fail friendly on use")
           '

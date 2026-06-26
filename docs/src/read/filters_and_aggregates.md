@@ -374,7 +374,7 @@ query.filter(Qor("constructorId" => 1, "constructorId" => 9))
 
 ## Aggregations and Grouping
 
-PormG provides five aggregate functions: `Count`, `Sum`, `Avg`, `Max`, and `Min`.
+`PormG.Functions` provides five aggregate functions: `Count`, `Sum`, `Avg`, `Max`, and `Min`.
 
 When aggregate values appear in `values()`, PormG **automatically groups by the non-aggregated columns**.
 

@@ -120,7 +120,7 @@ query = M.Race.objects.filter("date__@date" => Date(1991, 10, 20))
 
 ## String Functions
 
-PormG exports string manipulation functions that work in `values()`:
+`PormG.Functions` provides string manipulation functions that work in `values()`:
 
 | Function | Description | Example |
 | :--- | :--- | :--- |

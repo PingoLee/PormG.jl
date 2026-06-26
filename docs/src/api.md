@@ -266,7 +266,7 @@ df = M.Result.objects.values(
 
 ## SQL Functions
 
-PormG exports a comprehensive set of SQL functions:
+`PormG.Functions` provides a comprehensive set of SQL functions:
 
 ### String Functions
 

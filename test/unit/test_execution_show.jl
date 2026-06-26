@@ -108,7 +108,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "IN subqueries accept single SQL-function projections" begin
   # A single aliased SQL-function projection counts as one column — must pass validation.
-  subquery = TestDriver.objects.values("max_id" => PormG.Max("id"))
+  subquery = TestDriver.objects.values("max_id" => PormG.Functions.Max("id"))
   query = TestDriver.objects.filter("id__@in" => subquery)
 
   result = query.list(show_query=:dict)
@@ -126,7 +126,7 @@ end
 # two such pairs must trigger the same ArgumentError as two plain strings.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "IN subqueries reject two SQL-function projections" begin
-  subquery = TestDriver.objects.values("max_id" => PormG.Max("id"), "min_id" => PormG.Min("id"))
+  subquery = TestDriver.objects.values("max_id" => PormG.Functions.Max("id"), "min_id" => PormG.Functions.Min("id"))
   query = TestDriver.objects.filter("id__@in" => subquery)
 
   err = try

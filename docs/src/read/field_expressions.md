@@ -25,7 +25,8 @@
 ## Core Syntax
 
 ```julia
-using PormG: F, Count, Sum
+using PormG: F
+using PormG.Functions: Count, Sum
 
 # Field reference
 F("grid")

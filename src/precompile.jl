@@ -93,8 +93,8 @@ import Logging
 
           # Selection and Aggregation
           q.values("forename", "surname")
-          q.values("forename", "count" => Count("driverId"))
-          q.values("points_sum" => Sum("points"))
+          q.values("forename", "count" => Functions.Count("driverId"))
+          q.values("points_sum" => Functions.Sum("points"))
 
           # Ordering and pagination
           q.order_by("-points")

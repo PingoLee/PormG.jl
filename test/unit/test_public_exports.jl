@@ -73,11 +73,17 @@ const EXPECTED_FUNCTIONS = Set([
         @test PormG.Functions.Sum === PormG.QueryBuilder.Sum
     end
 
-    # Explicit opt-in still works (the pattern the read/* docs use): `using PormG: Sum`.
-    @testset "Explicit opt-in import still resolves" begin
-        @test isdefined(PormG, :Sum)    # accessible as PormG.Sum (unexported)
-        @test isdefined(PormG, :Count)
-        @test PormG.Sum === PormG.QueryBuilder.Sum
+    # Clean break (#35): the function constructors have exactly ONE home — PormG.Functions.
+    # They are deliberately NOT accessible as `PormG.Sum`, so `using PormG: Sum` fails by
+    # design. Pre-publish, we want one obvious namespace rather than a redundant alias.
+    @testset "Function names live ONLY in PormG.Functions (no PormG.Sum alias)" begin
+        @test !isdefined(PormG, :Sum)
+        @test !isdefined(PormG, :Count)
+        @test !isdefined(PormG, :Round)
+        @test !isdefined(PormG, :Replace)
+        # The single home still resolves to the QueryBuilder source of truth:
+        @test isdefined(PormG.Functions, :Sum)
+        @test PormG.Functions.Sum === PormG.QueryBuilder.Sum
     end
 
     # `fetch` extends Base.fetch instead of shadowing it (no forced qualification).

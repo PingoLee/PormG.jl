@@ -19,50 +19,75 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 | ⏳ | pending — not yet migrated |
 | — | n/a — app does not use the affected API |
 
+## Applying these in a consuming app
+
+This file is the **source of truth, kept in the PormG repo**. To fix a dependent app after a
+PormG bump, point an agent (or yourself) at this file — read it from the dev'd source
+(e.g. `~/.julia/dev/PormG/in_migration.md`) or from GitHub — and work the entries
+**newest first**:
+
+1. **Scope to this app.** In each entry's rollout table, skip rows already marked ✅ or —.
+   Work only the ⏳ rows for this app.
+2. **Find the call sites.** Run the entry's *"How to find the calls to migrate"* grep/error
+   inside the app.
+3. **Apply the `before → after`.** Edit each call site to the ✓ form shown in the entry.
+4. **Verify.** Run the app's own test/integration suite against the upgraded PormG. An entry
+   is done for this app only when its code is updated **and** its tests pass.
+5. **Record it.** Flip this app's cell in that entry's rollout table to ✅ (or — if the app
+   never used the affected API), and commit the table update back to PormG so the next app
+   sees accurate state.
+
+> **Tip — make it discoverable.** Add one line to each app's `AGENTS.md`/`CLAUDE.md`:
+> *"Before bumping the PormG dependency, apply any ⏳ rows in `PormG/in_migration.md` for this app."*
+> Then an agent working in that repo will pick up the rollout automatically.
+
 ---
 
 ## Export surface — SQL function constructors moved to `PormG.Functions`
 
 - **PormG ref**: issue #35 (Tier 2 pre-publish · curate the public export surface); [src/PormG.jl](src/PormG.jl) (`module Functions`), [docs/src/api.md](docs/src/api.md)
 - **Recorded**: 2026-06-25
-- **Severity**: **breaking** — only for code that relied on **bare `using PormG`** putting the function names into scope. Explicit imports are unaffected.
+- **Severity**: **breaking** — the function constructors now have a single home (`PormG.Functions`). Any code that reached them through `PormG` — whether by the bare-`using PormG` flood **or** by `using PormG: Sum` — must import them from `PormG.Functions`.
 
 ### What changed
 
-`using PormG` no longer exports the ~42 SQL function constructors (`Sum`, `Avg`, `Count`, `Max`, `Min`, `Case`, `When`, `Cast`, `Concat`, `Extract`, `To_char`, `Value`, `Coalesce`, `Greatest`, `Least`, `Lower`, `Upper`, `Length`, `Abs`, `Round`, `NullIf`, `Replace`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`, `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`). They now live in the `PormG.Functions` submodule. The curated top-level surface dropped from 73 names to 31 (query primitives, bulk ops, transactions, async, lifecycle).
+`using PormG` no longer exports the ~42 SQL function constructors (`Sum`, `Avg`, `Count`, `Max`, `Min`, `Case`, `When`, `Cast`, `Concat`, `Extract`, `To_char`, `Value`, `Coalesce`, `Greatest`, `Least`, `Lower`, `Upper`, `Length`, `Abs`, `Round`, `NullIf`, `Replace`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`, `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`). They live **only** in the `PormG.Functions` submodule — there is no `PormG.Sum` alias. The curated top-level surface dropped from 73 names to 31 (query primitives, bulk ops, transactions, async, lifecycle).
 
 `F`, `Q`, `Qor`, `Exists`, `OuterRef`, `object`, `get`, `show_query`, `inspect_query`, the `bulk_*` ops and the transaction/async API **stay at the top level**. `fetch` now extends `Base.fetch` (no longer a shadow) and needs no import.
 
-**What still works unchanged** (no migration needed): `using PormG: Sum, Count` (explicit opt-in) and `PormG.Sum` (qualified) — the names remain accessible, just not auto-exported.
-
 ### How to find the calls to migrate
 
-Only a `using PormG` followed by an **unqualified** function constructor breaks:
+Two patterns break:
 
-```text
-ERROR: UndefVarError: `Sum` not defined
-```
+1. **bare `using PormG`** then an unqualified `Sum(`/`Count(`/`Max(`/… — fails with:
+   ```text
+   ERROR: UndefVarError: `Sum` not defined
+   ```
+2. **`using PormG: Sum, Count, …`** (explicit opt-in of a function name) — now warns at load
+   (`Imported binding PormG.Sum was undeclared`) and leaves the name undefined.
 
-Grep the app for bare `using PormG` whose module then calls `Sum(`/`Count(`/`Max(`/… without a `using PormG: …` or `PormG.Functions` import.
+Grep the app for `using PormG` (bare or `using PormG: …` that lists any function name) and for unqualified function-constructor calls.
 
 ### Migrate your app
 
-Pick one (all equivalent):
+Bring the library in from `PormG.Functions` (pick one):
 
 ```julia
-# ✗ before — relied on bare `using PormG` exporting Sum/Count
-using PormG
+# ✗ before — reached Sum/Count through PormG (flood or `using PormG: Sum, Count`)
+using PormG                      # …or: using PormG: Sum, Count
 M.Result.objects.values("pts" => Sum("points"), "n" => Count("resultid"))
 
-# ✓ after — opt in to the whole function library
+# ✓ after — whole function library
 using PormG, PormG.Functions
 
-# ✓ after — opt in to specific names (also works, smallest diff)
-using PormG: Sum, Count
+# ✓ after — just the ones you use
+using PormG.Functions: Sum, Count
 
 # ✓ after — or qualify at the call site, no import
 M.Result.objects.values("pts" => PormG.Functions.Sum("points"))
 ```
+
+Query primitives are unaffected: `using PormG: Q, Qor, F, Exists, OuterRef` still works (they remain top-level).
 
 ### Per-app rollout
 

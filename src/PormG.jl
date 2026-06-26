@@ -110,7 +110,10 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, When, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+# Query primitives only. The SQL function constructors are NOT imported into PormG — they
+# live solely in `PormG.Functions` (below). There is intentionally no `PormG.Sum`: the
+# function library has exactly one home, reached via `using PormG.Functions` / `PormG.Functions.X`.
+import .QueryBuilder: object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 
 """
     PormG.Functions

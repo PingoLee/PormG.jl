@@ -188,7 +188,8 @@ For the full list of operators and transforms, see [Filters and Aggregates](read
 `F()` enables database-side field references and arithmetic. Use it for field-to-field comparisons and computed expressions.
 
 ```julia
-using PormG: F, Sum, Count
+using PormG: F
+using PormG.Functions: Sum, Count
 
 # Field-to-field comparison
 M.Result.objects.filter(F("grid") == F("positionOrder"))
@@ -596,15 +597,16 @@ scope — the SQL function constructors are *not* among them (see
 
 ### SQL function library: `PormG.Functions`
 
-The aggregate, conditional, window, string and math constructors live in the
-`PormG.Functions` submodule instead of being exported into `Main` — their names
-(`Sum`, `Count`, `Max`, `Round`, `Replace`, `Length`, …) are generic enough to collide
-with `Base` and user code. Reach them any of these ways:
+The aggregate, conditional, window, string and math constructors live **only** in the
+`PormG.Functions` submodule — they are not exported into `Main`, and there is no
+`PormG.Sum` alias either. Their names (`Sum`, `Count`, `Max`, `Round`, `Replace`,
+`Length`, …) are generic enough to collide with `Base` and user code, so the library has
+exactly one home. Reach it either way:
 
 ```julia
 using PormG, PormG.Functions          # bring the whole library into scope
-using PormG: Sum, Count, Max          # opt in to specific ones (also works)
-M.Result.objects.values(              # or qualify without importing
+using PormG.Functions: Sum, Count     # …or just the ones you use
+M.Result.objects.values(              # …or qualify without importing
     "n" => PormG.Functions.Count("resultid"))
 ```
 

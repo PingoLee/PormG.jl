@@ -23,7 +23,7 @@ The goal: for every 1991 race, assign each driver a rank based on their points �
 
 ```julia
 using PormG
-using PormG: WindowOver, Rank
+using PormG.Functions: WindowOver, Rank
 
 query = M.Driver_standings.objects
 query.filter(
@@ -116,7 +116,7 @@ ORDER BY "raceid" ASC,
 Rank drivers within their constructor by race points. `constructorid` lives in the `result` table (not `driver_standings`), so this example uses `M.Result.objects`. Each constructor is an independent group; the ranking never crosses constructor boundaries.
 
 ```julia
-using PormG: Rank, WindowOver
+using PormG.Functions: Rank, WindowOver
 
 # Each constructor is a separate window — ranks restart per constructor
 spec = WindowOver(partition_by=["constructorid"], order_by=["-points"])
@@ -162,7 +162,7 @@ Three things to notice:
 When there is no `partition_by`, all rows form a single group. `Lag` reaches back one row within that group — here, the previous lap for the same driver.
 
 ```julia
-using PormG: Lag, WindowOver
+using PormG.Functions: Lag, WindowOver
 
 # All laps in one window, ordered by lap number
 spec = WindowOver(order_by=["lap"])
@@ -218,7 +218,7 @@ The `?` for the `LAG` offset is the default `1` — one row back. There is no `P
 No `partition_by`. The window covers the **entire result set** as one group. `FirstValue` ordered by `positionorder` always picks the race winner's points and repeats it on every output row — no self-join needed.
 
 ```julia
-using PormG: FirstValue, WindowOver
+using PormG.Functions: FirstValue, WindowOver
 
 query = M.Result.objects
 query.filter("raceid" => 306, "positionorder__@lte" => 8)
@@ -305,7 +305,7 @@ Explicit frames are needed when the SQL default frame is wrong for your use case
 SQL's default frame is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — it includes only rows up to and including the current one. For `LastValue`, that means "the last row I can see is the current row," so it silently returns the current row's own value instead of the partition's actual last row.
 
 ```julia
-using PormG: LastValue, WindowOver
+using PormG.Functions: LastValue, WindowOver
 
 # Default frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 # LastValue sees only up to the current row → returns each row's own points
@@ -412,7 +412,7 @@ These functions assign a rank or row number to each row. They take no column arg
 | `RowNumber(over=...)` | `ROW_NUMBER() OVER (...)` | Unique sequential number per row |
 
 ```julia
-using PormG: Rank, DenseRank, RowNumber, WindowOver
+using PormG.Functions: Rank, DenseRank, RowNumber, WindowOver
 
 # Race 306 has two tie groups: Piquet/Patrese (6.0) and Suzuki/Alesi (1.0)
 spec = WindowOver(partition_by=["raceid"], order_by=["-points"])
@@ -486,7 +486,7 @@ ORDER BY "rank" ASC
 `Lag` reads from a previous row; `Lead` reads from a following row. Both accept a column reference, an optional `offset` (default `1`), and an optional `default` value returned when no such row exists.
 
 ```julia
-using PormG: Lag, Lead, WindowOver
+using PormG.Functions: Lag, Lead, WindowOver
 
 query = M.Lap_times.objects
 query.filter("raceid" => 841, "driverid" => 1)
@@ -547,7 +547,7 @@ ORDER BY "lap" ASC
 These functions return the value of a column at a specific position within the window frame.
 
 ```julia
-using PormG: FirstValue, LastValue, NthValue, WindowOver
+using PormG.Functions: FirstValue, LastValue, NthValue, WindowOver
 
 spec = WindowOver(partition_by=["raceid"], order_by=["positionorder"])
 
@@ -618,7 +618,7 @@ WHERE "Tb"."raceid" = $1
 Window function results support the same arithmetic operators as `F()` expressions:
 
 ```julia
-using PormG: RowNumber, Lag, WindowOver
+using PormG.Functions: RowNumber, Lag, WindowOver
 
 spec = WindowOver(order_by=["lap"])
 
@@ -678,7 +678,7 @@ Supported operators: `+`, `-`, `*`, `/`
 Window functions and aggregate functions can coexist in the same `values()` call. PormG correctly includes plain fields in `GROUP BY` while keeping window function aliases out of it.
 
 ```julia
-using PormG: Count, Rank, WindowOver
+using PormG.Functions: Count, Rank, WindowOver
 
 # Per constructor: total results count + within-constructor ranking by points
 query = M.Result.objects.filter("driverid__@in" => [846, 817], "points__@gt" => 0).values(

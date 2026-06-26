@@ -26,8 +26,10 @@ function _exec_lock_query(pool::PormGPostgres, conn, sql::String, key::AbstractS
   # session-level lock stays bound to this connection.
   async_res = backend_execute_async(pool, conn, sql, Any[key])
 
-  # fetch() waits for the task to complete and returns the driver result
-  res = fetch(async_res)
+  # Base.fetch awaits the LibPQ AsyncResult and returns the driver result.
+  # Qualified deliberately: this module imports no `fetch`, so a bare call would
+  # resolve to Base only by absence — qualifying keeps it immune to import shadowing.
+  res = Base.fetch(async_res)
 
   rows = collect(res)
   return !isempty(rows) && rows[1][1] == true
@@ -80,15 +82,15 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
     elseif strategy == :block
       # Server-side blocking with timeout
       try
-        prev = fetch(backend_execute_async(pool, conn, "SHOW statement_timeout", nothing))
+        prev = Base.fetch(backend_execute_async(pool, conn, "SHOW statement_timeout", nothing))
         rows = collect(prev)
         !isempty(rows) && (old_timeout = rows[1][1])
       catch
         old_timeout = nothing
       end
 
-      # use fetch() for commands without returned rows
-      fetch(backend_execute_async(pool, conn, "SET statement_timeout = $(timeout_ms)", nothing))
+      # use Base.fetch() for commands without returned rows
+      Base.fetch(backend_execute_async(pool, conn, "SET statement_timeout = $(timeout_ms)", nothing))
       
       try
         got_lock = _exec_lock_query(pool, conn, BLOCK_SQL, key)

@@ -101,6 +101,10 @@ using .Models
 
 include("Utils.jl")
 using .Utils
+# Re-export the Utils submodule macros at top level. NOT a duplicate of Utils's own
+# `export`: `using .Utils` imports the names but does not re-export them, so this line
+# is what makes `using PormG; @import_models` work (and it's pinned in
+# test_public_exports.jl). Removing either export breaks the public macros.
 export @models_module, @import_models
 
 include("Dialect.jl")

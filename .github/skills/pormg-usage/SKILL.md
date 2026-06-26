@@ -254,7 +254,7 @@ M.Result.objects.filter(
 Aggregate constructors: `Count`, `Sum`, `Avg`, `Max`, `Min`. Use them inside `values()` with an alias. PormG auto-generates `GROUP BY` from the **non-aggregate** columns — never write `GROUP BY` yourself.
 
 ```julia
-using PormG: Count, Sum, Max, Min
+using PormG.Functions: Count, Sum, Max, Min
 
 # Wins per constructor — grouped by the plain column, COUNT aggregated
 M.Result.objects.

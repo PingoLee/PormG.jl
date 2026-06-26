@@ -68,6 +68,7 @@ end
 
 ```julia
 using PormG, LibPQ, DataFrames          # LibPQ → PostgreSQL; use SQLite for the SQLite backend
+using PormG.Functions                   # SQL functions (Count, Sum, Max, …) — namespaced
 
 PormG.Configuration.load("db")          # loads db/settings.yml
 PormG.@import_models "db/models.jl" models

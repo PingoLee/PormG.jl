@@ -56,6 +56,7 @@ end
     @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
+    @testset "Public Export Surface (#35)" include("unit/test_public_exports.jl")
     # include("unit/test_migration_planner.jl")
 end
 

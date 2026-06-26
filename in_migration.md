@@ -21,6 +21,60 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 ---
 
+## Export surface — SQL function constructors moved to `PormG.Functions`
+
+- **PormG ref**: issue #35 (Tier 2 pre-publish · curate the public export surface); [src/PormG.jl](src/PormG.jl) (`module Functions`), [docs/src/api.md](docs/src/api.md)
+- **Recorded**: 2026-06-25
+- **Severity**: **breaking** — only for code that relied on **bare `using PormG`** putting the function names into scope. Explicit imports are unaffected.
+
+### What changed
+
+`using PormG` no longer exports the ~42 SQL function constructors (`Sum`, `Avg`, `Count`, `Max`, `Min`, `Case`, `When`, `Cast`, `Concat`, `Extract`, `To_char`, `Value`, `Coalesce`, `Greatest`, `Least`, `Lower`, `Upper`, `Length`, `Abs`, `Round`, `NullIf`, `Replace`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`, `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`). They now live in the `PormG.Functions` submodule. The curated top-level surface dropped from 73 names to 31 (query primitives, bulk ops, transactions, async, lifecycle).
+
+`F`, `Q`, `Qor`, `Exists`, `OuterRef`, `object`, `get`, `show_query`, `inspect_query`, the `bulk_*` ops and the transaction/async API **stay at the top level**. `fetch` now extends `Base.fetch` (no longer a shadow) and needs no import.
+
+**What still works unchanged** (no migration needed): `using PormG: Sum, Count` (explicit opt-in) and `PormG.Sum` (qualified) — the names remain accessible, just not auto-exported.
+
+### How to find the calls to migrate
+
+Only a `using PormG` followed by an **unqualified** function constructor breaks:
+
+```text
+ERROR: UndefVarError: `Sum` not defined
+```
+
+Grep the app for bare `using PormG` whose module then calls `Sum(`/`Count(`/`Max(`/… without a `using PormG: …` or `PormG.Functions` import.
+
+### Migrate your app
+
+Pick one (all equivalent):
+
+```julia
+# ✗ before — relied on bare `using PormG` exporting Sum/Count
+using PormG
+M.Result.objects.values("pts" => Sum("points"), "n" => Count("resultid"))
+
+# ✓ after — opt in to the whole function library
+using PormG, PormG.Functions
+
+# ✓ after — opt in to specific names (also works, smallest diff)
+using PormG: Sum, Count
+
+# ✓ after — or qualify at the call site, no import
+M.Result.objects.values("pts" => PormG.Functions.Sum("points"))
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
 ## Driver loading — `LibPQ`/`SQLite` are now weak dependencies (load the driver yourself)
 
 - **PormG ref**: issue #34 (Tier 2 pre-publish · decouple SQL adapters); [src/Backend.jl](src/Backend.jl), [ext/PormGLibPQExt.jl](ext/PormGLibPQExt.jl), [ext/PormGSQLiteExt.jl](ext/PormGSQLiteExt.jl), [Project.toml](Project.toml)

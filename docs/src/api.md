@@ -563,31 +563,71 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 
 ## Exported Symbols
 
-The following symbols are exported by `PormG` and available after `using PormG`:
+This is the curated public surface. `using PormG` brings **only** the names below into
+scope — the SQL function constructors are *not* among them (see
+[SQL function library](#sql-function-library-pormgfunctions)).
 
 ### Query Builder
-`object`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `show_query`, `inspect_query`
+`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `show_query`, `inspect_query`
 
-### Aggregate Functions
-`Sum`, `Avg`, `Count`, `Max`, `Min`
-
-### SQL Functions
-`Case`, `Cast`, `Concat`, `Extract`, `To_char`, `Value`, `Coalesce`, `Greatest`, `Least`, `Lower`, `Upper`, `Length`, `Abs`, `Round`, `NullIf`, `Replace`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
+### Rows & exceptions
+`PormGRow`, `DoesNotExist`, `MultipleObjectsReturned`
 
 ### Bulk Operations
-`bulk_insert`, `bulk_update`, `bulk_copy`
+`bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`
 
 ### Async API
 `fetch_async`, `await_result`, `FetchTask`
 
 ### Transactions
-`run_in_transaction`, `with_tx_context`, `in_transaction_context`
+`run_in_transaction`, `with_savepoint`, `with_tx_context`, `in_transaction_context`
 
 ### Locking
 `with_advisory_lock`
 
-### Utilities
-`setup`, `tui`, `@import_models`, `@models_module`
+### Utilities & lifecycle
+`setup`, `install_ai_skills`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
+
+!!! note "`fetch` extends `Base.fetch`"
+    The low-level `fetch(settings, sql; params=…)` escape hatch is a method of
+    `Base.fetch`, so it is always in scope (no import, no qualification) and does not
+    shadow Base. Prefer the fluent terminals (`list()`, `DataFrame`, `count()`) for
+    application code.
+
+### SQL function library: `PormG.Functions`
+
+The aggregate, conditional, window, string and math constructors live in the
+`PormG.Functions` submodule instead of being exported into `Main` — their names
+(`Sum`, `Count`, `Max`, `Round`, `Replace`, `Length`, …) are generic enough to collide
+with `Base` and user code. Reach them any of these ways:
+
+```julia
+using PormG, PormG.Functions          # bring the whole library into scope
+using PormG: Sum, Count, Max          # opt in to specific ones (also works)
+M.Result.objects.values(              # or qualify without importing
+    "n" => PormG.Functions.Count("resultid"))
+```
+
+`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef` stay at the top level — they are query
+primitives, not part of the function library.
+
+**Aggregate** — `Sum`, `Avg`, `Count`, `Max`, `Min`
+**Conditional** — `Case`, `When`
+**Window** — `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`
+**String** — `Concat`, `Lower`, `Upper`, `Length`, `Replace`, `Trim`, `LTrim`, `RTrim`
+**Math** — `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
+**Type / value** — `Cast`, `Extract`, `To_char`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
+
+### Result-shape contract for `list()`
+
+The terminal `list()` methods return a documented, stable shape:
+
+| Call | Returns |
+|------|---------|
+| `query.list()` | `Vector{PormGRow}` |
+| `query.list(:dict)` | `Vector{Dict{Symbol, Any}}` |
+| `query.list(:json)` | JSON string |
+| `query |> DataFrame` | `DataFrame` (preferred for analytical queries) |
 
 ---
 
@@ -596,6 +636,6 @@ The following symbols are exported by `PormG` and available after `using PormG`:
 The following section contains auto-generated documentation from docstrings in the source code:
 
 ```@autodocs
-Modules = [PormG, PormG.QueryBuilder, PormG.Models]
+Modules = [PormG, PormG.Functions, PormG.QueryBuilder, PormG.Models]
 Order   = [:function, :type]
 ```

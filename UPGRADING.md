@@ -1,4 +1,4 @@
-# In-App Migration Log
+# Upgrading PormG — consumer-app rollout log
 
 Tracks **breaking / behavior changes in PormG** that require source-code changes in the internal apps that depend on it. PormG is pre-publish (single maintainer, ~4 internal apps, no external users), so breaking changes are intentional and cheap on the *PormG* side — but each one still has to be rolled out by hand in every consuming app. This file is that rollout checklist.
 
@@ -23,7 +23,7 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 This file is the **source of truth, kept in the PormG repo**. To fix a dependent app after a
 PormG bump, point an agent (or yourself) at this file — read it from the dev'd source
-(e.g. `~/.julia/dev/PormG/in_migration.md`) or from GitHub — and work the entries
+(e.g. `~/.julia/dev/PormG/UPGRADING.md`) or from GitHub — and work the entries
 **newest first**:
 
 1. **Scope to this app.** In each entry's rollout table, skip rows already marked ✅ or —.
@@ -38,7 +38,7 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
    sees accurate state.
 
 > **Tip — make it discoverable.** Add one line to each app's `AGENTS.md`/`CLAUDE.md`:
-> *"Before bumping the PormG dependency, apply any ⏳ rows in `PormG/in_migration.md` for this app."*
+> *"Before bumping the PormG dependency, apply any ⏳ rows in `PormG/UPGRADING.md` for this app."*
 > Then an agent working in that repo will pick up the rollout automatically.
 
 ---

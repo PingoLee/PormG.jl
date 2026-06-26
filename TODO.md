@@ -26,13 +26,14 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 > ⚠️ **do BEFORE the first General-registry publish** — the items below lock in contracts that are
 > cheap to settle now (zero published users) but become breaking/irreversible afterward.
-> **Sequence:** **Tier 1** (irreversible user-data) is settled — the migration-format /
-> tracking-table contract and the generated schema conventions are now frozen and documented.
-> Remaining: the coupled **Tier 2** pair — (3) decouple adapters → (4) curate exports
-> (adapter-decoupling first, since export-curation depends on it).
+> **Sequence:** **Tier 1** (irreversible user-data — migration-format / tracking-table contract and
+> the frozen schema conventions) and **Tier 2** (#34 adapter decoupling → #35 export curation) are
+> both settled and merged. Remaining gating work: field-name **case preservation** (#57) and the
+> coupled **`db_column` authority** (#50), plus the infrastructure items below.
 
-- [#34](https://github.com/PingoLee/PormG.jl/issues/34) — ⚠️ **[Tier 2]** Decouple SQL adapters into weakdeps + extensions
-- [#35](https://github.com/PingoLee/PormG.jl/issues/35) — ⚠️ **[Tier 2]** Curate the public export surface
+- [#57](https://github.com/PingoLee/PormG.jl/issues/57) — ⚠️ Preserve declared field-name case — support mixed-case/uppercase DB columns (coupled with #50)
+- [#58](https://github.com/PingoLee/PormG.jl/issues/58) — ⚠️ Decide field-name casing convention (lean lowercase) — align docs/examples/F1 models (paired with #57)
+- [#50](https://github.com/PingoLee/PormG.jl/issues/50) — ⚠️ Make `db_column` authoritative for generated DDL (currently inert; coupled with #57)
 - [#36](https://github.com/PingoLee/PormG.jl/issues/36) — Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)
 - [#37](https://github.com/PingoLee/PormG.jl/issues/37) — Investigate PG pool exhaustion under remote-latency integration runs
 
@@ -45,10 +46,8 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 ## 🔍 Review possible issues
 
-- [#42](https://github.com/PingoLee/PormG.jl/issues/42) — `ObjectHandler` getproperty cleanup (`:inspect` alias, `:count`/`:exists` ignore `show_query`, `args...` type instability)
 - [#43](https://github.com/PingoLee/PormG.jl/issues/43) — `deepcopy(ctes)` → `copy(ctes)` shared-state risk
 - [#44](https://github.com/PingoLee/PormG.jl/issues/44) — CTE ergonomics: reference CTE fields via `F()` in the main query
-- [#50](https://github.com/PingoLee/PormG.jl/issues/50) — Make `db_column` authoritative for generated DDL (currently inert; accepted but ignored by schema generation)
 
 ## 🔗 Custom Join (`cjoin`) Gaps
 

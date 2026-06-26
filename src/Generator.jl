@@ -2,7 +2,6 @@ module Generator
 
 import PormG
 import PormG: MODEL_PATH, SQLConn, DB_PATH
-using SQLite, LibPQ
 import OrderedCollections: OrderedDict
 
 """
@@ -132,7 +131,7 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
       # Stamp the frozen on-disk format version (issue #32) as an inert comment header rather than a
       # `const`: generated files are re-included across runs, and a const would warn on redefinition
       # and conflict once files of different format versions coexist. The header is read by line-scan
-      # (`^# pormg-migration-format: (\\d+)$`) *before* the module is executed — see docs:
+      # (`^# pormg-migration-format: (\\d+)\\r?$`, CRLF-tolerant) *before* the module is executed — see docs:
       # Migrations → Format Stability. The authoritative record is the pormg_migrations.format_version
       # column; this comment is the on-disk annotation.
       fmt_version = PormG.Migrations.MIGRATION_FORMAT_VERSION

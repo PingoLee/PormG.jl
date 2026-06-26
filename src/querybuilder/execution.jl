@@ -958,9 +958,10 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # Execute with parameters and return affected row count (Django matched-rows semantics).
   try
     if connection isa PormGPostgres
-      # LibPQ.Result exposes num_affected_rows which counts matched rows.
+      # The driver result exposes a matched-row count; backend_num_affected_rows
+      # delegates to LibPQ.num_affected_rows in the PostgreSQL extension.
       result = fetch(settings, sql, parameters)
-      return LibPQ.num_affected_rows(result)
+      return backend_num_affected_rows(connection, result)
     elseif connection isa PormGSQLite
       # SQLite changes() must run on the same connection as the UPDATE.
       # If we are already inside a transaction context, fetch() reuses the

@@ -5,7 +5,7 @@ import Logging
   # Mock settings to allow Model and QueryBuilder compilation Without actual DB connection
   # We use a dummy PostgresConnectionPool as it's a common target
   mock_pool = ConnectionPool.PostgresConnectionPool(
-    Union{Nothing, LibPQ.Connection}[],
+    Any[],
     Bool[],
     "dummy_connection_string",
     0,
@@ -196,7 +196,5 @@ if ccall(:jl_generating_output, Cint, ()) == 1
   Base.precompile(Tuple{typeof(merge!), Dict{Symbol, Any}, Dict{Symbol, Int64}})                                   # 0.03 s
   Base.precompile(Tuple{typeof(merge!), Dict{Symbol, Any}, Dict{Symbol, Union{Missing, Int64}}})                   # 0.03 s
 
-  # SQLite parameter binding ---------------------------------------------------
-  Base.precompile(Tuple{typeof(SQLite.bind!), SQLite.Stmt, Int64, Float64})      # 0.025 s
-  Base.precompile(Tuple{typeof(SQLite.bind!), SQLite.Stmt, Int64, Int64})        # 0.024 s
+  # SQLite parameter binding precompiles moved to ext/PormGSQLiteExt.jl (SQLite is a weakdep).
 end

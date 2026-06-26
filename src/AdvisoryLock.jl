@@ -1,12 +1,11 @@
 module AdvisoryLock
 
 using Logging
-import LibPQ
 
 import PormG
-import PormG: SQLConn, PormGPostgres, PormGSQLite
+import PormG: SQLConn, PormGPostgres, PormGSQLite, backend_execute_async
 import PormG.Configuration: get_settings
-import PormG.ConnectionPool: acquire_connection, release_connection, reconnect_db, is_connection_error
+import PormG.ConnectionPool: acquire_connection, release_connection
 
 import PormG: @pormg_debug
 export with_advisory_lock
@@ -21,13 +20,15 @@ const UNLOCK_SQL = "SELECT pg_advisory_unlock($(ADVISORY_KEY_EXPR)) AS ok"
 """
 Execute a lock/unlock query on a held connection and return boolean result.
 """
-function _exec_lock_query(conn::LibPQ.Connection, sql::String, key::AbstractString)::Bool
-  # async_execute yields to the scheduler, allowing other Tasks to run
-  async_res = LibPQ.async_execute(conn, sql, Any[key])
-  
-  # FIX: fetch() waits for the task to complete and returns the LibPQ.Result
+function _exec_lock_query(pool::PormGPostgres, conn, sql::String, key::AbstractString)::Bool
+  # backend_execute_async yields to the scheduler, allowing other Tasks to run.
+  # It runs on the held connection without releasing it back to the pool, so the
+  # session-level lock stays bound to this connection.
+  async_res = backend_execute_async(pool, conn, sql, Any[key])
+
+  # fetch() waits for the task to complete and returns the driver result
   res = fetch(async_res)
-  
+
   rows = collect(res)
   return !isempty(rows) && rows[1][1] == true
 end
@@ -75,23 +76,22 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
     # Attempt to acquire lock
     if !wait
       # Non-blocking: single try
-      got_lock = _exec_lock_query(conn, TRY_SQL, key)
+      got_lock = _exec_lock_query(pool, conn, TRY_SQL, key)
     elseif strategy == :block
       # Server-side blocking with timeout
       try
-        prev = LibPQ.execute(conn, "SHOW statement_timeout")
+        prev = fetch(backend_execute_async(pool, conn, "SHOW statement_timeout", nothing))
         rows = collect(prev)
         !isempty(rows) && (old_timeout = rows[1][1])
       catch
         old_timeout = nothing
       end
-      
-      # FIX: use fetch() instead of collect() for commands without returned rows
-      async_res = LibPQ.async_execute(conn, "SET statement_timeout = $(timeout_ms)")
-      fetch(async_res) 
+
+      # use fetch() for commands without returned rows
+      fetch(backend_execute_async(pool, conn, "SET statement_timeout = $(timeout_ms)", nothing))
       
       try
-        got_lock = _exec_lock_query(conn, BLOCK_SQL, key)
+        got_lock = _exec_lock_query(pool, conn, BLOCK_SQL, key)
       catch e
         msg = lowercase(string(e))
         if occursin("canceling statement due to statement timeout", msg)
@@ -105,7 +105,7 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       # Client-side polling with retry
       deadline = time() * 1_000 + timeout_ms
       while true
-        got_lock = _exec_lock_query(conn, TRY_SQL, key)
+        got_lock = _exec_lock_query(pool, conn, TRY_SQL, key)
         got_lock && break
         (time() * 1_000) >= deadline && break
         sleep(interval_ms / 1_000)
@@ -123,7 +123,7 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
     # Release lock if acquired (on same connection)
     if got_lock
       try
-        _exec_lock_query(conn, UNLOCK_SQL, key)
+        _exec_lock_query(pool, conn, UNLOCK_SQL, key)
       catch e
         @warn "Failed to release advisory lock; connection may have been dropped" key=key exception=(e, catch_backtrace())
       end
@@ -132,13 +132,13 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
     # Restore statement_timeout if we changed it
     if old_timeout !== nothing
       try
-        # wait() é suficiente para AsyncResult quando não precisamos do output
-        wait(LibPQ.async_execute(conn, "SET statement_timeout = '$(old_timeout)'"))
+        # wait() is enough for the async result when we don't need the output
+        wait(backend_execute_async(pool, conn, "SET statement_timeout = '$(old_timeout)'", nothing))
       catch
       end
     elseif strategy == :block
       try
-        wait(LibPQ.async_execute(conn, "SET statement_timeout TO DEFAULT"))
+        wait(backend_execute_async(pool, conn, "SET statement_timeout TO DEFAULT", nothing))
       catch
       end
     end

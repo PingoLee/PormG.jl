@@ -56,7 +56,8 @@ The subsystem map below is also the review **architecture checkpoint**: when a n
 |------|------|
 | `src/PormG.jl` | Package root (config, models, QueryBuilder, dialects, migrations) |
 | `src/Configuration.jl`, `src/constants.jl` | Config, `DB_PATH`, `PORMG_ENV`, transactions |
-| `src/ConnectionPool.jl` | `fetch`, pool lock, transaction context |
+| `src/ConnectionPool.jl` | `fetch`, pool lock, transaction context (driver-agnostic; untyped connection storage) |
+| `src/Backend.jl`, `ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl` | Backend interface: `backend_*` generics + friendly fallbacks; driver bodies live in the weakdep extensions (`LibPQ`/`SQLite`). Core never names a concrete driver type |
 | `src/Models.jl`, `src/models/` | Models and fields |
 | `src/QueryBuilder.jl`, `src/querybuilder/` | Query builder (incl. `many_to_many.jl`) |
 | `src/Dialect.jl` | Backend SQL rendering |

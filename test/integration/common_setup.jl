@@ -4,6 +4,10 @@ ENV["PORMG_ENV"] = "dev"
 
 using Revise
 using PormG
+# Activate the LibPQ/SQLite weakdep extensions (#34) before any DB work — without these
+# every backend operation raises the "load the driver" error. Robust across env types;
+# see test/load_drivers.jl.
+include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using DataFrames
 using CSV
 using Test#, SafeTestsets

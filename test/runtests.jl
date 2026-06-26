@@ -1,5 +1,8 @@
 using Test
 using PormG
+# Activate the LibPQ/SQLite weakdep extensions (the unit suite runs against SQLite
+# `:memory:`). See test/load_drivers.jl for why this is robust across env types.
+include(joinpath(@__DIR__, "load_drivers.jl"))
 
 const HAS_AQUA = let available = false
     try

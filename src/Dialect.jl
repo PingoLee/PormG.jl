@@ -1,9 +1,9 @@
 module Dialect
 using Dates, TimeZones
-using SQLite
 using DataFrames
-using LibPQ
+import Tables
 import PormG: SQLConn, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, AbstractModel, PormGModel, PormGField, PormGPostgres, PormGSQLite, PormGAbstractType
+import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
@@ -123,10 +123,12 @@ end
 const SQLITE_WINDOW_MIN_VERSION = 3025000
 
 function _assert_sqlite_window_support(conn::PormGSQLite)
-  version_number = SQLite.C.sqlite3_libversion_number()
+  version_number = backend_sqlite_version(conn)
   if version_number < SQLITE_WINDOW_MIN_VERSION
-    version_text = unsafe_string(SQLite.C.sqlite3_libversion())
-    throw(ArgumentError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $version_text."))
+    # Reconstruct M.mm.pp from the packed version integer (e.g. 3039000 -> "3.39.0").
+    major, rem = divrem(version_number, 1_000_000)
+    minor, patch = divrem(rem, 1_000)
+    throw(ArgumentError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $major.$minor.$patch."))
   end
   return nothing
 end
@@ -1045,7 +1047,7 @@ function get_objects_to_delete(connection::PormGPostgres, model::PormGModel, ins
   """
   # Execute the query to get IDs of objects to delete
   @pormg_debug false
-  result = LibPQ.execute(connection, sql_to_delete)
+  result = fetch(connection, sql_to_delete)
   return Tables.rowtable(result)
 end
 

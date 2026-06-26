@@ -35,5 +35,41 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
 
       # julia-runtest runs test/runtests.jl via Pkg.test().
-      # Unit tests have no external database dependency.
+      # Unit tests have no external database dependency. The test target pulls in
+      # LibPQ + SQLite (Project.toml `[extras]`/`[targets]`) so the weakdep driver
+      # extensions load and the SQLite-backed unit tests run.
       - uses: julia-actions/julia-runtest@v1
+
+  # Prove the loading contract: `using PormG` works with NO SQL driver present, and a
+  # backend operation raises the friendly "load the driver" error instead of a missing
+  # method / hard reference. This is the guarantee that LibPQ/SQLite are truly weakdeps.
+  load-without-drivers:
+    name: Load without drivers — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.12', '1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: using PormG with no driver loaded
+        run: |
+          julia --project=. -e '
+            using PormG
+            # No `using LibPQ` / `using SQLite`: the backend generics must fall back.
+            pool = PormG.ConnectionPool.PostgresConnectionPool("dummy"; pool_size=1)
+            threw = false
+            try
+              PormG.backend_connect(pool)
+            catch e
+              threw = true
+              @assert occursin("requires LibPQ", sprint(showerror, e)) "unexpected error: $(sprint(showerror, e))"
+            end
+            @assert threw "backend_connect should error when LibPQ is not loaded"
+            println("OK: PormG loads without drivers and fails friendly on backend use")
+          '

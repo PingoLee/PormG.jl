@@ -39,6 +39,25 @@ Pkg.develop(url="https://github.com/PingoLee/PormG.jl")
 > [!NOTE]
 > Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
 
+### Install a database driver
+
+PormG does **not** pull in a SQL driver automatically — `LibPQ` (PostgreSQL) and `SQLite` are
+weak dependencies, so each app installs and loads the one it uses as a direct dependency:
+
+```julia
+using Pkg
+Pkg.add("LibPQ")     # PostgreSQL backend
+Pkg.add("SQLite")    # SQLite backend
+```
+
+Load the driver alongside PormG (`using PormG, LibPQ` or `using PormG, SQLite`). A bare
+`using PormG` loads the ORM but no backend, so the first query raises a clear error telling you
+which driver to load:
+
+```text
+PormG: the PostgreSQL backend requires LibPQ. Run `using LibPQ` (or `using PormG, LibPQ`) so the PostgreSQL extension loads.
+```
+
 ---
 
 ## Quick Start
@@ -149,7 +168,7 @@ end
 ### 4. Load Configuration and Import Models
 
 ```julia
-using PormG, DataFrames
+using PormG, LibPQ, DataFrames   # LibPQ → PostgreSQL; use SQLite instead if your adapter is SQLite
 
 # Load configuration — must happen BEFORE importing models
 PormG.Configuration.load("db")

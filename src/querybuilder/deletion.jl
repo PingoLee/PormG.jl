@@ -114,7 +114,7 @@ function delete(objct::SQLObjectHandler;
 
   # Definition of run_deletions (backend agnostic)
   results = []
-  run_deletions = function(conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
+  run_deletions = function(conn)
     # Process fast deletes first (objects that can be deleted directly)
     for (model, keys) in collector.fast_deletes
       res = delete_objects(connection, model, keys, show_query, deleted_counter, conn)
@@ -420,7 +420,7 @@ function collect_fast_deletes!(collector::DeletionCollector)
 end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Symbol, deleted_counter::Dict{String, Integer}, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
+   show_query::Symbol, deleted_counter::Dict{String, Integer}, conn)
   @pormg_debug false
   if size(keys, 1) == 1 && keys[1][:key] == DIRECT_DELETE_KEY_SENTINEL
     objct = keys[1][:objct]
@@ -479,7 +479,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Symbol, conn::Union{Nothing, LibPQ.Connection, SQLite.DB})
+function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, field::String, value::Any, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, show_query::Symbol, conn)
   # Update field values using query object like CASCADE
   @pormg_debug false
   pk_field = keys[:key]

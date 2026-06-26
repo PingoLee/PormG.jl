@@ -5,9 +5,9 @@ import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, P
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE
 import PormG: Generator
 import PormG: @pormg_debug
+# Backend generics — driver bodies live in the weakdep extensions (no direct LibPQ/SQLite here).
+import PormG: backend_num_rows, backend_is_alive
 
-import SQLite
-import LibPQ
 using Base.ScopedValues: ScopedValue, with
 
 export env, Settings, connection, close_pool!, get_settings
@@ -80,7 +80,7 @@ Used to ensure that nested fetch() calls within a transaction
 use the same database connection.
 """
 mutable struct TransactionContext
-  conn::Union{Nothing, LibPQ.Connection, SQLite.DB}
+  conn::Any  # driver connection handle (untyped: core never names LibPQ.Connection / SQLite.DB)
   pool::Union{Nothing, PormGPostgres, PormGSQLite}
   depth::Int  # Track nested transaction contexts
   sqlite_reserved_primary_keys::Dict{Tuple{String, String}, Int64}
@@ -92,7 +92,7 @@ end
 const _tx_context = ScopedValue(TransactionContext())
 
 """
-    get_tx_connection() -> Union{Nothing, LibPQ.Connection}
+    get_tx_connection() -> Union{Nothing, <driver connection>}
 
 Get the current transaction connection if we're inside a transaction context.
 Returns `nothing` if not in a transaction.
@@ -121,7 +121,7 @@ function in_transaction_context()
   return _tx_context[].depth > 0
 end
 
-function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn::Union{LibPQ.Connection, SQLite.DB})
+function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn)
   old_ctx = _tx_context[]
   new_ctx = TransactionContext()
   new_ctx.conn = conn
@@ -348,7 +348,7 @@ function _check_configured_extensions!(settings::SQLConn)::Nothing
     if extension == "unaccent"
       # Literal name only — never interpolate the raw YAML value into SQL.
       installed = try
-        LibPQ.num_rows(CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
+        backend_num_rows(settings.connections, CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
       catch e
         @warn "Could not verify PostgreSQL extension state" extension=extension db_def_folder=settings.db_def_folder exception=e
         continue
@@ -669,7 +669,7 @@ function ping(path_or_key::String)::Bool
     else
       conn = CP.acquire_connection(pool; timeout_seconds=5, max_retries=1)
     end
-    return CP.is_connection_alive(conn)
+    return backend_is_alive(pool, conn)
   catch e
     @warn "Database ping failed" key=key db_def_folder=settings.db_def_folder adapter=get(settings.db_config_settings, "adapter", nothing) exception=(e, catch_backtrace())
     return false

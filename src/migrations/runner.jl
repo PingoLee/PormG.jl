@@ -218,8 +218,8 @@ end
 Insert a migration record into the history table within an existing transaction connection.
 """
 function _record_migration(pool::PormGPostgres, version::String, name::String, checksum::String, 
-                           sql_content::String, status::String, is_destr::Bool; 
-                           conn::Union{Nothing, LibPQ.Connection} = nothing)
+                           sql_content::String, status::String, is_destr::Bool;
+                           conn = nothing)
   sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version")
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',
            '$(replace(sql_content, "'" => "''"))', '$(replace(status, "'" => "''"))', $(is_destr), $(MIGRATION_FORMAT_VERSION));"""
@@ -232,8 +232,8 @@ function _record_migration(pool::PormGPostgres, version::String, name::String, c
 end
 
 function _record_migration(pool::PormGSQLite, version::String, name::String, checksum::String, 
-                           sql_content::String, status::String, is_destr::Bool; 
-                           conn::Union{Nothing, SQLite.DB} = nothing)
+                           sql_content::String, status::String, is_destr::Bool;
+                           conn = nothing)
   is_destr_val = is_destr ? 1 : 0
   sql = """INSERT INTO pormg_migrations ("version", "name", "checksum", "sql_content", "status", "is_destructive", "format_version")
            VALUES ('$(replace(version, "'" => "''"))', '$(replace(name, "'" => "''"))', '$(replace(checksum, "'" => "''"))',

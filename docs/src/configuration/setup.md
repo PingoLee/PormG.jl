@@ -29,7 +29,7 @@ PormG.setup("db_bs")
 If you already have a `connection.yml`, you can load it directly:
 
 ```julia
-using PormG
+using PormG, LibPQ   # load SQLite instead for a SQLite app
 
 # Load the configuration folder (e.g., "db")
 # This MUST happen BEFORE importing models!

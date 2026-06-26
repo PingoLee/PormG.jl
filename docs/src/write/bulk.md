@@ -138,7 +138,7 @@ By default, `bulk_insert()` chunks data and processes each chunk in its own tran
 To ensure all-or-nothing semantics (all rows inserted or none), wrap `bulk_insert()` in `run_in_transaction()`:
 
 ```julia
-using PormG
+using PormG, LibPQ   # "db_2" is a PostgreSQL connection
 
 # All inserts succeed together, or all fail together
 PormG.run_in_transaction("db_2") do

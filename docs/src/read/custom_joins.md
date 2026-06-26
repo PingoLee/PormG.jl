@@ -30,7 +30,7 @@ The `.cjoin()` method allows you to add custom conditions to JOIN clauses at que
 The `.cjoin()` method is built into the query builder handler, meaning no special function imports are required once you have loaded PormG:
 
 ```julia
-using PormG
+using PormG, LibPQ   # load SQLite instead for a SQLite app
 # Q, Qor, and F are automatically exported by PormG
 ```
 

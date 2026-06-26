@@ -21,7 +21,7 @@ Because every operation runs through the async core, even synchronous-looking co
 The simplest pattern: pass your `"db_2"` database key to `run_in_transaction`, then execute your query block inside the callback.
 
 ```julia
-using PormG
+using PormG, LibPQ   # "db_2" is a PostgreSQL connection
 using DataFrames
 
 # Load configuration

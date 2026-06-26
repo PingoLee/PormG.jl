@@ -41,7 +41,7 @@ PormG.Migrations.remove_migration_record("db", "20260310120000")
 For complex logic that requires Julia-side data processing, use `run_in_transaction` to ensure atomicity:
 
 ```julia
-using PormG
+using PormG, LibPQ   # load SQLite instead for a SQLite app
 
 PormG.run_in_transaction("db") do
     # Fetch data

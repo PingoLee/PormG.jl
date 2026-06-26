@@ -23,6 +23,17 @@ using Pkg
 Pkg.add("PormG")
 ```
 
+PormG does **not** pull in a SQL driver automatically — `LibPQ` (PostgreSQL) and `SQLite` are
+weak dependencies. Install and load the one your app uses:
+
+```julia
+Pkg.add("LibPQ")     # PostgreSQL
+Pkg.add("SQLite")    # SQLite
+```
+
+A bare `using PormG` loads the ORM but no backend; the first query then raises a clear error
+telling you to `using LibPQ` (or `using SQLite`).
+
 ---
 
 ## Quick Start
@@ -56,7 +67,7 @@ end
 ### Load configuration and models
 
 ```julia
-using PormG, DataFrames
+using PormG, LibPQ, DataFrames          # LibPQ → PostgreSQL; use SQLite for the SQLite backend
 
 PormG.Configuration.load("db")          # loads db/settings.yml
 PormG.@import_models "db/models.jl" models

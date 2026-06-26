@@ -15,7 +15,7 @@ PormG is designed for Julia's asynchronous task scheduling. This section covers 
 Use advisory locks to ensure long-running tasks (migrations, seeds, imports) do not run in parallel across processes.
 
 ```julia
-using PormG
+using PormG, LibPQ   # advisory locks are PostgreSQL-only
 
 # Wrap multiple operations in an advisory lock
 PormG.run_in_transaction("db") do

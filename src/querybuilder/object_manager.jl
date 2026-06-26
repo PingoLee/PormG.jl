@@ -232,30 +232,32 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :copy
     return () -> deepcopy(q)
 
-
-    # === CATEGORY 2: Terminal methods (return result) ===
-    # End the chain. E.g.: query.create(...) returns a Dict.
+  # === CATEGORY 2: Terminal methods (return result) ===
+  # End the chain. E.g.: query.create(...) returns a Dict.
   elseif sym === :create
-    # Returns a function that forwards to up_create!
+    # `args...` is intentionally untyped: the execute path returns a Dict, while
+    # show_query=:sql/:dict/:params/:none return String/Dict/Vector/nothing. A typed
+    # signature would force the inspect contract to fork, so the return stays `Any`.
     return (args...; kwargs...) -> up_create!(q.object, args; kwargs...)
   elseif sym === :update
+    # Same dual execute/inspect return contract as :create — see the note above.
     return (args...; kwargs...) -> up_update!(q.object, args; kwargs...)
   elseif sym === :count
-    return () -> do_count(q)
+    return (; show_query=:execute) -> do_count(q; show_query=show_query)
   elseif sym === :exists
-    return () -> do_exists(q)
+    return (; show_query=:execute) -> do_exists(q; show_query=show_query)
   elseif sym === :first
     return (; kwargs...) -> first(q; kwargs...)
   elseif sym === :get
     return (args...; show_query=:execute) -> get(q, args...; show_query=show_query)
   elseif sym === :list
     return (format::Symbol=:row; show_query::Symbol=:execute) -> list(q, Val(format); show_query=show_query)
-  elseif sym === :inspect_query || sym === :inspect
+  elseif sym === :inspect
     return (; kwargs...) -> inspect_query(q; kwargs...)
   elseif sym === :delete
     return (; kwargs...) -> delete(q; kwargs...)
 
-    # === CATEGORY 3: Internal fields ===
+  # === CATEGORY 3: Internal fields ===
   else
     return getfield(q, sym)
   end

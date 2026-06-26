@@ -275,7 +275,7 @@ show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)
 # Count or check if exists
 #
 
-function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)::Integer
+function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   # Resolve settings
   settings, connection, conn_key = get_settings(oq)
   
@@ -304,8 +304,13 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
     FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
-    $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "") 
+    $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")
     """
+  # Inspection short-circuit: return SQL/metadata without hitting the database.
+  if show_query !== :execute
+    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
+                            parameters=instruction.parameters)
+  end
   query_result = fetch(settings, resposta, instruction.parameters)
   # PostgreSQL returns a LibPQ.Result that supports scalar [row, col] indexing.
   # SQLite returns a materialized rowtable (Vector{<:NamedTuple}); a Vector *also* has a
@@ -320,7 +325,7 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
   end
 end
 
-function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing)
+function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   try
     # Resolve settings
     settings, connection, conn_key = get_settings(oq)
@@ -355,7 +360,12 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     $(instruction.agregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")
     $limit_clause
     $offset_clause
-    """    
+    """
+    # Inspection short-circuit: return SQL/metadata without hitting the database.
+    if show_query !== :execute
+      return _show_query_result(show_query, sql, instruction.connection, q.object.model.name, :select;
+                              parameters=instruction.parameters)
+    end
     @pormg_debug false
     result = fetch(settings, sql, instruction.parameters) |> Tables.rowtable
     @pormg_debug false

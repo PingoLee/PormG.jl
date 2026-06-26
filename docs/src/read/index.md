@@ -199,7 +199,7 @@ meta = query.list(show_query=:dict)
 @time query.list(show_query=:none)
 
 # Dedicated inspection API with heuristic intent detection
-inspection = query.inspect_query()
+inspection = query.inspect()
 println(inspection[:sql])
 println(inspection[:operation])  # => :select
 ```
@@ -213,7 +213,7 @@ println(inspection[:operation])  # => :select
 | `:params` | Parameters array only. |
 | `:none` | `nothing` (zero-overhead benchmarking). |
 
-`show_query` is supported on terminal methods such as `list()`, `first()`, `get()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
+`show_query` is supported on terminal methods such as `list()`, `first()`, `get()`, `count()`, `exists()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
 
 ---
 

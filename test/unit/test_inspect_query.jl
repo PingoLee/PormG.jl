@@ -530,4 +530,64 @@ PormG.config["default"] = MockSettings
     @test_throws ArgumentError inspect_query(note_query)
   end
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # count() / exists() inspection (#42): both terminals must honor show_query so
+  # their generated SQL is inspectable without a live database. The short-circuit
+  # returns before fetch(), so MockPostgres is sufficient.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "count()/exists() honor show_query" begin
+    q = DriverModel.objects
+    q.filter("nationality" => "British")
+
+    # count(show_query=:sql) renders the COUNT SELECT without executing.
+    count_sql = q.count(show_query=:sql)
+    @test count_sql isa String
+    @test contains(count_sql, "COUNT")
+    @test occursin("drivers", lowercase(count_sql))
+
+    # count(show_query=:dict) exposes the full metadata dict with bound parameters.
+    count_meta = q.count(show_query=:dict)
+    @test count_meta isa Dict
+    @test count_meta[:operation] === :select
+    @test count_meta[:model] == "drivers"
+    @test contains(count_meta[:sql_text], "COUNT")
+    @test count_meta[:parameters] == ["British"]
+
+    # exists(show_query=:sql) renders the `SELECT 1 ... LIMIT 1` probe.
+    exists_sql = q.exists(show_query=:sql)
+    @test exists_sql isa String
+    @test contains(exists_sql, "SELECT 1")
+    @test contains(exists_sql, "LIMIT 1")
+
+    # exists(show_query=:dict) exposes the same metadata shape.
+    exists_meta = q.exists(show_query=:dict)
+    @test exists_meta isa Dict
+    @test exists_meta[:model] == "drivers"
+    @test contains(exists_meta[:sql_text], "SELECT 1")
+    @test exists_meta[:parameters] == ["British"]
+
+    # Default path (no show_query) is unchanged: count() still returns an Integer.
+    # (Skipped here — requires a live DB; covered in integration suites.)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Terminal-name cleanup (#42): `query.inspect()` is the only surviving inspection
+  # terminal. The `query.inspect_query()` alias was removed, so the accessor must
+  # fall through to getfield and error.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "inspect terminal: alias removed, :inspect survives" begin
+    q = DriverModel.objects
+    q.filter("nationality" => "Italian")
+
+    # `.inspect()` forwards to inspect_query and returns the same metadata.
+    via_terminal = q.inspect()
+    via_function = inspect_query(q)
+    @test via_terminal isa Dict
+    @test via_terminal[:sql_text] == via_function[:sql_text]
+    @test via_terminal[:parameters] == via_function[:parameters]
+
+    # The removed alias is no longer a property → getfield fallback throws.
+    @test_throws ErrorException q.inspect_query
+  end
+
 end

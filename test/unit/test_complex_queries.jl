@@ -467,7 +467,7 @@ ResultCamelDjangoModel._module = Main
 
   # ===== Section: Concat variadic vs vector form =====
   @testset "Concat variadic and vector forms produce identical SQL" begin
-    using PormG: Concat, Value
+    using PormG.Functions: Concat, Value
 
     # Variadic form: Concat("forename", Value(" "), "surname")
     q_var = DriverModel.objects
@@ -490,7 +490,7 @@ ResultCamelDjangoModel._module = Main
 
   # ===== Section: Case/When expression as filter RHS =====
   @testset "Case/When as filter RHS value" begin
-    using PormG: Case, When
+    using PormG.Functions: Case, When
 
     # Filter: year >= threshold where threshold comes from a Case expression
     q = RaceModel.objects

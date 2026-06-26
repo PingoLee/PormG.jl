@@ -1,6 +1,10 @@
 module ConnectionPool
 
 import Logging
+# Extend Base.fetch rather than define a fresh `fetch` — a shadowing `fetch` forces every
+# caller to qualify it and conflicts with Base.fetch on `using` (#35). PormG owns the
+# first-argument types (PormGPostgres/PormGSQLite/SQLConn), so this is not type piracy.
+import Base: fetch
 import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
@@ -9,7 +13,11 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, with_savepoint
-export acquire_connection, release_connection, close_pool!
+export acquire_connection, release_connection
+# NOTE: close_pool! is intentionally NOT exported here. Configuration owns the public
+# `close_pool!` (it dispatches on a pool OR a db-name String and delegates the pool case to
+# this module's `close_pool!`). Exporting it from both modules made `PormG.close_pool!`
+# ambiguous and therefore undefined (#35). Callers in this package use `CP.close_pool!`.
 
 # Import transaction context helpers from Configuration
 import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool

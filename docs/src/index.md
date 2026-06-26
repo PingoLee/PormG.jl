@@ -207,7 +207,8 @@ bulk_insert(M.Driver.objects, bulk_data)
 ### 7. Query Your Data
 
 ```julia
-using PormG: Count, F
+using PormG: F
+using PormG.Functions: Count
 
 # Simple filter and list
 drivers = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname").list()

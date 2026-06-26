@@ -379,7 +379,7 @@ PormG provides five aggregate functions: `Count`, `Sum`, `Avg`, `Max`, and `Min`
 When aggregate values appear in `values()`, PormG **automatically groups by the non-aggregated columns**.
 
 ```julia
-using PormG: Count, Sum, Max, Min
+using PormG.Functions: Count, Sum, Max, Min
 
 query = M.Result.objects
 query.values(

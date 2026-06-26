@@ -134,7 +134,7 @@ PormG exports string manipulation functions that work in `values()`:
 | `Replace("field", old, new)` | Replace substring | `"fixed" => Replace("name", "-", " ")` |
 
 ```julia
-using PormG: Concat, Value, Lower, Upper, Length
+using PormG.Functions: Concat, Value, Lower, Upper, Length
 
 query = M.Driver.objects
 query.values(
@@ -202,7 +202,7 @@ df = query |> DataFrame
 | `Mod("field", n)` | Modulo (remainder) | `Mod("driverid", Value(3))` |
 
 ```julia
-using PormG: Power, Round, Value, Abs
+using PormG.Functions: Power, Round, Value, Abs
 
 query = M.Driver.objects
 query.values(
@@ -225,7 +225,7 @@ df = query |> DataFrame
 ### `Coalesce` — First Non-Null Value
 
 ```julia
-using PormG: Coalesce
+using PormG.Functions: Coalesce
 
 query = M.Driver.objects
 query.values(
@@ -236,7 +236,7 @@ query.values(
 ### `NullIf` — Return NULL If Equal
 
 ```julia
-using PormG: NullIf
+using PormG.Functions: NullIf
 
 # Return NULL if code is an empty string
 query = M.Driver.objects
@@ -248,7 +248,7 @@ query.values(
 ### `Greatest` / `Least` — Max/Min of Values
 
 ```julia
-using PormG: Greatest, Least, Value
+using PormG.Functions: Greatest, Least, Value
 
 query = M.Result.objects
 query.values(
@@ -260,7 +260,7 @@ query.values(
 ### `Cast` — Type Conversion
 
 ```julia
-using PormG: Cast
+using PormG.Functions: Cast
 
 query = M.Result.objects
 query.values(
@@ -271,7 +271,7 @@ query.values(
 ### `Extract` — Extract Date/Time Part
 
 ```julia
-using PormG: Extract
+using PormG.Functions: Extract
 
 query = M.Race.objects
 query.values(
@@ -283,7 +283,7 @@ query.values(
 ### `To_char` — Format as String
 
 ```julia
-using PormG: To_char
+using PormG.Functions: To_char
 
 query = M.Race.objects
 query.values(
@@ -310,7 +310,7 @@ For a simple yes/no expression, pass `otherwise` directly to `When`. PormG wraps
 `CASE … END` automatically — no `Case` wrapper needed:
 
 ```julia
-using PormG: When
+using PormG.Functions: When
 
 # Did the driver win at least one race in their standing?
 query = M.Driver_standings.objects
@@ -362,7 +362,7 @@ For multiple conditions, wrap a vector of `When` fragments in `Case`. The `defau
 provides the `ELSE` branch:
 
 ```julia
-using PormG: Case, When
+using PormG.Functions: Case, When
 
 query = M.Driver.objects
 query.values(
@@ -398,7 +398,8 @@ Output:
 For more complex conditions, combine `Case`/`When` with `Q()` for boolean logic and `F()` for field references:
 
 ```julia
-using PormG: Case, When, Sum, Q, F, Value
+using PormG: Q, F
+using PormG.Functions: Case, When, Sum, Value
 
 query = M.Result.objects
 query.filter("driverid__forename" => "Mika")
@@ -463,7 +464,7 @@ dynamic thresholds. For example, the F1 points system awarded points to the top 
 from 2010 onwards, but only the top 8 before that:
 
 ```julia
-using PormG: Case, When
+using PormG.Functions: Case, When
 
 # Keep only results where the driver finished inside the points-scoring positions,
 # applying the correct threshold for each era.
@@ -519,7 +520,7 @@ All rows are from 1950 (classic era), so the CASE evaluates to `ELSE 8` — only
 Functions can be nested and combined with aggregates:
 
 ```julia
-using PormG: Count, Concat, Value, Upper
+using PormG.Functions: Count, Concat, Value, Upper
 
 # Count races per nationality, with formatted output
 query = M.Driver.objects

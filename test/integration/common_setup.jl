@@ -4,6 +4,11 @@ ENV["PORMG_ENV"] = "dev"
 
 using Revise
 using PormG
+# SQL function library (Sum, Count, Lower, Greatest, Floor, Extract, Abs, Concat, …) is
+# namespaced under PormG.Functions since #35 (no longer flooded into Main by `using PormG`).
+# Bring the whole library into scope so the integration tests can use the bare constructors —
+# this models the documented `using PormG, PormG.Functions` pattern (docs/src/api.md).
+using PormG.Functions
 # Activate the LibPQ/SQLite weakdep extensions (#34) before any DB work — without these
 # every backend operation raises the "load the driver" error. Robust across env types;
 # see test/load_drivers.jl.

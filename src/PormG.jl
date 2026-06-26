@@ -110,9 +110,42 @@ include("AdvisoryLock.jl")
 using .AdvisoryLock
 
 include("QueryBuilder.jl")
-import .QueryBuilder: object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, When, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+# Query primitives only. The SQL function constructors are NOT imported into PormG — they
+# live solely in `PormG.Functions` (below). There is intentionally no `PormG.Sum`: the
+# function library has exactly one home, reached via `using PormG.Functions` / `PormG.Functions.X`.
+import .QueryBuilder: object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 
-export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Sum, Avg, Count, Max, Min, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, Case, When, Cast, Concat, Extract, To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+"""
+    PormG.Functions
+
+The SQL function library — aggregate (`Sum`, `Avg`, `Count`, `Max`, `Min`), conditional
+(`Case`, `When`), window (`WindowOver`, `Rank`, `Lag`, …), string (`Lower`, `Replace`,
+`Trim`, …) and math (`Round`, `Floor`, `Power`, …) constructors.
+
+These are **not** exported into `Main` by `using PormG`: the names are generic enough to
+collide with `Base` and user code (`Sum`, `Count`, `Max`, `Replace`, `Round`, `Length`…).
+Opt in explicitly:
+
+```julia
+using PormG, PormG.Functions          # brings Sum, Count, … into scope
+# or qualify without importing:
+M.Result.objects.values("n" => PormG.Functions.Count("resultid"))
+```
+"""
+module Functions
+  import ..QueryBuilder: Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
+    To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
+    Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
+    WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+  export Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
+    To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
+    Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
+    WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+end
+
+# Curated top-level surface: query primitives only. The SQL function constructors above
+# live in `PormG.Functions` and are reached via `using PormG.Functions` / `PormG.Functions.X`.
+export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, with_savepoint  # Async-first API
 export with_tx_context, in_transaction_context  # Transaction context helpers

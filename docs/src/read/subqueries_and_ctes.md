@@ -55,7 +55,7 @@ query.filter("statusId__@in" => good_sub)
 You can use a SQL function alias as the single column. PormG counts a `"alias" => Function(...)` pair as one column, so the validator accepts it:
 
 ```julia
-using PormG: Max
+using PormG.Functions: Max
 
 # Subquery that returns the single highest driver id
 top_id_sub = M.Driver.objects.values("top_id" => Max("driverid"))
@@ -120,7 +120,7 @@ CTEs (SQL `WITH` clauses) are useful when a query becomes easier to reason about
 Define a subquery, give it a name, and join it to the main query via `join_field`:
 
 ```julia
-using PormG: Count
+using PormG.Functions: Count
 
 # Define the CTE: count results per driver (where status = 1)
 driver_stats = M.Result.objects
@@ -146,7 +146,7 @@ The `.with()` method:
 ## CTE with Multiple Aggregated Fields
 
 ```julia
-using PormG: Count, Sum
+using PormG.Functions: Count, Sum
 
 # CTE with multiple aggregates
 stats = M.Result.objects
@@ -208,7 +208,7 @@ Each `.with()` call adds another `WITH` clause and `JOIN` to the final SQL.
 By default, CTEs use `LEFT JOIN`. Use `join_type="INNER"` to filter out non-matching rows:
 
 ```julia
-using PormG: Sum
+using PormG.Functions: Sum
 
 high_scorers = M.Result.objects
 high_scorers.filter("points__@gte" => 10)
@@ -242,7 +242,7 @@ The SQL builder can also render `"RIGHT"` and `"FULL"` join keywords, but these 
 The `join_field` can contain a multi-level path with `__`. PormG builds the intermediate joins needed to connect the main query to the CTE:
 
 ```julia
-using PormG: Count
+using PormG.Functions: Count
 
 # CTE: count drivers per nationality
 nat_stats = M.Driver.objects

@@ -85,7 +85,8 @@ bulk_data = DataFrame([
     Dict(&quot;forename&quot; =&gt; &quot;Nelson&quot;, &quot;surname&quot; =&gt; &quot;Piquet&quot;,   &quot;nationality&quot; =&gt; &quot;Brazilian&quot;),
 ])
 # We call bulk_insert on the .objects handler to respect the ORM boundary
-bulk_insert(M.Driver.objects, bulk_data)</code></pre><h3 id="7.-Query-Your-Data"><a class="docs-heading-anchor" href="#7.-Query-Your-Data">7. Query Your Data</a><a id="7.-Query-Your-Data-1"></a><a class="docs-heading-anchor-permalink" href="#7.-Query-Your-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG: Count, F
+bulk_insert(M.Driver.objects, bulk_data)</code></pre><h3 id="7.-Query-Your-Data"><a class="docs-heading-anchor" href="#7.-Query-Your-Data">7. Query Your Data</a><a id="7.-Query-Your-Data-1"></a><a class="docs-heading-anchor-permalink" href="#7.-Query-Your-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">using PormG: F
+using PormG.Functions: Count
 
 # Simple filter and list
 drivers = M.Driver.objects.filter(&quot;nationality&quot; =&gt; &quot;Brazilian&quot;).order_by(&quot;surname&quot;).list()

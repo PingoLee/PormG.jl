@@ -1,0 +1,9 @@
+# Line-ending policy for PormG.
+#
+# Julia source is LF by convention, and several tests read migration files as raw
+# bytes — e.g. the frozen v1 fixture's `# pormg-migration-format: N` header scan in
+# test/unit/test_migration_format_v1.jl, whose checksum is byte-pinned. Without this,
+# a Windows checkout with core.autocrlf=true rewrites LF -> CRLF in the working tree,
+# and the trailing CR breaks the `$`-anchored line scan (and would desync a byte-frozen
+# fixture). Pin LF so the working tree matches the index (already LF) on every platform.
+*.jl text eol=lf

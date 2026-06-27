@@ -17,10 +17,14 @@ import TimeZones: ZonedDateTime
     @test length(rows) == 1
 
     row = rows[1]
-    @test row.driverId == row.driverid
-    @test row.driverId == row[:driverId]
-    @test row.driverId == row["driverId"]
-    @test haskey(row, :driverId)
+    # Field access is case-sensitive (#57): the field is declared `driverid`, so the
+    # lowercase name resolves and the camelCase form misses (no silent normalization).
+    @test row.driverid == row[:driverid]
+    @test row.driverid == row["driverid"]
+    @test haskey(row, :driverid)
+    @test !haskey(row, :driverId)
+    @test_throws ArgumentError row.driverId   # getproperty validates → ArgumentError
+    @test_throws KeyError row[:driverId]      # raw getindex → KeyError
     @test get(row, "missingField", :fallback) === :fallback
 
     dict_rows = M.Driver.objects.filter("driverref" => "hamilton").list(:dict)
@@ -63,10 +67,12 @@ end
     @test nrow(df_direct) == 1
     @test df_from_rows[1, :driverid] == df_direct[1, :driverid]
 
-    # Tables.getcolumn symbol normalization test (BUG-10 regression)
+    # Tables.getcolumn is case-sensitive (#57): the exact declared symbol resolves; a
+    # wrong-case symbol misses (the old case-insensitive normalization is incompatible
+    # with case preservation and was removed).
     row_item = row_result[1]
-    @test Tables.getcolumn(row_item, :driverId) == row_item.driverid
     @test Tables.getcolumn(row_item, :driverid) == row_item.driverid
+    @test_throws KeyError Tables.getcolumn(row_item, :driverId)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

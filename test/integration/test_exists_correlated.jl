@@ -84,7 +84,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Correlated EXISTS with OuterRef("pk") auto-resolution
-# The F1 Result model has resultId as primary key.
+# The F1 Result model has resultid as primary key.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Correlated EXISTS - OuterRef pk resolves to primary key" begin
     # Just_a_test_deletion.test_result is a FK back to Result.
@@ -105,7 +105,7 @@ end
      # FROM "result" as "Tb"
      # WHERE EXISTS (SELECT 1
      # FROM "just_a_test_deletion" as "R1"
-     # WHERE "R1"."test_result" = "Tb"."resultId"
+     # WHERE "R1"."test_result" = "Tb"."resultid"
      # LIMIT 1)
     count = q.count()
     total = M.Result.objects.count()

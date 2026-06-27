@@ -374,14 +374,18 @@ function ensure_model_initialized(model::PormGModel)
     return false
 end
 
+# Normalize a field name: strip ONE leading underscore (the escape hatch for SQL
+# reserved words / `id`, e.g. `_end` -> `end`) and validate. The declared case is
+# PRESERVED (#57): a field declared `driverId` keeps that case as its identity and
+# its column name, so PormG can faithfully target mixed-case/uppercase DB columns.
+# Table/model names still lowercase — see `format_model_name` below.
 function format_fild_name(name::String)::String
   isempty(name) && return name
-  name[1] == '_' && (name = name[2:end])   
+  name[1] == '_' && (name = name[2:end])
   isempty(name) && return name
-  name = lowercase(name)
   if occursin(r"__|@|^_", name)
     throw(ArgumentError("The field name $name contains __ or @ or starts with _; this is not allowed"))
-  end 
+  end
   return name
 end
 function format_fild_name(name::Nothing)::Nothing
@@ -389,8 +393,11 @@ function format_fild_name(name::Nothing)::Nothing
 end
 format_fild_name(name::Symbol)::String = name |> String |> format_fild_name
 
-function format_model_name(name::String)::String  
-  return format_fild_name(name)  
+# Table/model names are LOWERCASED (frozen schema convention, #33) — independent of
+# field-name case preservation (#57). Reuses `format_fild_name`'s leading-underscore
+# strip + validation, then lowercases the result.
+function format_model_name(name::String)::String
+  return lowercase(format_fild_name(name))
 end
 function format_model_name(name::Symbol)::String
   return name |> String |> format_model_name  

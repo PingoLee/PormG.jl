@@ -4,7 +4,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PormGRow mutation: assignment validation and dirty tracking
-# Verifies write-side field-name normalization, unknown-field rejection,
+# Verifies case-sensitive field-name resolution, unknown-field rejection,
 # projected-FK validation, and primary-key mutation protection.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PormGRow assignment validation" begin
@@ -17,20 +17,25 @@ end
 
     original_position_text = row.positiontext
 
-    row.positionText = "Phase 2 pending"
+    # Assignment is case-sensitive (#57): write via the declared lowercase field name.
+    row.positiontext = "Phase 2 pending"
     @test row.positiontext == "Phase 2 pending"
-    @test row[:positionText] == "Phase 2 pending"
+    @test row[:positiontext] == "Phase 2 pending"
     @test :positiontext in row._dirty
 
     row.positiontext = original_position_text
-    @test row.positionText == original_position_text
+    @test row.positiontext == original_position_text
     @test :positiontext in row._dirty
+
+    # Wrong-case assignment misses the lowercase-declared field (no silent normalization).
+    @test_throws ArgumentError (row.positionText = "x")
 
     @test_throws ArgumentError (row.unknownField = 1)
     @test_throws ArgumentError (row.badFk__name = "x")
 
+    # Primary-key mutation is rejected (driverid is Driver's PK).
     driver = M.Driver.objects.get("driverref" => "hamilton")
-    @test_throws ArgumentError (driver.driverId = driver.driverid + 1)
+    @test_throws ArgumentError (driver.driverid = driver.driverid + 1)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

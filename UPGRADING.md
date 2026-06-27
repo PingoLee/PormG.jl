@@ -43,6 +43,107 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Field names — declared **case is preserved** and lookups are **case-sensitive**
+
+- **PormG ref**: issue #57 (preserve declared field-name case) + #58 (lowercase house-style convention); [src/Models.jl](src/Models.jl) (`format_fild_name` / `format_model_name`), [src/querybuilder/deletion.jl](src/querybuilder/deletion.jl), [src/querybuilder/types.jl](src/querybuilder/types.jl)
+- **Recorded**: 2026-06-27
+- **Severity**: **breaking** — has both a **code** dimension (query/row access is case-sensitive) and a **database** dimension (the declared field name *is* the physical column name, verbatim).
+
+### What changed
+
+PormG used to **force every field name to lowercase** at model registration: a field declared
+`driverId` was stored as `driverid`, its column was `driverid`, and queries had to be lowercase. The
+query-side lookup had already become **case-sensitive**, so the two halves disagreed and mixed-case
+columns were impossible to target.
+
+Now the **declared case is preserved end to end**:
+
+- `driverId = IDField()` → field identity `driverId` → column `"driverId"` → query `driverId__…`.
+- **Field lookups are case-sensitive** everywhere: `filter`, `values`, `order_by`, `update`, join
+  paths (`fk__field`), and `PormGRow` attribute/index access must use the **exact declared case**.
+- **Table/model names are unchanged** — still lowercased (frozen convention #33). Only *columns*
+  preserve case.
+- House style remains **lowercase snake_case** (#58); mixed/upper-case is now supported specifically
+  so you can map legacy/Django columns faithfully.
+
+This is what unblocks porting apps whose real DB columns are mixed-case (`driverId`, `foreName`, …).
+
+### How to find the calls to migrate
+
+The breakage depends on whether the app's models declared mixed-case fields against a database whose
+physical columns are **lowercase** (anything created by old PormG):
+
+1. **Build-time** — a query path whose case no longer matches the field:
+   ```text
+   The field driverid not found in Driver: driverId, foreName, …
+   ```
+2. **Execution-time (PostgreSQL)** — declared `driverId` but the physical column is `driverid`:
+   ```text
+   ERROR: column "driverId" does not exist
+   ```
+   (SQLite is case-insensitive on column names, so it may *silently* keep working — PostgreSQL will not.)
+3. **Row access** — `row.driverId` when the field is `driverid`:
+   ```text
+   Driver row has no field or accessor 'driverId'
+   ```
+4. **Migration churn** — `makemigrations` / `dry_run` proposes spurious rename/add/drop on columns
+   that differ only in case. That is the signal your declared case ≠ physical column case.
+
+Grep each app for its model declarations and for query field paths / `row.<Field>` accesses that use
+capital letters.
+
+### Migrate your app
+
+The rule: **the declared field-name case must exactly equal the physical column case**, and you must
+query in that same case. Choose per model:
+
+```julia
+# ✗ before — old PormG lowercased the declaration; you queried lowercase
+Driver = Models.Model("driver",
+    driverId = Models.IDField(),                 # was stored as "driverid"
+    foreName = Models.CharField(),
+)
+M.Driver.objects.filter("driverid__surname" => "Senna")   # lowercase "worked"
+row.driverid
+
+# ✓ after (a) — EXISTING DB with lowercase columns (the common case): declare lowercase
+Driver = Models.Model("driver",
+    driverid = Models.IDField(),                 # matches the physical "driverid"
+    forename = Models.CharField(),
+)
+M.Driver.objects.filter("driverid__surname" => "Senna")   # unchanged; stays green
+row.driverid
+
+# ✓ after (b) — targeting a legacy MIXED-CASE schema (now possible): declare the real case
+Driver = Models.Model("driver",
+    driverId = Models.IDField(),                 # column "driverId" (must exist that way)
+    foreName = Models.CharField(),
+)
+M.Driver.objects.filter("driverId__surname" => "Senna")   # query in the declared case
+row.driverId
+```
+
+Then update **all** field references to the chosen case: `filter`, `values`, `order_by`, `update`,
+join paths, `Q`/`Qor`/`F`/`OuterRef` field strings, and every `PormGRow` `.field` / `[:field]` access.
+
+**Verify (do not skip):** after editing, run `makemigrations` / `dry_run` and confirm it reports **no
+changes** for the affected tables. Any proposed rename/add/drop means a declared-case ↔ column-case
+mismatch still remains. Watch three spots when adopting **mixed-case** against an old lowercase DB —
+they assume declared case == physical column: PostgreSQL identity-**sequence** names
+(`<table>_<pk>_seq`), **many-to-many** auto through-columns (`<model>_<pk>`), and FK `pk_field`
+references. Keeping a model lowercase (path *a*) avoids all of these.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
 ## Export surface — SQL function constructors moved to `PormG.Functions`
 
 - **PormG ref**: issue #35 (Tier 2 pre-publish · curate the public export surface); [src/PormG.jl](src/PormG.jl) (`module Functions`), [docs/src/api.md](docs/src/api.md)

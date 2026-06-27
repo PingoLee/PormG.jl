@@ -70,8 +70,8 @@ The `IDField` renders as an auto-incrementing key per backend:
 
 ## Foreign-key columns
 
-A foreign-key column is the **declared field name, lowercased, verbatim** — PormG never appends
-`_id` or otherwise transforms it:
+A foreign-key column is the **declared field name, verbatim (case preserved)** — PormG never appends
+`_id`, lowercases, or otherwise transforms it:
 
 ```julia
 Result = Models.Model("result",
@@ -142,8 +142,10 @@ Driver = Models.Model("driver",
 ## Identifier quoting and case
 
 All table and column identifiers are emitted with **double quotes** (`"…"`) on **both** PostgreSQL
-and SQLite, and identifiers are **lowercased** before quoting. There are no backticks and no
-backend-specific quoting differences:
+and SQLite (no backticks, no backend-specific quoting). **Table names are lowercased** before
+quoting; **column names preserve the declared field-name case** (#57) — so a field declared
+`driverId` becomes `"driverId"`. Declaring lowercase snake_case (the house style) yields all-lowercase
+identifiers as below:
 
 ```sql
 CREATE TABLE result (
@@ -161,10 +163,10 @@ CREATE TABLE result (
 | Table name | `model.name` lowercased, verbatim — no pluralization |
 | `django_prefix` | optional Django-interop prefix; shapes generated `name`/accessors, not the physical-table rule |
 | Primary key | explicit `IDField` on native models; no implicit `id` (importer auto-adds `id`) |
-| FK column | declared field name, lowercased, verbatim — no `_id` suffix (importer adds `_id`) |
+| FK column | declared field name, verbatim (case preserved) — no `_id` suffix (importer adds `_id`) |
 | Default `on_delete` | `NO ACTION` |
 | Timestamps | opt-in `auto_now` / `auto_now_add`; no implicit `created`/`modified` |
-| Quoting | double quotes, lowercase identifiers, both backends |
+| Quoting | double quotes both backends; table names lowercased, column names case-preserved |
 
 The migration *format* that records these schemas (file layout, checksum, tracking table) is a
 separate frozen contract — see [Migration Format Stability](migrations/stability.md).

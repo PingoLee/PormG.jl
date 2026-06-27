@@ -104,7 +104,7 @@ end
 - **Field names**: Lowercase, snake_case: `first_name`, `created_at`
 - **Never use `__`** in field or table names — reserved for ORM join traversal
 - Prefix reserved Julia keywords: `_id`, `_type`, `_end`
-- **In query operations, field paths are lowercase** (`constructorid__name`), even when the model declares camelCase fields — camelCase join paths throw at build time.
+- **Query fields in the case they were declared** — lookups are case-sensitive (#57). The F1 models declare **lowercase** fields, so their paths are lowercase (`constructorid__name`); a camelCase path throws because the field doesn't exist under that case. (House style is lowercase snake_case; mixed-case columns are supported when you declare them that way.)
 
 > Migrations, create/update/delete, bulk operations, and transactions live in [`writing.md`](writing.md).
 
@@ -156,7 +156,7 @@ df   = query |> DataFrame   # DataFrames.DataFrame
 ## 4. Joins and Lookups
 
 ### Relationship traversal
-Use `__` to traverse ForeignKey relationships (lowercase field paths):
+Use `__` to traverse ForeignKey relationships (query each segment in the case it was declared; the F1 models use lowercase):
 
 ```julia
 # Filter by joined field
@@ -417,7 +417,7 @@ Alias identifiers must start with a Unicode letter or underscore, followed by le
 | `query \|> list` (free function) | `query.list()` |
 | `delete(query)` (free function) | `query.delete()` |
 | `SELECT *` across joins | `.values("*", "joined__field")` explicitly |
-| camelCase join path in a query | lowercase path (`constructorid__name`) |
+| Wrong-case join path for a lowercase-declared field | match the declared case (`constructorid__name`) |
 | Loops for batch inserts | `bulk_insert()` or `bulk_copy()` (see `writing.md`) |
 | Python-style `annotate()` | `values("alias" => F("field") * 1.5)` |
 | `F("points") > 20` in filter | `"points__@gt" => 20` (suffix syntax) |

@@ -938,6 +938,36 @@ end
     @test pool_in_use(pool) == in_use_before
   end
 
+  # ── Phase 14: Mixed-case columns preserve case + no churn (#57) ────
+  # Declares a model with genuinely mixed-case COLUMNS, migrates it, then proves
+  # (a) create_table preserved the declared case on the real backend, and
+  # (b) a re-run detects NO changes — introspection reads the mixed-case columns
+  # and the diff compares case-correctly, so there is no spurious add/drop churn.
+  @testset "Phase 14: Mixed-case Columns + No Churn (#57)" begin
+    write_edge_models("""
+    MixedCaseTable = Models.Model(
+        id = Models.IDField(),
+        driverRef = Models.CharField(),
+        foreName = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # (a) The physical columns carry the declared case verbatim (table stays lowercase).
+    cols = column_names(pool, "mixedcasetable")
+    @test "driverRef" in cols
+    @test "foreName" in cols
+    @test !("driverref" in cols)   # no lowercased duplicate column
+
+    # (b) Re-running makemigrations with the SAME models writes NO pending plan:
+    #     introspection + diff agree on the mixed-case columns ⇒ zero churn.
+    pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+  end
+
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

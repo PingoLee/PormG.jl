@@ -9,7 +9,7 @@ Exercises ManyToManyField end-to-end against the selected integration database
   • ManyToManyManager `add!`, `remove!`, `clear!`, `set!` against the
     through table with parameterized SQL on both backends.
   • Forward-direction filter traversal (`endorsement.sponsors__name`).
-  • Reverse-direction filter traversal (`sponsor.drivers__driverRef`)
+  • Reverse-direction filter traversal (`sponsor.drivers__driverref`)
     using the `related_name="drivers"` declared on the field.
   • `manager.all()` returning a fluent query restricted to the related rows.
   • Empty/no-op mutators, `set!` rollback on FK failure, parent-delete cascade,

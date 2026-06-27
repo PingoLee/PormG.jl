@@ -10,13 +10,13 @@ import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
 
 
 Status = Models.Model(
-  statusId = Models.IDField(),
+  statusid = Models.IDField(),
   status = Models.CharField()
 )
 
 Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the names of models.
-  circuitId = Models.IDField(), # PormG automatically lowercases the name of the field, so you can use a capital letter in the name of the field. However, you must use lowercase in query operations.
-  circuitRef = Models.CharField(),
+  circuitid = Models.IDField(), # House style: declare field names in lowercase snake_case. PormG preserves the case you declare (so mixed-case/uppercase legacy columns are supported) and field lookups are case-sensitive — query fields in the same case you declared them.
+  circuitref = Models.CharField(),
   name = Models.CharField(),
   location = Models.CharField(),
   country = Models.CharField(),
@@ -27,10 +27,10 @@ Circuit = Models.Model( # You can create a model like a Django model for each ta
 )
 
 Race = Models.Model(
-  raceId = Models.IDField(),
+  raceid = Models.IDField(),
   year = Models.IntegerField(),
   round = Models.IntegerField(),
-  circuitId = Models.ForeignKey(Circuit, pk_field=&quot;circuitId&quot;, on_delete=&quot;CASCADE&quot;),
+  circuitid = Models.ForeignKey(Circuit, pk_field=&quot;circuitid&quot;, on_delete=&quot;CASCADE&quot;),
   name = Models.CharField(),
   date = Models.DateField(),
   time = Models.TimeField(null=true),
@@ -48,8 +48,8 @@ Race = Models.Model(
 )
 
 Driver = Models.Model(
-  driverId = Models.IDField(),
-  driverRef = Models.CharField(),
+  driverid = Models.IDField(),
+  driverref = Models.CharField(),
   number = Models.IntegerField(null=true),
   code = Models.CharField(),
   forename = Models.CharField(),
@@ -60,39 +60,39 @@ Driver = Models.Model(
 )
 
 Constructor = Models.Model(
-  constructorId = Models.IDField(),
-  constructorRef = Models.CharField(),
+  constructorid = Models.IDField(),
+  constructorref = Models.CharField(),
   name = Models.CharField(),
   nationality = Models.CharField(),
   url = Models.CharField()
 )
 
 Result = Models.Model(
-  resultId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field=&quot;raceId&quot;, on_delete=&quot;CASCADE&quot;),
-  driverId = Models.ForeignKey(Driver, pk_field=&quot;driverId&quot;, on_delete=&quot;RESTRICT&quot;),
-  constructorId = Models.ForeignKey(Constructor, pk_field=&quot;constructorId&quot;, on_delete=&quot;RESTRICT&quot;),
+  resultid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field=&quot;raceid&quot;, on_delete=&quot;CASCADE&quot;),
+  driverid = Models.ForeignKey(Driver, pk_field=&quot;driverid&quot;, on_delete=&quot;RESTRICT&quot;),
+  constructorid = Models.ForeignKey(Constructor, pk_field=&quot;constructorid&quot;, on_delete=&quot;RESTRICT&quot;),
   number = Models.IntegerField(null=true),
   grid = Models.IntegerField(),
   position = Models.IntegerField(null=true),
-  positionText = Models.CharField(),
-  positionOrder = Models.IntegerField(),
+  positiontext = Models.CharField(),
+  positionorder = Models.IntegerField(),
   points = Models.FloatField(),
   laps = Models.IntegerField(),
   time = Models.CharField(null=true),
   milliseconds = Models.IntegerField(null=true),
-  fastestLap = Models.IntegerField(null=true),
+  fastestlap = Models.IntegerField(null=true),
   rank = Models.IntegerField(null=true),
-  fastestLapTime = Models.DurationField(null=true),
-  fastestLapSpeed = Models.FloatField(null=true),
-  statusId = Models.ForeignKey(Status, pk_field=&quot;statusId&quot;, on_delete=&quot;CASCADE&quot;)
+  fastestlaptime = Models.DurationField(null=true),
+  fastestlapspeed = Models.FloatField(null=true),
+  statusid = Models.ForeignKey(Status, pk_field=&quot;statusid&quot;, on_delete=&quot;CASCADE&quot;)
 )
 
 Just_a_test_deletion = Models.Model(
   id = Models.IDField(),
   name = Models.CharField(),
-  test_result = Models.ForeignKey(Result, pk_field=&quot;resultId&quot;, on_delete=&quot;CASCADE&quot;, null=true, related_name=&quot;test_deletion&quot;),
-  test_result2 = Models.ForeignKey(Result, pk_field=&quot;resultId&quot;, on_delete=&quot;CASCADE&quot;, null=true, related_name=&quot;test_deletion2&quot;)
+  test_result = Models.ForeignKey(Result, pk_field=&quot;resultid&quot;, on_delete=&quot;CASCADE&quot;, null=true, related_name=&quot;test_deletion&quot;),
+  test_result2 = Models.ForeignKey(Result, pk_field=&quot;resultid&quot;, on_delete=&quot;CASCADE&quot;, null=true, related_name=&quot;test_deletion2&quot;)
 )
 
 end</code></pre><ul><li>Each field uses a PormG field constructor (e.g., <code>IDField</code>, <code>CharField</code>, <code>DateField</code>).</li><li>You can use keyword arguments to customize field options (e.g., <code>max_length</code>, <code>unique</code>, <code>null</code>).</li></ul><h2 id="Naming-Conventions-and-Considerations"><a class="docs-heading-anchor" href="#Naming-Conventions-and-Considerations">Naming Conventions and Considerations</a><a id="Naming-Conventions-and-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Naming-Conventions-and-Considerations" title="Permalink"></a></h2><h3 id="Model-Naming-Rules"><a class="docs-heading-anchor" href="#Model-Naming-Rules">Model Naming Rules</a><a id="Model-Naming-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Naming-Rules" title="Permalink"></a></h3><ul><li><strong>Use snake_case with capitalized first letter</strong>: <code>User</code>, <code>Product</code>, <code>Order_item</code></li><li><strong>Use singular nouns</strong>: <code>User</code> not <code>Users</code>, <code>Product</code> not <code>Products</code></li><li><strong>Be descriptive and clear</strong>: <code>User_profile</code>, <code>Product_category</code>, <code>Order_history</code></li></ul><h3 id="Model-Organization"><a class="docs-heading-anchor" href="#Model-Organization">Model Organization</a><a id="Model-Organization-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Organization" title="Permalink"></a></h3><ul><li><strong>Keep models in <code>db/models.jl</code></strong> or similar organized structure</li><li><strong>Group related models together</strong> in logical sections</li><li><strong>Use meaningful comments</strong> to explain complex relationships</li></ul><h2 id="Development-Workflow"><a class="docs-heading-anchor" href="#Development-Workflow">Development Workflow</a><a id="Development-Workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Development-Workflow" title="Permalink"></a></h2><p>PormG supports two primary workflows for model creation:</p><h3 id="1.-Model-First-(Recommended-for-New-Projects)"><a class="docs-heading-anchor" href="#1.-Model-First-(Recommended-for-New-Projects)">1. Model-First (Recommended for New Projects)</a><a id="1.-Model-First-(Recommended-for-New-Projects)-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Model-First-(Recommended-for-New-Projects)" title="Permalink"></a></h3><ol><li>Define your models in a <code>models.jl</code> file.</li><li>Use <code>PormG.Migrations.makemigrations()</code> to detect changes.</li><li>Use <code>PormG.Migrations.migrate()</code> to apply them to your database.</li></ol><h3 id="2.-DB-First-(Legacy-or-Existing-Databases)"><a class="docs-heading-anchor" href="#2.-DB-First-(Legacy-or-Existing-Databases)">2. DB-First (Legacy or Existing Databases)</a><a id="2.-DB-First-(Legacy-or-Existing-Databases)-1"></a><a class="docs-heading-anchor-permalink" href="#2.-DB-First-(Legacy-or-Existing-Databases)" title="Permalink"></a></h3><p>If you already have a database, you can use the <strong><code>PormG.setup()</code></strong> utility to generate your model code automatically:</p><pre><code class="language-julia hljs">using PormG
@@ -111,7 +111,7 @@ end</code></pre><h4 id="What-@import_models-Does"><a class="docs-heading-anchor"
     import PormG.Models as M
 
     Driver = M.Model(&quot;drivers&quot;,
-        driverId = M.IDField(),
+        driverid = M.IDField(),
         forename = M.CharField()
     )
 end
@@ -121,4 +121,4 @@ julia&gt; M.Driver.fields  # Shows current fields: id, name
 
 # Edit db/models.jl to add a field, save the file...
 
-julia&gt; M.Driver.fields  # Automatically updated with new field!</code></pre><p>This enables rapid development and testing without restarting Julia. When you modify models:</p><ul><li>Add new fields</li><li>Remove fields</li><li>Change field types</li><li>Adjust field parameters</li></ul><p>All changes are automatically reloaded and available in the next REPL command.</p><h2 id="Supported-Field-Types"><a class="docs-heading-anchor" href="#Supported-Field-Types">Supported Field Types</a><a id="Supported-Field-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Supported-Field-Types" title="Permalink"></a></h2><p>PormG provides comprehensive field types for all common database scenarios:</p><ul><li><strong>Primary Key Fields</strong>: <code>IDField</code>, <code>AutoField</code></li><li><strong>Text Fields</strong>: <code>CharField</code>, <code>TextField</code>, <code>EmailField</code></li><li><strong>Numeric Fields</strong>: <code>IntegerField</code>, <code>BigIntegerField</code>, <code>FloatField</code>, <code>DecimalField</code></li><li><strong>Date/Time Fields</strong>: <code>DateField</code>, <code>DateTimeField</code>, <code>TimeField</code>, <code>DurationField</code></li><li><strong>Other Types</strong>: <code>BooleanField</code>, <code>ImageField</code>, <code>BinaryField</code></li><li><strong>Relationship Fields</strong>: <code>ForeignKey</code>, <code>OneToOneField</code></li></ul><p>For detailed documentation on each field type, including parameters, examples, and best practices, see <a href="../fields/">Field Types Reference</a>.</p><h2 id="Post-Precompilation-Behavior"><a class="docs-heading-anchor" href="#Post-Precompilation-Behavior">Post-Precompilation Behavior</a><a id="Post-Precompilation-Behavior-1"></a><a class="docs-heading-anchor-permalink" href="#Post-Precompilation-Behavior" title="Permalink"></a></h2><p>When your package is precompiled (e.g., after <code>import MyPkg</code>), the <code>@import_models</code> macro ensures models are <strong>automatically re-registered</strong> via injected <code>__init__()</code> functions. This means:</p><ul><li>Models are available in package code without manual registration</li><li>Hot-reloading continues to work in interactive sessions</li><li>No additional setup is required for REPL users</li></ul><hr/><p>For more details, see the <a href="../">PormG Documentation</a> or the example scripts in the <code>test/integration/</code> folder.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../fields/">Fields »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 26 June 2026 19:49">Friday 26 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+julia&gt; M.Driver.fields  # Automatically updated with new field!</code></pre><p>This enables rapid development and testing without restarting Julia. When you modify models:</p><ul><li>Add new fields</li><li>Remove fields</li><li>Change field types</li><li>Adjust field parameters</li></ul><p>All changes are automatically reloaded and available in the next REPL command.</p><h2 id="Supported-Field-Types"><a class="docs-heading-anchor" href="#Supported-Field-Types">Supported Field Types</a><a id="Supported-Field-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Supported-Field-Types" title="Permalink"></a></h2><p>PormG provides comprehensive field types for all common database scenarios:</p><ul><li><strong>Primary Key Fields</strong>: <code>IDField</code>, <code>AutoField</code></li><li><strong>Text Fields</strong>: <code>CharField</code>, <code>TextField</code>, <code>EmailField</code></li><li><strong>Numeric Fields</strong>: <code>IntegerField</code>, <code>BigIntegerField</code>, <code>FloatField</code>, <code>DecimalField</code></li><li><strong>Date/Time Fields</strong>: <code>DateField</code>, <code>DateTimeField</code>, <code>TimeField</code>, <code>DurationField</code></li><li><strong>Other Types</strong>: <code>BooleanField</code>, <code>ImageField</code>, <code>BinaryField</code></li><li><strong>Relationship Fields</strong>: <code>ForeignKey</code>, <code>OneToOneField</code></li></ul><p>For detailed documentation on each field type, including parameters, examples, and best practices, see <a href="../fields/">Field Types Reference</a>.</p><h2 id="Post-Precompilation-Behavior"><a class="docs-heading-anchor" href="#Post-Precompilation-Behavior">Post-Precompilation Behavior</a><a id="Post-Precompilation-Behavior-1"></a><a class="docs-heading-anchor-permalink" href="#Post-Precompilation-Behavior" title="Permalink"></a></h2><p>When your package is precompiled (e.g., after <code>import MyPkg</code>), the <code>@import_models</code> macro ensures models are <strong>automatically re-registered</strong> via injected <code>__init__()</code> functions. This means:</p><ul><li>Models are available in package code without manual registration</li><li>Hot-reloading continues to work in interactive sessions</li><li>No additional setup is required for REPL users</li></ul><hr/><p>For more details, see the <a href="../">PormG Documentation</a> or the example scripts in the <code>test/integration/</code> folder.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../fields/">Fields »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Saturday 27 June 2026 19:46">Saturday 27 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

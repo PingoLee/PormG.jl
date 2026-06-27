@@ -28,12 +28,11 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 > cheap to settle now (zero published users) but become breaking/irreversible afterward.
 > **Sequence:** **Tier 1** (irreversible user-data — migration-format / tracking-table contract and
 > the frozen schema conventions) and **Tier 2** (#34 adapter decoupling → #35 export curation) are
-> both settled and merged. Remaining gating work: field-name **case preservation** (#57) and the
-> coupled **`db_column` authority** (#50), plus the infrastructure items below.
+> both settled and merged — as is field-name **case preservation** (#57) and its lowercase
+> **convention** (#58). Remaining gating work: the coupled **`db_column` authority** (#50), plus
+> the infrastructure items below.
 
-- [#57](https://github.com/PingoLee/PormG.jl/issues/57) — ⚠️ Preserve declared field-name case — support mixed-case/uppercase DB columns (coupled with #50)
-- [#58](https://github.com/PingoLee/PormG.jl/issues/58) — ⚠️ Decide field-name casing convention (lean lowercase) — align docs/examples/F1 models (paired with #57)
-- [#50](https://github.com/PingoLee/PormG.jl/issues/50) — ⚠️ Make `db_column` authoritative for generated DDL (currently inert; coupled with #57)
+- [#50](https://github.com/PingoLee/PormG.jl/issues/50) — ⚠️ Make `db_column` authoritative for generated DDL (currently inert; pairs with the merged #57 case-preservation)
 - [#36](https://github.com/PingoLee/PormG.jl/issues/36) — Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)
 - [#37](https://github.com/PingoLee/PormG.jl/issues/37) — Investigate PG pool exhaustion under remote-latency integration runs
 
@@ -41,6 +40,7 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 - [#38](https://github.com/PingoLee/PormG.jl/issues/38) — Advanced migration support (renames, targeted execution, rollback, deployment safety, data migrations, schema objects)
 - [#39](https://github.com/PingoLee/PormG.jl/issues/39) — SQLite parity with PostgreSQL features
+- [#60](https://github.com/PingoLee/PormG.jl/issues/60) — Add MySQL / MariaDB backend support (third driver via the weakdep-extension seam)
 - [#40](https://github.com/PingoLee/PormG.jl/issues/40) — Documentation expansion (F1 examples, PostgreSQL power-user guide)
 - [#41](https://github.com/PingoLee/PormG.jl/issues/41) — Performance & type stability (typed returns, fast JSON, IO allocation, benchmarking, thread-safety audit)
 
@@ -60,6 +60,7 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 ## 🔮 Future Considerations
 
 - [#46](https://github.com/PingoLee/PormG.jl/issues/46) — Parameterize LIMIT/OFFSET
+- [#59](https://github.com/PingoLee/PormG.jl/issues/59) — Model `db_table` option: pin an explicit (mixed/upper-case) table name (Django `Meta.db_table` analog; table-level sibling of #50, pairs with #57)
 
 ---
 

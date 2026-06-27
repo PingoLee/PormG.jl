@@ -5,13 +5,13 @@ import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
 
 
 Status = Models.Model(
-  statusId=Models.IDField(),
+  statusid=Models.IDField(),
   status=Models.CharField()
 )
 
 Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the names of models.
-  circuitId=Models.IDField(), # the PormG automatically do a lowercase for the name of the field, so you can use a capital letter in the name of the field, Hoewver you need to use a lowercase in the query operations.
-  circuitRef=Models.CharField(),
+  circuitid=Models.IDField(), # House style: declare field names in lowercase snake_case. PormG preserves the case you declare (so mixed-case/uppercase legacy columns are supported) and field lookups are case-sensitive — query fields in the same case you declared them.
+  circuitref=Models.CharField(),
   name=Models.CharField(),
   location=Models.CharField(),
   country=Models.CharField(),
@@ -22,10 +22,10 @@ Circuit = Models.Model( # You can create a model like a Django model for each ta
 )
 
 Race = Models.Model(
-  raceId=Models.IDField(),
+  raceid=Models.IDField(),
   year=Models.IntegerField(),
   round=Models.IntegerField(),
-  circuitId=Models.ForeignKey(Circuit, pk_field="circuitId", on_delete="CASCADE"),
+  circuitid=Models.ForeignKey(Circuit, pk_field="circuitid", on_delete="CASCADE"),
   name=Models.CharField(),
   date=Models.DateField(),
   time=Models.TimeField(null=true),
@@ -43,8 +43,8 @@ Race = Models.Model(
 )
 
 Driver = Models.Model(
-  driverId=Models.IDField(),
-  driverRef=Models.CharField(),
+  driverid=Models.IDField(),
+  driverref=Models.CharField(),
   number=Models.IntegerField(null=true),
   code=Models.CharField(),
   forename=Models.CharField(),
@@ -55,18 +55,18 @@ Driver = Models.Model(
 )
 
 Driver_standings = Models.Model(
-  driverStandingsId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete=" RESTRICT"),
+  driverstandingsid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete=" RESTRICT"),
   points = Models.FloatField(),  # F1 data has half-points (e.g. 1.5) from shared fastest-lap bonuses
   position = Models.IntegerField(),
-  positionText = Models.CharField(),
+  positiontext = Models.CharField(),
   wins = Models.IntegerField()
-) 
+)
 
 Lap_times = Models.Model(
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
   lap = Models.IntegerField(),
   position = Models.IntegerField(),
   time = Models.DurationField(),
@@ -74,8 +74,8 @@ Lap_times = Models.Model(
 )
 
 Pit_stops = Models.Model(
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
   stop = Models.IntegerField(),
   lap = Models.IntegerField(),
   time = Models.TimeField(),
@@ -84,36 +84,36 @@ Pit_stops = Models.Model(
 )
 
 Constructor = Models.Model(
-  constructorId=Models.IDField(),
-  constructorRef=Models.CharField(),
+  constructorid=Models.IDField(),
+  constructorref=Models.CharField(),
   name=Models.CharField(),
   nationality=Models.CharField(),
   url=Models.CharField()
 )
 
 Constructor_results = Models.Model(
-  constructorResultsId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  constructorresultsid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
   points = Models.DecimalField(),
   status = Models.CharField()
 )
 
 Constructor_standings = Models.Model(
-  constructorStandingsId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  constructorstandingsid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
   points = Models.DecimalField(),
   position = Models.IntegerField(),
-  positionText = Models.CharField(),
+  positiontext = Models.CharField(),
   wins = Models.IntegerField()
-) 
+)
 
 Qualifying = Models.Model(
-  qualifyingId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  qualifyingid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
   number = Models.IntegerField(null=true),
   position = Models.IntegerField(null=true),
   q1 = Models.DurationField(null=true),
@@ -122,52 +122,52 @@ Qualifying = Models.Model(
 )
 
 Sprint_results = Models.Model(
-  sprintId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  sprintid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
   number = Models.IntegerField(null=true),
   grid = Models.IntegerField(),
   position = Models.IntegerField(null=true),
-  positionText = Models.CharField(),
-  positionOrder = Models.IntegerField(),
+  positiontext = Models.CharField(),
+  positionorder = Models.IntegerField(),
   points = Models.FloatField(),
   laps = Models.IntegerField(),
   time = Models.CharField(null=true),
   milliseconds = Models.IntegerField(null=true),
-  fastestLap = Models.IntegerField(null=true),
-  fastestLapTime = Models.DurationField(null=true),
-  statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
+  fastestlap = Models.IntegerField(null=true),
+  fastestlaptime = Models.DurationField(null=true),
+  statusid = Models.ForeignKey(Status, pk_field="statusid", on_delete="CASCADE")
 )
 
 Result = Models.Model(
-  resultId=Models.IDField(),
-  raceId=Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId=Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-  constructorId=Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  resultid=Models.IDField(),
+  raceid=Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid=Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  constructorid=Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
   number=Models.IntegerField(null=true),
   grid=Models.IntegerField(),
   position=Models.IntegerField(null=true),
-  positionText=Models.CharField(),
-  positionOrder=Models.IntegerField(),
+  positiontext=Models.CharField(),
+  positionorder=Models.IntegerField(),
   points=Models.FloatField(),
   laps=Models.IntegerField(),
   time=Models.CharField(null=true),
   milliseconds=Models.IntegerField(null=true),
-  fastestLap=Models.IntegerField(null=true),
+  fastestlap=Models.IntegerField(null=true),
   rank=Models.IntegerField(null=true),
-  fastestLapTime=Models.DurationField(null=true),
-  fastestLapSpeed=Models.FloatField(null=true),
-  statusId=Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
+  fastestlaptime=Models.DurationField(null=true),
+  fastestlapspeed=Models.FloatField(null=true),
+  statusid=Models.ForeignKey(Status, pk_field="statusid", on_delete="CASCADE")
 )
 
 Just_a_test_deletion = Models.Model(
   id=Models.IDField(),
   name=Models.CharField(),
-  test_result=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
-  test_result2=Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2"),
-  test_result_set_null=Models.ForeignKey(Result, pk_field="resultId", on_delete="SET_NULL", null=true, related_name="test_deletion_set_null"),
-  test_result_set_default=Models.ForeignKey(Result, pk_field="resultId", on_delete="SET_DEFAULT", default=1, null=true, related_name="test_deletion_set_default")
+  test_result=Models.ForeignKey(Result, pk_field="resultid", on_delete="CASCADE", null=true, related_name="test_deletion"),
+  test_result2=Models.ForeignKey(Result, pk_field="resultid", on_delete="CASCADE", null=true, related_name="test_deletion2"),
+  test_result_set_null=Models.ForeignKey(Result, pk_field="resultid", on_delete="SET_NULL", null=true, related_name="test_deletion_set_null"),
+  test_result_set_default=Models.ForeignKey(Result, pk_field="resultid", on_delete="SET_DEFAULT", default=1, null=true, related_name="test_deletion_set_default")
 )
 
 Just_a_nested_roll_back = Models.Model(
@@ -241,7 +241,7 @@ M2m_sponsor_scratch = Models.Model("m2m_sponsor_scratch",
 
 M2m_driver_endorsement_scratch = Models.Model("m2m_driver_endorsement_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   sponsors = Models.ManyToManyField(M2m_sponsor_scratch, related_name="drivers")
 )
 
@@ -259,7 +259,7 @@ M2m_sponsor_with_country_scratch = Models.Model("m2m_sponsor_with_country_scratc
 
 M2m_driver_multi_hop_scratch = Models.Model("m2m_driver_multi_hop_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   sponsors = Models.ManyToManyField(M2m_sponsor_with_country_scratch, related_name="drivers")
 )
 
@@ -271,7 +271,7 @@ M2m_team_scratch = Models.Model("m2m_team_scratch",
 
 M2m_driver_explicit_scratch = Models.Model("m2m_driver_explicit_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   teams = Models.ManyToManyField(M2m_team_scratch, through="M2m_membership_scratch", related_name="drivers")
 )
 
@@ -290,7 +290,7 @@ M2m_team_plain_scratch = Models.Model("m2m_team_plain_scratch",
 
 M2m_driver_plain_scratch = Models.Model("m2m_driver_plain_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   teams = Models.ManyToManyField(M2m_team_plain_scratch, through="M2m_link_plain_scratch", related_name="drivers")
 )
 
@@ -308,8 +308,24 @@ M2m_brand_scratch = Models.Model("m2m_brand_scratch",
 
 M2m_driver_default_reverse_scratch = Models.Model("m2m_driver_default_reverse_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   partners = Models.ManyToManyField(M2m_brand_scratch),
+)
+
+# Case-preservation (#57) fixtures — DELIBERATELY mixed-case COLUMNS (driverRef,
+# foreName, parentRef, lapTime) to prove PormG creates and queries genuinely
+# mixed-case columns on a live DB. These are capability fixtures, NOT the house
+# style: declare lowercase snake_case in real models. Table names stay lowercase.
+Case_preserve_parent_scratch = Models.Model("case_preserve_parent_scratch",
+  id = Models.IDField(),
+  driverRef = Models.CharField(unique=true),
+  foreName = Models.CharField(null=true),
+)
+
+Case_preserve_child_scratch = Models.Model("case_preserve_child_scratch",
+  id = Models.IDField(),
+  parentRef = Models.ForeignKey(Case_preserve_parent_scratch, pk_field="id", on_delete="CASCADE", related_name="children"),
+  lapTime = Models.IntegerField(null=true),
 )
 
 end

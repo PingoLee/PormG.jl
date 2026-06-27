@@ -36,13 +36,13 @@ import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
 
 
 Status = Models.Model(
-  statusId = Models.IDField(),
+  statusid = Models.IDField(),
   status = Models.CharField()
 )
 
 Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the names of models.
-  circuitId = Models.IDField(), # PormG automatically lowercases the name of the field, so you can use a capital letter in the name of the field. However, you must use lowercase in query operations.
-  circuitRef = Models.CharField(),
+  circuitid = Models.IDField(), # House style: declare field names in lowercase snake_case. PormG preserves the case you declare (so mixed-case/uppercase legacy columns are supported) and field lookups are case-sensitive — query fields in the same case you declared them.
+  circuitref = Models.CharField(),
   name = Models.CharField(),
   location = Models.CharField(),
   country = Models.CharField(),
@@ -53,10 +53,10 @@ Circuit = Models.Model( # You can create a model like a Django model for each ta
 )
 
 Race = Models.Model(
-  raceId = Models.IDField(),
+  raceid = Models.IDField(),
   year = Models.IntegerField(),
   round = Models.IntegerField(),
-  circuitId = Models.ForeignKey(Circuit, pk_field="circuitId", on_delete="CASCADE"),
+  circuitid = Models.ForeignKey(Circuit, pk_field="circuitid", on_delete="CASCADE"),
   name = Models.CharField(),
   date = Models.DateField(),
   time = Models.TimeField(null=true),
@@ -74,8 +74,8 @@ Race = Models.Model(
 )
 
 Driver = Models.Model(
-  driverId = Models.IDField(),
-  driverRef = Models.CharField(),
+  driverid = Models.IDField(),
+  driverref = Models.CharField(),
   number = Models.IntegerField(null=true),
   code = Models.CharField(),
   forename = Models.CharField(),
@@ -86,39 +86,39 @@ Driver = Models.Model(
 )
 
 Constructor = Models.Model(
-  constructorId = Models.IDField(),
-  constructorRef = Models.CharField(),
+  constructorid = Models.IDField(),
+  constructorref = Models.CharField(),
   name = Models.CharField(),
   nationality = Models.CharField(),
   url = Models.CharField()
 )
 
 Result = Models.Model(
-  resultId = Models.IDField(),
-  raceId = Models.ForeignKey(Race, pk_field="raceId", on_delete="CASCADE"),
-  driverId = Models.ForeignKey(Driver, pk_field="driverId", on_delete="RESTRICT"),
-  constructorId = Models.ForeignKey(Constructor, pk_field="constructorId", on_delete="RESTRICT"),
+  resultid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="RESTRICT"),
   number = Models.IntegerField(null=true),
   grid = Models.IntegerField(),
   position = Models.IntegerField(null=true),
-  positionText = Models.CharField(),
-  positionOrder = Models.IntegerField(),
+  positiontext = Models.CharField(),
+  positionorder = Models.IntegerField(),
   points = Models.FloatField(),
   laps = Models.IntegerField(),
   time = Models.CharField(null=true),
   milliseconds = Models.IntegerField(null=true),
-  fastestLap = Models.IntegerField(null=true),
+  fastestlap = Models.IntegerField(null=true),
   rank = Models.IntegerField(null=true),
-  fastestLapTime = Models.DurationField(null=true),
-  fastestLapSpeed = Models.FloatField(null=true),
-  statusId = Models.ForeignKey(Status, pk_field="statusId", on_delete="CASCADE")
+  fastestlaptime = Models.DurationField(null=true),
+  fastestlapspeed = Models.FloatField(null=true),
+  statusid = Models.ForeignKey(Status, pk_field="statusid", on_delete="CASCADE")
 )
 
 Just_a_test_deletion = Models.Model(
   id = Models.IDField(),
   name = Models.CharField(),
-  test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
-  test_result2 = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion2")
+  test_result = Models.ForeignKey(Result, pk_field="resultid", on_delete="CASCADE", null=true, related_name="test_deletion"),
+  test_result2 = Models.ForeignKey(Result, pk_field="resultid", on_delete="CASCADE", null=true, related_name="test_deletion2")
 )
 
 end
@@ -193,7 +193,7 @@ PormG.@models_module my_models "db" begin
     import PormG.Models as M
 
     Driver = M.Model("drivers",
-        driverId = M.IDField(),
+        driverid = M.IDField(),
         forename = M.CharField()
     )
 end

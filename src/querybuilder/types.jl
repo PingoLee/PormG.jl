@@ -694,7 +694,8 @@ mutable struct PormGRow
 end
 PormGRow(data::Dict{Symbol,<:Any}, model::PormGModel) = PormGRow(Dict{Symbol,Any}(data), model, Set{Symbol}())
 
-"""Normalize row-facing symbols to the lowercase storage keys used internally."""
+"""Normalize row-facing symbols to the declared-case storage keys used internally
+(strips a leading underscore per `format_fild_name`; case is preserved, #57)."""
 function _normalize_row_symbol(sym::Symbol)::Symbol
   parts = split(String(sym), "__")
   any(isempty, parts) && throw(ArgumentError("Invalid projected row field '$sym'. Empty '__' path segment."))

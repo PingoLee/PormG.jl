@@ -116,7 +116,7 @@ In the final pass, review `docs`, `ext`, `.github`, `.cursor`, `db`, and any rem
 - workflow or CI changes that hide failures or leak secrets
 - generated files that drift from source-of-truth files
 - configuration changes that alter runtime or migration behavior without matching tests
-- **changed query examples in `docs/`, `README.MD`, or `src/*.md`** that were not verified against the live `db_sl` data — confirm the SQL shape, execute the example, and cross-check the value per the verification recipe in [`../pormg-public-api-development/SKILL.md`](../pormg-public-api-development/SKILL.md) ("Verifying doc examples against the live database"). Flag camelCase join paths (`driverId__surname`) — query paths must be lowercase or they throw at build time.
+- **changed query examples in `docs/`, `README.MD`, or `src/*.md`** that were not verified against the live `db_sl` data — confirm the SQL shape, execute the example, and cross-check the value per the verification recipe in [`../pormg-public-api-development/SKILL.md`](../pormg-public-api-development/SKILL.md) ("Verifying doc examples against the live database"). Flag query paths whose case doesn't match the declared field — lookups are case-sensitive (#57). The F1 models declare lowercase fields, so `driverId__surname` throws (the field is `driverid`); the path must match the declared case.
 
 ## Review Method
 

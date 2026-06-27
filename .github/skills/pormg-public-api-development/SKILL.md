@@ -151,7 +151,7 @@ raw = (M.Result.objects.filter("constructorid" => 131).values("points") |> DataF
 Rules and gotchas:
 
 - **Verify the value, not just execution.** For aggregates/computed columns, recompute the answer independently (raw row scan, plain `Sum`, etc.) and assert equality — a query that runs can still be wrong.
-- **Query field paths must be lowercase** (`constructorid__name`), even though models declare camelCase fields. CamelCase join paths throw at build time.
+- **Query a field by the exact case it was declared** — field lookups are case-sensitive (#57). The F1 models declare **lowercase** fields, so their paths are lowercase (`constructorid__name`); a camelCase path like `constructorId__name` throws *because the field is `constructorid`*, not because PormG folds case. (House style is lowercase snake_case; mixed-case is supported for legacy columns.)
 - **`@import_models` resolves its path relative to the script file's directory** — keep the script in `test/integration/` or pass an absolute path.
 - **Dialect placeholders differ:** db_sl (SQLite) renders `?`, db_2 (PostgreSQL) renders `$1`. Doc SQL blocks conventionally show the PostgreSQL form; note the SQLite difference when it matters.
 - `inspect_query(q)[:sql_text]` (or `show_query=:sql`) renders before any DB round-trip, so the SQL-shape check works even without a live connection.

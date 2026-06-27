@@ -195,11 +195,13 @@ const DIRECT_DELETE_KEY_SENTINEL = "__pormg_direct_delete__"
 function resolve_delete_key(model::PormGModel; fallback::Union{Nothing,String}=nothing, allow_direct::Bool=false)
   pk_field = get_model_pk_field(model)
   if pk_field !== nothing
-    return string(pk_field) |> lowercase
+    # Preserve the declared case (#57): field_names and column names are case-sensitive,
+    # so the delete key must match the field's declared case verbatim.
+    return string(pk_field)
   end
 
   if fallback !== nothing
-    fallback = lowercase(fallback)
+    # Match the user-supplied fallback verbatim — field lookup is case-sensitive (#57).
     fallback in model.field_names || throw(ArgumentError("The fallback delete field $(fallback) was not found in $(model.name)"))
     return fallback
   end

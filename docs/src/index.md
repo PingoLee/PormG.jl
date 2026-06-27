@@ -118,7 +118,7 @@ dev:
 Create `db/models.jl` with your model definitions. 
 
 > [!NOTE]
-> PormG automatically formats field names to lowercase internally under the hood. While you can define fields with capital letters (e.g. `driverId`), they are stored lowercase (`driverid`) and **must** be queried in lowercase in all filter, values, and order_by operations. To avoid confusion, define your fields in lowercase snake_case directly.
+> PormG **preserves the case** you declare field names with: `driverId` stays `driverId` (column `"driverId"`), and field lookups are **case-sensitive** — query a field by the exact case you declared it. The recommended house style is **lowercase snake_case** (PormG's own models use it), so define new fields that way; reserve mixed-case declarations for faithfully mapping existing mixed-case/uppercase columns you don't control.
 
 ```julia
 module models
@@ -213,7 +213,8 @@ using PormG.Functions: Count
 # Simple filter and list
 drivers = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname").list()
 
-# Chainable methods with DataFrame output (always use lowercase field names in queries!)
+# Chainable methods with DataFrame output (query fields in the case they were declared;
+# the F1 models use lowercase, so the paths below are lowercase)
 df = M.Result.objects.filter(
         "driverid__nationality" => "Brazilian",
         "positionorder"         => 1

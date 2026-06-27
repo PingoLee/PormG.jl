@@ -39,6 +39,7 @@ end
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
     @testset "Reserved-word / Underscore Field Names" include("unit/test_reserved_word_fields.jl")
+    @testset "Field-name Case Preservation (#57)" include("unit/test_field_name_case.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")

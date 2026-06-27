@@ -5,8 +5,13 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 ## Naming Conventions and Considerations
 
 ### Field Naming Rules
-- **Use lowercase for all field names**: `username`, `email`, `created_at`
-- **Use snake_case for multi-word fields**: `first_name`, `last_name`, `birth_date`
+- **Recommended house style: lowercase snake_case** — `username`, `email`, `created_at`, `first_name`.
+  PormG's own models and examples follow this, and it is the convention to prefer for new schemas.
+- **Field-name case is preserved, not folded.** Whatever case you declare is the field's identity
+  *and* its database column. A field declared `driverId` registers as `driverId` and maps to the
+  column `"driverId"`. This is what lets PormG faithfully target mixed-case / uppercase columns in
+  existing (e.g. legacy Django) schemas. Field lookups are **case-sensitive** — query a field by the
+  exact case you declared it.
 - **Never use double underscores (`__`)** in field names or table names (reserved for internal use)
 - **Prefix reserved Julia keywords with underscore**: `_id`, `_type`, `_end`, `_function`
 
@@ -16,9 +21,12 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 - **Be descriptive and clear**: `User_profile`, `Product_category`, `Order_history`
 
 ### Database Column Mapping
-- **Field names automatically become lowercase** in the database
-- **PormG handles the conversion**: `firstName` → `firstname` in database
-- **Column names follow the field name** (lowercased, otherwise verbatim); the schema generator does not currently rename columns via `db_column` — see [Schema Conventions](schema_conventions.md)
+- **Column names follow the field name verbatim, with case preserved**: a field declared `firstName`
+  becomes the column `"firstName"`; declare `first_name` to get `first_name`.
+- **The house style is lowercase snake_case** — prefer it for new schemas; reserve mixed-case
+  declarations for faithfully mapping existing columns you don't control.
+- The schema generator does not currently rename columns via `db_column` — see
+  [Schema Conventions](schema_conventions.md).
 
 ### Examples of Good Naming
 

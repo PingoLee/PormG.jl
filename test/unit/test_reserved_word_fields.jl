@@ -4,8 +4,8 @@ Unit coverage for reserved-word / leading-underscore field names.
 PormG lets a model expose a SQL column whose name collides with a Julia reserved word
 (e.g. `end`, `function`) — or simply with `id` — by declaring the field with a single
 leading underscore (`_end`, `_function`, `_id`). `format_fild_name` strips that one
-leading underscore (then lowercases), so the field is referenced everywhere — model
-definition, `filter`, `values` — by its *stripped* name; the underscored form never
+leading underscore (case is preserved — see #57), so the field is referenced everywhere —
+model definition, `filter`, `values` — by its *stripped* name; the underscored form never
 reaches SQL.
 
 Downstream consumers depend on this contract: LinkSUS declares `_id` on every model and
@@ -43,7 +43,7 @@ PormG.config["default"] = PormG.Configuration.Settings(
 @testset "Reserved-word / underscore field names" begin
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # format_fild_name: normalization — strips ONE leading underscore then lowercases.
+  # format_fild_name: normalization — strips ONE leading underscore, PRESERVES case.
   # `_id`/`_end`/`_function` resolve to the bare SQL identifiers `id`/`end`/`function`.
   # This is the single function every column name and query key flows through.
   # ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +55,9 @@ PormG.config["default"] = PormG.Configuration.Settings(
     # Already-bare names pass through unchanged (idempotent on a stripped name).
     @test format_fild_name("nome")      == "nome"
     @test format_fild_name("id")        == "id"
+    # Case is PRESERVED, not folded (#57): declare `driverId`, keep `driverId`.
+    @test format_fild_name("driverId")  == "driverId"
+    @test format_fild_name("_DriverId") == "DriverId"
     # Only ONE leading underscore is stripped; a residual leading `_` is rejected so a
     # double leading underscore can never be mistaken for a stripped name.
     @test_throws ArgumentError format_fild_name("__id")

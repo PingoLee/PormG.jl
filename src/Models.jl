@@ -406,6 +406,54 @@ function format_model_name(name::PormGModel)::String
   return name.name |> format_model_name
 end
 
+# Physical SQL column for a field given its declared identity `name` (#50). Returns
+# `db_column` when the field carries a non-empty one, else the field name. The
+# default (column == field name) keeps every existing schema unchanged; only fields
+# that explicitly set `db_column` map to a differently-named column. `hasproperty`
+# keeps this safe for any field type — including synthetic/introspected fields that
+# do not carry a `db_column` member.
+function field_db_column(field::PormGField, name::AbstractString)::String
+  if hasproperty(field, :db_column)
+    dbc = getproperty(field, :db_column)
+    dbc isa AbstractString && !isempty(dbc) && return String(dbc)
+  end
+  return String(name)
+end
+field_db_column(field::PormGField, name::Symbol)::String = field_db_column(field, String(name))
+
+# Referenced (parent) physical column for a ForeignKey (#50). `pk_field` names a
+# field on the target model; resolve it to that field's `db_column` when the target
+# model is in scope (the normal query/migration path, where `to` is a resolved
+# PormGModel). The verbatim fallback is CORRECT for introspected models: their `to`
+# is a String and their `pk_field` is already the physical column, with no
+# `db_column` on the reconstructed field.
+function fk_target_column(field::PormGField)::String
+  pk = field.pk_field === nothing ? "id" : String(field.pk_field)
+  tgt = field.to
+  (tgt isa PormGModel && haskey(tgt.fields, pk)) && return field_db_column(tgt.fields[pk], pk)
+  return pk
+end
+
+# Resolve a field-name string to its physical column within `model` (db_column when
+# the named field carries one), verbatim when the name is not a field of `model`. For
+# call sites that hold only a model + a field-name string — e.g. reverse-relation join
+# keys assembled from `related_objects` tuples (#50). A strict no-op without db_column.
+function model_column(model::PormGModel, name::AbstractString)::String
+  haskey(model.fields, name) ? field_db_column(model.fields[name], name) : String(name)
+end
+
+# True when any field of `model` declares a non-empty db_column (#50). Lets write paths
+# skip the physical-column → field-name result remap on the common path (no db_column).
+function model_has_db_column(model::PormGModel)::Bool
+  for (_, f) in model.fields
+    if hasproperty(f, :db_column)
+      dbc = getproperty(f, :db_column)
+      dbc isa AbstractString && !isempty(dbc) && return true
+    end
+  end
+  return false
+end
+
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
@@ -985,9 +1033,11 @@ function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField
   old_to = old_field.to isa PormGModel ? old_field.to.name : old_field.to
   normalized_new_to = isnothing(new_to) ? nothing : format_model_name(string(new_to))
   normalized_old_to = isnothing(old_to) ? nothing : format_model_name(string(old_to))
-  normalized_new_pk = isnothing(new_field.pk_field) ? nothing : format_fild_name(string(new_field.pk_field))
-  normalized_old_pk = isnothing(old_field.pk_field) ? nothing : format_fild_name(string(old_field.pk_field))
-  if normalized_new_to == normalized_old_to && normalized_new_pk == normalized_old_pk
+  # Compare the referenced column by its RESOLVED physical name (fk_target_column), so a
+  # field-name pk_field on the code side matches the introspected physical column when the
+  # parent's pk field is renamed via db_column (#50). With no db_column this equals the
+  # field name, so behavior is unchanged for existing schemas.
+  if normalized_new_to == normalized_old_to && fk_target_column(new_field) == fk_target_column(old_field)
     return true
   end
   return false

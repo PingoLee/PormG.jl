@@ -7,6 +7,7 @@ struct sIDField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
@@ -76,7 +77,7 @@ Order = Models.Model(
 function IDField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :default, :editable, :generated, :generated_always
+      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :generated, :generated_always
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -92,6 +93,7 @@ function IDField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, true)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   generated = get(kwargs, :generated, true)
@@ -106,6 +108,7 @@ function IDField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(generated isa Bool) && throw(ArgumentError("The 'generated' must be a Boolean"))
   !(generated_always isa Bool) && throw(ArgumentError("The 'generated_always' must be a Boolean"))
@@ -113,7 +116,7 @@ function IDField(; kwargs...)
   default = validate_default(default, Union{Int64, Nothing}, "IDField", format2int64)
   # Return the field instance
   return sIDField(
-    verbose_name, primary_key, auto_increment, unique, blank, null, db_index, default, editable, "BIGINT", format_number_sql, generated, generated_always
+    verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, default, editable, "BIGINT", format_number_sql, generated, generated_always
   )
 end
 
@@ -124,6 +127,7 @@ mutable struct sForeignKey <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   to::Union{String, PormGModel, Nothing}
@@ -168,6 +172,7 @@ The `ForeignKey` field represents a relationship where many records in the curre
 - `how::Union{String, Nothing} = nothing`: Join type for queries ("INNER JOIN", "LEFT JOIN", etc.)
 - `related_name::Union{String, Nothing} = nothing`: Name for the reverse relation
 - `db_constraint::Bool = true`: Whether to create a database foreign key constraint
+- `db_column::Union{String, Nothing} = nothing`: Map the local FK column to a differently-named physical column (#50). The *referenced* parent column follows `pk_field` (resolved through the parent field's own `db_column` when the target is a resolved model). Defaults to the field name
 
 # Database Mapping
 - **PostgreSQL Type**: BIGINT with foreign key constraint
@@ -245,7 +250,7 @@ Message = Models.Model(
 function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
+      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -260,6 +265,7 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, true)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   pk_field = get(kwargs, :pk_field, nothing)
@@ -283,6 +289,7 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
   !(initially_deferred isa Bool) && throw(ArgumentError("The 'initially_deferred' must be a Boolean"))
@@ -310,6 +317,7 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     to,
@@ -435,6 +443,7 @@ mutable struct sOneToOneField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   to::Union{String, PormGModel, Nothing}
@@ -479,6 +488,7 @@ The `OneToOneField` represents a strict one-to-one relationship where each recor
 - `how::Union{String, Nothing} = nothing`: Join type for queries ("INNER JOIN", "LEFT JOIN", etc.)
 - `related_name::Union{String, Nothing} = nothing`: Name for the reverse relation
 - `db_constraint::Bool = true`: Whether to create a database foreign key constraint
+- `db_column::Union{String, Nothing} = nothing`: Map the local column to a differently-named physical column (#50); defaults to the field name
 
 # Database Mapping
 - **PostgreSQL Type**: BIGINT with unique foreign key constraint
@@ -577,7 +587,7 @@ However, OneToOneField is more explicit about the intended relationship type and
 function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
+      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -592,6 +602,7 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, true)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   pk_field = get(kwargs, :pk_field, nothing)
@@ -615,6 +626,7 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
   !(initially_deferred isa Bool) && throw(ArgumentError("The 'initially_deferred' must be a Boolean"))
@@ -634,6 +646,9 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
 
   # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint
+  # Normalize pk_field (strip one leading underscore for reserved-word escaping), matching
+  # ForeignKey — so a referenced parent field resolves to its stored (stripped) key (#50).
+  pk_field = format_fild_name(pk_field)
 
   return sOneToOneField(
     unique,
@@ -642,6 +657,7 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     to,
@@ -666,6 +682,7 @@ mutable struct sAutoField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
@@ -725,7 +742,7 @@ The `AutoField` is designed for auto-incrementing integer primary keys and autom
 function AutoField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -741,6 +758,7 @@ function AutoField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -753,12 +771,13 @@ function AutoField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
   # Return the field instance
 
-  return sAutoField(verbose_name, primary_key, auto_increment, unique, blank, null, db_index, default, editable, "INTEGER", format_number_sql)
+  return sAutoField(verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, default, editable, "INTEGER", format_number_sql)
 end
 
 mutable struct sCharField <: PormGField
@@ -831,7 +850,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 - `blank::Bool = false`: Whether the field can be left blank in forms
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
-- `db_column::Union{String, Nothing} = nothing`: Accepted but not currently honored by schema generation; the generated column is the field name
+- `db_column::Union{String, Nothing} = nothing`: Map this field to a differently-named physical column (Django `db_column`). Authoritative across DDL, queries, and migrations (#50); defaults to the field name
 - `default::Union{String, Nothing} = nothing`: Default value for the field
 - `choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} = nothing`: Restricted set of valid values
 - `editable::Bool = true`: Whether the field should be editable in forms
@@ -1032,6 +1051,7 @@ mutable struct sIntegerField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
@@ -1102,7 +1122,7 @@ Review = Models.Model(
 function IntegerField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1116,12 +1136,13 @@ function IntegerField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
-  
+
   # Validate default using validate_default
   default = validate_default(default, Union{Int64, Nothing}, "IntegerField", format2int64)
   
@@ -1130,8 +1151,9 @@ function IntegerField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Booleadn"))
   !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
-  
+
   return sIntegerField(
     verbose_name,
     false, # primary_key
@@ -1139,6 +1161,7 @@ function IntegerField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "INTEGER",
@@ -1153,6 +1176,7 @@ mutable struct sPositiveSmallIntegerField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
@@ -1204,7 +1228,7 @@ Standing = Models.Model(
 function PositiveSmallIntegerField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1218,6 +1242,7 @@ function PositiveSmallIntegerField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -1235,6 +1260,7 @@ function PositiveSmallIntegerField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
 
   return sPositiveSmallIntegerField(
@@ -1244,6 +1270,7 @@ function PositiveSmallIntegerField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "SMALLINT",
@@ -1258,6 +1285,7 @@ mutable struct sPositiveIntegerField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
@@ -1309,7 +1337,7 @@ Lap_times = Models.Model(
 function PositiveIntegerField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1323,6 +1351,7 @@ function PositiveIntegerField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -1340,6 +1369,7 @@ function PositiveIntegerField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
 
   return sPositiveIntegerField(
@@ -1349,6 +1379,7 @@ function PositiveIntegerField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "INTEGER UNSIGNED",
@@ -1363,6 +1394,7 @@ mutable struct sBigIntegerField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
@@ -1442,7 +1474,7 @@ SocialMedia = Models.Model(
 function BigIntegerField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1456,12 +1488,13 @@ function BigIntegerField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
-  
+
   # Validate default using validate_default
   default = validate_default(default, Union{Int64, Nothing}, "BigIntegerField", format2int64)
   
@@ -1470,8 +1503,9 @@ function BigIntegerField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
-  
+
   return sBigIntegerField(
     verbose_name,
     false, # primary_key
@@ -1479,6 +1513,7 @@ function BigIntegerField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "BIGINT",
@@ -1493,6 +1528,7 @@ mutable struct sBooleanField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Bool, Nothing}
   editable::Bool
   type::String
@@ -1539,7 +1575,7 @@ The field handles various input formats:
 function BooleanField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1553,6 +1589,7 @@ function BooleanField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -1565,6 +1602,7 @@ function BooleanField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBooleanField(
@@ -1574,6 +1612,7 @@ function BooleanField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "BOOLEAN",
@@ -1588,6 +1627,7 @@ mutable struct sDateField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Date, Nothing}
   editable::Bool
   auto_now::Bool
@@ -1677,7 +1717,7 @@ The field accepts various input formats:
 function DateField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :auto_now, :auto_now_add
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :auto_now, :auto_now_add
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1691,10 +1731,11 @@ function DateField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   auto_now = get(kwargs, :auto_now, false)
-  auto_now_add = get(kwargs, :auto_now_add, false)  
+  auto_now_add = get(kwargs, :auto_now_add, false)
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
@@ -1705,6 +1746,7 @@ function DateField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
@@ -1716,6 +1758,7 @@ function DateField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     auto_now,
@@ -1732,6 +1775,7 @@ mutable struct sDateTimeField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{ZonedDateTime, DateTime, Nothing}
   editable::Bool
   auto_now::Bool
@@ -1784,7 +1828,7 @@ deadline = DateTimeField(null=true, blank=true)```
 function DateTimeField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :auto_now, :auto_now_add, :type
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :auto_now, :auto_now_add, :type
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1798,6 +1842,7 @@ function DateTimeField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   auto_now = get(kwargs, :auto_now, false)
@@ -1834,6 +1879,7 @@ function DateTimeField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
   !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
@@ -1849,6 +1895,7 @@ function DateTimeField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     auto_now,
@@ -1865,6 +1912,7 @@ mutable struct sDecimalField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Float64, Nothing}
   editable::Bool
   max_digits::Int
@@ -1920,7 +1968,7 @@ discount = DecimalField(
 function DecimalField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :max_digits, :decimal_places, :primary_key
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :max_digits, :decimal_places, :primary_key
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -1934,6 +1982,7 @@ function DecimalField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   max_digits = get(kwargs, :max_digits, 10)
@@ -1963,8 +2012,9 @@ function DecimalField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
-  
+
   return sDecimalField(
     verbose_name,
     false, # primary_key
@@ -1972,6 +2022,7 @@ function DecimalField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     max_digits,
@@ -1988,6 +2039,7 @@ mutable struct sEmailField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2032,7 +2084,7 @@ primary_email = EmailField(
 function EmailField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2046,6 +2098,7 @@ function EmailField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -2058,6 +2111,7 @@ function EmailField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sEmailField(
@@ -2067,6 +2121,7 @@ function EmailField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "VARCHAR",
@@ -2087,6 +2142,7 @@ mutable struct sPasswordField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2200,7 +2256,7 @@ Users can continue to log in without any password reset.
 function PasswordField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :blank, :null, :editable, :max_length, :auto_hash
+      :verbose_name, :blank, :null, :editable, :max_length, :auto_hash, :db_column
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2215,6 +2271,7 @@ function PasswordField(; kwargs...)
   editable = get(kwargs, :editable, true)
   max_length = get(kwargs, :max_length, 128)
   auto_hash = get(kwargs, :auto_hash, true)
+  db_column = get(kwargs, :db_column, nothing)
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
@@ -2225,6 +2282,7 @@ function PasswordField(; kwargs...)
   !(max_length isa Int) && throw(ArgumentError("The 'max_length' must be an Integer"))
   max_length < 64 && throw(ArgumentError("The 'max_length' must be at least 64 to store password hashes"))
   !(auto_hash isa Bool) && throw(ArgumentError("The 'auto_hash' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   
   # Return the field instance
   return sPasswordField(
@@ -2234,13 +2292,14 @@ function PasswordField(; kwargs...)
     blank,
     null,
     false, # db_index - never index passwords
+    db_column,
     nothing, # default - no default password
     editable,
     "VARCHAR",
     format_text_sql,
     max_length,
     auto_hash
-  )  
+  )
 end
 
 mutable struct sFloatField <: PormGField
@@ -2250,6 +2309,7 @@ mutable struct sFloatField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Float64, String, Int64, Nothing}
   editable::Bool
   type::String
@@ -2285,7 +2345,7 @@ weight = FloatField(null=true)
 function FloatField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :primary_key
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :primary_key
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2299,6 +2359,7 @@ function FloatField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   primary_key = get(kwargs, :primary_key, false)
@@ -2319,8 +2380,9 @@ function FloatField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
-  
+
   return sFloatField(
     verbose_name,
     false, # primary_key
@@ -2328,6 +2390,7 @@ function FloatField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "FLOAT",
@@ -2342,6 +2405,7 @@ mutable struct sImageField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2386,7 +2450,7 @@ banner = ImageField(
 function ImageField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2400,6 +2464,7 @@ function ImageField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -2412,6 +2477,7 @@ function ImageField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sImageField(
@@ -2421,6 +2487,7 @@ function ImageField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "BLOB",
@@ -2436,7 +2503,7 @@ Accepted kwargs: `verbose_name`, `unique`, `blank`, `null`, `db_index`, `default
 """
 function FileField(; kwargs...)
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable,
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable,
       :upload_to, :max_length
   ])
   for (k, v) in kwargs
@@ -2449,6 +2516,7 @@ function FileField(; kwargs...)
   blank        = get(kwargs, :blank, false)
   null         = get(kwargs, :null, false)
   db_index     = get(kwargs, :db_index, false)
+  db_column    = get(kwargs, :db_column, nothing)
   default      = get(kwargs, :default, nothing)
   editable     = get(kwargs, :editable, true)
 
@@ -2458,6 +2526,7 @@ function FileField(; kwargs...)
   !(blank    isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null     isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
 
   return sImageField(
@@ -2467,6 +2536,7 @@ function FileField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "BLOB",
@@ -2481,6 +2551,7 @@ mutable struct sTextField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2525,7 +2596,7 @@ template = TextField(
 ```
 """
 function TextField(; kwargs...)
-  accepted = Set([:verbose_name, :unique, :blank, :null, :db_index, :default, :editable])
+  accepted = Set([:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable])
   for (k, v) in kwargs
       if !(k in accepted)
           @warn "Unexpected parameter for TextField. It will be ignored." field="TextField" param=k value=v
@@ -2536,6 +2607,7 @@ function TextField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -2548,6 +2620,7 @@ function TextField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTextField(
@@ -2557,6 +2630,7 @@ function TextField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "TEXT",
@@ -2571,6 +2645,7 @@ mutable struct sTimeField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{Time, Nothing}
   editable::Bool
   type::String
@@ -2580,7 +2655,7 @@ end
 function TimeField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2594,6 +2669,7 @@ function TimeField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -2606,6 +2682,7 @@ function TimeField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTimeField(
@@ -2615,6 +2692,7 @@ function TimeField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "TIME",
@@ -2629,6 +2707,7 @@ mutable struct sBinaryField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2639,7 +2718,7 @@ end
 function BinaryField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable, :max_length
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :max_length
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2653,6 +2732,7 @@ function BinaryField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
   max_length = get(kwargs, :max_length, nothing)
@@ -2678,6 +2758,7 @@ function BinaryField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBinaryField(
@@ -2687,6 +2768,7 @@ function BinaryField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "BLOB",
@@ -2702,6 +2784,7 @@ mutable struct sDurationField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2711,7 +2794,7 @@ end
 function DurationField(; kwargs...)
   # List of accepted parameters
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   # Check for unexpected parameters
   for (k, v) in kwargs
@@ -2725,6 +2808,7 @@ function DurationField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, false)
 
@@ -2737,6 +2821,7 @@ function DurationField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   # Return the field instance
   return sDurationField(
@@ -2746,6 +2831,7 @@ function DurationField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "INTERVAL",
@@ -2764,6 +2850,7 @@ mutable struct sUUIDField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2807,7 +2894,7 @@ Session = Models.Model(
 """
 function UUIDField(; kwargs...)
   accepted = Set([
-      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :default, :editable, :auto_add
+      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :auto_add
   ])
   for (k, v) in kwargs
       if !(k in accepted)
@@ -2820,6 +2907,7 @@ function UUIDField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
   auto_add = get(kwargs, :auto_add, false)
@@ -2830,6 +2918,7 @@ function UUIDField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
   !(auto_add isa Bool) && throw(ArgumentError("The 'auto_add' must be a Boolean"))
 
@@ -2848,6 +2937,7 @@ function UUIDField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "UUID",
@@ -2868,6 +2958,7 @@ mutable struct sURLField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -2907,7 +2998,7 @@ Circuit = Models.Model(
 """
 function URLField(; kwargs...)
   accepted = Set([
-      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   for (k, v) in kwargs
       if !(k in accepted)
@@ -2920,6 +3011,7 @@ function URLField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
 
@@ -2931,6 +3023,7 @@ function URLField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
 
   default = validate_default(default, Union{String, Nothing}, "URLField", x -> string(x))
@@ -2943,6 +3036,7 @@ function URLField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "VARCHAR",
@@ -2962,6 +3056,7 @@ mutable struct sSlugField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -3002,7 +3097,7 @@ Race = Models.Model(
 """
 function SlugField(; kwargs...)
   accepted = Set([
-      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   for (k, v) in kwargs
       if !(k in accepted)
@@ -3015,6 +3110,7 @@ function SlugField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, true)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
 
@@ -3027,6 +3123,7 @@ function SlugField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
 
   default = validate_default(default, Union{String, Nothing}, "SlugField", x -> string(x))
@@ -3039,6 +3136,7 @@ function SlugField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "VARCHAR",
@@ -3057,6 +3155,7 @@ mutable struct sJSONField <: PormGField
   blank::Bool
   null::Bool
   db_index::Bool
+  db_column::Union{String, Nothing}
   default::Union{String, Nothing}
   editable::Bool
   type::String
@@ -3101,7 +3200,7 @@ Race = Models.Model(
 """
 function JSONField(; kwargs...)
   accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :default, :editable
+      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
   ])
   for (k, v) in kwargs
       if !(k in accepted)
@@ -3113,6 +3212,7 @@ function JSONField(; kwargs...)
   blank = get(kwargs, :blank, false)
   null = get(kwargs, :null, false)
   db_index = get(kwargs, :db_index, false)
+  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
 
@@ -3121,6 +3221,7 @@ function JSONField(; kwargs...)
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
   !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
   !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
   !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
 
   # Validate JSON format for string defaults (validate_default won't invoke the
@@ -3138,6 +3239,7 @@ function JSONField(; kwargs...)
     blank,
     null,
     db_index,
+    db_column,
     default,
     editable,
     "JSONB",

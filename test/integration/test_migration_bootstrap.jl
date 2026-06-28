@@ -968,6 +968,105 @@ end
     @test !isfile(pending)
   end
 
+  # ── Phase 15: db_column drives the physical column + no churn (#50) ─
+  # A field's db_column drives the PHYSICAL column name; the field name never
+  # becomes a column. Proves create_table + ADD COLUMN target the db_column, and
+  # that re-running makemigrations detects no churn (introspection reads the
+  # db_column physical name and the diff is keyed by column, not field name).
+  @testset "Phase 15: db_column Columns + No Churn (#50)" begin
+    write_edge_models("""
+    DbColTable = Models.Model(
+        id = Models.IDField(),
+        sku = Models.CharField(db_column="product_sku"),
+        name = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # (a) The physical column carries the db_column name; the field name is NOT a column.
+    cols = column_names(pool, "dbcoltable")
+    @test "product_sku" in cols
+    @test !("sku" in cols)
+    @test "name" in cols
+
+    # (b) No churn: re-running with the SAME models writes no pending plan.
+    pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+
+    # (c) ADD path: a new db_column field → ADD COLUMN targets the db_column name.
+    write_edge_models("""
+    DbColTable = Models.Model(
+        id = Models.IDField(),
+        sku = Models.CharField(db_column="product_sku"),
+        name = Models.CharField(null=true),
+        qty = Models.IntegerField(db_column="quantity_col", null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    result = Migrations.dry_run(pool, edge_settings)
+    @test any(s -> occursin("quantity_col", lowercase(s)), result.statements)   # ADD COLUMN → db_column
+    @test !any(s -> occursin("add column \"qty\"", lowercase(s)), result.statements)  # not the field name
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    cols2 = column_names(pool, "dbcoltable")
+    @test "quantity_col" in cols2
+    @test !("qty" in cols2)
+
+    # (d) No churn after the ADD.
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+
+    # (d2) ADD a NOT NULL DateTimeField with db_column — exercises the temporary-default
+    # path (ADD COLUMN "stamp_ts" ... DEFAULT <now>, then DROP DEFAULT). The DROP DEFAULT
+    # must target the db_column; on PostgreSQL the field-name form errored before the fix.
+    write_edge_models("""
+    DbColTable = Models.Model(
+        id = Models.IDField(),
+        sku = Models.CharField(db_column="product_sku"),
+        name = Models.CharField(null=true),
+        qty = Models.IntegerField(db_column="quantity_col", null=true),
+        stamp = Models.DateTimeField(db_column="stamp_ts")
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)  # must not error on the DROP DEFAULT
+    stamp_cols = column_names(pool, "dbcoltable")
+    @test "stamp_ts" in stamp_cols
+    @test !("stamp" in stamp_cols)
+
+    # (e) FK honors db_column on BOTH the local column and the referenced parent
+    # column (the parent's pk field is itself renamed via db_column). The FK target
+    # is a model instance, so fk_target_column resolves the parent's db_column —
+    # migrate() succeeding proves the FK REFERENCES targets the real column.
+    # The parent's PRIMARY KEY field is itself renamed via db_column (IDField is
+    # inherently unique — satisfies PostgreSQL's FK-target requirement — and round-trips
+    # cleanly through introspection, unlike a UNIQUE non-PK column).
+    write_edge_models("""
+    DbColParent = Models.Model("dbcolparent",
+        code = Models.IDField(db_column="parent_code"),
+        label = Models.CharField(null=true)
+    )
+    DbColChild = Models.Model("dbcolchild",
+        id = Models.IDField(),
+        parent = Models.ForeignKey(DbColParent, pk_field="code", db_column="parent_fk", null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test "parent_code" in column_names(pool, "dbcolparent")   # parent pk physical column
+    ccols = column_names(pool, "dbcolchild")
+    @test "parent_fk" in ccols                                 # local FK column = db_column
+    @test !("parent" in ccols)                                 # field name is NOT a column
+
+    # (f) No churn for the FK models either.
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+  end
+
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

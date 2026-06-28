@@ -247,8 +247,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
     # @pormg_debug
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_b"] = first_field.pk_field::String
-    row_join["key_a"] = first_column
+    # Local FK column and referenced parent column both honor db_column (#50).
+    row_join["key_b"] = Models.fk_target_column(first_field)
+    row_join["key_a"] = Models.field_db_column(first_field, first_column)
   elseif haskey(instruct.object.model.related_objects, vector[1])
     related_object = instruct.object.model.related_objects[vector[1]]
     if related_object isa Models.ManyToManyRelation
@@ -279,8 +280,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["key_a"] = instruct.object.model.related_objects[vector[1]][2] |> String
-    row_join["key_b"] = instruct.object.model.related_objects[vector[1]][1] |> String
+    # Reverse join: key_a is the parent's referenced column, key_b the child's FK
+    # column; both honor db_column (resolved in their own model, no-op without it) (#50).
+    row_join["key_a"] = Models.model_column(instruct.object.model, instruct.object.model.related_objects[vector[1]][2] |> String)
+    row_join["key_b"] = Models.model_column(reverse_model, instruct.object.model.related_objects[vector[1]][1] |> String)
     foreign_table_name = s_model |> string
     @pormg_debug false
     end
@@ -346,8 +349,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
       end
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
-      row_join["key_b"] = new_object.fields[first_column].pk_field::String
-      row_join["key_a"] = first_column    
+      # Local FK column and referenced parent column both honor db_column (#50).
+      row_join["key_b"] = Models.fk_target_column(first_field)
+      row_join["key_a"] = Models.field_db_column(first_field, first_column)
     elseif haskey(new_object.related_objects, vector[1])
       related_object = new_object.related_objects[vector[1]]
       if related_object isa Models.ManyToManyRelation
@@ -377,8 +381,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-      row_join["key_a"] = new_object.related_objects[vector[1]][2] |> String
-      row_join["key_b"] = new_object.related_objects[vector[1]][1] |> String
+      # Reverse join: key_a is the parent's referenced column, key_b the child's FK
+      # column; both honor db_column (resolved in their own model, no-op without it) (#50).
+      row_join["key_a"] = Models.model_column(new_object, new_object.related_objects[vector[1]][2] |> String)
+      row_join["key_b"] = Models.model_column(reverse_model, new_object.related_objects[vector[1]][1] |> String)
       foreign_table_name = s_model |> string
       vector = vector[2:end]
       _reverse_advanced = true

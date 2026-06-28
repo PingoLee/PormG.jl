@@ -21,12 +21,14 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 - **Be descriptive and clear**: `User_profile`, `Product_category`, `Order_history`
 
 ### Database Column Mapping
-- **Column names follow the field name verbatim, with case preserved**: a field declared `firstName`
-  becomes the column `"firstName"`; declare `first_name` to get `first_name`.
+- **By default, column names follow the field name verbatim, with case preserved**: a field declared
+  `firstName` becomes the column `"firstName"`; declare `first_name` to get `first_name`.
 - **The house style is lowercase snake_case** — prefer it for new schemas; reserve mixed-case
   declarations for faithfully mapping existing columns you don't control.
-- The schema generator does not currently rename columns via `db_column` — see
-  [Schema Conventions](schema_conventions.md).
+- **`db_column` maps a field to a differently-named column** and is authoritative across DDL,
+  queries, and migrations (#50) — e.g. `sku = CharField(db_column="product_sku")` keeps the field
+  `sku` but targets the column `"product_sku"`. Supported on all field types except `ManyToManyField`;
+  see [Schema Conventions](schema_conventions.md).
 
 ### Examples of Good Naming
 
@@ -1000,7 +1002,7 @@ All field types support these common parameters:
 
 ### Database Options
 - `db_index::Bool = false`: Create database index for faster queries
-- `db_column::Union{String, Nothing} = nothing`: Accepted but **not currently honored** by schema generation — the column name is the field name (see [Schema Conventions](schema_conventions.md))
+- `db_column::Union{String, Nothing} = nothing`: Maps this field to a differently-named physical column; **authoritative** across DDL, queries, and migrations (#50). Defaults to the field name (see [Schema Conventions](schema_conventions.md))
 - `db_constraint::Bool = true`: Create database constraints (for relationships)
 
 ### Example with All Common Options

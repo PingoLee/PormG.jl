@@ -445,7 +445,9 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   # @info keys[1][:objct] |> query
   for key in keys
     pk_field = key[:key]
-    push!(_where, """"$(pk_field)" IN ($(query(key[:objct], parameters=parameters)))""")
+    # Outer WHERE targets the physical column (db_column when set); the subquery already
+    # projects/aliases the key, so only this identifier needs resolving (#50).
+    push!(_where, """"$(Models.model_column(model, pk_field))" IN ($(query(key[:objct], parameters=parameters)))""")
   end
   sql::String = ""
   if size(keys, 1) == 1
@@ -468,7 +470,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     deleted_counter[model.name] = show_query === :execute ? (_query |> do_count) : 0
     _query.values(pk_field) # Ensure the query is built
     @pormg_debug false
-    sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(pk_field)\" IN ($(query(_query, parameters=parameters)))"
+    sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
   end
 
   sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
@@ -489,7 +491,8 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   _query = keys[:objct]
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
-  sql = "UPDATE $(model.name |> lowercase) SET \"$(field)\" = $(value_sql) WHERE \"$(pk_field)\" IN ($(query(_query, parameters=parameters)))"
+  # SET column and outer WHERE key both target the physical column (db_column) — #50.
+  sql = "UPDATE $(model.name |> lowercase) SET \"$(Models.model_column(model, field))\" = $(value_sql) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

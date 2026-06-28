@@ -381,6 +381,17 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
   end
 end
 
+# Build a Dict{Symbol,Any} from a result row, mapping physical column names back to the
+# declared field names so callers always see field-name keys even when a field maps to a
+# differently-named column via db_column (#50). No-op shape on the common path.
+function _row_to_field_keyed_dict(row, model::PormGModel)::Dict{Symbol,Any}
+  if !Models.model_has_db_column(model)
+    return Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(row))
+  end
+  rev = Dict{String,Symbol}(Models.field_db_column(f, string(k)) => Symbol(k) for (k, f) in model.fields)
+  return Dict{Symbol,Any}(get(rev, string(k), Symbol(k)) => v for (k, v) in pairs(row))
+end
+
 function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
 real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
@@ -446,8 +457,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # check if the field is a primary key
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
 
-     # Add safely quoted field name to columns list
-    push!(quoted_field_columns, quote_identifier(field, connection))
+     # Add safely quoted physical column (db_column when set) to columns list (#50)
+    push!(quoted_field_columns, quote_identifier(Models.field_db_column(model.fields[field], field), connection))
 
     # Format and add value to parameters
     push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formater))
@@ -475,7 +486,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   if connection isa PormGPostgres
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return Tables.rowtable(result) |> Base.first |> x -> Dict(Symbol(k) => v for (k, v) in pairs(x))
+    return _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model)
   elseif connection isa PormGSQLite
     # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
     # indefinitely inside SQLite/libsqlite3 for some table shapes (observed: an
@@ -493,7 +504,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
         "SELECT * FROM $(safe_table_name) WHERE rowid = last_insert_rowid();") |> Tables.rowtable
       isempty(rows) ?
         Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(rows[1]))
+        _row_to_field_keyed_dict(rows[1], model)
     end
 
     # INSERT and the row read-back must run on one connection (last_insert_rowid()
@@ -531,7 +542,9 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
   !(settings.change_db || settings.django_prefix !== nothing) && return nothing
 
   for field in pk_field
-    sequence_name = _get_owned_sequence_name(connection, model, field; ignore_tx=ignore_tx)
+    # Resolve the PK field to its physical column (db_column when set) — #50.
+    col = Models.model_column(model, field)
+    sequence_name = _get_owned_sequence_name(connection, model, col; ignore_tx=ignore_tx)
 
     if isnothing(sequence_name)
       # Fallback for Django-managed tables where sequence ownership is not set:
@@ -546,7 +559,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
       sequence_name = seqs_df[1, :sequencename]
     end
 
-    safe_field_name = quote_identifier(field, connection)
+    safe_field_name = quote_identifier(col, connection)
     safe_table_name = safe_table_identifier(string(model.name), connection)
     fetch(
       connection,
@@ -587,7 +600,7 @@ end
 # end
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::SQLConn)
   for field in pk_field
-    safe_field_name = quote_identifier(field, connection)
+    safe_field_name = quote_identifier(Models.model_column(model, field), connection)  # db_column (#50)
     safe_table_name = safe_table_identifier(string(model.name), connection)
     safe_table_literal = replace(string(model.name |> lowercase), "'" => "''")
     max_id_query = "SELECT MAX($(safe_field_name)) as m FROM $(safe_table_name);"
@@ -783,7 +796,7 @@ function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{St
 
   safe_table_name = safe_table_identifier(instruction.object.model.name, instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
-  quoted_pk = quote_identifier(String(pk_field_sym), instruction.connection)
+  quoted_pk = quote_identifier(Models.model_column(instruction.object.model, String(pk_field_sym)), instruction.connection)  # db_column (#50)
 
   io = IOBuffer()
   print(io, "SELECT DISTINCT ", safe_alias, ".", quoted_pk)
@@ -892,7 +905,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
     Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add!, remove!, clear!, or set! methods"))
     
-    quoted_field = quote_identifier(field, connection)
+    quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
     if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction)
       f_value = _set_update_query(objct.insert[field], instruction)
@@ -920,7 +933,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       pk_subquery = (!set_uses_join_aliases && isempty(real_obj.ctes)) ? _build_update_target_pk_subquery(instruction) : nothing
 
       if pk_subquery !== nothing && pk_field_sym !== nothing
-        quoted_pk = quote_identifier(String(pk_field_sym), connection)
+        quoted_pk = quote_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
         sql = """
         UPDATE $(safe_table_name) AS $(safe_alias)
         SET $(set_clause)

@@ -90,10 +90,32 @@ Two consequences worth noting:
 - The FK field name is also the **join/lookup prefix**: `Result.objects.filter("driverid__surname"
   => "Senna")`. There is no separate "related object vs. raw id" split like Django's
   `obj.author` / `obj.author_id` — the one field name serves both, by design.
-- A column always equals its field name in generated DDL. Some field types accept a `db_column`
-  parameter, but the schema generator does **not currently honor it** — `field_to_column` renders
-  the field-name key regardless. Making `db_column` authoritative for generated DDL would be a safe,
-  non-breaking future change; until then, name the field as you want the column.
+- By default a column equals its field name. To map a field to a **differently-named** column, set
+  `db_column` — it is **authoritative** (#50) across generated DDL, queries (SELECT/WHERE/ORDER BY/
+  INSERT/UPDATE, and the bulk APIs), and the migration diff. The field name stays the identity you
+  declare and query by; only the physical column changes, and results stay keyed by the field name:
+
+  ```julia
+  sku = Models.CharField(db_column="product_sku")   # field `sku` → column "product_sku"
+  ```
+
+  This is non-breaking: the default (column == field name) is unchanged, so existing schemas are
+  unaffected. On a `ForeignKey`/`OneToOneField`, `db_column` renames the **local** FK column; the
+  **referenced** parent column follows `pk_field`, resolved through the parent field's own
+  `db_column` when the FK target is a resolved model.
+
+  !!! note "Limitations when db_column is on a *key* field"
+      `db_column` on a primary key works for ordinary CRUD (create/get/update, bulk, sequence
+      sync). A few join/reference paths that derive a column from a *parent key field* do not yet
+      resolve that parent's `db_column` and fall back to the field name — tracked in
+      [#62](https://github.com/PingoLee/PormG.jl/issues/62):
+
+      - An FK whose target is given as a **string** (`ForeignKey("Driver", pk_field="code")`) when
+        the referenced parent field itself uses `db_column` — declare the target as a model
+        **instance** (`ForeignKey(Driver, pk_field="code")`) so the FK constraint/join resolve it.
+      - A **ManyToMany** or **CTE** join whose participating model's *primary key* uses `db_column`.
+
+      ManyToMany through-table columns are not configurable via `db_column`.
 
 !!! note "Imported models differ"
     The Django importer appends `_id` to a `ForeignKey`/`OneToOneField` field and points it at the
@@ -163,7 +185,8 @@ CREATE TABLE result (
 | Table name | `model.name` lowercased, verbatim — no pluralization |
 | `django_prefix` | optional Django-interop prefix; shapes generated `name`/accessors, not the physical-table rule |
 | Primary key | explicit `IDField` on native models; no implicit `id` (importer auto-adds `id`) |
-| FK column | declared field name, verbatim (case preserved) — no `_id` suffix (importer adds `_id`) |
+| FK column | declared field name, verbatim (case preserved), or `db_column` when set — no `_id` suffix (importer adds `_id`) |
+| `db_column` | authoritative: maps a field to a differently-named column (default: column == field name) |
 | Default `on_delete` | `NO ACTION` |
 | Timestamps | opt-in `auto_now` / `auto_now_add`; no implicit `created`/`modified` |
 | Quoting | double quotes both backends; table names lowercased, column names case-preserved |

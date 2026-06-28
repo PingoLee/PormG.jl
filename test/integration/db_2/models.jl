@@ -366,4 +366,13 @@ Db_column_pk_child_scratch = Models.Model("db_column_pk_child_scratch",
   tag = Models.CharField(null=true),
 )
 
+# #62: the SAME renamed-parent relationship, but the FK target is the model-name STRING
+# "Db_column_pk_scratch" (not the model instance). set_models must resolve it so the FK
+# constraint and join ON clause still target the parent's db_column ("pk_code").
+Db_column_pk_strchild_scratch = Models.Model("db_column_pk_strchild_scratch",
+  id = Models.IDField(),
+  parent = Models.ForeignKey("Db_column_pk_scratch", pk_field="code", db_column="parent_code_strfk", on_delete="CASCADE", related_name="pkstrchildren", null=true),
+  tag = Models.CharField(null=true),
+)
+
 end

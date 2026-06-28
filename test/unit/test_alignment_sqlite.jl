@@ -1817,6 +1817,34 @@ end
     @test haskey(M.Result.related_objects, "test_deletion_set_default")
 end
 
+@testset "set_models resolves string FK targets (#62)" begin
+    # Fast, DB-free guard for the runtime write-back: `M` was registered via
+    # set_models above, and Db_column_pk_strchild_scratch declares its FK with the
+    # model-name STRING "Db_column_pk_scratch". set_models must resolve and write it
+    # back to `.to` so fk_target_column honors the parent's renamed PK db_column.
+    fk = M.Db_column_pk_strchild_scratch.fields["parent"]
+    @test fk.to isa PormG.PormGModel                       # string target → resolved model
+    @test fk.to === M.Db_column_pk_scratch                 # resolved to the correct model
+    @test PormG.Models.fk_target_column(fk) == "pk_code"   # → parent's db_column, not "code"
+end
+
+@testset "set_models throws on an unresolvable string FK target (#62)" begin
+    # #62 restructured set_models' resolution (try/catch → _resolve_target_model + explicit
+    # throw); the strict error must remain — a string target naming a model that is not
+    # defined in the module raises ArgumentError rather than silently skipping.
+    BadChild = PormG.Models.Model_Type(
+        name = "bad_fk_child",
+        fields = Dict(
+            "id" => PormG.Models.IDField(),
+            "parent" => PormG.Models.ForeignKey("NoSuchModelXYZ", on_delete="CASCADE", null=true),
+        ),
+        field_names = ["id", "parent"]
+    )
+    bad_mod = Module(:bad_fk_target_module)
+    Core.eval(bad_mod, :(const BadChild = $BadChild))
+    @test_throws ArgumentError PormG.Models.set_models(bad_mod, "mock_sl_path")
+end
+
 @testset "Related Objects - Auto-generated related_name key format" begin
     # Just_a_nested_roll_back has a single FK to Just_a_test_deletion with no
     # explicit related_name. The auto-generated key should be the lowercased

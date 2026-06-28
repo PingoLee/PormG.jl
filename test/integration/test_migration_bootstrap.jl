@@ -1065,6 +1065,50 @@ end
     isfile(pending) && rm(pending)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test !isfile(pending)
+
+    # (g) #62: a STRING FK target + an OMITTED pk_field over the renamed-PK parent. The
+    # migration prelude (_load_current_models) must resolve "DbColParent" → the model AND
+    # default pk_field to the parent's PK ("code"), so the FK REFERENCES
+    # "dbcolparent"("parent_code") — not the "id" fallback. migrate() SUCCEEDING is the
+    # assertion: dbcolparent has no "id" column, so an unresolved target / "id" fallback
+    # would raise. (Before #62 this churned + emitted the wrong referenced column.)
+    write_edge_models("""
+    DbColParent = Models.Model("dbcolparent",
+        code = Models.IDField(db_column="parent_code"),
+        label = Models.CharField(null=true)
+    )
+    DbColChild = Models.Model("dbcolchild",
+        id = Models.IDField(),
+        parent = Models.ForeignKey(DbColParent, pk_field="code", db_column="parent_fk", null=true)
+    )
+    DbColStrChild = Models.Model("dbcolstrchild",
+        id = Models.IDField(),
+        parent = Models.ForeignKey("DbColParent", db_column="parent_strfk", null=true)
+    )
+    """)
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    scols = column_names(pool, "dbcolstrchild")
+    @test "parent_strfk" in scols                              # local FK column = db_column
+    @test !("parent" in scols)                                 # field name is NOT a column
+
+    # Adapter-neutral proof of the REFERENCED column: migrate() raising is a
+    # PostgreSQL-only signal (SQLite validates FK targets lazily at create time), so
+    # introspect the migrated FK and confirm it points at the parent's db_column
+    # ("parent_code"), not the "id" fallback an unresolved target would have produced.
+    strchild_intro = nothing
+    for m in PormG.Migrations.convert_schema_to_models(pool)
+      lowercase(string(m.name)) == "dbcolstrchild" && (strchild_intro = m)
+    end
+    @test strchild_intro !== nothing
+    @test any(f -> hasproperty(f, :to) && hasproperty(f, :pk_field) && f.pk_field == "parent_code",
+              values(strchild_intro.fields))
+
+    # (h) No churn for the string-target + omitted-pk_field model.
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
   end
 
   # ── Cleanup ─────────────────────────────────────────────────────────

@@ -28,11 +28,11 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 > cheap to settle now (zero published users) but become breaking/irreversible afterward.
 > **Sequence:** **Tier 1** (irreversible user-data — migration-format / tracking-table contract and
 > the frozen schema conventions) and **Tier 2** (#34 adapter decoupling → #35 export curation) are
-> both settled and merged — as is field-name **case preservation** (#57) and its lowercase
-> **convention** (#58). Remaining gating work: the coupled **`db_column` authority** (#50), plus
-> the infrastructure items below.
+> both settled and merged — as is field-name **case preservation** (#57), its lowercase
+> **convention** (#58), and **`db_column` authority** (#50). Remaining gating work: the #50
+> follow-up (#62 — referenced-parent-key resolution) plus the infrastructure items below.
 
-- [#50](https://github.com/PingoLee/PormG.jl/issues/50) — ⚠️ Make `db_column` authoritative for generated DDL (currently inert; pairs with the merged #57 case-preservation)
+- [#62](https://github.com/PingoLee/PormG.jl/issues/62) — ⚠️ Resolve string FK targets to model objects (Django-style) so `db_column` on a referenced parent key is honored in FK constraints/joins (follow-up corner from the merged #50)
 - [#36](https://github.com/PingoLee/PormG.jl/issues/36) — Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)
 - [#37](https://github.com/PingoLee/PormG.jl/issues/37) — Investigate PG pool exhaustion under remote-latency integration runs
 

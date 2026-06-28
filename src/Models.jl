@@ -195,13 +195,12 @@ function set_models(_module::Module, path::String)::Nothing
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey || field isa sOneToOneField
-        field_to::Union{PormGModel, Nothing} = nothing
-        try
-          field_to = field.to isa PormGModel ? field.to : getfield(_module, field.to |> Symbol)
-        catch
-          throw(ArgumentError("The model $(field.to) in the field $field_name in the model $(model.name) is not defined"))
-        end
-        # println("field_to_", field_to.name)
+        field_to::Union{PormGModel, Nothing} = _resolve_target_model(field.to, _module)
+        field_to === nothing && throw(ArgumentError("The model $(field.to) in the field $field_name in the model $(model.name) is not defined"))
+        # #62: persist the resolved target so `fk_target_column` honors a referenced
+        # parent's db_column for string-declared FKs too. Idempotent on reload (a model
+        # `.to` resolves to itself); the rest of this loop keeps using the local `field_to`.
+        field.to = field_to
         if field.pk_field === nothing
           pk_sym = get_model_pk_field(field_to)
           if pk_sym !== nothing
@@ -434,6 +433,23 @@ function fk_target_column(field::PormGField)::String
   return pk
 end
 
+# Resolve a string FK/O2O target to its model object within `mod` (#62). Returns the
+# resolved `PormGModel`, a model passed through untouched, or `nothing` when the name is
+# not a model binding (caller picks strictness). `fk_target_column` can only honor a
+# referenced parent's `db_column` once `field.to` is a resolved model, so both model-load
+# lifecycles (runtime `set_models`, the migration prelude) write the resolution back via
+# this helper. The catch is narrowed to `UndefVarError` (the "not defined" case) so a
+# genuine bug surfaces instead of being swallowed.
+function _resolve_target_model(to, mod::Module)::Union{PormGModel, Nothing}
+  to isa PormGModel && return to
+  m = try
+    getfield(mod, Symbol(to))
+  catch e
+    e isa UndefVarError ? nothing : rethrow()
+  end
+  return m isa PormGModel ? m : nothing
+end
+
 # Resolve a field-name string to its physical column within `model` (db_column when
 # the named field carries one), verbatim when the name is not a field of `model`. For
 # call sites that hold only a model + a field-name string — e.g. reverse-relation join
@@ -605,12 +621,17 @@ function _model_to_str_general(field_name, field, struct_name, sets, fields)
   return fields
 end
 function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
-  to::String = "" 
+  to::String = ""
   for sfield in fieldnames(typeof(field))
-    sfield == :to && (to = getfield(field, sfield); continue)    
+    # #62: `.to` may now be a resolved PormGModel (set_models / migration prelude write
+    # back the model). Emit its generated variable name — `uppercasefirst(model.name)`,
+    # matching `Model_to_str` above — so a model-`.to` serializes identically to the
+    # string a user would have declared. (The only live caller, the import flow, always
+    # has a string `.to`; this branch is defensive, locked by a round-trip test.)
+    sfield == :to && (v = getfield(field, sfield); to = v isa PormGModel ? uppercasefirst(v.name) : v; continue)
     if getfield(field, sfield) != getfield(ForeignKey(""), sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
-    end    
+    end
   end
   fields *= ",\n  $field_name = Models.$struct_name(\"$to\", $(join(sets, ", ")))"
   return fields

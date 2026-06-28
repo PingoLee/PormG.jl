@@ -50,6 +50,10 @@ Entry = Model("entry_scratch",
 )
 Entry.connect_key = "default"
 
+# #62 string-target fixtures are built FRESH inside each test below (local instances or a
+# throwaway Module), so every subtest is isolated and re-runnable — matching this file's
+# convention of per-subtest fixtures rather than shared mutable module-level state.
+
 @testset "db_column authoritative (#50)" begin
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -252,6 +256,115 @@ Entry.connect_key = "default"
     insp = inspect_query(q)
     @test occursin("\"driver_id\" = \$1", insp[:sql_text])            # WHERE → db_column
     @test occursin("\"driver_id\" as \"driverId\"", insp[:sql_text])  # alias back to the mixed-case field
+  end
+
+end
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+# #62 — string FK targets resolve to model objects, so `db_column` on a REFERENCED parent
+# key is honored for string-declared FKs too (model-instance targets already worked in #50).
+# ════════════════════════════════════════════════════════════════════════════════════════
+@testset "db_column string FK targets (#62)" begin
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # _resolve_target_model: name string → model object; model passthrough; unknown
+  # name → nothing (caller decides strictness).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "_resolve_target_model" begin
+    @test PormG.Models._resolve_target_model("DriverRef", @__MODULE__) === DriverRef
+    @test PormG.Models._resolve_target_model(DriverRef, @__MODULE__)   === DriverRef   # passthrough
+    @test PormG.Models._resolve_target_model("NoSuchModelXYZ", @__MODULE__) === nothing
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The #62 gap: an UNRESOLVED string target falls back to the verbatim pk_field name;
+  # once `.to` is a resolved model, fk_target_column returns the parent's db_column —
+  # identical to the model-instance variant. (This tests the resolver ∘ fk_target_column
+  # composition; the production write-back itself is guarded by the set_models test in
+  # test_alignment_sqlite.jl and the integration join test.)
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "resolved string target → parent db_column (fk_target_column)" begin
+    fk = ForeignKey("DriverRef", pk_field="code", db_column="drv")
+    @test fk_target_column(fk) == "code"                       # before: verbatim pk name (the gap)
+    fk.to = PormG.Models._resolve_target_model(fk.to, @__MODULE__)
+    @test fk_target_column(fk) == "driver_code"                # after: parent's db_column
+    @test fk_target_column(fk) == fk_target_column(ForeignKey(DriverRef, pk_field="code"))  # == model-instance
+
+    # OneToOneField shares the resolution path (set_models / prelude branch on
+    # `sForeignKey || sOneToOneField`) — a string-target O2O resolves identically.
+    o2o = OneToOneField("DriverRef", pk_field="code", db_column="prof")
+    @test fk_target_column(o2o) == "code"
+    o2o.to = PormG.Models._resolve_target_model(o2o.to, @__MODULE__)
+    @test fk_target_column(o2o) == "driver_code"
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Render: once a string-target FK's `.to` is resolved, create_table renders the FK
+  # constraint with the parent's db_column AND the real table name — matching a
+  # model-instance FK. Fresh local fixture, so the subtest is re-runnable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "create_table FK constraint renders a resolved string target" begin
+    entry_str = Model("entry_str_local_scratch",
+      id     = IDField(),
+      driver = ForeignKey("DriverRef", pk_field="code", db_column="drv"),
+    )
+    entry_str.fields["driver"].to = PormG.Models._resolve_target_model(entry_str.fields["driver"].to, @__MODULE__)
+    ddl = PormG.Dialect.create_table(MockSQLiteDbColumn(), entry_str)
+    @test occursin("FOREIGN KEY (\"drv\")", ddl)       # local FK column = db_column
+    @test occursin("(\"driver_code\")", ddl)           # referenced parent column resolved (the #62 fix)
+    @test occursin("\"driverref_scratch\"", ddl)       # resolved → real table name, not "driverref"
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The migration prelude proper: resolve `.to` AND default a missing pk_field, plus the
+  # best-effort branch (unresolvable target → left as-is, no throw). Built in a throwaway
+  # Module (the dup_test_module idiom) so it's isolated/re-runnable, and tested directly on
+  # `_resolve_fk_targets_and_pk!` so it can't pass via an include-time set_models confound.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "migration prelude resolves string target + defaults pk_field" begin
+    prelude_parent = Model("db62_prelude_parent", code = IDField(db_column="parent_code"), label = CharField(null=true))
+    prelude_child  = Model("db62_prelude_child", id = IDField(),
+      parent = ForeignKey("Db62PreludeParent", db_column="parent_fk", null=true),   # string target, NO pk_field
+    )
+    prelude_orphan = Model("db62_prelude_orphan", id = IDField(),
+      ref = ForeignKey("NoSuchModelABC", db_column="ref_fk", null=true),            # unresolvable target
+    )
+    mod = Module(:db62_prelude_module)
+    Core.eval(mod, :(const Db62PreludeParent = $prelude_parent))   # the FK string target must be a binding in `mod`
+    Core.eval(mod, :(const Db62PreludeChild  = $prelude_child))
+    Core.eval(mod, :(const Db62PreludeOrphan = $prelude_orphan))
+
+    # Pre-conditions (fresh fixtures): unresolved string target, no pk_field.
+    @test prelude_child.fields["parent"].to == "Db62PreludeParent"
+    @test prelude_child.fields["parent"].pk_field === nothing
+
+    current = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      :db62_prelude_parent => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => prelude_parent, :exist => false),
+      :db62_prelude_child  => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => prelude_child,  :exist => false),
+      :db62_prelude_orphan => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => prelude_orphan, :exist => false),
+    )
+    PormG.Migrations._resolve_fk_targets_and_pk!(current, mod)
+
+    # Resolvable string target → resolved model + defaulted pk_field + parent's db_column.
+    @test prelude_child.fields["parent"].to === prelude_parent   # resolved to the model object
+    @test prelude_child.fields["parent"].pk_field == "code"      # defaulted to the parent's PK field name
+    @test fk_target_column(prelude_child.fields["parent"]) == "parent_code"  # → db_column, NOT the "id" fallback
+
+    # Best-effort: an UNRESOLVABLE string target is left as-is (no throw); pk_field untouched.
+    @test prelude_orphan.fields["ref"].to == "NoSuchModelABC"
+    @test prelude_orphan.fields["ref"].pk_field === nothing
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Serializer: a model-instance `.to` serializes to the SAME string a user would have
+  # declared (uppercasefirst(model.name)) — the write-back can't change snapshot output.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "serializer: model-instance .to == its string form" begin
+    fk_model = PormG.Models._model_to_str_foreign_key("driver", ForeignKey(DriverRef, db_column="drv"), :ForeignKey, String[], "")
+    fk_str   = PormG.Models._model_to_str_foreign_key("driver", ForeignKey("Driverref_scratch", db_column="drv"), :ForeignKey, String[], "")
+    @test fk_model == fk_str                                       # byte-identical serialization
+    @test occursin("Models.ForeignKey(\"Driverref_scratch\"", fk_model)
+    @test occursin("db_column=\"drv\"", fk_model)
   end
 
 end

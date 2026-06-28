@@ -159,6 +159,33 @@ end
     end
 end
 
+# #62: the SAME renamed-parent join, but the child's FK was declared with a STRING target
+# ("Db_column_pk_scratch") instead of the model instance. set_models must have resolved it
+# so the join ON clause targets the parent's db_column ("pk_code") — proving the runtime
+# write-back end-to-end (the table itself was created via the migration prelude in Phase 0).
+@testset "db_column: FK join over a renamed parent PK via a STRING target" begin
+    M.Db_column_pk_strchild_scratch.objects.delete(allow_delete_all=true)
+    M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
+    try
+        M.Db_column_pk_scratch.objects.create("code" => 600, "label" => "SP")
+        M.Db_column_pk_strchild_scratch.objects.create("parent" => 600, "tag" => "sp-child")
+
+        # Forward join child → parent on the renamed parent PK, projecting a parent field.
+        fwd = M.Db_column_pk_strchild_scratch.objects.
+            filter("parent__label" => "SP").values("tag", "plabel" => "parent__label").first()
+        @test fwd.tag == "sp-child"
+        @test fwd.plabel == "SP"
+
+        # Reverse traversal parent → children over the string-declared FK.
+        rev = M.Db_column_pk_scratch.objects.
+            filter("pkstrchildren__tag" => "sp-child").values("label").first()
+        @test rev.label == "SP"
+    finally
+        M.Db_column_pk_strchild_scratch.objects.delete(allow_delete_all=true)
+        M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
+    end
+end
+
 @testset "db_column: bulk_insert / bulk_update target the db_column" begin
     M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
     M.Db_column_scratch.objects.delete(allow_delete_all=true)

@@ -517,11 +517,8 @@ catch e
   end
 end
 
-# get module from the path
-temp_module = Module(:TemporaryModels)
-Base.include(temp_module, path)
-# current_models = get_all_models(Base.invokelatest(getfield, temp_module, :models))
-current_models = Base.invokelatest(get_all_models, Base.invokelatest(getfield, temp_module, :models)) # TODO : i need create abstrations to deal with change :models name
+# get module from the path (load + resolve FK targets + default pk_field — #62)
+current_models = _load_current_models(path)
 
 @pormg_debug false
 
@@ -558,10 +555,8 @@ function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String
     return
   end
 
-  # get module from the path
-  temp_module = Module(:TemporaryModels)
-  Base.include(temp_module, path)
-  current_models = Base.invokelatest(get_all_models, Base.invokelatest(getfield, temp_module, :models))
+  # get module from the path (load + resolve FK targets + default pk_field — #62)
+  current_models = _load_current_models(path)
 
   migration_plan = get_migration_plan(models_array, current_models, connection, settings, interactive=interactive)
 
@@ -601,4 +596,49 @@ for name in names(mod, all = true)
   end
 end
 return models
+end
+
+# #62: Shared makemigrations prelude — load the code models for a schema diff, then
+# resolve string FK/O2O targets to model objects and default `pk_field`. The planner
+# loads models into a throwaway module via `Base.include` and never runs `set_models`
+# (deliberately, to keep diffing free of `set_models`' global side effects), so the
+# resolution `set_models` does at runtime must be reproduced here — otherwise a
+# string-declared FK, or any FK with an omitted `pk_field`, would not honor a referenced
+# parent's `db_column` in the generated DDL. Both backends call this; see Follow-up
+# (#65) for collapsing the two load lifecycles into one.
+function _load_current_models(path::String)::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}
+  temp_module = Module(:TemporaryModels)
+  Base.include(temp_module, path)
+  models_module = Base.invokelatest(getfield, temp_module, :models)
+  current_models = Base.invokelatest(get_all_models, models_module)
+  Base.invokelatest(_resolve_fk_targets_and_pk!, current_models, models_module)
+  return current_models
+end
+
+# Resolve each code model's FK/O2O targets against `models_module` (write-back) and
+# default a missing `pk_field` to the parent's primary key. Best-effort: an unresolvable
+# string target is left as-is (e.g. a cross-module reference whose verbatim fallback is
+# already correct) with a `@debug`, never breaking the run. The runtime path's strict
+# throw lives in `set_models`, so typos surface loudly there first.
+function _resolve_fk_targets_and_pk!(current_models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, models_module::Module)::Nothing
+  for (_, entry) in current_models
+    model = entry[:model]
+    model isa PormGModel || continue
+    for (field_name, field) in pairs(model.fields)
+      (field isa Models.sForeignKey || field isa Models.sOneToOneField) || continue
+      if !(field.to isa PormGModel)
+        resolved = Models._resolve_target_model(field.to, models_module)
+        if resolved === nothing
+          @debug "makemigrations: FK target $(field.to) of field $field_name in model $(model.name) is not a model binding in the models module; leaving as a string"
+          continue
+        end
+        field.to = resolved
+      end
+      if field.pk_field === nothing
+        pk_sym = Models.get_model_pk_field(field.to)
+        pk_sym !== nothing && (field.pk_field = string(pk_sym))
+      end
+    end
+  end
+  return nothing
 end

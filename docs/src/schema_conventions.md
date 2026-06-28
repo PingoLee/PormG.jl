@@ -102,18 +102,17 @@ Two consequences worth noting:
   This is non-breaking: the default (column == field name) is unchanged, so existing schemas are
   unaffected. On a `ForeignKey`/`OneToOneField`, `db_column` renames the **local** FK column; the
   **referenced** parent column follows `pk_field`, resolved through the parent field's own
-  `db_column` when the FK target is a resolved model.
+  `db_column`. This works for both model-instance and **string** targets
+  (`ForeignKey(Driver, pk_field="code")` or `ForeignKey("Driver", pk_field="code")`), and whether or
+  not `pk_field` is spelled out — string targets are resolved to the model object once, up front
+  ([#62](https://github.com/PingoLee/PormG.jl/issues/62)).
 
-  !!! note "Limitations when db_column is on a *key* field"
-      `db_column` on a primary key works for ordinary CRUD (create/get/update, bulk, sequence
-      sync). A few join/reference paths that derive a column from a *parent key field* do not yet
-      resolve that parent's `db_column` and fall back to the field name — tracked in
-      [#62](https://github.com/PingoLee/PormG.jl/issues/62):
-
-      - An FK whose target is given as a **string** (`ForeignKey("Driver", pk_field="code")`) when
-        the referenced parent field itself uses `db_column` — declare the target as a model
-        **instance** (`ForeignKey(Driver, pk_field="code")`) so the FK constraint/join resolve it.
-      - A **ManyToMany** or **CTE** join whose participating model's *primary key* uses `db_column`.
+  !!! note "Limitation: db_column on a ManyToMany/CTE key field"
+      `db_column` on a primary key works for ordinary CRUD (create/get/update, bulk, sequence sync)
+      **and** for FK constraints and joins (model-instance or string targets, including a renamed
+      parent PK). One path does not yet resolve a parent key's `db_column` and falls back to the
+      field name — tracked in [#64](https://github.com/PingoLee/PormG.jl/issues/64): a **ManyToMany**
+      or **CTE** join whose participating model's *primary key* uses `db_column`.
 
       ManyToMany through-table columns are not configurable via `db_column`.
 

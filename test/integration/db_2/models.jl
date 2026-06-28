@@ -328,4 +328,42 @@ Case_preserve_child_scratch = Models.Model("case_preserve_child_scratch",
   lapTime = Models.IntegerField(null=true),
 )
 
+# db_column (#50) fixtures — the FIELD name differs from the physical COLUMN name.
+# `sku` → column "product_sku"; the FK `parent` → column "parent_fk". Proves PormG
+# creates/queries the db_column physical names while results stay keyed by field name.
+Db_column_scratch = Models.Model("db_column_scratch",
+  id = Models.IDField(),
+  sku = Models.CharField(db_column="product_sku"),
+  name = Models.CharField(null=true),
+)
+
+Db_column_child_scratch = Models.Model("db_column_child_scratch",
+  id = Models.IDField(),
+  parent = Models.ForeignKey(Db_column_scratch, db_column="parent_fk", on_delete="CASCADE", related_name="children", null=true),
+  note = Models.CharField(null=true),
+)
+
+# db_column on a PRIMARY KEY (#50): field `code` → physical column "pk_code". Exercises
+# sequence sync / id allocation against the db_column column on insert.
+Db_column_pk_scratch = Models.Model("db_column_pk_scratch",
+  code = Models.IDField(db_column="pk_code"),
+  label = Models.CharField(null=true),
+)
+
+# SET_NULL child over a db_column FK (#50): deleting the parent must NULL "parent_fk"
+# (exercises the cascade SET_NULL UPDATE on the physical column).
+Db_column_setnull_child_scratch = Models.Model("db_column_setnull_child_scratch",
+  id = Models.IDField(),
+  parent = Models.ForeignKey(Db_column_scratch, db_column="parent_fk", on_delete="SET_NULL", related_name="snchildren", null=true),
+  note = Models.CharField(null=true),
+)
+
+# FK over a RENAMED parent PK (#50): references Db_column_pk_scratch.code (physical column
+# "pk_code") via pk_field; the FK constraint AND joins must resolve the parent's db_column.
+Db_column_pk_child_scratch = Models.Model("db_column_pk_child_scratch",
+  id = Models.IDField(),
+  parent = Models.ForeignKey(Db_column_pk_scratch, pk_field="code", db_column="parent_code_fk", on_delete="CASCADE", related_name="pkchildren", null=true),
+  tag = Models.CharField(null=true),
+)
+
 end

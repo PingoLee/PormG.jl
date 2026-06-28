@@ -43,6 +43,70 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## `db_column` is now **authoritative** — map a field to a differently-named column
+
+- **PormG ref**: issue #50 (make `db_column` authoritative); [src/Models.jl](src/Models.jl) (`field_db_column` / `fk_target_column`), [src/Dialect.jl](src/Dialect.jl), [src/querybuilder/](src/querybuilder/), [src/migrations/planner.jl](src/migrations/planner.jl)
+- **Recorded**: 2026-06-27
+- **Severity**: **non-breaking — opt-in.** The default is unchanged (column == field name), so existing models and schemas keep working with **no edits**. This entry exists so apps can *adopt* the new capability; the rollout table is "no action required" unless you want it.
+
+### What changed
+
+`db_column` used to be accepted on `CharField` but **silently ignored** (and `ForeignKey`/
+`OneToOneField` didn't accept it at all). Now `db_column` is **authoritative** across the whole stack
+— DDL (`create_table`/`add_field`/`alter_field`), queries (`filter`/`values`/`order_by`/`update`/
+`create`, and `bulk_insert`/`bulk_update`/`bulk_copy`), FK constraints, and the migration diff — on
+**every field type except `ManyToManyField`**.
+
+The field name stays the identity you declare and query by; only the **physical column** changes, and
+all results stay **keyed by the field name**. This complements case preservation (#57): use the
+declared name (lowercase house style) as your code-facing identity and `db_column` to point it at a
+legacy column whose physical name you don't control.
+
+### How to adopt (optional)
+
+```julia
+# A field whose physical column differs from the code-facing name:
+Product = Models.Model("product",
+    id   = Models.IDField(),
+    sku  = Models.CharField(db_column="product_sku"),   # field `sku` → column "product_sku"
+)
+M.Product.objects.filter("sku" => "ABC").values("sku")  # query by the field name `sku`
+row.sku                                                  # results stay keyed by `sku`
+
+# ForeignKey: db_column renames the LOCAL fk column.
+Entry = Models.Model("entry",
+    id     = Models.IDField(),
+    driver = Models.ForeignKey(Product, db_column="driver_fk"),  # local column "driver_fk"
+)
+```
+
+Notes / limits:
+
+- On an FK, `db_column` renames the **local** column. The **referenced** parent column follows
+  `pk_field`; when the parent's pk field *itself* uses `db_column`, declare the FK target as a model
+  **instance** (`ForeignKey(Parent, pk_field="code")`, not the string `"Parent"`) so the generated
+  FK constraint resolves the parent's `db_column`.
+- `ManyToManyField` through-table columns are **not** configurable via `db_column`.
+
+### Verify
+
+After adding `db_column`, run `makemigrations` / `dry_run`: a fresh model creates the column under the
+`db_column` name, and re-running reports **no changes** (the diff is keyed by physical column, so
+there is no churn).
+
+### Per-app rollout
+
+Non-breaking — no edits required. Mark an app ✅ only if/when it intentionally adopts `db_column`.
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | — | non-breaking; adopt only if mapping a renamed column |
+| app-2 | — | non-breaking; adopt only if mapping a renamed column |
+| app-3 | — | non-breaking; adopt only if mapping a renamed column |
+| app-4 | — | non-breaking; adopt only if mapping a renamed column |
+
+---
+
 ## Field names — declared **case is preserved** and lookups are **case-sensitive**
 
 - **PormG ref**: issue #57 (preserve declared field-name case) + #58 (lowercase house-style convention); [src/Models.jl](src/Models.jl) (`format_fild_name` / `format_model_name`), [src/querybuilder/deletion.jl](src/querybuilder/deletion.jl), [src/querybuilder/types.jl](src/querybuilder/types.jl)

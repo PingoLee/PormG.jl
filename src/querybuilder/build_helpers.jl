@@ -426,8 +426,10 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
 
-  # Quote the field name to prevent SQL injection
-  return quote_identifier(field, instruct.connection)
+  # Resolve to the physical column (db_column when set, else the field name) and quote
+  # it to prevent SQL injection (#50). SELECT auto-aliases back to the field name, so
+  # rows stay keyed by the declared field name even when the column differs.
+  return quote_identifier(Models.field_db_column(model.fields[field], field), instruct.connection)
 end
 _solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct)
 _solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction) = _solve_field(field, _module, Symbol(model_name), instruct)

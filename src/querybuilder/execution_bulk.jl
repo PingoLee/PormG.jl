@@ -233,7 +233,7 @@ function _allocate_pg_ids(model::PormGModel, connection::PormGPostgres, pk_field
   parameters = get_parameter(connection)
   set_context!(parameters, :select)
   table_placeholder = add_parameter!(parameters, safe_table)
-  field_placeholder = add_parameter!(parameters, pk_field)
+  field_placeholder = add_parameter!(parameters, Models.model_column(model, pk_field))  # db_column (#50)
   count_placeholder = add_parameter!(parameters, n)
   sql = """
   SELECT nextval(pg_get_serial_sequence($(table_placeholder), $(field_placeholder))) AS reserved_id
@@ -256,7 +256,7 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   safe_table = string(model.name |> lowercase)
   safe_table_name = safe_table_identifier(safe_table, connection)
   safe_table_literal = replace(safe_table, "'" => "''")
-  safe_field = quote_identifier(pk_field, connection)
+  safe_field = quote_identifier(Models.model_column(model, pk_field), connection)  # db_column (#50)
   sql = """
   SELECT MAX(candidate) AS max_id
   FROM (
@@ -809,10 +809,11 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   _columns = _normalize_bulk_columns(columns)
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy, settings)
 
-  # Security: Quote table name and field names
+  # Security: Quote table name and physical column names (db_column when set, #50).
+  # The CSV is positional (HEADER FALSE), so the data order still matches.
   safe_table_name = safe_table_identifier(string(model.name), connection)
-  quoted_fields = [quote_identifier(field, connection) for field in fields_df]
-  
+  quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
+
   # Construct the COPY command (using CSV format for safety)
   sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE)"
   
@@ -894,10 +895,11 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
   django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam)
 
-  # Security: Quote table name and field names
+  # Security: Quote table name and physical column names (db_column when set, #50).
+  # VALUES rows are positional and built in `fields` order, so they still align.
   safe_table_name = safe_table_identifier(string(model.name), connection)
-  quoted_fields = [quote_identifier(field, connection) for field in fields]
-  
+  quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields]
+
   # Construct the bulk insert SQL.
   sql = """
   INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))
@@ -1051,7 +1053,9 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   for field in fields_df
     if !(field in deny_fields)
       # @pormg_debug
-      quoted_field = quote_identifier(field, connection)
+      # SET target uses the physical column (db_column); the source.* reference and the
+      # VALUES/CTE source column list stay the field name (#50).
+      quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)
       quoted_source_field = quote_identifier(field, connection)
       field_type = model.fields[field].type |> lowercase
       if connection isa PormGPostgres
@@ -1142,7 +1146,9 @@ function _bulk_update(model::PormGModel,
   # Security: Build safe WHERE conditions with quoted identifiers
   safe_where_conditions::Vector{String} = []
   for filter in dinanic_filters
-    quoted_tb_field = quote_identifier(filter, connection)
+    # WHERE target (Tb.) uses the physical column (db_column); the source.* reference
+    # and the source column list stay the field name (#50).
+    quoted_tb_field = quote_identifier(Models.field_db_column(model.fields[filter], filter), connection)
     quoted_source_field = quote_identifier(filter, connection)
     field_type = model.fields[filter].type |> lowercase
     if connection isa PormGPostgres

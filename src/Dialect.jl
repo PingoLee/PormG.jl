@@ -7,7 +7,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
-import PormG.Models: Migration, get_model_pk_field, format_model_name
+import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column
 
 import PormG: @pormg_debug
 
@@ -585,6 +585,8 @@ _requires_non_negative_check(field::PormGField)::Bool = field isa Union{sPositiv
 _non_negative_check_clause(col_name)::String = "CHECK (\"$(col_name)\" >= 0)"
 
 function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any=nothing)::String
+  # Resolve the physical column name (db_column when set, else the field name) — #50.
+  col_name = field_db_column(field, col_name)
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
 
@@ -628,6 +630,8 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
 end
 
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite; temporary_default::Any=nothing)::String
+  # Resolve the physical column name (db_column when set, else the field name) — #50.
+  col_name = field_db_column(field, col_name)
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
 
@@ -721,8 +725,10 @@ function create_table(conn::PormGSQLite, model::PormGModel)
   for (field_name, field) in model.fields
     if field isa sForeignKey && field.db_constraint
       on_delete_str = _foreign_key_on_delete_sql(field.on_delete)
-      target_pk = isnothing(field.pk_field) ? "id" : field.pk_field
-      push!(columns, "FOREIGN KEY (\"$field_name\") REFERENCES \"$(field.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
+      # Local FK column and referenced parent column both honor db_column (#50).
+      local_col = field_db_column(field, string(field_name))
+      target_pk = fk_target_column(field)
+      push!(columns, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(field.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
 
@@ -754,6 +760,10 @@ end
 # end
 
 function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})::String # TODO add old_field
+  # Resolve to the physical column (db_column when set) so every ALTER targets the real
+  # column even when called with the field-name key (e.g. the temporary-default cleanup in
+  # _add_new_field). Idempotent when callers already pass the physical column (#50).
+  field_name = field_db_column(new_field, string(field_name))
   sql_statements = []
 
   # Non-negative CHECK constraint diffing on a type transition (Django-style).
@@ -929,12 +939,13 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
     push!(columns_defs, field_to_column(f_name |> string, f, conn))
   end
 
-  # Add foreign key constraints
+  # Add foreign key constraints (local + referenced columns honor db_column — #50)
   for (f_name, f) in model.fields
     if f isa sForeignKey && f.db_constraint
       on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
-      target_pk = isnothing(f.pk_field) ? "id" : f.pk_field
-      push!(columns_defs, "FOREIGN KEY (\"$f_name\") REFERENCES \"$(f.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
+      local_col = field_db_column(f, string(f_name))
+      target_pk = fk_target_column(f)
+      push!(columns_defs, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(f.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
 
@@ -950,7 +961,9 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   # constraint failure when the INSERT tries to populate the new table from the
   # old one — the new table's CREATE has the column as NOT NULL but the INSERT
   # simply doesn't mention it.
-  model_cols = [string(k) for k in keys(model.fields)]
+  # Physical column names (db_column when set) — both old and new tables use these,
+  # so the column-aligned copy stays correct for db_column-mapped fields (#50).
+  model_cols = [field_db_column(f, string(k)) for (k, f) in model.fields]
   cols_joined = join(["\"$c\"" for c in model_cols], ", ")
 
   insert_sql = """INSERT INTO "$new_table_name" ($cols_joined) SELECT $cols_joined FROM "$table_name";"""

@@ -92,10 +92,12 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
        return nothing
     end
     constraint_name = "$(name)_fk" |> lowercase
-    resolved_pk = isnothing(new_field.pk_field) ? "id" : string(new_field.pk_field)
+    # Local FK column and referenced parent column both honor db_column (#50).
+    resolved_pk = Models.fk_target_column(new_field)
+    local_col = Models.field_db_column(new_field, string(field_name))
     on_delete_sql = hasfield(typeof(new_field), :on_delete) ? Dialect._foreign_key_on_delete_sql(new_field.on_delete) : nothing
-    _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(new_field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+    _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
+    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(new_field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
   end
   return nothing
 end
@@ -108,21 +110,24 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
   if hasfield(field |> typeof, :to) && field.db_constraint
     if conn isa PormGPostgres
       constraint_name = name * "_fk" |> lowercase
-      resolved_pk = isnothing(field.pk_field) ? "id" : string(field.pk_field)
+      # Local FK column and referenced parent column both honor db_column (#50).
+      resolved_pk = Models.fk_target_column(field)
+      local_col = Models.field_db_column(field, string(field_name))
       on_delete_sql = hasfield(typeof(field), :on_delete) ? Dialect._foreign_key_on_delete_sql(field.on_delete) : nothing
-      _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name", 
-      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$field_name\"",  "\"$(field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+      _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
+      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
     # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
     # we might need recreation if it's a FK.
     end
   end
 
-  # If the new field is also indexed
-  if !field.primary_key && field.db_index 
+  # If the new field is also indexed (index targets the physical column, db_column #50)
+  if !field.primary_key && field.db_index
     index_name = name * "_idx" |> lowercase
-    _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name", 
-    Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name\""]))
-  end  
+    index_col = Models.field_db_column(field, string(field_name))
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name",
+    Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$index_col\""]))
+  end
   nothing
 end
 
@@ -188,8 +193,12 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
     model_fields_map = Dict(String(strip(key, '"')) => String(key) for key in keys(model.fields))
     stripped_model_fields = Set(keys(model_fields_map))
 
-    # Do the same for current_schema model fields
-    current_fields_map = Dict(String(strip(key, '"')) => String(key) for key in keys(current_schema[model_name][:model].fields))
+    # Do the same for current_schema model fields, but key by the PHYSICAL column name
+    # (db_column when set, else the field name) so the code side aligns with the
+    # column-keyed introspected DB side — otherwise a field whose db_column differs from
+    # its name would churn as a spurious DROP + ADD (#50). The value stays the real
+    # field-name key for accessing model.fields.
+    current_fields_map = Dict(Models.field_db_column(field, String(strip(String(key), '"'))) => String(key) for (key, field) in current_schema[model_name][:model].fields)
     stripped_current_fields = Set(keys(current_fields_map))
 
     # check the field are not in current_schema (deletion)
@@ -228,7 +237,14 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
             old_var = getfield(old_field, attr)
             if new_var != old_var                  
               attr == :to && Models._compare_field_foreign_key(field, old_field) && continue
-              attr in [:blank, :on_delete, :related_name, :verbose_name, :editable, :how, :formater] && continue 
+              # pk_field is compared by RESOLVED referenced column: a field-name pk_field on
+              # the code side matches the introspected physical column when the parent pk is
+              # renamed via db_column (#50). No-op when the referenced column isn't renamed.
+              attr == :pk_field && Models.fk_target_column(field) == Models.fk_target_column(old_field) && continue
+              # :db_column never alters the live schema by itself — the column identity is
+              # already proven equal by the matched (column-keyed) field, and the introspected
+              # side carries db_column=nothing (#50).
+              attr in [:blank, :on_delete, :related_name, :verbose_name, :editable, :how, :formater, :db_column] && continue
               push!(colect_not_equal, attr)
             end
           end
@@ -302,8 +318,10 @@ function _resolve_table_fields(
     field_name_sym = colect_addition[1]
     field_name = field_name_sym |> string       
     colect_numbered, list_to_question = _colect_numbered_fields(colect_deletion)
-    if colect_deletion |> isempty 
-      _add_new_field(conn, migration_plan, model_name, current_model, field_name, temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
+    if colect_deletion |> isempty
+      # `field_name` here is the physical column; pass the real field key so _add_new_field's
+      # model.fields lookup resolves (the DDL re-derives the db_column from the field) (#50).
+      _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
     else       
       response = "no"
       if interactive
@@ -313,7 +331,8 @@ function _resolve_table_fields(
       end
       
       if response in ["no", "n"]
-        _add_new_field(conn, migration_plan, model_name, current_model, field_name, temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
+        # `field_name` is the physical column; pass the real field key (see above) (#50).
+        _add_new_field(conn, migration_plan, model_name, current_model, current_fields_map[field_name], temporary_default_value = _get_temporary_default_value(current_model.fields[current_fields_map[field_name]], settings))
       else
         old_field_sym::Union{Symbol,Nothing} = nothing
         try

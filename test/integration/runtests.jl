@@ -30,6 +30,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "PormGRow and get()"           begin include("test_row_and_get.jl")        end
     @testset "PormGRow Mutation"            begin include("test_row_mutation.jl")       end
     @testset "Field-name Case Preservation" begin include("test_field_name_case_db.jl") end
+    @testset "db_column Authoritative"       begin include("test_db_column_db.jl")       end
     @testset "Field Expressions"            begin include("test_field_expressions.jl")  end
     @testset "Updates"                      begin include("test_updates.jl")            end
     @testset "Deletes"                      begin include("test_deletes.jl")            end

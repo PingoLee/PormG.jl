@@ -451,7 +451,7 @@ Joining a **to-many** relation — a reverse foreign key (one parent → many ch
 query = M.Driver.objects
 query.values("nationality", "n" => Count("driverid"))
 query.filter("driver_standings__position__@gte" => 1)
-query |> DataFrame   # ArgumentError: PormG fan-out guard (#74) — the aggregate n is inflated …
+query |> DataFrame   # ArgumentError: PormG fan-out guard (#74): the aggregate n is inflated because …
 ```
 
 The legitimate case — aggregating the **related** table's own column (e.g. counting the related rows) — is exactly the intended fan-out and works normally:
@@ -468,6 +468,16 @@ df = query |> DataFrame
 1. **Aggregate the related table's own column** — count/sum the related rows directly, as above.
 2. **Pass `distinct=true`** if de-duplicated counting is what you want: `Count("driverid", distinct=true)` renders `COUNT(DISTINCT …)`.
 3. **Compute the aggregate in a correlated subquery** so the base rows are never multiplied.
+
+**Not affected.** Ordinary forward (to-one) `ForeignKey` traversals never trip the guard — only *to-many* joins (reverse FK / many-to-many) multiply rows. Aggregating across a normal FK is always fine:
+
+```julia
+# ✓ to-one join (Result → Constructor); no fan-out — results per constructor
+query = M.Result.objects
+query.values("constructorid__name", "n" => Count("resultid"))
+query.filter("raceid" => 1)
+df = query |> DataFrame
+```
 
 **Exemptions.** `Max` and `Min` are immune to row duplication and are never blocked; an aggregate built with `distinct=true` is treated as an explicit opt-in.
 

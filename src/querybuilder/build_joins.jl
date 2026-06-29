@@ -170,6 +170,9 @@ function _apply_many_to_many_branch(
   last_field = size(vector, 1) == 2 ? foreign_model.fields[vector[2]] : nothing
   tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how)
   row_join = _row_join_for_alias(instruct.row_join, tb_alias)
+  # #74: the related table reached through a many-to-many is the "many-side". Flag the (deduped)
+  # row_join entry so the fan-out guard can refuse silently-inflated aggregates over base columns.
+  row_join["to_many"] = "1"
   return (tb_alias, row_join, foreign_model, last_field)
 end
 
@@ -304,6 +307,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # column; both honor db_column (resolved in their own model, no-op without it) (#50).
     row_join["key_a"] = Models.model_column(instruct.object.model, instruct.object.model.related_objects[vector[1]][2] |> String)
     row_join["key_b"] = Models.model_column(reverse_model, instruct.object.model.related_objects[vector[1]][1] |> String)
+    # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
+    row_join["to_many"] = "1"
     foreign_table_name = s_model |> string
     @pormg_debug false
     end
@@ -405,6 +410,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       # column; both honor db_column (resolved in their own model, no-op without it) (#50).
       row_join["key_a"] = Models.model_column(new_object, new_object.related_objects[vector[1]][2] |> String)
       row_join["key_b"] = Models.model_column(reverse_model, new_object.related_objects[vector[1]][1] |> String)
+      # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
+      row_join["to_many"] = "1"
       foreign_table_name = s_model |> string
       vector = vector[2:end]
       _reverse_advanced = true

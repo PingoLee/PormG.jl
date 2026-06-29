@@ -57,7 +57,6 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 ## 🧮 SQL correctness & dialect alignment
 
-- [#74](https://github.com/PingoLee/PormG.jl/issues/74) — ⚠️ Aggregates over to-many joins silently inflate `Count`/`Sum`/`Avg` (no auto-DISTINCT/subquery) (pre-publish)
 - [#75](https://github.com/PingoLee/PormG.jl/issues/75) — ⚠️ `ORDER BY` NULL placement diverges PG vs SQLite (no `NULLS FIRST/LAST`) (pre-publish)
 - [#76](https://github.com/PingoLee/PormG.jl/issues/76) — `SELECT DISTINCT … ORDER BY <unselected column>` errors on PG, runs on SQLite
 - [#77](https://github.com/PingoLee/PormG.jl/issues/77) — `SQLOrder.orientation` interpolated unvalidated into `ORDER BY` (latent SQL injection; `security`)
@@ -94,6 +93,7 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 - [#46](https://github.com/PingoLee/PormG.jl/issues/46) — Parameterize LIMIT/OFFSET
 - [#59](https://github.com/PingoLee/PormG.jl/issues/59) — Model `db_table` option: pin an explicit (mixed/upper-case) table name (Django `Meta.db_table` analog; table-level sibling of #50, pairs with #57)
+- [#92](https://github.com/PingoLee/PormG.jl/issues/92) — 💬 Design: explicit correlated-subquery aggregates (no auto-magic) — the supported fix for #74 fan-out
 
 ---
 

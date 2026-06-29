@@ -1039,3 +1039,121 @@ end
     end
 end
 
+@testset "#74 Aggregate fan-out guard" begin
+    # Logic: COUNT/SUM/AVG over a column a to-many join (reverse FK / M2M) row-multiplies must RAISE the
+    #        #74 guard *specifically* (cause-checked, not just any ArgumentError); aggregating the
+    #        to-many table's OWN column under a single to-many returns the CORRECT recomputed value;
+    #        MAX/MIN and distinct=true are exempt; two to-many joins (n>=2), M2M, and un-attributable
+    #        expressions raise; a plain aggregate is correct and unaffected.
+    # Why: a base/parent column aggregated under a to-many join returns a confidently-wrong number
+    #      (verified 36x inflation on driver_standings). Fail-loud guard for issue #74.
+
+    # Returns the thrown error (or nothing). is_fanout confirms it is the #74 guard, so an unrelated
+    # ArgumentError (e.g. a bad field path) cannot masquerade as a passing raise.
+    fanout_err(f) = try; f(); nothing; catch e; e; end
+    is_fanout(e)  = e isa ArgumentError && occursin("fan-out", e.msg)
+
+    did = 1  # F1 dataset: driver 1 (Hamilton) has many driver_standings rows.
+
+    # CASE B — base-table pk under a to-many join → inflated → raise (cause-checked).
+    qB = M.Driver.objects
+    qB.values("nationality", "n" => Count("driverid"))
+    qB.filter("driver_standings__position__@gte" => 1)
+    @test is_fanout(fanout_err(() -> (qB |> DataFrame)))
+
+    # SUM / AVG over a BASE column under a to-many must also raise — the guard is not COUNT-only.
+    qSum = M.Driver.objects
+    qSum.values("nationality", "s" => Sum("number"))     # `number` is a base Driver column
+    qSum.filter("driver_standings__position__@gte" => 1)
+    @test is_fanout(fanout_err(() -> inspect_query(qSum)))
+
+    qAvg = M.Driver.objects
+    qAvg.values("nationality", "a" => Avg("number"))
+    qAvg.filter("driver_standings__position__@gte" => 1)
+    @test is_fanout(fanout_err(() -> inspect_query(qAvg)))
+
+    # CASE A — aggregate the to-many table's OWN column (single to-many) → allowed AND correct.
+    qA = M.Driver.objects
+    qA.values("driverid", "n" => Count("driver_standings__driverstandingsid"))
+    qA.filter("driverid" => did)
+    dfA = qA |> DataFrame
+    expectedA = M.Driver_standings.objects.filter("driverid" => did).count()
+    @test expectedA > 0                                  # guard against a vacuous 0 == 0
+    @test nrow(dfA) == 1 && dfA[1, :n] == expectedA       # recomputed value, not just "it ran"
+
+    # CASE A' — related column AND a filter on the SAME relation must NOT raise, and stay correct. The
+    #           join is built twice (cache + real); the guard derives from the deduped row_join.
+    qAp = M.Driver.objects
+    qAp.values("driverid", "n" => Count("driver_standings__driverstandingsid"))
+    qAp.filter("driverid" => did, "driver_standings__position__@gte" => 1)
+    dfAp = qAp |> DataFrame
+    expectedAp = M.Driver_standings.objects.filter("driverid" => did, "position__@gte" => 1).count()
+    @test (nrow(dfAp) == 1 ? dfAp[1, :n] : 0) == expectedAp
+
+    # MAX over a to-many column is immune to duplication → allowed AND equals the true max.
+    qMax = M.Driver.objects
+    qMax.values("driverid", "m" => Max("driver_standings__points"))
+    qMax.filter("driverid" => did)
+    pts = (M.Driver_standings.objects.filter("driverid" => did).values("points") |> DataFrame).points
+    @test (qMax |> DataFrame)[1, :m] == maximum(pts)
+
+    # MIN is exempt too (symmetric to MAX) → allowed AND equals the true min.
+    qMin = M.Driver.objects
+    qMin.values("driverid", "m" => Min("driver_standings__points"))
+    qMin.filter("driverid" => did)
+    @test (qMin |> DataFrame)[1, :m] == minimum(pts)
+
+    # distinct=true → renders COUNT(DISTINCT …) and counts the single grouped driver once.
+    qDist = M.Driver.objects
+    qDist.values("driverid", "n" => Count("driverid", distinct=true))
+    qDist.filter("driverid" => did, "driver_standings__position__@gte" => 1)
+    @test occursin("COUNT(DISTINCT", inspect_query(qDist)[:sql_text])   # cause: opt-in rendered
+    @test (qDist |> DataFrame)[1, :n] == 1
+
+    # COUNT(*) under a to-many join → inflated → raise (cause-checked).
+    qStar = M.Driver.objects
+    qStar.values("nationality", "n" => Count("*"))
+    qStar.filter("driver_standings__position__@gte" => 1)
+    @test is_fanout(fanout_err(() -> (qStar |> DataFrame)))
+
+    # n >= 2 — aggregating ONE many-side column while a SECOND to-many relation is also joined still
+    #          inflates (the grains multiply), so even the many-side aggregate must raise.
+    qN2 = M.Driver.objects
+    qN2.values("driverid", "n" => Count("driver_standings__driverstandingsid"))
+    qN2.filter("lap_times__lap__@gte" => 1)              # second reverse to-many relation
+    @test is_fanout(fanout_err(() -> inspect_query(qN2)))
+
+    # Many-to-many — counting the BASE row while joining an M2M relation inflates → raise; counting the
+    # M2M-related table's own column (single to-many) is allowed. Build-level (needs no M2M data).
+    qM2M = M.M2m_driver_endorsement_scratch.objects
+    qM2M.values("driverref", "n" => Count("id"))
+    qM2M.filter("sponsors__name__@icontains" => "x")
+    @test is_fanout(fanout_err(() -> inspect_query(qM2M)))
+
+    qM2Mok = M.M2m_driver_endorsement_scratch.objects
+    qM2Mok.values("driverref", "n" => Count("sponsors__id"))
+    @test fanout_err(() -> inspect_query(qM2Mok)) === nothing   # related-col M2M aggregate is fine
+
+    # Ambiguous — an aggregate over a multi-column expression cannot be attributed to one table, so the
+    # guard conservatively raises under a to-many rather than risk a silent wrong number.
+    qAmb = M.Driver.objects
+    qAmb.values("nationality", "s" => Sum(F("driver_standings__points") + F("driver_standings__wins")))
+    qAmb.filter("driver_standings__position__@gte" => 1)
+    @test is_fanout(fanout_err(() -> inspect_query(qAmb)))
+
+    # Forward FK (to-one) join present → NOT a fan-out → guard must allow. This is the key
+    # discrimination: a to-one join must never be marked to-many. Counts stay correct.
+    qFk = M.Result.objects
+    qFk.values("constructorid__name", "n" => Count("resultid"))
+    qFk.filter("raceid" => 1)
+    @test fanout_err(() -> inspect_query(qFk)) === nothing            # to-one join does not trip the guard
+    dfFk = qFk |> DataFrame
+    @test sum(dfFk.n) == M.Result.objects.filter("raceid" => 1).count()  # per-constructor counts sum to the race total
+
+    # No to-many join (plain aggregate) → unaffected AND correct.
+    qPlain = M.Result.objects
+    qPlain.values("raceid", "n" => Count("resultid"))
+    qPlain.filter("raceid" => 1)
+    @test (qPlain |> DataFrame)[1, :n] == M.Result.objects.filter("raceid" => 1).count()
+end
+

@@ -619,6 +619,16 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     return getfield(Dialect, func_name)(resolved_column, over_sql, instruc.connection)
   end
 end
+# #74: extract the single source table alias from a fully-resolved bare column reference like
+# `"Tb_1"."points"` or `"Tb".*`. Returns the unquoted alias, or `nothing` for anything that is not a
+# single column (nested aggregate, F-expression, multi-column) — the fan-out guard treats `nothing`
+# as ambiguous and conservatively refuses. Both backends quote identifiers with double quotes.
+function _extract_leading_alias(s)
+  s isa AbstractString || return nothing
+  m = match(r"^\"((?:[^\"]|\"\")+)\"\.(?:\"(?:[^\"]|\"\")+\"|\*)$", s)
+  m === nothing ? nothing : replace(m.captures[1], "\"\"" => "\"")
+end
+
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
   # IMPORTANT: these must be parameterized AFTER the column is resolved, because the SQL text order
@@ -656,6 +666,18 @@ function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Uni
 
   # Phase 2: Resolve column (conditions) — this adds condition params in SQL text order
   resolved_column = _get_select_query(v.column, instruc, _as=_as)
+
+  # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can
+  # refuse aggregates a to-many join would silently inflate. MAX/MIN are immune and omitted; a
+  # `distinct=true` aggregate is an explicit opt-in and is exempted by the check.
+  if v.function_name in ("COUNT", "SUM", "AVG")
+    src = _extract_leading_alias(resolved_column)
+    push!(instruc.agg_sources, (
+      alias = src === nothing ? "\0AMBIGUOUS" : src,
+      func = v.function_name,
+      label = _as === nothing ? string(v.function_name, "(", resolved_column, ")") : _as,
+      distinct = get(v.kwargs, "distinct", false) === true))
+  end
 
   # Phase 3: Now parameterize deferred kwargs (they appear AFTER conditions in SQL)
   # Order matters for positional backends: then → else → precision

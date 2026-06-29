@@ -11,6 +11,7 @@ Expert Julia ORM work on **PormG** (async-first, Genie-compatible). Be direct, c
 ## Non-negotiables
 
 - **Pre-publish (not yet on Julia General; single maintainer, ~4 internal apps, no external users):** breaking changes are cheap — get the API/schema/naming *right* over backward compatibility; deprecation shims (e.g. the `bulk_update` legacy-`filters` error) are internal migration aids to remove before publish; release-gating decisions are tagged `⚠️ do BEFORE the first General-registry publish` in [`TODO.md`](../../TODO.md). *(Remove this bullet once published.)*
+- **Commit/push gate — review first:** never run `git commit`, `git push`, or open/update a PR without the user's **explicit approval at that step**. Plan approval (including `ExitPlanMode`) authorizes *implementing* the change, **not** committing it — finish the work, show the diff/summary, and wait for an explicit go-ahead to commit; treat pushing and opening PRs as a *separate* confirmation again. Backlog (`TODO.md`) and docs edits follow the same rule.
 - Use the ORM surface (`M.Model.objects`, fluent terminals). No raw SQL in docs, examples, or integration tests unless the feature requires it.
 - **Julia chains:** multi-line method chains **must** use **trailing-dot** syntax (placing `.` at the end of the previous line to continue) or stay inline — leading-dot lines are a Julia `ParseError`.
 - Parameterized queries only; never interpolate user input into SQL strings.

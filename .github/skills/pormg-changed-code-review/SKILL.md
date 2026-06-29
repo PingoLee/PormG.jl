@@ -101,12 +101,29 @@ Check aggressively for:
 
 ### Tests
 
-In the `test` pass, verify:
+A `test` pass is **not** a box-tick on "are there tests?" — it is a critical judgement of whether each
+new or changed test actually *constrains behavior*, or is just **green-theater**: present so the suite
+goes green without proving the change is correct. For every added/modified test apply the **mutation
+test** — *if the source change were reverted (or the bug it guards reintroduced), would this test
+fail?* If it would still pass, the test is decorative; report that as a finding, because a behavior
+change with only decorative coverage carries the same risk as no coverage.
 
-- changed behavior has regression coverage
+Verify:
+
+- changed behavior has regression coverage that genuinely exercises the changed code path
 - tests validate public behavior first when the change is user-visible
-- assertions still match the real contract instead of just the current implementation detail
+- assertions check the real contract / the actual value — not merely that code ran
 - new tests do not weaken field contracts to accommodate dirty fixtures when normalization belongs in import/setup code
+
+Flag these **green-theater smells** explicitly, and propose the assertion that would actually fail if the behavior broke:
+
+- **"It ran" assertions** — `@test (q |> DataFrame) isa DataFrame`, `@test !isnothing(x)`, `@test true`, or asserting a return *type/shape* when the test's intent is a *value*. These pass as long as nothing throws and prove almost nothing. Demand the real value: recompute it independently and assert equality (the live-data recipe in [`../pormg-public-api-development/SKILL.md`](../pormg-public-api-development/SKILL.md), "Verify the value, not just execution").
+- **`@test_throws` with no cause check** — `@test_throws ArgumentError f()` passes for *any* `ArgumentError`, including an unrelated one (a typo'd field, a different validator). When the point is a *specific* failure, assert on the message/condition (e.g. `try f(); @test false catch e; @test occursin("fan-out", e.msg) end`) so a different error can't masquerade as a pass.
+- **Tautologies** — `@test x == x`, or comparing a value to a constant the code under test just produced.
+- **Weak bounds when the exact answer is knowable** — `@test n > 0` / `@test !isempty(rows)` where a precise count or row set could be asserted. Acceptable only when the value is genuinely nondeterministic.
+- **No discrimination** — a guard/branch test that exercises only one side (only the raise, or only the allow). It cannot prove the behavior fires *and only* when it should; require both the positive and negative case.
+- **Snapshot drift** — an expected SQL string / output edited to match new code without confirming the new output is itself correct (see Anti-Patterns).
+- **Dead tests** — over-mocking, the wrong fixture, or a skipped path means the test never reaches the changed code and would pass against the old code too.
 
 ### Other folders
 
@@ -155,3 +172,4 @@ This project is single-developer: unstaged changes are reviewed first, then stag
 - Do not rely on a single giant diff when ordered slices are available
 - Do not treat generated docs or build artifacts as the primary source of truth
 - Do not approve sensitive logging, SQL interpolation, or weakened destructive guards as minor issues
+- Do not count green-theater tests as coverage — a type/shape-only "it ran" assertion, a `@test_throws` with no cause check, a tautology, or a weak bound where the exact value is knowable is a **finding**, not a pass; name it and give the assertion that would actually fail if the behavior regressed

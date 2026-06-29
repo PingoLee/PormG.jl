@@ -86,8 +86,10 @@ Notes / limits:
   `pk_field` and is resolved through the parent field's own `db_column` — for **both** model-instance
   and string targets (`ForeignKey(Parent, pk_field="code")` or `ForeignKey("Parent", pk_field="code")`),
   and whether or not `pk_field` is spelled out (#62).
-- `ManyToManyField` through-table columns are **not** configurable via `db_column`. A `db_column` on a
-  model's primary key is also **not** yet honored by ManyToMany/CTE join keys (#64).
+- A `db_column` on a model's primary key is honored by **ManyToMany and CTE join keys** too (#64), so
+  M2M traversal and CTE joins on a renamed PK resolve correctly (the base-table side of a CTE join maps
+  to the physical column; the CTE side keeps its projection alias). The only surface that is **not**
+  configurable is the auto-generated `ManyToManyField` **through-table column names** (`<model>_<pk>`).
 
 ### Verify
 

@@ -76,19 +76,26 @@ function _resolve_django_join_field(model::PormGModel, field_name::String, instr
   return field_name
 end
 
-function _resolve_many_to_many_related_model(_module::Module, relation::Models.ManyToManyRelation)::PormGModel
-  binding = Symbol(relation.related_binding)
-  if isdefined(_module, binding)
-    candidate = Base.invokelatest(getfield, _module, binding)
+# Resolve one side of an M2M relation (owner or related) to its PormGModel within `_module`:
+# by binding first, then by formatted model name. Lets the join builder read each side's
+# `db_column` for its PK (#64) — the relation stores only string names/bindings.
+function _resolve_m2m_side_model(_module::Module, binding::String, model_name::String, field_name::String)::PormGModel
+  bsym = Symbol(binding)
+  if isdefined(_module, bsym)
+    candidate = Base.invokelatest(getfield, _module, bsym)
     candidate isa PormGModel && return candidate
   end
 
-  target_name = Models.format_model_name(relation.related_model)
+  target_name = Models.format_model_name(model_name)
   for model in Models.get_all_models(_module)
     Models.format_model_name(model.name) == target_name && return model
   end
 
-  throw(ArgumentError("The many-to-many related model $(relation.related_binding) for accessor $(relation.field_name) is not defined"))
+  throw(ArgumentError("The many-to-many model $(binding) for accessor $(field_name) is not defined"))
+end
+
+function _resolve_many_to_many_related_model(_module::Module, relation::Models.ManyToManyRelation)::PormGModel
+  return _resolve_m2m_side_model(_module, relation.related_binding, relation.related_model, relation.field_name)
 end
 
 function _insert_many_to_many_joins(
@@ -101,10 +108,18 @@ function _insert_many_to_many_joins(
 )
   join_type = previus_how == "LEFT" ? "LEFT" : "INNER"
 
+  # #64: the PARENT-side join keys (owner_pk / related_pk) are field NAMES; resolve each to
+  # its physical column via the owning model's db_column. The through-table columns
+  # (owner_column / related_column) are the through table's own (auto-generated) columns and
+  # stay as-is. `model_column` is a strict no-op when the PK has no db_column.
+  _module = instruct.object.model._module::Module
+  owner_model = _resolve_m2m_side_model(_module, relation.owner_binding, relation.owner_model, relation.field_name)
+  related_model = _resolve_m2m_side_model(_module, relation.related_binding, relation.related_model, relation.field_name)
+
   through_row = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
   through_row["a"] = parent_table
   through_row["alias_a"] = parent_alias
-  through_row["key_a"] = relation.owner_pk
+  through_row["key_a"] = Models.model_column(owner_model, relation.owner_pk)
   through_row["b"] = relation.through_model
   through_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
   through_row["key_b"] = relation.owner_column
@@ -118,7 +133,7 @@ function _insert_many_to_many_joins(
   related_row["key_a"] = relation.related_column
   related_row["b"] = relation.related_model
   related_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-  related_row["key_b"] = relation.related_pk
+  related_row["key_b"] = Models.model_column(related_model, relation.related_pk)
   related_row["how"] = join_type
 
   return _insert_join(instruct.row_join, related_row, instruct.row_path, join_path)
@@ -197,7 +212,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
     if (main_table_key in instruct.object.model.field_names)
       row_join["alias_a"] = instruct.alias
-      row_join["key_a"] = main_table_key
+      # #64: resolve the main-model join field to its physical column (db_column).
+      row_join["key_a"] = Models.model_column(instruct.object.model, main_table_key)
     elseif haskey(instruct.cache, main_table_key) || _cache_join(main_table_key, instruct)
       cache_item = instruct.cache[main_table_key]
       v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
@@ -213,7 +229,11 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["b"] = cte_name  # CTE name becomes the table name
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     row_join["how"] = cte_dict["join_type"]::String
-        
+
+    # #64: the CTE side stays the FIELD NAME — a CTE is a derived table whose columns are
+    # the values() projection ALIASES (`"pk_code" AS "code"`), so the join references the
+    # alias "code", not the physical column. Only the main-table side (key_a above) is a
+    # real physical column and is db_column-resolved.
     row_join["key_b"] = cte_table_key
 
     @pormg_debug false

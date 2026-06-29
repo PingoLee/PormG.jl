@@ -1845,6 +1845,39 @@ end
     @test_throws ArgumentError PormG.Models.set_models(bad_mod, "mock_sl_path")
 end
 
+# ── #64: db_column on M2M / CTE join keys (DB-free render asserts) ─────────────────────────
+@testset "M2M join honors db_column on renamed PKs (#64)" begin
+    # Both participating models' PKs are renamed (driver code→driver_pk, sponsor code→sponsor_pk).
+    # The through-table join must target the physical PK columns, not the field name "code".
+    q = M.M2m_rpk_driver_scratch.objects
+    q.filter("sponsors__name" => "Petrolux")
+    q.values("driverref")
+    sql = inspect_query(q)[:sql_text]
+    @test occursin("\"driver_pk\"", sql)    # owner PK resolved → through-join key_a
+    @test occursin("\"sponsor_pk\"", sql)   # related PK resolved → related-join key_b
+    @test !occursin("\"code\"", sql)        # the bare field name is never a join column
+end
+
+@testset "CTE join honors db_column on a renamed PK (#64)" begin
+    # Self-CTE over a renamed-PK model. The main physical-table join key resolves code→pk_code;
+    # the CTE side stays the field-name alias ("code" = the CTE's output column).
+    cte = M.Db_column_pk_scratch.objects
+    cte.values("code", "label")
+    main = M.Db_column_pk_scratch.objects
+    main.with("rpk_cte" => cte, join_field="code" => "code")
+    main.values("label", "cval" => "rpk_cte__label")
+    sql = inspect_query(main)[:sql_text]
+    @test occursin("pk_code\" =", sql)      # main physical-table join key resolved (key_a)
+end
+
+@testset "_resolve_m2m_side_model: binding fallback + not-found error (#64)" begin
+    # When the binding isn't a defined module binding, the helper falls back to a name scan
+    # over get_all_models; a name that matches no model raises ArgumentError.
+    resolved = PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "m2m_rpk_sponsor_scratch", "sponsors")
+    @test resolved === M.M2m_rpk_sponsor_scratch
+    @test_throws ArgumentError PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "no_such_model_zzz", "sponsors")
+end
+
 @testset "Related Objects - Auto-generated related_name key format" begin
     # Just_a_nested_roll_back has a single FK to Just_a_test_deletion with no
     # explicit related_name. The auto-generated key should be the lowercased

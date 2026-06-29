@@ -1155,3 +1155,155 @@ end  # @testset "Migration Engine Edge Cases"
   @info "Selected integration DB rebuilt after edge-case migration tests" adapter=adapter_name db=PORMG_DB_FOLDER fallback=edge_db_reuses_selected_db[]
 end
 
+# ── SQLite table-rebuild: preserve secondary indexes + FK-integrity gate (#82) ──
+#
+# Logic: a SQLite field ALTER rebuilds the table (CREATE new → INSERT…SELECT → DROP old → RENAME).
+#        The DROP drops the table's secondary indexes; the fix re-emits their captured CREATE INDEX
+#        DDL after the rename, and a `PRAGMA foreign_key_check` gates the rebuild. After altering an
+#        UNRELATED field, the pre-existing db_index index must still exist, the UNIQUE constraint must
+#        still be enforced, and the seeded row must survive.
+# Why: before the fix the rebuild silently dropped every secondary index (lost uniqueness / slow
+#      queries surfacing much later) — issue #82. PostgreSQL uses real ALTER COLUMN (no rebuild), so
+#      this regression is SQLite-specific.
+if adapter_name == "SQLite"
+  @testset "SQLite rebuild preserves indexes + FK gate (#82)" begin
+    db82 = "db_test_migration_82"
+    db82_path = joinpath(@__DIR__, db82)
+    write82(content::String) = open(joinpath(db82_path, "models.jl"), "w") do f
+      write(f, "module models\nimport PormG.Models\n", content, "\nend")
+    end
+    # Only "_idx" CREATE INDEX entries are at risk; column-level UNIQUE auto-indexes
+    # (sqlite_autoindex_*) are recreated by the rebuilt CREATE TABLE, so isolate the user indexes.
+    user_idx(names) = sort([n for n in names if occursin("idx", lowercase(n))])
+
+    try
+      # ── setup: fresh isolated SQLite DB ──────────────────────────────────────
+      try; PormG.Configuration.close_pool!(db82_path); catch; end
+      try; ispath(db82_path) && rm(db82_path, recursive=true); catch; end
+      PormG.Generator.create_db_folder_and_yml(path=db82_path, adapter="SQLite")
+      yml = joinpath(db82_path, "connection.yml")
+      yml_content = replace(read(yml, String), "database: database.sqlite" => "database: migration_82.sqlite")
+      open(yml, "w") do f; write(f, yml_content); end   # read BEFORE opening "w" (which truncates)
+      PormG.Configuration.load(db82_path)
+      pool82 = PormG.Configuration.get_settings(db82_path).connections
+
+      # ── create: child carries a db_index + UNIQUE field, an FK to parent, and an unrelated field ──
+      write82("""
+      IndexParent82 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField()
+      )
+      IndexChild82 = Models.Model(
+          id = Models.IDField(),
+          code = Models.CharField(db_index=true, unique=true),
+          parent_id = Models.ForeignKey(IndexParent82, pk_field="id", on_delete="CASCADE"),
+          payload = Models.CharField(null=true)
+      )
+      """)
+      makemigrations(db82_path, interactive=false)
+      migrate(db82_path, interactive=false, destructive=true)
+
+      # baseline: the db_index secondary index exists, and seed a valid parent + child.
+      idx_before = user_idx(index_names(pool82, "indexchild82"))
+      @test !isempty(idx_before)
+      PormG.ConnectionPool.fetch(pool82, """INSERT INTO "indexparent82" ("name") VALUES ('p1')""")
+      PormG.ConnectionPool.fetch(pool82, """INSERT INTO "indexchild82" ("code", "parent_id", "payload") VALUES ('c1', 1, 'keep')""")
+
+      # ── alter an UNRELATED field (payload: null=true → NOT NULL) → forces the table rebuild ──
+      write82("""
+      IndexParent82 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField()
+      )
+      IndexChild82 = Models.Model(
+          id = Models.IDField(),
+          code = Models.CharField(db_index=true, unique=true),
+          parent_id = Models.ForeignKey(IndexParent82, pk_field="id", on_delete="CASCADE"),
+          payload = Models.CharField()
+      )
+      """)
+      makemigrations(db82_path, interactive=false)
+      migrate(db82_path, interactive=false, destructive=true)   # would throw if foreign_key_check found orphans
+
+      # (a) the user-created secondary index SURVIVED the rebuild (same name) — the core #82 fix.
+      @test user_idx(index_names(pool82, "indexchild82")) == idx_before
+
+      # (b) uniqueness is still enforced after the rebuild.
+      dup_err = try
+        PormG.ConnectionPool.fetch(pool82, """INSERT INTO "indexchild82" ("code", "parent_id", "payload") VALUES ('c1', 1, 'dup')""")
+        nothing
+      catch e; e; end
+      @test dup_err !== nothing
+      @test any(tok -> occursin(tok, lowercase(string(dup_err))), ["unique", "constraint"])
+
+      # (c) the seeded row survived the rebuild.
+      survivors = PormG.ConnectionPool.fetch(pool82,
+        """SELECT "code" FROM "indexchild82" WHERE "code" = 'c1'""") |> DataFrame
+      @test DataFrames.nrow(survivors) == 1
+
+      # (d) the alteration applied and the migration succeeded (so foreign_key_check passed, no orphans).
+      @test "payload" in column_names(pool82, "indexchild82")
+
+      # (e) the OTHER rebuild path — adding a NOT NULL field with no explicit default forces a
+      #     temp-default backfill + table recreation (planner `_add_new_field`). It must ALSO preserve
+      #     the indexes. (DateField is backfilled with a temp default, mirroring Phase 8f; a plain
+      #     CharField has no temp default and SQLite rejects the NOT NULL add, so it wouldn't rebuild.)
+      write82("""
+      IndexParent82 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField()
+      )
+      IndexChild82 = Models.Model(
+          id = Models.IDField(),
+          code = Models.CharField(db_index=true, unique=true),
+          parent_id = Models.ForeignKey(IndexParent82, pk_field="id", on_delete="CASCADE"),
+          payload = Models.CharField(),
+          added_on = Models.DateField()
+      )
+      """)
+      makemigrations(db82_path, interactive=false)
+      migrate(db82_path, interactive=false, destructive=true)
+      @test "added_on" in column_names(pool82, "indexchild82")
+      @test user_idx(index_names(pool82, "indexchild82")) == idx_before   # add-field rebuild kept the index
+
+      # (f) the FK-check GATE fires: enforcement is off by default, so we can plant an orphan row, and the
+      #     next rebuild's PRAGMA foreign_key_check must abort the migration (rollback) rather than commit.
+      PormG.ConnectionPool.fetch(pool82,
+        """INSERT INTO "indexchild82" ("code", "parent_id", "payload", "added_on") VALUES ('orphan', 999, 'x', '2024-01-01')""")
+      write82("""
+      IndexParent82 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField()
+      )
+      IndexChild82 = Models.Model(
+          id = Models.IDField(),
+          code = Models.CharField(db_index=true, unique=true),
+          parent_id = Models.ForeignKey(IndexParent82, pk_field="id", on_delete="CASCADE"),
+          payload = Models.CharField(null=true),
+          added_on = Models.DateField()
+      )
+      """)
+      makemigrations(db82_path, interactive=false)
+      gate_err = try
+        migrate(db82_path, interactive=false, destructive=true)
+        nothing
+      catch e; e; end
+      @test gate_err !== nothing
+      @test occursin("foreign_key_check", lowercase(string(gate_err))) ||
+            occursin("orphan", lowercase(string(gate_err)))
+      # rollback integrity: the aborted alter (payload NOT NULL → nullable) must NOT have applied, so a
+      # row omitting payload is still rejected by the surviving NOT NULL constraint.
+      rollback_err = try
+        PormG.ConnectionPool.fetch(pool82,
+          """INSERT INTO "indexchild82" ("code", "parent_id", "added_on") VALUES ('rollbackcheck', 1, '2024-01-01')""")
+        nothing
+      catch e; e; end
+      @test rollback_err !== nothing
+    finally
+      try; PormG.Configuration.close_pool!(db82_path); catch; end
+      try; delete!(PormG.config, db82_path); catch; end
+      try; ispath(db82_path) && rm(db82_path, recursive=true); catch; end
+    end
+  end
+end
+

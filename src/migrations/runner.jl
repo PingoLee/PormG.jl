@@ -580,7 +580,19 @@ function _execute_statements_sqlite(connection::PormGSQLite, statements::Vector{
       trimmed = strip(part) |> string
       isempty(trimmed) && continue
       @debug "Executing: $trimmed"
-      with_transaction(connection, trimmed, conn=conn)
+      if occursin(r"^PRAGMA\s+foreign_key_check"i, trimmed)
+        # #82: gate emitted by the SQLite table-rebuild. foreign_key_check returns one row per orphaned
+        # FK reference; any rows mean the rebuild left dangling children, so abort — the surrounding
+        # catch rolls the whole migration back. (PRAGMA foreign_key_check works inside a transaction,
+        # unlike PRAGMA foreign_keys.)
+        result, _ = with_transaction(connection, trimmed, conn=conn)
+        violations = DataFrame(result)
+        if nrow(violations) > 0
+          error("Migration aborted: PRAGMA foreign_key_check found $(nrow(violations)) orphaned foreign-key row(s) after a SQLite table rebuild; rolling back.")
+        end
+      else
+        with_transaction(connection, trimmed, conn=conn)
+      end
     end
   end
 end

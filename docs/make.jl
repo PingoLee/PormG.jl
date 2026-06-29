@@ -1,4 +1,5 @@
 using Documenter
+using DocumenterMermaid
 using PormG
 using Dates
 using TimeZones
@@ -55,6 +56,7 @@ makedocs(
         ],
         "Import from Django" => "import_django.md",
 
+        "Architecture" => "architecture.md",
         "Advisory Locks" => "advisory_lock.md",
         "Extending PormG" => "extending.md",
         "Contributing" => "contributing.md",

@@ -47,8 +47,38 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 ## 🔍 Review possible issues
 
-- [#43](https://github.com/PingoLee/PormG.jl/issues/43) — `deepcopy(ctes)` → `copy(ctes)` shared-state risk
+- [#43](https://github.com/PingoLee/PormG.jl/issues/43) — ⚠️ Shared mutable state in read/copy path: `.list()` mutates the live query, `.copy()` aliases CTE state (pre-publish)
+- [#69](https://github.com/PingoLee/PormG.jl/issues/69) — ⚠️ Migration diff fails open: `_compare_model_field` swallows comparison errors and reports fields equal (pre-publish)
 - [#44](https://github.com/PingoLee/PormG.jl/issues/44) — CTE ergonomics: reference CTE fields via `F()` in the main query
+- [#68](https://github.com/PingoLee/PormG.jl/issues/68) — Refactor `_build_row_join`: collapse duplicated first-hop/loop join resolution (tech debt; behavior-preserving)
+- [#70](https://github.com/PingoLee/PormG.jl/issues/70) — `Model_to_str` silently drops a field when rendering throws (swallowed catch)
+- [#73](https://github.com/PingoLee/PormG.jl/issues/73) — `bulk_update` parameters snapshot/restore leaves partial state on mid-chunk failure
+- [#80](https://github.com/PingoLee/PormG.jl/issues/80) — Dead identifier-whitelist helpers + skill-doc claims a contract the code doesn't exercise (`documentation`)
+
+## 🧮 SQL correctness & dialect alignment
+
+- [#74](https://github.com/PingoLee/PormG.jl/issues/74) — ⚠️ Aggregates over to-many joins silently inflate `Count`/`Sum`/`Avg` (no auto-DISTINCT/subquery) (pre-publish)
+- [#75](https://github.com/PingoLee/PormG.jl/issues/75) — ⚠️ `ORDER BY` NULL placement diverges PG vs SQLite (no `NULLS FIRST/LAST`) (pre-publish)
+- [#76](https://github.com/PingoLee/PormG.jl/issues/76) — `SELECT DISTINCT … ORDER BY <unselected column>` errors on PG, runs on SQLite
+- [#77](https://github.com/PingoLee/PormG.jl/issues/77) — `SQLOrder.orientation` interpolated unvalidated into `ORDER BY` (latent SQL injection; `security`)
+- [#78](https://github.com/PingoLee/PormG.jl/issues/78) — Case-insensitive lookups (`icontains`/`istartswith`/`iendswith`) diverge PG vs SQLite on non-ASCII text
+- [#79](https://github.com/PingoLee/PormG.jl/issues/79) — `DateTimeField` equality/range filters can diverge PG vs SQLite (format-sensitive TEXT comparison)
+
+## 🧱 Migration apply / rollback safety
+
+- [#81](https://github.com/PingoLee/PormG.jl/issues/81) — Migrations are not idempotent and checksum is never verified (re-apply landmine, no drift detection)
+- [#82](https://github.com/PingoLee/PormG.jl/issues/82) — SQLite table-rebuild drops secondary indexes and runs with FK enforcement off (data-loss risk)
+- [#83](https://github.com/PingoLee/PormG.jl/issues/83) — SQLite `drop_foreign_key` is broken (undefined `get_constraints`) and embeds `BEGIN/COMMIT` that breaks migration atomicity
+- [#87](https://github.com/PingoLee/PormG.jl/issues/87) — `migrate()` defaults `interactive=true` and blocks on `readline()` in non-interactive/CI contexts
+- [#89](https://github.com/PingoLee/PormG.jl/issues/89) — Migration statement ordering has no FK-dependency topological sort (`CREATE`/`DROP` order survives by accident)
+- [#90](https://github.com/PingoLee/PormG.jl/issues/90) — Migration advisory lock keyed on config folder, not database identity (two configs on one DB don't mutually exclude)
+
+## 📦 Bulk insert / update / copy
+
+- [#84](https://github.com/PingoLee/PormG.jl/issues/84) — Bulk insert/update has no parameter-limit-aware chunking (overflows SQLite 999 / PG 65535)
+- [#85](https://github.com/PingoLee/PormG.jl/issues/85) — `bulk_update` is non-atomic on SQLite (multi-chunk partial update on mid-chunk failure)
+- [#86](https://github.com/PingoLee/PormG.jl/issues/86) — `bulk_copy` NULL/empty-string collision + formatter bypass (silent data divergence vs `create`/`bulk_insert`)
+- [#88](https://github.com/PingoLee/PormG.jl/issues/88) — SQLite `allocate_primary_keys` is racy outside `run_in_transaction` (read-then-write; reservation no-op at tx depth 0)
 
 ## 🔗 Custom Join (`cjoin`) Gaps
 
@@ -57,6 +87,8 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 ## 🐞 SQLite worker / pool stability
 
 - [#47](https://github.com/PingoLee/PormG.jl/issues/47) — SQLite connection / file-handle release at teardown (`close_pool!` leased-close + non-idempotent `_close_db!`)
+- [#71](https://github.com/PingoLee/PormG.jl/issues/71) — Failed ROLLBACK returns a possibly-dirty connection to the pool
+- [#72](https://github.com/PingoLee/PormG.jl/issues/72) — `acquire_connection` throws raw `String`s and spins ~30s on a permanently-bad connection
 
 ## 🔮 Future Considerations
 

@@ -324,7 +324,51 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :join)
   build_row_join_sql_text(instruct)
 
-  get_order_query(object, instruct)  # ORDER BY has no parameters  
+  get_order_query(object, instruct)  # ORDER BY has no parameters
+
+  _check_aggregate_fanout(instruct)  # #74: refuse silently-inflated aggregates over to-many joins
 
   return instruct
+end
+
+# #74 fan-out guard ------------------------------------------------------------------------------
+# A to-many join (reverse FK / many-to-many) repeats base-table rows, so COUNT/SUM/AVG over a column
+# from a row-multiplied table silently inflates the result. We refuse those at build time rather than
+# return a confidently-wrong number. The legitimate case — aggregating the to-many table's OWN column
+# (the sole many-side) — is preserved. MAX/MIN are immune; `distinct=true` is an explicit opt-in.
+function _check_aggregate_fanout(instruct::SQLInstruction)
+  isempty(instruct.agg_sources) && return nothing
+  # Derive the many-side aliases from the *deduped* row_join. A join can be built more than once
+  # (e.g. _cache_join pre-builds a filter join, then it is built again for real); _insert_join keeps
+  # only one entry, so deriving here counts each actual to-many join exactly once.
+  many = Set{String}()
+  for r in instruct.row_join
+    get(r, "to_many", "") == "1" && push!(many, string(r["alias_b"]))
+  end
+  isempty(many) && return nothing
+  n = length(many)
+  for a in instruct.agg_sources
+    a.distinct && continue
+    ambiguous = a.alias == "\0AMBIGUOUS"
+    # Safe only when the aggregate targets the sole to-many table's own column.
+    (!ambiguous && a.alias in many && n == 1) && continue
+    throw(_argerr(_fanout_error_msg(a, many, ambiguous)))
+  end
+  return nothing
+end
+
+function _fanout_error_msg(a, many, ambiguous::Bool)
+  paths = join(sort!(collect(many)), ", ")
+  reason = ambiguous ?
+    "the aggregated expression spans more than one source, so it cannot be proven safe under a row-multiplying (to-many) join" :
+    "it aggregates a column from a table that a to-many join row-multiplies"
+  string(
+    "PormG fan-out guard (#74): the aggregate \e[4m\e[31m", a.label, "\e[0m is inflated because ", reason, ".\n",
+    "  A to-many join (reverse foreign key or many-to-many) repeats base-table rows, so ", a.func,
+    " would count/sum each base row once per related row.\n",
+    "  To-many table alias(es) in this query: \e[33m", paths, "\e[0m.\n",
+    "  Fix one of:\n",
+    "    \e[32m1.\e[0m Aggregate the RELATED table's own column instead (e.g. count related rows: Count(\"reverse_relation__id\")).\n",
+    "    \e[32m2.\e[0m Pass \e[32mdistinct=true\e[0m to the aggregate if de-duplicated counting is what you want.\n",
+    "    \e[32m3.\e[0m Compute the aggregate in a correlated subquery so the base rows are not multiplied.\n")
 end

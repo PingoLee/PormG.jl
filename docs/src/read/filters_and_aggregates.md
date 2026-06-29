@@ -442,6 +442,38 @@ The `WHERE` filter still applies row-by-row *before* aggregation; it is the abse
 
 These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid") - Min("resultid")`, or subtract a constant like `Max("resultid") - 1000`. See [Aggregate Arithmetic](field_expressions.md#aggregate-arithmetic).
 
+### Aggregating Across To-Many Relations (Fan-Out Guard)
+
+Joining a **to-many** relation — a reverse foreign key (one parent → many children) or a many-to-many — repeats each parent row once per related row *before* aggregation. An aggregate over a **parent/base** column would therefore be silently multiplied. PormG refuses this at build time rather than return a confidently-wrong number:
+
+```julia
+# ✗ raises: counts the DRIVER pk, but the driver_standings join repeats each driver row once per standing
+query = M.Driver.objects
+query.values("nationality", "n" => Count("driverid"))
+query.filter("driver_standings__position__@gte" => 1)
+query |> DataFrame   # ArgumentError: PormG fan-out guard (#74) — the aggregate n is inflated …
+```
+
+The legitimate case — aggregating the **related** table's own column (e.g. counting the related rows) — is exactly the intended fan-out and works normally:
+
+```julia
+# ✓ counts each driver's standings rows — the fan-out IS the answer
+query = M.Driver.objects
+query.values("driverid", "standings" => Count("driver_standings__driverid"))
+df = query |> DataFrame
+```
+
+**The rule.** When a to-many join is present, `COUNT` / `SUM` / `AVG` raise if they aggregate a column the join row-multiplies (a base/parent column, or *any* column when two or more to-many relations are joined). To resolve it, pick one:
+
+1. **Aggregate the related table's own column** — count/sum the related rows directly, as above.
+2. **Pass `distinct=true`** if de-duplicated counting is what you want: `Count("driverid", distinct=true)` renders `COUNT(DISTINCT …)`.
+3. **Compute the aggregate in a correlated subquery** so the base rows are never multiplied.
+
+**Exemptions.** `Max` and `Min` are immune to row duplication and are never blocked; an aggregate built with `distinct=true` is treated as an explicit opt-in.
+
+!!! note
+    The guard is deliberately fail-loud: an aggregate it cannot prove safe (for example one wrapping a multi-column expression) raises rather than risk a silent wrong number. A first-class, explicit correlated-subquery construct for pattern 3 is under design discussion ([#92](https://github.com/PingoLee/PormG.jl/issues/92)).
+
 ---
 
 ## HAVING Clauses

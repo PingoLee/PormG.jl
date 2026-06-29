@@ -77,6 +77,12 @@ end
   django::OptionalString = nothing
   parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
   outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
+  # #74 fan-out guard: record each at-risk aggregate's source alias so build() can refuse
+  # silently-inflated COUNT/SUM/AVG. To-many joins are flagged in-place on their row_join dict (a
+  # "to_many" key) and the many-side alias set is derived from the *deduped* row_join at check time
+  # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
+  agg_sources::Vector{NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}} =
+    NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}[]
 end
 
 # Store information to decide the name from table alias in subquery

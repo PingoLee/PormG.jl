@@ -1039,3 +1039,56 @@ end
     end
 end
 
+@testset "#74 Aggregate fan-out guard" begin
+    # Logic: COUNT/SUM/AVG over a column that a to-many join (reverse FK / M2M) row-multiplies must
+    #        RAISE rather than silently inflate; aggregating the to-many table's OWN column still works;
+    #        MAX/MIN and distinct=true are exempt; a plain aggregate with no to-many join is unaffected.
+    # Why: a base/parent column aggregated under a to-many join returns a confidently-wrong number
+    #      (verified 36x inflation on driver_standings). Fail-loud guard for issue #74.
+
+    # CASE B — base-table column under a to-many join → inflated → raise.
+    qB = M.Driver.objects
+    qB.values("nationality", "n" => Count("driverid"))
+    qB.filter("driver_standings__position__@gte" => 1)
+    @test_throws ArgumentError (qB |> DataFrame)
+
+    # CASE A — aggregate the to-many table's OWN column (single to-many) → intended fan-out → allowed.
+    qA = M.Driver.objects
+    qA.values("driverid", "n" => Count("driver_standings__driverid"))
+    qA.filter("nationality" => "British")
+    dfA = qA |> DataFrame
+    @test nrow(dfA) > 0
+    @test all(dfA.n .>= 1)  # each grouped driver has at least one standing counted
+
+    # CASE A' — related column AND a filter on the SAME relation must NOT raise. The join is built
+    #           twice internally (cache + real) but the guard derives from the deduped row_join, so it
+    #           counts once. Regression for the dedup-derived detection.
+    qAp = M.Driver.objects
+    qAp.values("driverid", "n" => Count("driver_standings__driverid"))
+    qAp.filter("driver_standings__position__@gte" => 1)
+    @test (qAp |> DataFrame) isa DataFrame
+
+    # MAX over a to-many column is immune to row duplication → allowed.
+    qMax = M.Driver.objects
+    qMax.values("nationality", "m" => Max("driver_standings__points"))
+    qMax.filter("driver_standings__position__@gte" => 1)
+    @test (qMax |> DataFrame) isa DataFrame
+
+    # distinct=true is an explicit opt-in → allowed even on a base column under a to-many.
+    qDist = M.Driver.objects
+    qDist.values("nationality", "n" => Count("driverid", distinct=true))
+    qDist.filter("driver_standings__position__@gte" => 1)
+    @test (qDist |> DataFrame) isa DataFrame
+
+    # COUNT(*) under a to-many join → also inflated → raise.
+    qStar = M.Driver.objects
+    qStar.values("nationality", "n" => Count("*"))
+    qStar.filter("driver_standings__position__@gte" => 1)
+    @test_throws ArgumentError (qStar |> DataFrame)
+
+    # No to-many join (plain forward-FK / base aggregate) → unaffected.
+    qPlain = M.Result.objects
+    qPlain.values("constructorid", "n" => Count("resultid"))
+    @test (qPlain |> DataFrame) isa DataFrame
+end
+

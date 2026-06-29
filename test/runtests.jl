@@ -34,6 +34,7 @@ end
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "Aggregate Fan-out Guard (#74)" include("unit/test_aggregate_fanout.jl")
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")

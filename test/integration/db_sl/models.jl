@@ -375,4 +375,18 @@ Db_column_pk_strchild_scratch = Models.Model("db_column_pk_strchild_scratch",
   tag = Models.CharField(null=true),
 )
 
+# #64: M2M where BOTH participating models' PKs are renamed via db_column. The through-table
+# join must target the physical PK columns ("driver_pk" / "sponsor_pk"), NOT the field name
+# "code" — exercises owner_pk (through key_a) and related_pk (related key_b) resolution.
+M2m_rpk_sponsor_scratch = Models.Model("m2m_rpk_sponsor_scratch",
+  code = Models.IDField(db_column="sponsor_pk"),
+  name = Models.CharField(unique=true),
+)
+
+M2m_rpk_driver_scratch = Models.Model("m2m_rpk_driver_scratch",
+  code = Models.IDField(db_column="driver_pk"),
+  driverref = Models.CharField(unique=true),
+  sponsors = Models.ManyToManyField(M2m_rpk_sponsor_scratch, related_name="rpkdrivers"),
+)
+
 end

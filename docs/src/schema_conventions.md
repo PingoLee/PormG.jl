@@ -107,14 +107,12 @@ Two consequences worth noting:
   not `pk_field` is spelled out — string targets are resolved to the model object once, up front
   ([#62](https://github.com/PingoLee/PormG.jl/issues/62)).
 
-  !!! note "Limitation: db_column on a ManyToMany/CTE key field"
-      `db_column` on a primary key works for ordinary CRUD (create/get/update, bulk, sequence sync)
-      **and** for FK constraints and joins (model-instance or string targets, including a renamed
-      parent PK). One path does not yet resolve a parent key's `db_column` and falls back to the
-      field name — tracked in [#64](https://github.com/PingoLee/PormG.jl/issues/64): a **ManyToMany**
-      or **CTE** join whose participating model's *primary key* uses `db_column`.
-
-      ManyToMany through-table columns are not configurable via `db_column`.
+  !!! note "Limitation: ManyToMany through-table column names"
+      `db_column` is honored across the whole stack — CRUD (create/get/update, bulk, sequence sync),
+      FK constraints and joins (model-instance or string targets, a renamed parent PK), **and**
+      ManyToMany / CTE join keys when a participating model's primary key uses `db_column`
+      ([#64](https://github.com/PingoLee/PormG.jl/issues/64)). The one surface that is **not**
+      configurable is the **auto-generated ManyToMany through-table column names** (`<model>_<pk>`).
 
 !!! note "Imported models differ"
     The Django importer appends `_id` to a `ForeignKey`/`OneToOneField` field and points it at the

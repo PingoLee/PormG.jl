@@ -254,3 +254,70 @@ end
         @test true  # SQLite: bulk_copy unsupported; covered by bulk_insert above.
     end
 end
+
+# #64: an M2M where BOTH participating models' PKs are renamed via db_column. The through-table
+# join must target the physical PK columns ("driver_pk"/"sponsor_pk"). `add!` writes the through
+# table regardless of the fix (it uses through-table columns), so the discriminator is the READ:
+# forward/reverse filters join on the parent PK columns and would target a non-existent "code"
+# column without the fix.
+@testset "db_column: M2M join over renamed PKs (#64)" begin
+    M.M2m_rpk_driver_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_rpk_sponsor_scratch.objects.delete(allow_delete_all=true)
+    try
+        sponsor_a = M.M2m_rpk_sponsor_scratch.objects.create("name" => "Petrolux")
+        sponsor_b = M.M2m_rpk_sponsor_scratch.objects.create("name" => "AeroFuel")
+        driver_x  = M.M2m_rpk_driver_scratch.objects.create("driverref" => "ham44")
+
+        manager = M.M2m_rpk_driver_scratch.sponsors(driver_x)
+        @test manager.add!(sponsor_a, sponsor_b) === nothing
+        @test length(manager.all().list()) == 2            # all() routes through the fixed join
+
+        # Forward: driver → sponsors (through-join on "driver_pk", related-join on "sponsor_pk").
+        fwd = M.M2m_rpk_driver_scratch.objects
+        fwd.filter("sponsors__name" => "Petrolux")
+        fwd.values("driverref")
+        fwd_rows = fwd.list()
+        @test length(fwd_rows) == 1
+        @test fwd_rows[1][:driverref] == "ham44"
+
+        # Reverse: sponsor → drivers via related_name "rpkdrivers".
+        rev = M.M2m_rpk_sponsor_scratch.objects
+        rev.filter("rpkdrivers__driverref" => "ham44")
+        rev.values("name")
+        @test Set([row[:name] for row in rev.list()]) == Set(["Petrolux", "AeroFuel"])
+    finally
+        M.M2m_rpk_driver_scratch.objects.delete(allow_delete_all=true)
+        M.M2m_rpk_sponsor_scratch.objects.delete(allow_delete_all=true)
+    end
+end
+
+# #64: a CTE over a renamed-PK model, joined on the renamed PK field ("code"). The main
+# physical-table side resolves "code"→"pk_code"; without the fix the join targets a
+# non-existent "code" column and errors. (The CTE side stays the alias "code".)
+@testset "db_column: CTE join over a renamed PK (#64)" begin
+    # Clear the CASCADE children before the parent so this testset is self-contained and
+    # order-independent (mirrors the renamed-parent-PK testsets above).
+    M.Db_column_pk_child_scratch.objects.delete(allow_delete_all=true)
+    M.Db_column_pk_strchild_scratch.objects.delete(allow_delete_all=true)
+    M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
+    try
+        M.Db_column_pk_scratch.objects.create("code" => 700, "label" => "CT")
+        M.Db_column_pk_scratch.objects.create("code" => 701, "label" => "other")
+
+        cte = M.Db_column_pk_scratch.objects
+        cte.filter("label" => "CT")
+        cte.values("code", "label")
+
+        main = M.Db_column_pk_scratch.objects
+        main.with("rpk_cte" => cte, join_field="code" => "code", join_type="INNER")
+        main.values("code", "lbl" => "rpk_cte__label")
+        rows = main.list()
+        @test length(rows) == 1                 # INNER join keeps only the matched code (700)
+        @test rows[1][:code] == 700
+        @test rows[1][:lbl] == "CT"
+    finally
+        M.Db_column_pk_child_scratch.objects.delete(allow_delete_all=true)
+        M.Db_column_pk_strchild_scratch.objects.delete(allow_delete_all=true)
+        M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
+    end
+end

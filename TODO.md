@@ -29,11 +29,10 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 > **Sequence:** **Tier 1** (irreversible user-data — migration-format / tracking-table contract and
 > the frozen schema conventions) and **Tier 2** (#34 adapter decoupling → #35 export curation) are
 > both settled and merged — as is field-name **case preservation** (#57), its lowercase
-> **convention** (#58), and **`db_column` authority** (#50), now extended to **string FK targets**
-> (#62 — referenced-parent-key resolution). Remaining gating work: the `db_column` completeness
-> follow-up (#64 — ManyToMany/CTE join keys) plus the infrastructure items below.
+> **convention** (#58), and the full **`db_column` authority** family: authoritative DDL/queries
+> (#50), string FK targets (#62), and ManyToMany/CTE join keys (#64) — all merged. Remaining gating
+> work: the infrastructure items below.
 
-- [#64](https://github.com/PingoLee/PormG.jl/issues/64) — ⚠️ Honor `db_column` on ManyToMany through-table + CTE join keys when a participating model's primary key is renamed (db_column completeness follow-up to #50/#62)
 - [#36](https://github.com/PingoLee/PormG.jl/issues/36) — Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)
 - [#37](https://github.com/PingoLee/PormG.jl/issues/37) — Investigate PG pool exhaustion under remote-latency integration runs
 

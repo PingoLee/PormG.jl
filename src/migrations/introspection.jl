@@ -447,6 +447,28 @@ function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name
   return nothing
 end
 
+"""
+    get_secondary_index_ddls(conn::PormGSQLite, table_name) -> Vector{String}
+
+Return the `CREATE INDEX` DDL for every *user-created* secondary index on `table_name`, verbatim from
+`sqlite_master`. Auto-indexes backing column-level `UNIQUE` constraints have a NULL `sql` and are excluded —
+they are recreated automatically by the rebuilt `CREATE TABLE`. Used by the SQLite table-rebuild path to
+re-create the indexes that the rebuild's `DROP TABLE` would otherwise silently lose (#82).
+"""
+function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol})::Vector{String}
+  tname = replace(string(table_name), "'" => "''")
+  rows = fetch(conn, "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '$(tname)' AND sql IS NOT NULL") |> DataFrame
+  isempty(rows) && return String[]
+  ddls = String[]
+  for s in rows.sql
+    s === missing && continue
+    stmt = strip(string(s))
+    isempty(stmt) && continue
+    push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
+  end
+  return ddls
+end
+
 function get_constraints_pk(conn::PormGPostgres, table_name::Symbol, field_name::String )
   query = """
   SELECT

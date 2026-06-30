@@ -35,7 +35,22 @@ function _configure_order_dict_migration_plan(migration_plan::OrderedDict{Symbol
   else
     migration_plan[model_name][key] = value
   end
-end  
+end
+
+# #82: wrap a SQLite table-rebuild block so it re-creates the table's existing secondary indexes (the
+# rebuild's DROP TABLE drops them) and gates on `PRAGMA foreign_key_check(<table>)`. The CREATE INDEX DDL
+# is taken verbatim from sqlite_master, so names / uniqueness / partial clauses are preserved exactly.
+# No-op for PostgreSQL (real ALTER COLUMN, no rebuild) or an empty block — callers invoke it
+# unconditionally so every rebuild path (field alteration AND add-NOT-NULL-with-default) is covered the
+# same way. The check is SCOPED to the rebuilt table (not the whole DB) so an unrelated pre-existing orphan
+# elsewhere can't fail this migration; the rename preserves the table name + PKs, so children of this table
+# stay valid and need no check.
+function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sql::AbstractString)::String
+  (!(conn isa PormGSQLite) || isempty(rebuild_sql)) && return String(rebuild_sql)
+  idx_ddls = get_secondary_index_ddls(conn, table_name)
+  safe_tbl = replace(table_name, "\"" => "\"\"")
+  return join(String[String(rebuild_sql); idx_ddls; "PRAGMA foreign_key_check(\"$(safe_tbl)\");"], "\n")
+end
 
 function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::Union{PormGField, Nothing}, old_field::PormGField)::Nothing
   if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (new_field === nothing || !hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
@@ -174,7 +189,11 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     if conn isa PormGSQLite && haskey(migration_plan, model_name) && haskey(migration_plan[model_name], alter_key)
       delete!(migration_plan[model_name], alter_key)
     end
-    _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, Dialect.alter_field(conn, model, field_name, field, nothing, [:default]))
+    # #82: this add-NOT-NULL-with-default path also rebuilds the table on SQLite, so it must preserve the
+    # existing secondary indexes too (no-op on PostgreSQL).
+    _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
+      _sqlite_rebuild_preserving_indexes(conn, model.name |> lowercase,
+        Dialect.alter_field(conn, model, field_name, field, nothing, [:default])))
   end
   return nothing
 end
@@ -273,8 +292,11 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         # table overwrite each other, producing exactly one recreation statement
         # instead of one per changed field.
         alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
-        _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
-        Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal))
+        # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
+        # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
+        alter_sql = _sqlite_rebuild_preserving_indexes(conn, model.name |> lowercase,
+          Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal))
+        _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
 
         # Check if the field is a foreign key
         _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field, name)
@@ -282,9 +304,15 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         # Check if the field is also indexed
         if !field.primary_key && field.db_index && !model.fields[original_db_key].db_index
           @pormg_debug false
-          index_name = "$(name)_idx"
-          _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name_stripped", 
-          Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name_stripped\""]))
+          # #82: SQLite introspection can't see db_index, so this branch always fires for an indexed
+          # field; and the table rebuild (alter_field) already re-emits every existing index. Skip the
+          # redundant CREATE INDEX when one already exists in the live DB, or it would duplicate the
+          # rebuilt index (random suffix defeats IF NOT EXISTS). Genuinely-new indexes still get created.
+          if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, field_name_stripped) !== nothing)
+            index_name = "$(name)_idx"
+            _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name_stripped",
+            Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name_stripped\""]))
+          end
         end
 
         # Check if is need to remove the index

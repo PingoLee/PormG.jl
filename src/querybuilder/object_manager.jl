@@ -245,7 +245,12 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     # Same dual execute/inspect return contract as :create — see the note above.
     return (args...; kwargs...) -> up_update!(q.object, args; kwargs...)
   elseif sym === :count
-    return (; show_query=:execute) -> do_count(q; show_query=show_query)
+    # count()                         -> COUNT(*)              (total rows)
+    # count(distinct=true)            -> distinct rows         (subquery COUNT(*) over SELECT DISTINCT *)
+    # count("col")                    -> COUNT("col")          (non-null values of a column)
+    # count("col", distinct=true)     -> COUNT(DISTINCT "col") (distinct values of a column, scalar)
+    return (column=nothing; distinct::Bool=false, show_query::Symbol=:execute) ->
+      do_count(q; column=column, distinct=distinct, show_query=show_query)
   elseif sym === :exists
     return (; show_query=:execute) -> do_exists(q; show_query=show_query)
   elseif sym === :first

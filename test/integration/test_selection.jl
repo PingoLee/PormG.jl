@@ -422,6 +422,39 @@ end
     ), eachrow(df))
   end
 
+  @testset "distinct().count() executes and matches plain count" begin
+    # Regression: distinct().count() used to render COUNT(DISTINCT *), which is a
+    # syntax error in both PostgreSQL and SQLite — so this call would throw at
+    # execution. It must now run on a live DB. For a PK'd table every row is unique,
+    # so the distinct count must equal the plain count (cross-check, not just "it ran").
+    @test M.Driver.objects.distinct().count() == M.Driver.objects.count()
+
+    # Same with a WHERE filter: the bound parameter must survive the subquery wrapping.
+    @test M.Driver.objects.filter("nationality" => "British").distinct().count() ==
+          M.Driver.objects.filter("nationality" => "British").count()
+
+    # With a JOIN (FK-traversal filter): the inner `SELECT DISTINCT *` now spans
+    # multiple tables, which can surface duplicate column names in the subquery —
+    # engines differ, so exercise it live on both backends.
+    @test M.Result.objects.filter("driverid__surname" => "Senna").distinct().count() ==
+          M.Result.objects.filter("driverid__surname" => "Senna").count()
+  end
+
+  @testset "count(column, distinct=true) counts distinct column values" begin
+    # COUNT(DISTINCT col) as a scalar Int (the efficient flat form). Cross-check the
+    # value independently and prove dedup actually happens — nationality is non-null,
+    # so many drivers share one, making distinct strictly less than the total.
+    total = M.Driver.objects.count()
+    n_nat = M.Driver.objects.count("nationality", distinct=true)
+
+    nats = (M.Driver.objects.values("nationality") |> DataFrame).nationality
+    @test n_nat == length(unique(nats))   # exact value, computed independently
+    @test n_nat < total                   # dedup genuinely happened
+
+    # count("col") on a non-null column counts every row (no DISTINCT).
+    @test M.Driver.objects.count("nationality") == total
+  end
+
   @testset "Qor fallback branch with impossible id is a no-op" begin
     # Production code uses an impossible id branch as a safe fallback when an
     # input array may be empty. This test ensures that pattern keeps the real

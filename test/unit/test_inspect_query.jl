@@ -651,6 +651,61 @@ PormG.config["default"] = MockSettings
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # distinct().count() must render valid SQL. COUNT(DISTINCT *) is a syntax error
+  # in both PostgreSQL and SQLite, so count() on a distinct() query must instead
+  # wrap `SELECT DISTINCT *` in an outer COUNT(*) subquery.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "distinct().count() renders valid SQL (no COUNT(DISTINCT *))" begin
+    q = DriverModel.objects
+    q.filter("nationality" => "British")
+    q.distinct()
+
+    sql = q.count(show_query=:sql)
+    @test sql isa String
+    @test !occursin("COUNT(DISTINCT", sql)   # the invalid form must be gone
+    @test occursin("SELECT DISTINCT", sql)    # inner distinct row-select
+    @test occursin("COUNT(*)", sql)           # outer plain count over the subquery
+
+    # The WHERE parameter survives the subquery wrapping (bound exactly once).
+    meta = q.count(show_query=:dict)
+    @test meta[:parameters] == ["British"]
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Terminal count() column/distinct forms:
+  #   count("col")                -> COUNT("col")           (non-null values)
+  #   count("col", distinct=true) -> COUNT(DISTINCT "col")  (distinct values, scalar; flat, no subquery)
+  #   count(distinct=true)        -> distinct rows          (subquery, like .distinct().count())
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "count() column and distinct forms render valid SQL" begin
+    # count("col", distinct=true) is the efficient flat form — COUNT(DISTINCT col),
+    # not a subquery (COUNT(DISTINCT single_column) is valid SQL, unlike COUNT(DISTINCT *)).
+    sql_cd = DriverModel.objects.count("nationality", distinct=true, show_query=:sql)
+    @test occursin("COUNT(DISTINCT", sql_cd)
+    @test occursin("nationality", sql_cd)
+    @test !occursin("SELECT DISTINCT", sql_cd)      # flat, no subquery wrapping
+
+    # count("col") counts non-null values of the column (no DISTINCT).
+    sql_c = DriverModel.objects.count("nationality", show_query=:sql)
+    @test occursin("COUNT(", sql_c)
+    @test occursin("nationality", sql_c)
+    @test !occursin("DISTINCT", sql_c)
+
+    # count(distinct=true) with no column = distinct rows (subquery form).
+    qd = DriverModel.objects
+    qd.filter("nationality" => "British")
+    sql_dr = qd.count(distinct=true, show_query=:sql)
+    @test occursin("SELECT DISTINCT", sql_dr)
+    @test occursin("COUNT(*)", sql_dr)
+    @test !occursin("COUNT(DISTINCT", sql_dr)
+
+    # WHERE param preserved in the flat column-distinct form.
+    meta_cd = DriverModel.objects.filter("nationality" => "British").
+      count("nationality", distinct=true, show_query=:dict)
+    @test meta_cd[:parameters] == ["British"]
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # Terminal-name cleanup (#42): `query.inspect()` is the only surviving inspection
   # terminal. The `query.inspect_query()` alias was removed, so the accessor must
   # fall through to getfield and error.

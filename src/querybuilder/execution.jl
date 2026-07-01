@@ -275,7 +275,24 @@ show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)
 # Count or check if exists
 #
 
-function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
+function do_count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = nothing, distinct::Bool = false,
+                  table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
+  # Column form: COUNT([DISTINCT] column). Reuse the Count() aggregate so column
+  # resolution, joins and dialect rendering are shared with values(Count(...)); we
+  # return the scalar rather than a row. COUNT(DISTINCT col) is valid SQL (unlike
+  # COUNT(DISTINCT *)), so no subquery is needed for this form.
+  if column !== nothing
+    cq = deepcopy(oq)
+    cq.object.order = []
+    cq.object.distinct = false      # DISTINCT belongs to COUNT(col), not the row set
+    cq.object.limit = 0
+    cq.object.offset = 0
+    up_values!(cq.object, Any["__pormg_count" => Count(String(column); distinct = distinct)])
+    show_query !== :execute && return query(cq; table_alias = table_alias, show_query = show_query)
+    rows = list(cq, Val(:dict))
+    return isempty(rows) ? 0 : Base.first(values(Base.first(rows)))
+  end
+
   # Resolve settings
   settings, connection, conn_key = get_settings(oq)
   
@@ -299,13 +316,26 @@ function do_count(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlia
   safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
   
-  resposta = """$(with_clause)SELECT
-      COUNT($(q.object.distinct ? "DISTINCT *" : "*"))
-    FROM $safe_table_name as $safe_alias
+  # Shared FROM / JOIN / WHERE / GROUP BY body for both count forms.
+  body = """FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
     $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")
     """
+  if distinct || q.object.distinct
+    # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite. To count the rows a
+    # DISTINCT select would return, wrap `SELECT DISTINCT *` in an outer COUNT(*) so that
+    # count() == length(distinct list()). Any CTEs stay at the top level and remain in
+    # scope for the subquery; parameter order/count is unchanged by the wrapping.
+    resposta = """$(with_clause)SELECT COUNT(*) FROM (
+    SELECT DISTINCT *
+    $body) as "__pormg_distinct_count"
+    """
+  else
+    resposta = """$(with_clause)SELECT
+      COUNT(*)
+    $body"""
+  end
   # Inspection short-circuit: return SQL/metadata without hitting the database.
   if show_query !== :execute
     return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;

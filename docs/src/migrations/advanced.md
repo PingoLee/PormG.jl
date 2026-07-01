@@ -24,8 +24,15 @@ custom_entries = OrderedDict{String, String}(
 If a migration fails or requires manual intervention, you can use repair commands to update the history table without re-running SQL:
 
 ```julia
-# Mark a version as manually applied
-PormG.Migrations.mark_applied("db", "20260310120000", "manual_fix")
+# Mark a version as manually applied. Supply the migration's SQL (`sql_content`) so the
+# recorded checksum is computed from — and later verifiable against — the real statements.
+# Passing neither `sql_content` nor an explicit `checksum` is refused: a fabricated digest
+# could never be verified and would silently defeat integrity checks.
+PormG.Migrations.mark_applied("db", "20260310120000", "manual_fix";
+    sql_content = \"\"\"ALTER TABLE drivers ADD COLUMN nationality VARCHAR(255);\"\"\")
+
+# Already have the digest? Pass it explicitly instead of the SQL:
+# PormG.Migrations.mark_applied("db", "20260310120000", "manual_fix"; checksum = "…64-hex…")
 
 # Mark a version as failed
 PormG.Migrations.mark_failed("db", "20260310120000")

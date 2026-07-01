@@ -44,7 +44,9 @@ const _MANUAL_DIGEST    = "ee7ee5c8ede0b94b23ff384d1f9b2e2f9ac9d87c3be23647d032a
         @test Migrations.compute_checksum(known_sql) == _KNOWN_SQL_DIGEST
         @test length(Migrations.compute_checksum(known_sql)) == 64  # SHA-256 hex
 
-        # Manual fallback used by mark_applied() when no SQL is supplied.
+        # Frozen format-v1 primitive. `mark_applied` no longer auto-invokes it (it now refuses to
+        # fabricate a checksum — issue #81), but the digest algorithm stays pinned for format
+        # stability so any historically manual-checksummed record remains reproducible.
         @test Migrations._manual_checksum("20260101120000000", "freeze_format_v1") == _MANUAL_DIGEST
     end
 

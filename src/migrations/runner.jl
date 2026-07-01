@@ -97,6 +97,11 @@ function detect_destructive_actions(statements::Vector{String})::Vector{String}
   return filter(is_destructive, statements)
 end
 
+# Frozen format-v1 primitive (see test/unit/test_migration_format_v1.jl). Retained for format
+# stability, but no longer auto-invoked: `mark_applied` used to call this to *fabricate* a checksum
+# when the caller supplied neither `sql_content` nor `checksum`. A fabricated digest can never be
+# verified against the real migration, silently defeating drift detection (issue #81), so
+# `mark_applied` now refuses that path instead of fabricating.
 function _manual_checksum(version::String, name::String)::String
   return bytes2hex(sha256(Vector{UInt8}("manual:" * version * ":" * name)))
 end
@@ -192,6 +197,32 @@ function _get_applied_migrations(connection::Union{PormGPostgres, PormGSQLite})
   df = DataFrame(fetch(connection, sql))
   # Convert DataFrame rows to NamedTuples for uniform access
   return [NamedTuple(row) for row in eachrow(df)]
+end
+
+"""
+    _latest_applied_checksum(connection) -> Union{String, Nothing}
+
+Return the checksum of the most-recently-applied migration — the `status='applied'` record with
+the greatest `version` — or `nothing` when nothing has been applied yet.
+
+Idempotency guard for `migrate()` (issue #81). `migrate()` mints a fresh timestamp `version` on
+every run, so re-apply detection must key on migration **content** (the checksum), never the
+version. We deliberately compare against the *latest applied* record only, not the full history,
+so a legitimate drop-then-re-add — whose regenerated SQL is byte-identical to the original add —
+is still applied, while a stale `pending_migrations.jl` left behind by a post-commit archive
+failure is recognised as already-applied and skipped instead of being destructively re-run.
+"""
+function _latest_applied_checksum(connection::Union{PormGPostgres, PormGSQLite})::Union{String, Nothing}
+  records = _get_applied_migrations(connection)
+  latest = nothing
+  for r in records
+    # records come back ordered by version ASC, so the last applied row we see is the newest.
+    if r[:status] == "applied"
+      latest = r
+    end
+  end
+  latest === nothing && return nothing
+  return String(latest[:checksum])
 end
 
 """
@@ -802,10 +833,26 @@ end
 
 function _execute_migration_lifecycle(connection::PormGPostgres, settings::SQLConn,
                                       ordered_statements::Vector{String}, all_sql::String,
-                                      version::String, name::String, checksum::String, 
+                                      version::String, name::String, checksum::String,
                                       has_destructive::Bool)
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
-  
+
+  # Idempotency guard (issue #81). Runs inside the advisory lock, so the check-and-skip is
+  # serialized against any concurrent migrator. If the pending plan's checksum matches the latest
+  # applied migration, this is a re-run over a `pending_migrations.jl` that a previous apply
+  # COMMITted but then failed to archive — re-executing non-idempotent DDL (a plain ADD COLUMN /
+  # ADD CONSTRAINT / CREATE INDEX) would error and leave a spurious `failed` row. Skip the DDL and
+  # retry the archive so the stale pending file finally clears.
+  if _latest_applied_checksum(connection) == checksum
+    @info(_emsg("\e[32mMigration already applied (checksum match) — skipping re-apply.\e[0m"))
+    try
+      _archive_migration_files(settings, date_str)
+    catch e
+      @error "Error archiving already-applied migration files" exception=e
+    end
+    return nothing
+  end
+
   # Begin transaction
   result, conn = with_transaction(connection, "BEGIN;")
   
@@ -848,9 +895,23 @@ end
 
 function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn,
                                       ordered_statements::Vector{String}, all_sql::String,
-                                      version::String, name::String, checksum::String, 
+                                      version::String, name::String, checksum::String,
                                       has_destructive::Bool)
   date_str = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
+
+  # Idempotency guard (issue #81) — see the PostgreSQL lifecycle for the full rationale. If the
+  # pending plan's checksum matches the latest applied migration, this is a re-run over a
+  # `pending_migrations.jl` a previous apply COMMITted but failed to archive; re-executing
+  # non-idempotent DDL would error. Skip and retry the archive so the stale pending file clears.
+  if _latest_applied_checksum(connection) == checksum
+    @info(_emsg("\e[32mMigration already applied (checksum match) — skipping re-apply.\e[0m"))
+    try
+      _archive_migration_files(settings, date_str)
+    catch e
+      @error "Error archiving already-applied migration files" exception=e
+    end
+    return nothing
+  end
 
   # Serialize the whole BEGIN..COMMIT against any concurrent SQLite writer, like
   # run_in_transaction/delete(). Migrations normally run sequentially at startup,
@@ -946,23 +1007,47 @@ end
 # ==============================================================================
 
 """
+    _resolve_mark_checksum(checksum, sql_content) -> String
+
+Resolve the checksum `mark_applied` will record, or throw if the caller gave nothing to base it on.
+
+Guardrail for issue #81: a manually-reconciled migration must carry a *verifiable* checksum. When
+the caller supplies `sql_content` we hash it; when they supply an explicit `checksum` we trust it;
+when they supply neither we refuse rather than fabricate one, because a made-up digest can never be
+verified against the real migration and would silently defeat drift detection. Pure/DB-free so it
+can be unit-tested directly.
+"""
+function _resolve_mark_checksum(checksum::String, sql_content::String)::String
+  if isempty(checksum) && isempty(sql_content)
+    throw(ArgumentError(
+      "mark_applied requires the migration's `sql_content` (preferred — the checksum is then " *
+      "computed from, and verifiable against, the real SQL) or an explicit `checksum`. Refusing " *
+      "to fabricate one: a made-up checksum can never be verified and silently defeats drift " *
+      "detection (issue #81)."))
+  end
+  return isempty(checksum) ? compute_checksum(sql_content) : checksum
+end
+
+"""
     mark_applied(connection, settings, version, name; checksum, sql_content)
 
 Manually mark a migration version as applied in the history table.
 Useful for reconciliation after manual intervention or interrupted migrations.
+
+Requires either `sql_content` (preferred) or an explicit `checksum` so the recorded digest is
+verifiable — passing neither is refused rather than fabricated (issue #81). Destructiveness is
+classified from `sql_content` when provided instead of being hard-coded, so a manually-reconciled
+destructive migration is still flagged in history.
 """
 function mark_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn,
-                      version::String, name::String; 
+                      version::String, name::String;
                       checksum::String = "", sql_content::String = "")
+  # Validate arguments before touching the DB so a bad call is a pure ArgumentError.
+  checksum = _resolve_mark_checksum(checksum, sql_content)
   init_migrations(connection)
-  
-  if isempty(checksum) && !isempty(sql_content)
-    checksum = compute_checksum(sql_content)
-  elseif isempty(checksum)
-    checksum = _manual_checksum(version, name)
-  end
-  
-  _record_migration(connection, version, name, checksum, sql_content, "applied", false)
+
+  destr = !isempty(sql_content) && is_destructive(sql_content)
+  _record_migration(connection, version, name, checksum, sql_content, "applied", destr)
   @info("Marked version $version as applied.")
 end
 

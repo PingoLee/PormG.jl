@@ -129,7 +129,9 @@ end
   @test legacy[1, :format_version] == 1
 
   # A migration recorded AFTER the upgrade is stamped with the current format version.
-  Migrations.mark_applied(conn, settings, "20250101000001000", "after_upgrade")
+  # mark_applied requires a verifiable checksum basis (issue #81), so pass sql_content.
+  Migrations.mark_applied(conn, settings, "20250101000001000", "after_upgrade";
+                          sql_content = "-- post-upgrade reconciliation (format-version backfill test)")
   fresh = DataFrame(PormG.ConnectionPool.fetch(conn,
     """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000001000';"""))
   @test fresh[1, :format_version] == Migrations.MIGRATION_FORMAT_VERSION
@@ -921,7 +923,10 @@ end
     pool_in_use(p) = length(p.connections) - count(p.available)
     in_use_before = pool_in_use(pool)
 
-    Migrations.mark_applied(pool, edge_settings, "99990101000001", "manual_test_migration")
+    # mark_applied now requires a verifiable checksum basis (issue #81): pass sql_content so the
+    # recorded digest is computed from real SQL rather than fabricated.
+    Migrations.mark_applied(pool, edge_settings, "99990101000001", "manual_test_migration";
+                            sql_content = "-- manual reconciliation (Phase 13 repair test)")
     st = Migrations.status(pool, edge_settings)
     @test "99990101000001" in [m[:version] for m in st.applied]
 
@@ -1109,6 +1114,77 @@ end
     isfile(pending) && rm(pending)
     makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
     @test !isfile(pending)
+  end
+
+  # ── Phase 16: idempotent re-apply / archive-failure landmine (#81) ─
+  # Acceptance criteria 1 & 3: re-running migrate() over a pending_migrations.jl that a previous
+  # apply COMMITted but then failed to archive must be a NO-OP, not a destructive re-apply.
+  #
+  # We reproduce the landmine deterministically. A CREATE TABLE is emitted with IF NOT EXISTS and
+  # would survive a re-run harmlessly, so instead we apply an ADD COLUMN migration (a plain
+  # `ALTER TABLE … ADD COLUMN`, which is NOT idempotent), then hand the engine back the exact
+  # pending file a failed archive would have left and call migrate() again:
+  #   • Pre-fix: the second run re-executes ADD COLUMN, errors on the duplicate column, records a
+  #     spurious `failed` row, and rethrows.
+  #   • Post-fix: the checksum guard recognises the content as already-applied, skips the DDL, and
+  #     retries the archive so the stale pending file finally clears.
+  @testset "Phase 16: Idempotent re-apply (#81)" begin
+    pending_path = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+
+    # Step 1 — an isolated table to mutate. Replacing the model set drops the Phase-15 tables
+    # (DROP TABLE … CASCADE on PostgreSQL), hence destructive=true.
+    write_edge_models("""
+    Reapply81 = Models.Model(
+        id = Models.IDField(),
+        alpha = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @test table_exists(pool, "reapply81")
+    @test !("beta" in column_names(pool, "reapply81"))
+
+    # Step 2 — add a column: the non-idempotent ADD COLUMN whose re-apply would error.
+    write_edge_models("""
+    Reapply81 = Models.Model(
+        id = Models.IDField(),
+        alpha = Models.CharField(null=true),
+        beta = Models.IntegerField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test isfile(pending_path)
+    # Capture the exact pending file that a failed post-commit archive would leave behind.
+    stashed_pending = read(pending_path, String)
+
+    applied_before = length(Migrations.status(pool, edge_settings).applied)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test "beta" in column_names(pool, "reapply81")   # applied
+    @test !isfile(pending_path)                        # archived on success
+
+    st_after = Migrations.status(pool, edge_settings)
+    applied_after = length(st_after.applied)
+    failed_after  = length(st_after.failed)
+    @test applied_after == applied_before + 1          # exactly one new record
+
+    # Step 3 — SIMULATE the archive-failure landmine: restore the stale pending file and re-run.
+    write(pending_path, stashed_pending)
+    @test isfile(pending_path)
+
+    # The re-run must NOT throw. Pre-fix the duplicate ADD COLUMN raises → reapplied_ok = false.
+    reapplied_ok = try
+      migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+      true
+    catch
+      false
+    end
+    @test reapplied_ok
+
+    st_reapply = Migrations.status(pool, edge_settings)
+    @test "beta" in column_names(pool, "reapply81")            # schema unchanged
+    @test length(st_reapply.applied) == applied_after          # no new applied record
+    @test length(st_reapply.failed) == failed_after            # no spurious 'failed' row (pre-fix bug)
+    @test !isfile(pending_path)                                # archive retry cleared the stale file
   end
 
   # ── Cleanup ─────────────────────────────────────────────────────────

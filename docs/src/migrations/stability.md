@@ -102,10 +102,12 @@ compute_checksum(sql_content) == bytes2hex(sha256(Vector{UInt8}(sql_content)))
 ```
 
 The input is the migration's full SQL content — every statement in the plan concatenated in
-execution order. Records created without SQL (e.g. a migration registered after the fact with
-`mark_applied()`) use the manual fallback `sha256("manual:" * version * ":" * name)`. Both
-schemes are frozen at format version 1: re-hashing a committed v1 migration must reproduce its
-stored checksum exactly.
+execution order. `mark_applied()` therefore requires either the migration's `sql_content` (from
+which this checksum is computed) or an explicit `checksum`; it will **not** fabricate one, so that
+every recorded digest stays verifiable against real SQL. The legacy manual fallback
+`sha256("manual:" * version * ":" * name)` remains a frozen v1 primitive for reproducing digests of
+records created that way before the requirement was introduced. Both schemes are frozen at format
+version 1: re-hashing a committed v1 migration must reproduce its stored checksum exactly.
 
 ## Tracking table: `pormg_migrations`
 

@@ -13,7 +13,6 @@ using PormG.Models
 using PormG.Migrations
 using OrderedCollections
 using Dates
-using SQLite
 
 # ==============================================================================
 # SECTION 1: Checksum and Version Generation
@@ -287,6 +286,45 @@ using SQLite
         checksum = Migrations._manual_checksum("20260311112233444", "manual_fix")
         @test length(checksum) == 64
         @test all(c -> isdigit(c) || c in ['a','b','c','d','e','f'], checksum)
+    end
+
+    # ==============================================================================
+    # SECTION 6b: mark_applied checksum guardrail (#81)
+    #
+    # mark_applied must never fabricate a checksum. A manually-reconciled migration
+    # has to carry a *verifiable* digest, so the caller must supply either the real
+    # `sql_content` (from which the checksum is computed) or an explicit `checksum`.
+    # Supplying neither is refused with an ArgumentError — a made-up digest can never
+    # be verified and silently defeats drift detection. _resolve_mark_checksum is the
+    # pure, DB-free core of that guardrail, so we can exercise it without a connection.
+    # ==============================================================================
+
+    @testset "mark_applied Checksum Guardrail" begin
+        # Neither sql_content nor checksum → refuse (do NOT fabricate).
+        @test_throws ArgumentError Migrations._resolve_mark_checksum("", "")
+
+        # The refusal message must point the caller at the fix (supply sql_content).
+        err = try
+            Migrations._resolve_mark_checksum("", "")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("sql_content", err.msg)
+
+        # sql_content supplied, no explicit checksum → checksum is COMPUTED from the SQL
+        # and equals compute_checksum of the same content (verifiable, not fabricated).
+        sql = """ALTER TABLE "drivers" ADD COLUMN "points" INTEGER;"""
+        resolved = Migrations._resolve_mark_checksum("", sql)
+        @test resolved == Migrations.compute_checksum(sql)
+        @test length(resolved) == 64
+
+        # Explicit checksum supplied → trusted and returned unchanged, even with no SQL.
+        @test Migrations._resolve_mark_checksum("deadbeef", "") == "deadbeef"
+
+        # When both are supplied the explicit checksum wins (caller's stated intent).
+        @test Migrations._resolve_mark_checksum("deadbeef", sql) == "deadbeef"
     end
 
     @testset "SQLite Statement Splitting" begin

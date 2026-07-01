@@ -8,7 +8,7 @@ M2m_sponsor_scratch = Models.Model(&quot;m2m_sponsor_scratch&quot;,
 
 M2m_driver_endorsement_scratch = Models.Model(&quot;m2m_driver_endorsement_scratch&quot;,
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   
   # PormG will automatically create a join table for this relationship
   sponsors = Models.ManyToManyField(M2m_sponsor_scratch, related_name=&quot;drivers&quot;)
@@ -21,7 +21,7 @@ M2m_team_scratch = Models.Model(&quot;m2m_team_scratch&quot;,
 
 M2m_driver_explicit_scratch = Models.Model(&quot;m2m_driver_explicit_scratch&quot;,
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   
   # Note that we use a string &quot;M2m_membership_scratch&quot; to refer to a model 
   # that hasn&#39;t been evaluated yet.
@@ -77,7 +77,7 @@ query.filter(&quot;sponsors__country__name&quot; =&gt; &quot;Italy&quot;)
 query.values(&quot;driverref&quot;, &quot;sponsors__name&quot;)
 
 df = query |&gt; DataFrame</code></pre><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
-    &quot;Tb&quot;.&quot;driverRef&quot; as driverRef,
+    &quot;Tb&quot;.&quot;driverref&quot; as driverref,
     &quot;Tb_2&quot;.&quot;name&quot; as sponsors__name
 FROM &quot;m2m_driver_multi_hop_scratch&quot; as &quot;Tb&quot;
   INNER JOIN &quot;m2m_driver_multi_hop_scratch_sponsors&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;id&quot; = &quot;Tb_1&quot;.&quot;m2m_driver_multi_hop_scratch_id&quot;
@@ -88,4 +88,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../schema_conventions/">« Schema Conventions</a><a class="docs-footer-nextpage" href="../configuration/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 1 July 2026 17:11">Wednesday 1 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../schema_conventions/">« Schema Conventions</a><a class="docs-footer-nextpage" href="../configuration/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 1 July 2026 17:15">Wednesday 1 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

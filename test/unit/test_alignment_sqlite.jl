@@ -1251,6 +1251,45 @@ end
     @test contains(insp[:sql_text], "INSERT INTO")
 end
 
+@testset "Alignment Verification - INSERT column order follows call order (#97)" begin
+    # The test above only checks parameter *membership* in the :select bucket, which
+    # passes for any permutation. #97 is specifically about determinism: because
+    # q.insert is now an OrderedDict, the emitted column list must follow the *call*
+    # order on the positional (SQLite `?`) backend too, not hash order. This is the
+    # property that lets create() be golden-tested as an exact string.
+    #
+    # Columns and their bound values are pushed in lockstep (execution.jl), so once
+    # the column order is pinned the params are pinned with it. We assert the column
+    # order directly, which is what a plain Dict would scramble.
+    call_order = ["statusid", "laps", "raceid", "points",
+                  "driverid", "positionorder", "constructorid", "positiontext", "grid"]
+
+    insp = M.Result.objects.create(
+        "statusid"      => 91,
+        "laps"          => 92,
+        "raceid"        => 93,
+        "points"        => 94,
+        "driverid"      => 95,
+        "positionorder" => 96,
+        "constructorid" => 97,
+        "positiontext"  => "98",
+        "grid"          => 99,
+        show_query=:inspection
+    )
+
+    sql = insp[:sql_text]
+    # Column list is the first parenthesised group: INSERT INTO "results" ( ... ) VALUES ...
+    lo = findfirst('(', sql)
+    hi = findnext(')', sql, lo)
+    colsec = sql[lo:hi]
+    col_order = [m.captures[1] for m in eachmatch(r"\"([^\"]+)\"", colsec)]
+
+    # Deterministic and equal to the call order — the exact behavior a plain Dict breaks.
+    @test col_order == call_order
+    # One positional marker per column, and no extras.
+    @test count(==('?'), sql) == length(call_order)
+end
+
 @testset "Alignment Verification - UPDATE with JOIN Alignment" begin
     # Test UPDATE with JOIN: parameters should be ordered: :update -> :join -> :where
     # Scenario: Update Result points to 25 for drivers from Brazil in 1990

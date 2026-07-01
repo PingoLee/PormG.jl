@@ -571,6 +571,86 @@ PormG.config["default"] = MockSettings
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # create()/update() column order follows call order (#97): q.insert is backed
+  # by an OrderedDict, so the rendered INSERT column list (and matching params)
+  # and the UPDATE SET list appear in the exact order fields were passed. With
+  # the previous plain-Dict backing these came out in hash order, so create()/
+  # update() could only be asserted structurally; now they are exact-string
+  # golden-testable, which is what the offline golden-SQL suites need.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "create()/update() column order follows call order" begin
+    # Pass fields in a deliberately non-alphabetical, non-model-declaration order.
+    # (DriverModel declares id, forename, surname, nationality — none of which
+    # matches the call order below.) id is the primary key and is auto-skipped,
+    # and every other passed field is non-null, so no auto-fill reordering occurs:
+    # the rendered order must be exactly nationality, surname, forename.
+
+    # --- create(): INSERT column list ---
+    create_sql = DriverModel.objects.create(
+      "nationality" => "Brazilian",
+      "surname"     => "Senna",
+      "forename"    => "Ayrton",
+      show_query = :sql
+    )
+    @test create_sql isa String
+    # Each column name appears exactly once (INSERT has no WHERE), so first-index
+    # ordering is a robust, whitespace/newline-agnostic check of column order.
+    pos_nat = findfirst("\"nationality\"", create_sql)
+    pos_sur = findfirst("\"surname\"", create_sql)
+    pos_for = findfirst("\"forename\"", create_sql)
+    @test pos_nat !== nothing && pos_sur !== nothing && pos_for !== nothing
+    @test pos_nat.start < pos_sur.start < pos_for.start
+
+    # The strongest check: bound params must line up with the call order, so a
+    # positional backend inserts each value into its intended column.
+    create_meta = DriverModel.objects.create(
+      "nationality" => "Brazilian",
+      "surname"     => "Senna",
+      "forename"    => "Ayrton",
+      show_query = :dict
+    )
+    @test create_meta[:operation] === :insert
+    @test create_meta[:parameters] == ["Brazilian", "Senna", "Ayrton"]
+
+    # --- update(): SET clause list (same OrderedDict backing) ---
+    # update() enforces a filter guard (no accidental update-all), so attach one.
+    # The filter is on `id`, which never collides with the SET column names below.
+    uq = DriverModel.objects
+    uq.filter("id" => 44)
+    update_sql = uq.update(
+      "nationality" => "British",
+      "surname"     => "Hamilton",
+      "forename"    => "Lewis",
+      show_query = :sql
+    )
+    @test update_sql isa String
+    u_nat = findfirst("\"nationality\"", update_sql)
+    u_sur = findfirst("\"surname\"", update_sql)
+    u_for = findfirst("\"forename\"", update_sql)
+    @test u_nat !== nothing && u_sur !== nothing && u_for !== nothing
+    @test u_nat.start < u_sur.start < u_for.start
+
+    uq2 = DriverModel.objects
+    uq2.filter("id" => 44)
+    update_meta = uq2.update(
+      "nationality" => "British",
+      "surname"     => "Hamilton",
+      "forename"    => "Lewis",
+      show_query = :dict
+    )
+    @test update_meta[:operation] === :update
+    # The WHERE param may flatten before or after the SET params depending on
+    # backend/bucketing, so assert the SET values keep their call order relative
+    # to each other rather than pinning absolute positions.
+    params = update_meta[:parameters]
+    i_br = findfirst(==("British"), params)
+    i_ha = findfirst(==("Hamilton"), params)
+    i_le = findfirst(==("Lewis"), params)
+    @test i_br !== nothing && i_ha !== nothing && i_le !== nothing
+    @test i_br < i_ha < i_le
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # Terminal-name cleanup (#42): `query.inspect()` is the only surviving inspection
   # terminal. The `query.inspect_query()` alias was removed, so the accessor must
   # fall through to getfield and error.

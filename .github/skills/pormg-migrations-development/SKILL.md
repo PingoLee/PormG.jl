@@ -25,6 +25,7 @@ This skill is for the migration subsystem itself, not for ordinary ORM query beh
 
 - Treat `Generator.create_db_folder_and_yml()` as the expected bootstrap path for creating `db/connection.yml` before migration workflows touch project config
 - PormG uses a state-based migration engine that reconciles current Julia model state against the live database schema via introspection
+- **State-based, not Django-graph — do not port Django assumptions.** `makemigrations` computes `diff(live-DB introspection, models file)` and **never reads previous migration files**; there is no dependency graph or replay. `pending_migrations.jl` and `applied_migrations/` are **inert audit artifacts**, not a source of truth — editing an applied file changes nothing downstream. "Drift" that matters is live-schema-vs-models (surfaced by the next `makemigrations` and `status()`), not migration-file checksum divergence. Concept doc: `docs/src/migrations/index.md` → *What this means in practice*.
 - Keep docs, tests, and CLI guidance explicit about unsupported or partial behavior rather than implying Django-style completeness
 
 ## Core Rules
@@ -127,6 +128,7 @@ julia --project=. docs/make.jl
 ## Anti-Patterns
 
 - Do not treat filesystem archives as the only migration truth
+- Do not assume a Django-style migration graph: no ordered dependencies, no file replay, and migration files are audit artifacts (see *Bootstrap and system model*)
 - Do not silently allow destructive SQL
 - Do not broaden docs ahead of implementation
 - Do not test unsupported migration targeting as if it were complete

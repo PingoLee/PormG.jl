@@ -115,6 +115,14 @@ Focus on:
 - `execution.jl`
 - `deletion.jl`
 
+Gotcha — `do_count` (`execution.jl`): it clears `.values`/`.order` before rendering, so `count()` cannot reuse a `.values()` select. `COUNT(DISTINCT *)` is **invalid SQL on both PostgreSQL and SQLite**, so the count forms diverge:
+
+- `count()` → `COUNT(*)`.
+- query-level distinct (`.distinct().count()` / `count(distinct=true)`) → wrap `SELECT DISTINCT *` in an **outer `COUNT(*)` subquery** (so `count() == length(distinct list())`).
+- `count("col", distinct=true)` → flat, valid `COUNT(DISTINCT col)` by reusing the `Count()` aggregate (single column is legal; `*` is not).
+
+When changing count rendering, verify both dialects execute (not just that the SQL string looks right) — the bug this guards against was a syntax error that only surfaced at execution.
+
 ### Inspection tools
 
 Useful internal tools:

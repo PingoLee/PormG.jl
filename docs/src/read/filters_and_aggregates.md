@@ -117,6 +117,20 @@ count = query.count()
 > [!NOTE]
 > `@icontains` uses `ILIKE` on PostgreSQL. On SQLite (which is case-insensitive for ASCII by default), it uses `LIKE`.
 
+### Prefix / Suffix (`@startswith`, `@endswith`)
+
+Case-sensitive anchored matches — `@startswith` renders `LIKE 'value%'` and `@endswith` renders `LIKE '%value'` (the wildcard is added on one side only):
+
+```julia
+# Surnames beginning with "Ver" (e.g. Verstappen)
+M.Driver.objects.filter("surname__@startswith" => "Ver")
+
+# Surnames ending in "sen" (e.g. Häkkinen → no; Raikkonen → no; Magnussen → yes)
+M.Driver.objects.filter("surname__@endswith" => "sen")
+```
+
+Both escape `%` and `_` in the bound value, so user input is matched literally.
+
 ### Accent-Insensitive (`@iunaccent_contains`, `@iunaccent_exact`)
 
 **PostgreSQL only.** These lookups match while ignoring both diacritics and case, so an ASCII query finds accented data:
@@ -369,6 +383,37 @@ using PormG: Qor
 query = M.Result.objects
 query.filter(Qor("constructorId" => 1, "constructorId" => 9))
 ```
+
+---
+
+## Counting
+
+`count()` is a terminal that returns a scalar `Int` for the current query (filters included). It has four forms:
+
+```julia
+# Total rows
+M.Driver.objects.count()                                 # SELECT COUNT(*)
+
+# Distinct rows — dedupes whole rows (wraps SELECT DISTINCT * in an outer COUNT(*))
+M.Driver.objects.distinct().count()                      # same as:
+M.Driver.objects.count(distinct=true)
+
+# Non-null values of one column
+M.Driver.objects.count("nationality")                    # SELECT COUNT("nationality")
+
+# Distinct values of one column (e.g. "how many nationalities are represented?")
+M.Driver.objects.count("nationality", distinct=true)     # SELECT COUNT(DISTINCT "nationality")
+```
+
+Filters apply to every form:
+
+```julia
+# How many distinct nationalities among drivers who have raced for constructor 1?
+M.Result.objects.filter("constructorid" => 1).count("driverid__nationality", distinct=true)
+```
+
+> [!NOTE]
+> `count("col", distinct=true)` is the scalar, single-query equivalent of the `Count("col", distinct=true)` aggregate used inside [`values()`](#aggregations-and-grouping) — reach for the terminal form when you just want the number, and the aggregate form when you want it grouped alongside other columns.
 
 ---
 

@@ -17,6 +17,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTimeField
 using PormG.QueryBuilder: Q
 using Dates
+import Logging
 
 # ---------------------------------------------------------------------------
 # Minimal test models — same shape as test_complex_queries.jl so both files
@@ -387,6 +388,98 @@ const _E = _OperTestEvent
     @test contains(sql_left_shl, "SELECT")
     @test contains(sql_left_shl, "(\$1::integer << \"Tb\".\"number\") as \"index_mask\"")
     @test res_left_shl[:parameters] == [1]
+  end
+
+  # =========================================================================
+  # Invalid operator diagnostics (#98)
+  # An unknown or shape-incompatible operator must give one consistent,
+  # actionable error across every value shape (scalar/vector/subquery/tuple):
+  # list the valid operators, suggest the nearest match for a typo (e.g.
+  # @notin → @nin), and clearly distinguish a typo from a *known* operator that
+  # simply is not valid for that value shape (e.g. @gte with a vector). Before
+  # this fix the vector/subquery/tuple paths threw a terse message with none of
+  # that, so a one-character typo like @notin was a latent runtime bug.
+  # =========================================================================
+  @testset "Invalid operator diagnostics (#98)" begin
+    # Run a filter that is expected to throw and return the exception, silencing
+    # the @error _check_filter logs on the way out (keeps test output clean).
+    grab(f) = try
+      Logging.with_logger(Logging.NullLogger()) do
+        f()
+      end
+      nothing
+    catch e
+      e
+    end
+
+    # --- vector value, UNKNOWN operator: the exact @notin → @nin typo from #98 ---
+    e_vec = grab(() -> _D.objects.filter("id__@notin" => [1, 2]))
+    @test e_vec isa ArgumentError
+    m_vec = e_vec.msg
+    @test occursin("is not a valid operator", m_vec)  # unknown-operator branch
+    @test occursin("Did you mean", m_vec)             # nearest-match suggestion offered
+    @test occursin("@nin", m_vec)                     # …and it is the intended operator
+    @test occursin("Valid operators", m_vec)          # full valid-operator list present
+    @test occursin("@gte", m_vec)                     # (spot-check an entry in that list)
+
+    # --- vector value, KNOWN but shape-incompatible operator (@gte with a vector) ---
+    e_known = grab(() -> _D.objects.filter("id__@gte" => [1, 2]))
+    @test e_known isa ArgumentError
+    m_known = e_known.msg
+    @test occursin("not valid with a vector value", m_known)  # distinct from the typo branch
+    @test !occursin("Did you mean", m_known)                  # no suggestion for a real operator
+    @test occursin("use one of", m_known)                     # still points to the valid subset
+    @test occursin("@in", m_known)
+
+    # --- tuple value, unknown operator: message names the shape and its valid op ---
+    e_tup = grab(() -> _D.objects.filter("id__@betwen" => (1, 2)))
+    @test e_tup isa ArgumentError
+    m_tup = e_tup.msg
+    @test occursin("is not a valid operator", m_tup)
+    @test occursin("tuple", m_tup)
+    @test occursin("@range", m_tup)   # the only tuple-valid operator
+
+    # --- subquery value, unknown operator: same treatment, shape = "subquery" ---
+    sub = _D.objects.values("id")
+    e_sub = grab(() -> _D.objects.filter("id__@notin" => sub))
+    @test e_sub isa ArgumentError
+    m_sub = e_sub.msg
+    @test occursin("is not a valid operator", m_sub)
+    @test occursin("@nin", m_sub)
+    @test occursin("subquery", m_sub)
+
+    # --- bare field + collection value, no __@ operator at all ---
+    # Reaches the length(field_path) < 2 branch: the message must name the field
+    # and show actionable examples, not treat the field name as a bogus operator.
+    e_bare = grab(() -> _D.objects.filter("id" => [1, 2]))
+    @test e_bare isa ArgumentError
+    m_bare = e_bare.msg
+    @test occursin("was given a vector value but no operator", m_bare)
+    @test occursin("id__@in", m_bare)   # actionable example uses the real field name
+
+    # --- short garbage suffix: unknown-operator error but NO nonsense suggestion ---
+    # @xy is exactly 2 edits from @in/@ne/@gt (the whole word), so the relative
+    # threshold must refuse a "did you mean"; the old floor-of-2 threshold would not.
+    e_garb = grab(() -> _D.objects.filter("id__@xy" => [1, 2]))
+    @test e_garb isa ArgumentError
+    @test occursin("is not a valid operator", e_garb.msg)
+    @test !occursin("Did you mean", e_garb.msg)
+
+    # --- @range with the wrong number of values: explicit, actionable arity error ---
+    # A valid operator on the right shape, but @range requires exactly 2 bounds; the
+    # error must state that (and the count) rather than a generic "invalid operator".
+    e_range = grab(() -> _D.objects.filter("id__@range" => [1, 2, 3]))
+    @test e_range isa ArgumentError
+    @test occursin("requires exactly 2 values", e_range.msg)
+    @test occursin("got 3", e_range.msg)
+
+    # --- no regression: the valid operator on each shape still builds fine ---
+    ok_in    = _D.objects.filter("id__@in" => [1, 2]).list(show_query=:dict)
+    @test ok_in isa Dict
+    @test occursin("ANY", ok_in[:sql_text])   # PostgreSQL renders IN as "= ANY($1)"
+    ok_range = _D.objects.filter("id__@range" => (1, 9)).list(show_query=:dict)
+    @test ok_range isa Dict
+    @test occursin("BETWEEN", ok_range[:sql_text])
   end
 
 end  # end "PormGsuffix — Operator SQL Generation"

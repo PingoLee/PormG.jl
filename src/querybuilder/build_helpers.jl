@@ -106,6 +106,85 @@ function _check_function(x::FExpression)
   return x
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Invalid filter-operator diagnostics (#98)
+#
+# The scalar/function path (_check_function) already emits a rich "valid function
+# / valid operator" message. The vector, subquery, and tuple value paths used to
+# throw a terse message that neither listed the valid operators nor distinguished
+# a typo (unknown operator, e.g. @notin) from a known operator that simply is not
+# valid for that value shape (e.g. @gte with a vector). _raise_invalid_filter_operator
+# gives all three shapes one consistent, actionable error, with a nearest-match
+# "did you mean" suggestion for typos.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Iterative Levenshtein edit distance (two-row, O(min(m,n)) memory). Runs only when
+# building a typo suggestion, never on the happy path.
+function _levenshtein(a::AbstractString, b::AbstractString)::Int
+  av, bv = collect(a), collect(b)
+  m, n = length(av), length(bv)
+  m == 0 && return n
+  n == 0 && return m
+  prev = collect(0:n)
+  curr = Vector{Int}(undef, n + 1)
+  for i in 1:m
+    curr[1] = i
+    @inbounds for j in 1:n
+      cost = av[i] == bv[j] ? 0 : 1
+      curr[j + 1] = min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
+    end
+    prev, curr = curr, prev
+  end
+  return prev[n + 1]
+end
+
+# Nearest valid operator suffix to `suffix`, or nothing when nothing is close enough
+# to be a plausible typo (so garbage input does not get a nonsense suggestion).
+function _suggest_operator(suffix::AbstractString)::Union{Nothing,String}
+  best = nothing
+  best_d = typemax(Int)
+  for k in keys(PormGsuffix)
+    d = _levenshtein(suffix, k)
+    if d < best_d
+      best_d = d
+      best = k
+    end
+  end
+  # Suggest only when the edit is small relative to the typed length: keeps real
+  # near-misses (@notin→@nin, @containx→@contains) but rejects short garbage
+  # (@xy is 2 edits from @in — the whole word — so no suggestion).
+  return 2 * best_d <= length(suffix) ? best : nothing
+end
+
+# Consistent, actionable error for a filter operator that is not valid for the given
+# value shape. `field_path` is the split lookup (…, suffix); `shape` is a human word
+# ("vector", "subquery", "tuple"); `allowed` is the operator subset valid for that shape.
+function _raise_invalid_filter_operator(field_path::Vector{String}, shape::AbstractString, allowed::Vector{String})
+  all_opers = join(map(k -> "@" * k, sort!(collect(keys(PormGsuffix)))), ", ")
+  allowed_opers = join(map(a -> "@" * a, allowed), ", ")
+  if length(field_path) < 2
+    # No __@ suffix at all: a bare field was paired with a $shape value.
+    field = field_path[end]
+    examples = join(map(a -> "$(field)__@" * a, allowed), ", ")
+    throw(_argerr("Error in filter: field \e[31m$(field)\e[0m was given a $(shape) value but no operator.\n" *
+                  "With a $(shape) value, use one of: $(examples)"))
+  end
+  suffix = field_path[end]
+  if !haskey(PormGsuffix, suffix)
+    # Unknown operator — typo or nonexistent. List every valid operator and, when the
+    # input looks like a near-miss, suggest the intended one (e.g. @notin → @nin).
+    suggestion = _suggest_operator(suffix)
+    hint = suggestion === nothing ? "" : " Did you mean \e[32m@$(suggestion)\e[0m?"
+    throw(_argerr("Error in filter: \e[31m@$(suffix)\e[0m is not a valid operator.$(hint)\n" *
+                  "Valid operators: $(all_opers)\n" *
+                  "With a $(shape) value, use one of: $(allowed_opers)"))
+  else
+    # Known operator, but not valid for this value shape (e.g. @gte with a vector).
+    throw(_argerr("Error in filter: operator \e[31m@$(suffix)\e[0m is not valid with a $(shape) value.\n" *
+                  "With a $(shape) value, use one of: $(allowed_opers)"))
+  end
+end
+
 """
   _get_pair_to_oper(x::Pair)
 
@@ -137,7 +216,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
     # @pormg_debug
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(_argerr("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in and nin'\e[0m is allowed with a object"))
+    _raise_invalid_filter_operator(x.first, "subquery", ["in", "nin"])
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
@@ -161,18 +240,18 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Mis
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   elseif x.first[end] == "range"
     if length(x.second) != 2
-      throw(ArgumentError("Error in filter, 'range' operator requires exactly 2 values, got $(length(x.second))"))
+      throw(_argerr("Error in filter, 'range' operator requires exactly 2 values, got $(length(x.second))"))
     end
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(_argerr("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'in, nin and range'\e[0m is allowed with a vector of values"))
+    _raise_invalid_filter_operator(x.first, "vector", ["in", "nin", "range"])
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
   if x.first[end] == "range"
     return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    throw(_argerr("Error in filter, Invalid operator for \e[31m$(x.first[end])\e[0m, only \e[32m'range'\e[0m is allowed with a tuple of values"))
+    _raise_invalid_filter_operator(x.first, "tuple", ["range"])
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Date})

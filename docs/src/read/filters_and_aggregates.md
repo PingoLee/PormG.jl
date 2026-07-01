@@ -22,12 +22,12 @@ These work in both `filter()` and `values()`.
 | *(none)* | `= value` | Exact match | `"nationality" => "British"` |
 | `@gt` | `> value` | Greater than | `"points__@gt" => 10` |
 | `@gte` | `>= value` | Greater than or equal | `"points__@gte" => 10` |
-| `@lt` | `< value` | Less than | `"positionOrder__@lt" => 3` |
-| `@lte` | `<= value` | Less than or equal | `"positionOrder__@lte" => 10` |
+| `@lt` | `< value` | Less than | `"positionorder__@lt" => 3` |
+| `@lte` | `<= value` | Less than or equal | `"positionorder__@lte" => 10` |
 | `@ne` | `<> value` | Not equal | `"status__@ne" => "Retired"` |
 | `@in` | `IN (...)` | Value in set | `"nationality__@in" => ["British", "French"]` |
 | `@nin` | `NOT IN (...)` | Value not in set | `"nationality__@nin" => ["British", "German"]` |
-| `@range` | `BETWEEN a AND b` | Between two bounds | `"driverId__@range" => [1, 50]` |
+| `@range` | `BETWEEN a AND b` | Between two bounds | `"driverid__@range" => [1, 50]` |
 | `@isnull` | `IS NULL / IS NOT NULL` | Null check | `"dob__@isnull" => true` |
 | `@contains` | `LIKE '%val%'` | Case-sensitive substring | `"name__@contains" => "Monaco"` |
 | `@icontains` | `ILIKE '%val%'` | Case-insensitive substring | `"name__@icontains" => "monaco"` |
@@ -48,7 +48,7 @@ These work in both `filter()` and `values()`.
 | `@round` | Round numeric value | — | `"points__@round"` |
 | `@floor` | Floor numeric value | — | `"points__@floor"` |
 | `@ceil` | Ceiling numeric value | — | `"points__@ceil"` |
-| `@sqrt` | Square root | — | `"driverId__@sqrt"` |
+| `@sqrt` | Square root | — | `"driverid__@sqrt"` |
 | `@abs` | Absolute value | — | `"points__@abs"` |
 | `@power` | Power function | — | see `Power()` |
 | `@mod` | Modulo | — | see `Mod()` |
@@ -67,7 +67,7 @@ df = M.Driver.objects.filter("nationality" => "Brazilian") |> DataFrame
 
 ```julia
 query = M.Result.objects
-query.filter("positionOrder__@lt" => 3)
+query.filter("positionorder__@lt" => 3)
 df = query |> DataFrame
 ```
 
@@ -75,7 +75,7 @@ df = query |> DataFrame
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status__@ne" => "Retired")
+query.filter("statusid__status__@ne" => "Retired")
 ```
 
 ---
@@ -86,11 +86,11 @@ query.filter("statusId__status__@ne" => "Retired")
 
 ```julia
 # Vector syntax
-query = M.Driver.objects.filter("driverId__@range" => [1, 5])
+query = M.Driver.objects.filter("driverid__@range" => [1, 5])
 df = query |> DataFrame
 
 # Tuple syntax
-query = M.Driver.objects.filter("driverId__@range" => (10, 15))
+query = M.Driver.objects.filter("driverid__@range" => (10, 15))
 df = query |> DataFrame
 ```
 
@@ -102,7 +102,7 @@ df = query |> DataFrame
 
 ```julia
 query = M.Result.objects
-query.filter("raceId__circuitId__name__@contains" => "Monaco")
+query.filter("raceid__circuitid__name__@contains" => "Monaco")
 count = query.count()
 ```
 
@@ -110,7 +110,7 @@ count = query.count()
 
 ```julia
 query = M.Result.objects
-query.filter("raceId__circuitId__name__@icontains" => "monaco")
+query.filter("raceid__circuitid__name__@icontains" => "monaco")
 count = query.count()
 ```
 
@@ -165,7 +165,7 @@ M.Driver.objects.filter(Qor(
 
 ```julia
 query = M.Result.objects
-query.filter("raceId__circuitId__name__@in" => ["Circuit de Monaco", "Silverstone"])
+query.filter("raceid__circuitid__name__@in" => ["Circuit de Monaco", "Silverstone"])
 ```
 
 ### Value Not In Set
@@ -180,10 +180,10 @@ query.filter("nationality__@nin" => ["British", "German"])
 You can also pass a query object to `@in` for a server-side `IN (SELECT ...)`:
 
 ```julia
-engine_statuses = M.Status.objects.filter("status" => "Engine").values("statusId")
+engine_statuses = M.Status.objects.filter("status" => "Engine").values("statusid")
 
 query = M.Result.objects
-query.filter("statusId__@in" => engine_statuses)
+query.filter("statusid__@in" => engine_statuses)
 ```
 
 The subquery must project exactly one column — see [Subqueries and CTEs](subqueries_and_ctes.md) for the full column-count rule and SQL-function projection examples.
@@ -254,7 +254,7 @@ SELECT
 FROM "result" as "Tb"
 WHERE EXISTS (SELECT 1
 FROM "just_a_test_deletion" as "R1"
-WHERE "R1"."test_result" = "Tb"."resultId"
+WHERE "R1"."test_result" = "Tb"."resultid"
 LIMIT 1)
 ```
 
@@ -354,13 +354,13 @@ Multiple pairs inside one `filter()` call are combined with `AND`:
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Finished", "resultId" => 26745)
+query.filter("statusid__status" => "Finished", "resultid" => 26745)
 query.values(
-    "resultId",
-    "raceId__circuitId__name",
-    "driverId__forename",
-    "constructorId__name",
-    "statusId__status",
+    "resultid",
+    "raceid__circuitid__name",
+    "driverid__forename",
+    "constructorid__name",
+    "statusid__status",
     "grid",
     "laps"
 )
@@ -371,8 +371,8 @@ Successive `.filter()` calls also use AND — they are additive:
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Finished")
-query.filter("positionOrder" => 1)   # Adds another AND condition
+query.filter("statusid__status" => "Finished")
+query.filter("positionorder" => 1)   # Adds another AND condition
 ```
 
 For OR logic, use [`Qor()`](q_objects.md):
@@ -381,7 +381,7 @@ For OR logic, use [`Qor()`](q_objects.md):
 using PormG: Qor
 
 query = M.Result.objects
-query.filter(Qor("constructorId" => 1, "constructorId" => 9))
+query.filter(Qor("constructorid" => 1, "constructorid" => 9))
 ```
 
 ---
@@ -428,16 +428,16 @@ using PormG.Functions: Count, Sum, Max, Min
 
 query = M.Result.objects
 query.values(
-    "statusId__status",
-    "raceId__circuitId__name",
-    "driverId__forename",
-    "constructorId__name",
+    "statusid__status",
+    "raceid__circuitid__name",
+    "driverid__forename",
+    "constructorid__name",
     "count_grid" => Count("grid"),
     "max_grid"   => Max("grid"),
     "min_grid"   => Min("grid")
 )
-query.filter("statusId__status" => "Finished", "driverId__forename" => "Ayrton")
-query.order_by("raceId__circuitId__name")
+query.filter("statusid__status" => "Finished", "driverid__forename" => "Ayrton")
+query.order_by("raceid__circuitid__name")
 df = query |> DataFrame
 ```
 
@@ -538,12 +538,12 @@ When you filter on an aggregate alias, PormG automatically promotes the conditio
 ```julia
 query = M.Result.objects
 query.values(
-    "raceId__circuitId__name",
-    "driverId__forename",
-    "constructorId__name",
+    "raceid__circuitid__name",
+    "driverid__forename",
+    "constructorid__name",
     "count_grid" => Count("grid")
 )
-query.filter("statusId__status" => "Finished", "count_grid__@lte" => 3)
+query.filter("statusid__status" => "Finished", "count_grid__@lte" => 3)
 df = query |> DataFrame
 ```
 
@@ -577,8 +577,8 @@ You can filter on computed aggregate expressions too:
 ```julia
 query = M.Result.objects
 query.values(
-    "constructorId__name",
-    "avg_perf" => Sum("points") / Count("resultId")
+    "constructorid__name",
+    "avg_perf" => Sum("points") / Count("resultid")
 )
 query.filter("avg_perf__@gt" => 5)
 ```
@@ -593,8 +593,8 @@ For more complex expressions, see [Field Expressions](field_expressions.md).
 
 ```julia
 df = M.Result.objects.
-    filter("positionOrder" => 1).
-    values("constructorId__name", "wins" => Count("resultId")).
+    filter("positionorder" => 1).
+    values("constructorid__name", "wins" => Count("resultid")).
     order_by("-wins") |> DataFrame
 ```
 
@@ -602,7 +602,7 @@ df = M.Result.objects.
 
 ```julia
 df = M.Result.objects.
-    values("driverId__surname", "total_pts" => Sum("points")).
+    values("driverid__surname", "total_pts" => Sum("points")).
     order_by("-total_pts").
     limit(20) |> DataFrame
 ```
@@ -611,11 +611,11 @@ df = M.Result.objects.
 
 ```julia
 df = M.Result.objects.
-    filter("raceId__circuitId__name" => "Circuit de Monaco").
+    filter("raceid__circuitid__name" => "Circuit de Monaco").
     values(
-        "driverId__surname",
-        "best_finish" => Min("positionOrder"),
-        "races" => Count("resultId")
+        "driverid__surname",
+        "best_finish" => Min("positionorder"),
+        "races" => Count("resultid")
     ).
     order_by("best_finish") |> DataFrame
 ```

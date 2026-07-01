@@ -12,12 +12,12 @@ Pass a query object to `@in` to create a server-side `IN (SELECT ...)` predicate
 # Build the subquery
 subquery = M.Status.objects
 subquery.filter("status" => "Engine")
-subquery.values("statusId")
+subquery.values("statusid")
 
 # Use it in the main query
 query = M.Result.objects
-query.filter("statusId__@in" => subquery)
-query.values("resultId", "statusId", "statusId__status", "grid", "driverId")
+query.filter("statusid__@in" => subquery)
+query.values("resultid", "statusid", "statusid__status", "grid", "driverid")
 df = query |> DataFrame
 ```
 
@@ -39,15 +39,15 @@ An `@in` subquery **must project exactly one column**. PormG validates this befo
 
 ```julia
 # Wrong — two columns will throw ArgumentError
-bad_sub = M.Status.objects.values("statusId", "status")
-query.filter("statusId__@in" => bad_sub)
-# ERROR: 'statusId__@in' requires a subquery that returns exactly one column
-#        (currently selects 2 columns: statusId, status)
+bad_sub = M.Status.objects.values("statusid", "status")
+query.filter("statusid__@in" => bad_sub)
+# ERROR: 'statusid__@in' requires a subquery that returns exactly one column
+#        (currently selects 2 columns: statusid, status)
 #        call .values("field_name") on the subquery to narrow it to one column.
 
 # Correct — exactly one column
-good_sub = M.Status.objects.filter("status" => "Engine").values("statusId")
-query.filter("statusId__@in" => good_sub)
+good_sub = M.Status.objects.filter("status" => "Engine").values("statusid")
+query.filter("statusid__@in" => good_sub)
 ```
 
 ### SQL Function Projections
@@ -85,19 +85,19 @@ Combine subquery `@in` with other filter conditions:
 ```julia
 subquery = M.Status.objects
 subquery.filter("status" => "Engine")
-subquery.values("statusId")
+subquery.values("statusid")
 
 query = M.Result.objects
-query.filter("statusId__@in" => subquery, "driverId__@lte" => 7)
+query.filter("statusid__@in" => subquery, "driverid__@lte" => 7)
 query.values(
-    "resultId",
-    "statusId",
-    "statusId__status",
+    "resultid",
+    "statusid",
+    "statusid__status",
     "grid",
-    "driverId",
-    "raceId__date__@quarter"
+    "driverid",
+    "raceid__date__@quarter"
 )
-query.order_by("raceId__date__quarter")
+query.order_by("raceid__date__quarter")
 df = query |> DataFrame
 ```
 
@@ -124,15 +124,15 @@ using PormG.Functions: Count
 
 # Define the CTE: count results per driver (where status = 1)
 driver_stats = M.Result.objects
-driver_stats.filter("statusId" => 1)
-driver_stats.values("driverId", "total_results" => Count("resultId"))
+driver_stats.filter("statusid" => 1)
+driver_stats.values("driverid", "total_results" => Count("resultid"))
 
-# Main query: join the CTE to Result via driverId
+# Main query: join the CTE to Result via driverid
 main_query = M.Result.objects
-main_query.with("stats" => driver_stats, join_field="driverId" => "driverId")
+main_query.with("stats" => driver_stats, join_field="driverid" => "driverid")
 
-main_query.filter("resultId__@lte" => 100)
-main_query.values("resultId", "driverId", "stats__total_results")
+main_query.filter("resultid__@lte" => 100)
+main_query.values("resultid", "driverid", "stats__total_results")
 df = main_query |> DataFrame
 ```
 
@@ -150,20 +150,20 @@ using PormG.Functions: Count, Sum
 
 # CTE with multiple aggregates
 stats = M.Result.objects
-stats.filter("raceId__@lte" => 100)
+stats.filter("raceid__@lte" => 100)
 stats.values(
-    "driverId",
-    "total_results"         => Count("resultId"),
+    "driverid",
+    "total_results"         => Count("resultid"),
     "total_grid_positions"  => Sum("grid")
 )
 
 # Join CTE to Driver model
 query = M.Driver.objects
-query.with("driver_stats" => stats, join_field="driverId" => "driverId")
+query.with("driver_stats" => stats, join_field="driverid" => "driverid")
 
-query.filter("driverId__@lte" => 50)
+query.filter("driverid__@lte" => 50)
 query.values(
-    "driverId",
+    "driverid",
     "forename",
     "surname",
     "driver_stats__total_results",
@@ -182,19 +182,19 @@ Attach multiple CTEs to the same query:
 # CTE 1: Recent races
 recent_races = M.Race.objects
 recent_races.filter("year__@gte" => 2020)
-recent_races.values("raceId", "name", "year")
+recent_races.values("raceid", "name", "year")
 
 # CTE 2: Top drivers
 top_drivers = M.Driver.objects
-top_drivers.filter("driverId__@lte" => 100)
-top_drivers.values("driverId", "forename", "surname")
+top_drivers.filter("driverid__@lte" => 100)
+top_drivers.values("driverid", "forename", "surname")
 
 # Main query with both CTEs
 query = M.Result.objects
-query.with("recent" => recent_races, join_field="raceId" => "raceId")
-query.with("top_d" => top_drivers, join_field="driverId" => "driverId")
+query.with("recent" => recent_races, join_field="raceid" => "raceid")
+query.with("top_d" => top_drivers, join_field="driverid" => "driverid")
 
-query.values("resultId", "recent__name", "top_d__forename", "points")
+query.values("resultid", "recent__name", "top_d__forename", "points")
 query.filter("recent__name__@isnull" => false, "top_d__forename__@isnull" => false)
 df = query |> DataFrame
 ```
@@ -212,17 +212,17 @@ using PormG.Functions: Sum
 
 high_scorers = M.Result.objects
 high_scorers.filter("points__@gte" => 10)
-high_scorers.values("driverId", "max_points" => Sum("points"))
+high_scorers.values("driverid", "max_points" => Sum("points"))
 
 query = M.Driver.objects
 query.with(
     "high_scorers" => high_scorers,
-    join_field="driverId" => "driverId",
+    join_field="driverid" => "driverid",
     join_type="INNER"   # Only include drivers who have high scores
 )
 
-query.values("driverId", "forename", "max_points" => "high_scorers__max_points")
-query.filter("driverId__@lte" => 100)
+query.values("driverid", "forename", "max_points" => "high_scorers__max_points")
+query.filter("driverid__@lte" => 100)
 df = query |> DataFrame
 ```
 
@@ -246,19 +246,19 @@ using PormG.Functions: Count
 
 # CTE: count drivers per nationality
 nat_stats = M.Driver.objects
-nat_stats.values("nationality", "driver_count" => Count("driverId"))
+nat_stats.values("nationality", "driver_count" => Count("driverid"))
 
 # Main query: join CTE via a deep path (Result → Driver → nationality)
 query = M.Result.objects
-query.with("stats" => nat_stats, join_field="driverId__nationality" => "nationality")
+query.with("stats" => nat_stats, join_field="driverid__nationality" => "nationality")
 
-query.filter("raceId__year" => 2023)
-query.values("raceId__name", "driverId__surname", "stats__driver_count")
+query.filter("raceid__year" => 2023)
+query.values("raceid__name", "driverid__surname", "stats__driver_count")
 df = query |> DataFrame
 ```
 
 PormG automatically:
-1. Joins `Result → Driver` (via the `driverId` ForeignKey).
+1. Joins `Result → Driver` (via the `driverid` ForeignKey).
 2. Links `Driver.nationality` to `stats.nationality` (the CTE join column).
 
 ---
@@ -268,7 +268,7 @@ PormG automatically:
 If you call `.with("name" => subq)` without providing `join_field`, PormG still emits the CTE in the `WITH` clause but does **not** join it to the main table:
 
 ```julia
-subq = M.Status.objects.filter("status" => "Engine").values("statusId")
+subq = M.Status.objects.filter("status" => "Engine").values("statusid")
 
 query = M.Result.objects
 query.with("engine_statuses" => subq)   # Declared but not joined
@@ -279,7 +279,7 @@ This is valid SQL, but the CTE data won't be accessible through `values()`. The 
 ```julia
 query = M.Result.objects
 query.with("sub" => subq)
-query.filter("statusId__@in" => subq)   # Reuse the subquery in a filter
+query.filter("statusid__@in" => subq)   # Reuse the subquery in a filter
 ```
 
 > [!TIP]
@@ -294,25 +294,25 @@ PormG allows CTEs and custom joins (`.cjoin()`) in the same query. Parameter ord
 ```julia
 # 1. Define the CTE
 top_const = M.Constructor.objects.
-    filter("constructorId__@lte" => 5).
-    values("constructorId", "name")
+    filter("constructorid__@lte" => 5).
+    values("constructorid", "name")
 
 # 2. Build the chain with CTE, cjoin, filters, and values
 df = M.Result.objects.
-    with("tc" => top_const, join_field="constructorId" => "constructorId").
-    cjoin("driverId" => "Driver", filters=["nationality" => "German"]).
-    filter("positionOrder" => 1).
-    values("resultId", "tc__name", "driverId__surname") |> DataFrame
+    with("tc" => top_const, join_field="constructorid" => "constructorid").
+    cjoin("driverid" => "Driver", filters=["nationality" => "German"]).
+    filter("positionorder" => 1).
+    values("resultid", "tc__name", "driverid__surname") |> DataFrame
 ```
 
 ### Chaining Multiple Custom Joins
 
 ```julia
 df = M.Result.objects.
-    cjoin("driverId" => "Driver", filters=["nationality" => "Brazilian", "forename" => "Ayrton"]).
-    cjoin("raceId" => "Race", filters=["year" => 1991]).
-    filter("positionOrder" => 1).
-    values("resultId", "driverId__surname", "raceId__name") |> DataFrame
+    cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian", "forename" => "Ayrton"]).
+    cjoin("raceid" => "Race", filters=["year" => 1991]).
+    filter("positionorder" => 1).
+    values("resultid", "driverid__surname", "raceid__name") |> DataFrame
 ```
 
 See [Custom Joins](custom_joins.md) for the full `.cjoin()` and `.on()` documentation.

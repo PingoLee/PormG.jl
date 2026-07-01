@@ -12,9 +12,9 @@
 | Task | Preferred Style | F Expression |
 | :--- | :--- | :--- |
 | Compare field to a **constant** | `"points__@gt" => 10` | Avoid — use the filter suffix API |
-| Compare **field to field** | — | `F("grid") == F("positionOrder")` |
+| Compare **field to field** | — | `F("grid") == F("positionorder")` |
 | **Arithmetic** in SELECT | — | `F("points") * 0.1` |
-| **Aggregate ratios** | — | `Sum("points") / Count("resultId")` |
+| **Aggregate ratios** | — | `Sum("points") / Count("resultid")` |
 | **Atomic updates** | — | `F("points") + 1` |
 
 > [!TIP]
@@ -36,7 +36,7 @@ F("points") + 5                   # Addition
 F("points") - F("grid")          # Subtraction
 F("points") * F("laps")          # Multiplication
 F("points") / 2.0                # Division
-Sum("points") / Count("resultId") # Aggregate ratios
+Sum("points") / Count("resultid") # Aggregate ratios
 ```
 
 **Supported arithmetic operators:** `+`, `-`, `*`, `/`
@@ -68,7 +68,7 @@ Find results where the starting grid position matches the finishing position:
 
 ```julia
 query = M.Result.objects
-query.filter(F("grid") == F("positionOrder"))
+query.filter(F("grid") == F("positionorder"))
 df = query |> DataFrame
 ```
 
@@ -84,7 +84,7 @@ Compare fields across joined tables. Find results where the driver's birth month
 ```julia
 query = M.Result.objects
 query.filter(
-    F("driverId__dob__@month") == F("raceId__date__@month")
+    F("driverid__dob__@month") == F("raceid__date__@month")
 )
 df = query |> DataFrame
 ```
@@ -98,9 +98,9 @@ Combine `F()` comparisons with ordinary filter pairs when only part of the predi
 ```julia
 query = M.Result.objects
 query.filter(
-    F("driverId__dob__@day") == F("raceId__date__@day"),
-    F("driverId__dob__@month") == F("raceId__date__@month"),
-    "positionOrder__@lte" => 10,   # Standard scalar filter
+    F("driverid__dob__@day") == F("raceid__date__@day"),
+    F("driverid__dob__@month") == F("raceid__date__@month"),
+    "positionorder__@lte" => 10,   # Standard scalar filter
 )
 df = query |> DataFrame
 ```
@@ -112,8 +112,8 @@ Find results within 30 days of the driver's birthday:
 ```julia
 query = M.Result.objects
 query.filter(
-    F("raceId__date") > F("driverId__dob"),
-    F("raceId__date") <= F("driverId__dob") + 30
+    F("raceid__date") > F("driverid__dob"),
+    F("raceid__date") <= F("driverid__dob") + 30
 )
 ```
 
@@ -137,9 +137,9 @@ Use `F()` inside `values()` to create **computed columns** directly in the SQL `
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Finished")
+query.filter("statusid__status" => "Finished")
 query.values(
-    "driverId__surname",
+    "driverid__surname",
     "points",
     "bonus" => F("points") * 0.1,
     "total" => F("points") + (F("points") * 0.1)
@@ -180,7 +180,7 @@ df = query |> DataFrame
 ```julia
 query = M.Result.objects
 query.values(
-    "driverId__surname",
+    "driverid__surname",
     "bonus_pts" => F("points") * 0.1   # Computed in the database
 )
 df = query |> DataFrame
@@ -208,8 +208,8 @@ Aggregate functions (`Sum`, `Count`, `Avg`, `Max`, `Min`) can participate in ari
 ```julia
 query = M.Result.objects
 query.values(
-    "driverId__surname",
-    "points_per_result" => Sum("points") / Count("resultId")
+    "driverid__surname",
+    "points_per_result" => Sum("points") / Count("resultid")
 )
 df = query |> DataFrame
 ```
@@ -251,8 +251,8 @@ When a filter references an aggregate alias, PormG moves it to the `HAVING` clau
 ```julia
 query = M.Result.objects
 query.values(
-    "constructorId__name",
-    "avg_perf" => Sum("points") / Count("resultId")
+    "constructorid__name",
+    "avg_perf" => Sum("points") / Count("resultid")
 )
 query.filter("avg_perf__@gt" => 5)
 df = query |> DataFrame
@@ -276,7 +276,7 @@ F expressions are essential for **atomic updates** — modifying a column based 
 
 ```julia
 # Increment points by 1
-M.Result.objects.filter("resultId" => 1).update("points" => F("points") + 1)
+M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 1)
 
 # Apply a 10% penalty
 M.Result.objects.filter("points__@gt" => 10).update("points" => F("points") * 0.9)
@@ -309,8 +309,8 @@ Filter by joined fields while updating the main table:
 ```julia
 # Add 10 bonus points for all British drivers in result 1
 M.Result.objects.filter(
-    "driverId__nationality" => "British",
-    "resultId" => 1
+    "driverid__nationality" => "British",
+    "resultid" => 1
 ).update("points" => F("points") + 10)
 ```
 
@@ -529,13 +529,13 @@ Atomically update bitmask columns:
 UPDATE "drivers" AS "Tb"
 SET "number" = ("Tb"."number" # $2::bigint)
 WHERE "Tb"."driverid" = $1
--- Parameters: $1 = 1 (driverId), $2 = 1 (xor mask)
+-- Parameters: $1 = 1 (driverid), $2 = 1 (xor mask)
 ```
 
 ```julia
 # Ensure the racing number is odd by setting the lowest bit:
 M.Driver.objects.
-    filter("driverId" => 2).
+    filter("driverid" => 2).
     update("number" => F("number") | 1)
 ```
 
@@ -544,7 +544,7 @@ M.Driver.objects.
 UPDATE "drivers" AS "Tb"
 SET "number" = ("Tb"."number" | $2::bigint)
 WHERE "Tb"."driverid" = $1
--- Parameters: $1 = 2 (driverId), $2 = 1 (or mask)
+-- Parameters: $1 = 2 (driverid), $2 = 1 (or mask)
 ```
 ---
 
@@ -552,10 +552,10 @@ WHERE "Tb"."driverid" = $1
 
 | Feature | Example | Where |
 | :--- | :--- | :--- |
-| Field comparison | `F("grid") == F("positionOrder")` | `filter()` |
-| Cross-join comparison | `F("driverId__dob__@month") == F("raceId__date__@month")` | `filter()` |
+| Field comparison | `F("grid") == F("positionorder")` | `filter()` |
+| Cross-join comparison | `F("driverid__dob__@month") == F("raceid__date__@month")` | `filter()` |
 | Arithmetic column | `"bonus" => F("points") * 0.1` | `values()` |
-| Aggregate ratio | `Sum("points") / Count("resultId")` | `values()` |
+| Aggregate ratio | `Sum("points") / Count("resultid")` | `values()` |
 | Aggregate filter | `"avg__@gt" => 5` on an aggregate alias | `filter()` → HAVING |
 | Column alias | `"name" => "surname"` | `values()` |
 | Atomic update | `F("points") + 1` | `update()` |

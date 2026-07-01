@@ -22,7 +22,7 @@ M2m_sponsor_scratch = Models.Model("m2m_sponsor_scratch",
 
 M2m_driver_endorsement_scratch = Models.Model("m2m_driver_endorsement_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   
   # PormG will automatically create a join table for this relationship
   sponsors = Models.ManyToManyField(M2m_sponsor_scratch, related_name="drivers")
@@ -62,7 +62,7 @@ M2m_team_scratch = Models.Model("m2m_team_scratch",
 
 M2m_driver_explicit_scratch = Models.Model("m2m_driver_explicit_scratch",
   id = Models.IDField(),
-  driverRef = Models.CharField(unique=true),
+  driverref = Models.CharField(unique=true),
   
   # Note that we use a string "M2m_membership_scratch" to refer to a model 
   # that hasn't been evaluated yet.
@@ -217,7 +217,7 @@ df = query |> DataFrame
 Generated SQL (PostgreSQL):
 ```sql
 SELECT
-    "Tb"."driverRef" as driverRef,
+    "Tb"."driverref" as driverref,
     "Tb_2"."name" as sponsors__name
 FROM "m2m_driver_multi_hop_scratch" as "Tb"
   INNER JOIN "m2m_driver_multi_hop_scratch_sponsors" AS "Tb_1" ON "Tb"."id" = "Tb_1"."m2m_driver_multi_hop_scratch_id"

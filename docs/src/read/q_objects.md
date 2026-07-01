@@ -10,7 +10,7 @@ Standard `filter()` pairs are always combined with **AND**:
 
 ```julia
 # WHERE year >= 2000 AND surname = 'Schumacher'
-query.filter("raceId__year__@gte" => 2000, "driverId__surname" => "Schumacher")
+query.filter("raceid__year__@gte" => 2000, "driverid__surname" => "Schumacher")
 ```
 
 For **OR** conditions, nested boolean groups, or dynamic filter construction, you need `Q` and `Qor`:
@@ -20,10 +20,10 @@ using PormG: Q, Qor
 
 # WHERE year >= 2000 AND (surname = 'Schumacher' OR surname = 'Hamilton')
 query.filter(
-    "raceId__year__@gte" => 2000,
+    "raceid__year__@gte" => 2000,
     Qor(
-        "driverId__surname" => "Schumacher",
-        "driverId__surname" => "Hamilton"
+        "driverid__surname" => "Schumacher",
+        "driverid__surname" => "Hamilton"
     )
 )
 ```
@@ -46,7 +46,7 @@ Use `Qor` to combine conditions where **at least one** must be true:
 ```julia
 # Results for either Mercedes (ID 1) or Red Bull (ID 9)
 query = M.Result.objects
-query.filter(Qor("constructorId" => 1, "constructorId" => 9))
+query.filter(Qor("constructorid" => 1, "constructorid" => 9))
 df = query |> DataFrame
 ```
 
@@ -81,10 +81,10 @@ While `filter()` pairs are already ANDed, `Q()` is useful for **explicit groupin
 # (Year >= 2014) AND (Hamilton OR Verstappen)
 query = M.Result.objects
 query.filter(Q(
-    "raceId__year__@gte" => 2014,
+    "raceid__year__@gte" => 2014,
     Qor(
-        "driverId__surname" => "Hamilton",
-        "driverId__surname" => "Verstappen"
+        "driverid__surname" => "Hamilton",
+        "driverid__surname" => "Verstappen"
     )
 ))
 ```
@@ -105,8 +105,8 @@ Combine `Q()` groups inside `Qor()` to build complex disjunctions:
 query = M.Result.objects
 query.filter(
     Qor(
-        Q("constructorId__name" => "Ferrari", "driverId__surname" => "Schumacher"),
-        Q("constructorId__name" => "Mercedes", "driverId__surname" => "Hamilton")
+        Q("constructorid__name" => "Ferrari", "driverid__surname" => "Schumacher"),
+        Q("constructorid__name" => "Mercedes", "driverid__surname" => "Hamilton")
     )
 )
 ```
@@ -126,11 +126,11 @@ You can combine `Q`/`Qor` with regular filter pairs — they are all ANDed toget
 ```julia
 query = M.Result.objects
 query.filter(
-    "positionOrder" => 1,                           # AND condition
-    Qor("driverId__nationality" => "Brazilian",     # OR group
-         "driverId__nationality" => "British")
+    "positionorder" => 1,                           # AND condition
+    Qor("driverid__nationality" => "Brazilian",     # OR group
+         "driverid__nationality" => "British")
 )
-# WHERE positionOrder = 1 AND (nationality = 'Brazilian' OR nationality = 'British')
+# WHERE positionorder = 1 AND (nationality = 'Brazilian' OR nationality = 'British')
 ```
 
 ---
@@ -145,10 +145,10 @@ using PormG: Q, F
 query = M.Result.objects
 query.filter(
     Q(
-        F("driverId__dob__@day") == F("raceId__date__@day"),
-        F("driverId__dob__@month") == F("raceId__date__@month"),
+        F("driverid__dob__@day") == F("raceid__date__@day"),
+        F("driverid__dob__@month") == F("raceid__date__@month"),
     ),
-    "positionOrder__@lte" => 10,   # Regular scalar filter
+    "positionorder__@lte" => 10,   # Regular scalar filter
 )
 df = query |> DataFrame
 ```
@@ -182,12 +182,12 @@ query = M.Result.objects
 query.filter(
     Qor(
         Q(
-            "constructorId__name" => "Ferrari",
+            "constructorid__name" => "Ferrari",
             Qor("wins__@gt" => 5, "podiums__@gt" => 20)
         ),
         Q(
-            "constructorId__name" => "Mercedes",
-            "raceId__year__@gte" => 2014
+            "constructorid__name" => "Mercedes",
+            "raceid__year__@gte" => 2014
         )
     )
 )
@@ -203,20 +203,20 @@ Build filters incrementally from user input using `push!`. This is ideal for sea
 q_obj = Q()
 
 if !isnothing(search_name)
-    push!(q_obj, "driverId__surname__@icontains" => search_name)
+    push!(q_obj, "driverid__surname__@icontains" => search_name)
 end
 
 if only_winners
-    push!(q_obj, "positionOrder" => 1)
+    push!(q_obj, "positionorder" => 1)
 end
 
 if !isnothing(min_year)
-    push!(q_obj, "raceId__year__@gte" => min_year)
+    push!(q_obj, "raceid__year__@gte" => min_year)
 end
 
 query = M.Result.objects
 query.filter(q_obj)
-query.values("driverId__surname", "raceId__name", "positionOrder")
+query.values("driverid__surname", "raceid__name", "positionorder")
 df = query |> DataFrame
 ```
 
@@ -226,11 +226,11 @@ df = query |> DataFrame
 or_conditions = Qor()
 
 for nationality in user_selected_nationalities
-    push!(or_conditions, "driverId__nationality" => nationality)
+    push!(or_conditions, "driverid__nationality" => nationality)
 end
 
 query = M.Result.objects
-query.filter(or_conditions, "positionOrder" => 1)
+query.filter(or_conditions, "positionorder" => 1)
 ```
 
 ---
@@ -255,15 +255,15 @@ query.filter(q)   # Matches everything — equivalent to no filter
 function search_results(; driver=nothing, team=nothing, year=nothing, winner_only=false)
     q = Q()
     
-    !isnothing(driver) && push!(q, "driverId__surname__@icontains" => driver)
-    !isnothing(team)   && push!(q, "constructorId__name__@icontains" => team)
-    !isnothing(year)   && push!(q, "raceId__year" => year)
-    winner_only        && push!(q, "positionOrder" => 1)
+    !isnothing(driver) && push!(q, "driverid__surname__@icontains" => driver)
+    !isnothing(team)   && push!(q, "constructorid__name__@icontains" => team)
+    !isnothing(year)   && push!(q, "raceid__year" => year)
+    winner_only        && push!(q, "positionorder" => 1)
     
     return M.Result.objects.
         filter(q).
-        values("driverId__surname", "constructorId__name", "raceId__year", "positionOrder").
-        order_by("-raceId__year") |> DataFrame
+        values("driverid__surname", "constructorid__name", "raceid__year", "positionorder").
+        order_by("-raceid__year") |> DataFrame
 end
 ```
 

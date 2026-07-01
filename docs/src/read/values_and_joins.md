@@ -6,9 +6,9 @@ This page covers column selection, relation traversal with `__`, join types, rev
 
 ## How Joins Work in PormG
 
-PormG uses the double-underscore `__` notation (inspired by Django) to traverse relationships. When you reference a field like `driverId__surname`, PormG:
+PormG uses the double-underscore `__` notation (inspired by Django) to traverse relationships. When you reference a field like `driverid__surname`, PormG:
 
-1. **Resolves** `driverId` as a ForeignKey relationship on the model.
+1. **Resolves** `driverid` as a ForeignKey relationship on the model.
 2. **Creates** the appropriate SQL `JOIN` automatically.
 3. **Selects** the `surname` column from the joined `Driver` table.
 
@@ -22,12 +22,12 @@ Select specific columns from the main table:
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Engine")
-query.values("resultId", "statusId")
+query.filter("statusid__status" => "Engine")
+query.values("resultid", "statusid")
 df = query |> DataFrame
 ```
 
-This generates a simple `SELECT ... FROM ... WHERE` without any joins, since `resultId` and `statusId` are local columns on the `Result` table.
+This generates a simple `SELECT ... FROM ... WHERE` without any joins, since `resultid` and `statusid` are local columns on the `Result` table.
 
 ---
 
@@ -37,12 +37,12 @@ Select columns from related tables using `__`:
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Engine")
+query.filter("statusid__status" => "Engine")
 query.values(
-    "resultId",
-    "driverId__forename",
-    "constructorId__name",
-    "statusId__status",
+    "resultid",
+    "driverid__forename",
+    "constructorid__name",
+    "statusid__status",
     "grid",
     "laps"
 )
@@ -77,11 +77,11 @@ Chain `__` segments to traverse multiple relationships:
 
 ```julia
 query = M.Result.objects
-query.filter("raceId__circuitId__country" => "Monaco")
+query.filter("raceid__circuitid__country" => "Monaco")
 query.values(
-    "driverId__forename",
-    "raceid__circuitId__name",
-    "raceId__year"
+    "driverid__forename",
+    "raceid__circuitid__name",
+    "raceid__year"
 )
 df = query |> DataFrame
 ```
@@ -111,8 +111,8 @@ When Model B has a `ForeignKey` pointing to Model A, you can traverse the relati
 ```julia
 # Constructor → Result (reverse: Result has FK to Constructor)
 query = M.Constructor.objects
-query.values("constructorId", "name", "result__points")
-query.filter("result__positionOrder" => 1) # Filter for winning constructors
+query.values("constructorid", "name", "result__points")
+query.filter("result__positionorder" => 1) # Filter for winning constructors
 df = query |> DataFrame
 ```
 
@@ -125,13 +125,13 @@ If you have multiple `ForeignKey`s pointing to the same target model, or if you 
 ```julia
 # Model definition snippet
 # "test_deletion" becomes the reverse traversal key from Result
-test_result = Models.ForeignKey(Result, pk_field="resultId", related_name="test_deletion")
+test_result = Models.ForeignKey(Result, pk_field="resultid", related_name="test_deletion")
 ```
 
 ```julia
 # Querying using the related_name
 query = M.Result.objects
-query.values("resultId", "test_deletion__name")
+query.values("resultid", "test_deletion__name")
 ```
 
 ### Chained Multi-Hop Reverse Joins
@@ -142,7 +142,7 @@ PormG supports traversing multiple relationships in reverse, seamlessly chaining
 # Result ← test_deletion (related_name) ← just_a_nested_roll_back (lowercase model name)
 query = M.Result.objects
 query.filter("test_deletion__just_a_nested_roll_back__description" => "nested-value")
-query.values("resultId", "test_deletion__just_a_nested_roll_back__id")
+query.values("resultid", "test_deletion__just_a_nested_roll_back__id")
 ```
 
 ---
@@ -153,8 +153,8 @@ Use `"*"` to select all columns from the main table, then add specific joined fi
 
 ```julia
 query = M.Result.objects
-query.filter("driverId__nationality" => "Brazilian")
-query.values("*", "driverId__surname", "driverId__forename")
+query.filter("driverid__nationality" => "Brazilian")
+query.values("*", "driverid__surname", "driverid__forename")
 df = query |> DataFrame
 ```
 
@@ -188,27 +188,27 @@ Rename output columns using the `"alias" => "field"` pair syntax:
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Finished", "resultId" => 26745)
+query.filter("statusid__status" => "Finished", "resultid" => 26745)
 query.values(
-    "resultId",
-    "circuit" => "raceId__circuitId__name"
+    "resultid",
+    "circuit" => "raceid__circuitid__name"
 )
 df = query |> DataFrame
-# DataFrame columns: :resultId, :circuit
+# DataFrame columns: :resultid, :circuit
 ```
 
 ### Alias with Date Transforms
 
 ```julia
 query = M.Result.objects
-query.filter("statusId__status" => "Finished", "resultId" => 26745)
+query.filter("statusid__status" => "Finished", "resultid" => 26745)
 query.values(
-    "resultId",
-    "circuit" => "raceId__circuitId__name",
-    "quarter" => "raceId__date__@quarter"
+    "resultid",
+    "circuit" => "raceid__circuitid__name",
+    "quarter" => "raceid__date__@quarter"
 )
 df = query |> DataFrame
-# DataFrame columns: :resultId, :circuit, :quarter
+# DataFrame columns: :resultid, :circuit, :quarter
 ```
 
 ### Alias with Aggregates and F-Expressions
@@ -216,7 +216,7 @@ df = query |> DataFrame
 ```julia
 query = M.Result.objects
 query.values(
-    "driver" => "driverId__surname",
+    "driver" => "driverid__surname",
     "total_pts" => Sum("points"),
     "bonus" => F("points") * 0.1
 )
@@ -248,7 +248,7 @@ df = M.Driver.objects.filter("driverref" => "hamilton").
 ```julia
 # All results for British drivers
 query = M.Result.objects
-query.filter("driverId__nationality" => "British")
+query.filter("driverid__nationality" => "British")
 ```
 
 ### Select Across Multiple Relations
@@ -257,12 +257,12 @@ query.filter("driverId__nationality" => "British")
 # Full race result detail
 query = M.Result.objects
 query.values(
-    "positionOrder",
-    "driverId__forename",
-    "driverId__surname",
-    "constructorId__name",
-    "raceId__name",
-    "raceId__circuitId__country"
+    "positionorder",
+    "driverid__forename",
+    "driverid__surname",
+    "constructorid__name",
+    "raceid__name",
+    "raceid__circuitid__country"
 )
 ```
 
@@ -274,8 +274,8 @@ Multiple filter pairs involving different joins are ANDed together:
 # British drivers at Monaco
 query = M.Result.objects
 query.filter(
-    "driverId__nationality" => "British",
-    "raceId__circuitId__name__@icontains" => "monaco"
+    "driverid__nationality" => "British",
+    "raceid__circuitid__name__@icontains" => "monaco"
 )
 ```
 
@@ -284,8 +284,8 @@ query.filter(
 ```julia
 # Wins per constructor
 query = M.Result.objects
-query.filter("positionOrder" => 1)
-query.values("constructorId__name", "wins" => Count("resultId"))
+query.filter("positionorder" => 1)
+query.values("constructorid__name", "wins" => Count("resultid"))
 query.order_by("-wins")
 df = query |> DataFrame
 ```
@@ -296,7 +296,7 @@ When you filter on a joined field but don't call `values()`, PormG still creates
 
 ```julia
 # Returns all Result columns, filtered by driver nationality
-df = M.Result.objects.filter("driverId__nationality" => "British") |> DataFrame
+df = M.Result.objects.filter("driverid__nationality" => "British") |> DataFrame
 ```
 
 ---

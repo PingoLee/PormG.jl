@@ -42,7 +42,7 @@ using CSV, DataFrames
 
 # Prepare data
 df = CSV.File("drivers.csv") |> DataFrame
-# The CSV ships camelCase headers (driverId, driverRef, ...); bulk matching is
+# The CSV ships camelCase headers (driverid, driverref, ...); bulk matching is
 # case-sensitive, so normalize them to the model's lowercase field names first.
 rename!(df, lowercase.(names(df)))
 
@@ -258,7 +258,7 @@ using CSV, DataFrames
 import PormG.models as M
 
 # Load initial reference data
-# The Ergast CSVs ship camelCase headers (circuitId, driverRef, ...); bulk matching is
+# The Ergast CSVs ship camelCase headers (circuitid, driverref, ...); bulk matching is
 # case-sensitive, so normalize headers to the model's lowercase fields before loading.
 circuits_df = CSV.File("f1/circuits.csv") |> DataFrame
 rename!(circuits_df, lowercase.(names(circuits_df)))

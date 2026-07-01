@@ -27,13 +27,13 @@ These methods modify the query builder and return the handler for further chaini
 | Method | Description | Example |
 | :--- | :--- | :--- |
 | `.filter(key => value, ...)` | Add WHERE conditions (AND). Multiple pairs are ANDed. | `.filter("nationality" => "British")` |
-| `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. | `.values("*", "driverId__surname")` |
+| `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. | `.values("*", "driverid__surname")` |
 | `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | `.order_by("-points", "surname")` |
 | `.limit(n)` | Limit the number of returned rows. | `.limit(10)` |
 | `.offset(n)` | Skip the first `n` rows. | `.offset(20)` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
-| `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverId", "nationality" => "British")` |
-| `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverId" => "Driver")` |
+| `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverid", "nationality" => "British")` |
+| `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
 
 See also: [`.cjoin()`](#cjoin) for custom join definitions and [`.with()`](#with-common-table-expressions) for CTEs.
 
@@ -87,9 +87,9 @@ driver.save()
 ```julia
 # Full query chain with DataFrame output
 df = M.Result.objects
-    .filter("driverId__nationality" => "Brazilian", "positionOrder" => 1)
-    .values("driverId__forename", "driverId__surname", "raceId__year")
-    .order_by("-raceId__year") |> DataFrame
+    .filter("driverid__nationality" => "Brazilian", "positionorder" => 1)
+    .values("driverid__forename", "driverid__surname", "raceid__year")
+    .order_by("-raceid__year") |> DataFrame
 
 # Count and existence checks
 n = M.Driver.objects.filter("nationality" => "British").count()
@@ -156,12 +156,12 @@ PormG uses `__@` suffixes for lookup operators and field transforms:
 | `field` | `= value` | `"nationality" => "British"` |
 | `field__@gt` | `> value` | `"points__@gt" => 10` |
 | `field__@gte` | `>= value` | `"points__@gte" => 10` |
-| `field__@lt` | `< value` | `"positionOrder__@lt" => 3` |
-| `field__@lte` | `<= value` | `"positionOrder__@lte" => 10` |
+| `field__@lt` | `< value` | `"positionorder__@lt" => 3` |
+| `field__@lte` | `<= value` | `"positionorder__@lte" => 10` |
 | `field__@ne` | `<> value` | `"status__@ne" => "Retired"` |
 | `field__@in` | `IN (...)` | `"nationality__@in" => ["British", "French"]` |
 | `field__@nin` | `NOT IN (...)` | `"nationality__@nin" => ["British", "German"]` |
-| `field__@range` | `BETWEEN a AND b` | `"driverId__@range" => [1, 50]` |
+| `field__@range` | `BETWEEN a AND b` | `"driverid__@range" => [1, 50]` |
 | `field__@isnull` | `IS NULL / IS NOT NULL` | `"dob__@isnull" => true` |
 | `field__@contains` | `LIKE '%val%'` | `"name__@contains" => "Monaco"` |
 | `field__@icontains` | `ILIKE '%val%'` | `"name__@icontains" => "monaco"` |
@@ -192,22 +192,22 @@ using PormG: F
 using PormG.Functions: Sum, Count
 
 # Field-to-field comparison
-M.Result.objects.filter(F("grid") == F("positionOrder"))
+M.Result.objects.filter(F("grid") == F("positionorder"))
 
 # Arithmetic in projections
 M.Result.objects.values(
-    "driverId__surname",
+    "driverid__surname",
     "bonus" => F("points") * 0.1
 )
 
 # Aggregate ratios
 M.Result.objects.values(
-    "driverId__surname",
-    "avg_pts" => Sum("points") / Count("resultId")
+    "driverid__surname",
+    "avg_pts" => Sum("points") / Count("resultid")
 )
 
 # Atomic update (no read-modify-write race)
-M.Result.objects.filter("resultId" => 1).update("points" => F("points") + 10)
+M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 10)
 ```
 
 See [Field Expressions](read/field_expressions.md) for the full reference.
@@ -243,7 +243,7 @@ All aggregate functions can be used in `.values()` for grouping or combined with
 
 | Function | SQL | Example |
 | :--- | :--- | :--- |
-| `Count("field")` | `COUNT(field)` | `"total" => Count("resultId")` |
+| `Count("field")` | `COUNT(field)` | `"total" => Count("resultid")` |
 | `Sum("field")` | `SUM(field)` | `"total_pts" => Sum("points")` |
 | `Avg("field")` | `AVG(field)` | `"avg_pts" => Avg("points")` |
 | `Max("field")` | `MAX(field)` | `"best" => Max("points")` |
@@ -254,10 +254,10 @@ When aggregate values appear in `values()`, PormG automatically groups by the no
 ```julia
 # Wins per constructor with HAVING filter
 df = M.Result.objects.values(
-    "constructorId__name",
-    "wins" => Count("resultId")
+    "constructorid__name",
+    "wins" => Count("resultid")
 ).filter(
-    "positionOrder" => 1,
+    "positionorder" => 1,
     "wins__@gt" => 50
 ).order_by("-wins") |> DataFrame
 ```
@@ -321,8 +321,8 @@ df = M.Result.objects.values(
 
 ```julia
 "category" => Case([
-    When("positionOrder" => 1,            then = "Winner"),
-    When("positionOrder__@lte" => 3,      then = "Podium"),
+    When("positionorder" => 1,            then = "Winner"),
+    When("positionorder__@lte" => 3,      then = "Podium"),
 ], default = "Other")
 ```
 
@@ -342,10 +342,10 @@ Defines custom join conditions at query time as a chainable method on the query 
 using PormG: Q, Qor
 
 df = M.Result.objects.cjoin(
-    "driverId" => "Driver",
+    "driverid" => "Driver",
     filters=[Q("nationality" => "Brazilian", Qor("forename" => "Ayrton", "forename" => "Nelson"))],
     join_type="INNER"
-).values("driverId__forename", "driverId__surname", "points") |> DataFrame
+).values("driverid__forename", "driverid__surname", "points") |> DataFrame
 ```
 
 **Parameters:**
@@ -366,8 +366,8 @@ Adds ON-clause predicates to existing join paths (including reverse joins) witho
 
 ```julia
 query = M.Result.objects
-query.on("driverId", "nationality" => "Brazilian", "code" => "SEN")
-query.values("resultId", "driverId__surname", "points")
+query.on("driverid", "nationality" => "Brazilian", "code" => "SEN")
+query.values("resultid", "driverid__surname", "points")
 ```
 
 ---
@@ -430,8 +430,8 @@ Executes a block inside a database transaction with automatic commit/rollback:
 
 ```julia
 PormG.run_in_transaction("db") do
-    M.Result.objects.create("raceId" => 1, "driverId" => 1, "points" => 25)
-    M.Driver.objects.filter("driverId" => 1).update("code" => "WIN")
+    M.Result.objects.create("raceid" => 1, "driverid" => 1, "points" => 25)
+    M.Driver.objects.filter("driverid" => 1).update("code" => "WIN")
     # If any exception is raised, both operations are rolled back
 end
 ```

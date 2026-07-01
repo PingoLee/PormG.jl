@@ -139,7 +139,7 @@ mutable struct SQLObjectQuery <: SQLObject
   connect_key::OptionalString # Override for multi-tenant scenarios
   values::Vector{Union{SQLTypeText,SQLTypeField}}
   filter::Vector{FilterType} # filters to be used in the query
-  insert::Dict{String,Any} # values to be used to create or insert
+  insert::OrderedCollections.OrderedDict{String,Any} # values to be used to create or insert (ordered so INSERT/UPDATE column lists follow call order — #97)
   limit::Integer
   offset::Integer
   order::Vector{SQLTypeOrder}
@@ -152,7 +152,7 @@ mutable struct SQLObjectQuery <: SQLObject
   custom_join::Dict{String,Any}
   parameters::Union{Nothing,AbstractPormGParam}
 
-  SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=Dict(), limit=0, offset=0,
+  SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
     order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, ctes=Dict{String,CTEDict}(), custom_join=Dict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
     new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
 end

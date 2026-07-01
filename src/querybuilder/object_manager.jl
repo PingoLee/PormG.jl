@@ -56,7 +56,8 @@ function up_values!(q::SQLObject, values)
 end
 
 function up_create!(q::SQLObject, values; kwargs...)
-  q.insert = Dict()
+  # OrderedDict so the rendered INSERT column list follows call order deterministically (#97)
+  q.insert = OrderedCollections.OrderedDict{String,Any}()
   for (k, v) in values
     q.insert[k] = v
   end
@@ -76,7 +77,8 @@ function up_update!(q::SQLObject, values; kwargs...)
       end
     end
   end
-  q.insert = Dict()
+  # OrderedDict so the rendered UPDATE SET list follows call order deterministically (#97)
+  q.insert = OrderedCollections.OrderedDict{String,Any}()
   for (k, v) in values
     q.insert[k] = v
   end

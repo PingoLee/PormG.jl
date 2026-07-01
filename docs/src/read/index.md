@@ -37,8 +37,8 @@ PormG provides several terminal methods to execute a query and return data in di
 
 ```julia
 query = M.Result.objects
-query.filter("driverId__nationality" => "Brazilian", "positionOrder" => 1)
-query.values("driverId__surname", "raceId__name")
+query.filter("driverid__nationality" => "Brazilian", "positionorder" => 1)
+query.values("driverid__surname", "raceid__name")
 
 # As model-aware rows — best for ORM-style iteration
 results = query.list()
@@ -50,7 +50,7 @@ end
 dicts = query.list(:dict)
 
 # As a DataFrame — best for analysis
-df = query.values("driverId__surname", "raceId__year") |> DataFrame
+df = query.values("driverid__surname", "raceid__year") |> DataFrame
 
 # As JSON — best for API responses
 json_str = query.list(:json)
@@ -170,11 +170,11 @@ nationalities = M.Driver.objects.values("nationality").distinct().list()
 ### Copying a Query for Reuse
 
 ```julia
-base_query = M.Result.objects.filter("positionOrder" => 1)
+base_query = M.Result.objects.filter("positionorder" => 1)
 
 # Reuse for different projections
-winners_by_driver = base_query.copy().values("driverId__surname", "wins" => Count("resultId"))
-winners_by_team   = base_query.copy().values("constructorId__name", "wins" => Count("resultId"))
+winners_by_driver = base_query.copy().values("driverid__surname", "wins" => Count("resultid"))
+winners_by_team   = base_query.copy().values("constructorid__name", "wins" => Count("resultid"))
 ```
 
 ---
@@ -185,8 +185,8 @@ You can inspect the generated SQL without executing the query:
 
 ```julia
 query = M.Result.objects.
-    filter("driverId__nationality" => "Brazilian").
-    values("driverId__surname", "points").
+    filter("driverid__nationality" => "Brazilian").
+    values("driverid__surname", "points").
     order_by("-points")
 
 # Get just the SQL string
@@ -226,7 +226,7 @@ If you use multiple configured pools, select the target database per query:
 q = M.Driver.objects.db("staging").filter("code" => "SEN")
 
 # Route to a tenant database (with lazy resolution)
-results = M.Result.objects.db("client_42").filter("positionOrder" => 1).list()
+results = M.Result.objects.db("client_42").filter("positionorder" => 1).list()
 ```
 
 See [Configuration: Dynamic Multi-Tenancy](../configuration/dynamic.md) for setting up connection resolvers.

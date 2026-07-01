@@ -118,7 +118,7 @@ dev:
 Create `db/models.jl` with your model definitions. 
 
 > [!NOTE]
-> PormG **preserves the case** you declare field names with: `driverId` stays `driverId` (column `"driverId"`), and field lookups are **case-sensitive** — query a field by the exact case you declared it. The recommended house style is **lowercase snake_case** (PormG's own models use it), so define new fields that way; reserve mixed-case declarations for faithfully mapping existing mixed-case/uppercase columns you don't control.
+> PormG **preserves the case** you declare field names with: `driverid` stays `driverid` (column `"driverid"`), and field lookups are **case-sensitive** — query a field by the exact case you declared it. The recommended house style is **lowercase snake_case** (PormG's own models use it), so define new fields that way; reserve mixed-case declarations for faithfully mapping existing mixed-case/uppercase columns you don't control.
 
 ```julia
 module models

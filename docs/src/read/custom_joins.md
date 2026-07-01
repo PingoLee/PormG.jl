@@ -69,7 +69,7 @@ df = M.New_join_position.objects.
 #    3 | Finished                  teste 3           3
 ```
 
-The `.cjoin()` call creates a LEFT JOIN from `new_join_position.result` to `Result.resultId`, allowing you to traverse the relationship chain `result__statusid__status`.
+The `.cjoin()` call creates a LEFT JOIN from `new_join_position.result` to `Result.resultid`, allowing you to traverse the relationship chain `result__statusid__status`.
 
 ### Join with Filter Conditions (LEFT JOIN)
 

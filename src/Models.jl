@@ -1039,8 +1039,19 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
       elseif getfield(new_field, field_name) != getfield(old_field, field_name)
         return false
       end
-    catch
-      @pormg_debug false
+    catch e
+      # A StackOverflowError / InterruptException signals corrupted or interrupted program state,
+      # not an ordinary attribute mismatch — rethrow those so they surface loudly instead of being
+      # masked as "changed". (A StackOverflowError here would be a symptom of the getproperty
+      # recursion, issue #108, and must not be swallowed.)
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      # Otherwise fail SAFE, not open (issue #69). A schema-diff must never default to "equal" on an
+      # unexpected comparison error: reporting "equal" means "no change", so a real field change
+      # whose comparison throws would be silently dropped and no migration generated. Treat the
+      # field as CHANGED (return false) so a migration is emitted, and log structured context
+      # instead of swallowing. Worst case is an extra, visible migration — never a missed one.
+      @warn "Model field comparison raised; treating field as changed so a migration is generated" field=field_name new_field_type=typeof(new_field) old_field_type=typeof(old_field) exception=e
+      return false
     end
   end
   return true

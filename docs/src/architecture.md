@@ -151,7 +151,7 @@ flowchart TD
 ## Known architectural edges
 
 The macro-structure above is sound — Django-shaped layers and a clean backend seam. But a skeptical
-audit also turned up two **confirmed correctness bugs** and two characterizations worth stating
+audit also turned up one **confirmed correctness bug** and two characterizations worth stating
 plainly. These are listed first; the maintainability notes follow.
 
 ### Confirmed correctness bugs (pre-publish)
@@ -163,11 +163,6 @@ plainly. These are listed first; the maintainability notes follow.
   Result: a read mutates the live query, and `.copy()` does not give an independent query when CTEs
   are involved. `.count()`/`.exists()` `deepcopy` first and are safe — `.list()` does not, an
   inconsistency rather than a design.
-
-- **Migration diff fails open** — [#69](https://github.com/PingoLee/PormG.jl/issues/69).
-  `_compare_model_field` wraps each attribute comparison in a `try/catch` that swallows the error and
-  falls through to "fields equal", so a comparison that throws can silently classify a changed field
-  as unchanged and **skip a migration**. A schema-diff must fail *toward* generating a migration.
 
 ### Maintainability edges (no correctness impact)
 

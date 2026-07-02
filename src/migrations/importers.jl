@@ -221,24 +221,33 @@ end
   
 
 """
-  import_models_from_django(model_py_string::String; db::Union{PormGSQLite, PormGPostgres} = connection(), force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
+  import_models_from_django(model_py_string::String; db::String = DB_PATH, force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, django_prefix::Union{Nothing, String, Missing} = missing, autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
 
 Imports Django models from a given `model.py` file content string and generates corresponding Julia models.
 
 # Arguments
 - `model_py_string::String`: The content of the `model.py` file as a string; user django_to_string(path) to read the file; or insert the file path.
-- `db::String`: The configuration key used to resolve settings (usually the db folder path). The generated file is written to that configuration's `db_def_folder`. Defaults to `DB_PATH`.
+- `db::String`: The configuration key used to resolve settings (usually the db folder path). The generated file is written to that configuration's `db_def_folder` unless `output_path` overrides it, and the table-name prefix comes from that configuration's `django_prefix` unless `django_prefix` overrides it. Defaults to `DB_PATH`.
 - `force_replace::Bool`: If `true`, forces replacement of the existing models file. Defaults to `false`.
 - `ignore_table::Vector{String}`: Tables to ignore during the import process. Defaults to `postgres_ignore_table`.
 - `file::String`: The name of the file to save the generated models. Defaults to `"automatic_models.jl"`.
+- `output_path::Union{Nothing, String}`: Directory to write the generated file into, overriding the resolved config's `db_def_folder`. Use this to stage a *foreign* Django app's models next to their copied `model.py` (e.g. `"db_gal"`) while still resolving `db` for its Settings. Defaults to `nothing` (use `db_def_folder`).
+- `django_prefix::Union{Nothing, String, Missing}`: Overrides the generated table-name prefix. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"estoque"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
 - `autofields_ignore::Vector{String}`: Fields to ignore automatically. Defaults to `["Manager"]`.
 - `parameters_ignore::Vector{String}`: Parameters to ignore during field processing. Defaults to `["help_text"]`.
 
 # Description
 This function checks if the specified models file already exists and creates it if necessary. It parses the provided `model.py` content string to extract Django model classes and their fields. For each class, it processes the fields, adds a primary key if none exists, and generates the corresponding Julia model code. The generated models are then saved to the specified file.
 
+`output_path` and `django_prefix` never mutate the shared `db` config: when either is set, a
+throwaway render-only `Settings` (no database connection) drives the output directory and prefix.
+
 # Example
 import_models_from_django(django_to_string("/home/user/models.py"))
+
+# Stage a foreign Django app (its models.py copied into db_gal/) with its own folder and prefix:
+import_models_from_django("db_gal/models.py"; db="db", file="gal_models.jl",
+                          output_path="db_gal", django_prefix="estoque", force_replace=true)
 """
 function import_models_from_django(
     model_py_string::String;
@@ -246,6 +255,8 @@ function import_models_from_django(
     force_replace::Bool = false,
     ignore_table::Vector{String} = postgres_ignore_table,
     file::String = "automatic_models.jl",
+    output_path::Union{Nothing, String} = nothing,
+    django_prefix::Union{Nothing, String, Missing} = missing,
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
   )
@@ -258,10 +269,21 @@ function import_models_from_django(
     return
   end
 
-  # `db` is the config key; the output directory comes from the resolved settings,
-  # matching import_models_from_postgres. Key and folder usually coincide, but
-  # manually registered Settings may point elsewhere.
-  model_path = settings.db_def_folder
+  # `db` is the config key used to resolve Settings; by default the output directory
+  # and table-name prefix come from that config (matching import_models_from_postgres).
+  # When importing a *foreign* Django app staged elsewhere, `output_path`/`django_prefix`
+  # override those without mutating the shared config — a throwaway render-only Settings
+  # (no DB connection) carries the overrides. `django_prefix === missing` inherits the
+  # config's prefix; `nothing` emits unprefixed tables; a String forces that prefix.
+  render_settings = if output_path === nothing && django_prefix === missing
+    settings
+  else
+    Configuration.Settings(
+      db_def_folder = output_path === nothing ? settings.db_def_folder : output_path,
+      django_prefix = django_prefix === missing ? settings.django_prefix : django_prefix,
+    )
+  end
+  model_path = render_settings.db_def_folder
   model_output_path = joinpath(model_path, file)
 
   # Check if the generated models file already exists.
@@ -312,12 +334,12 @@ function import_models_from_django(
 
     # Collect all create instructions
     if !isempty(fields_dict)
-        push!(Instructions, Models.Model_to_str(Models.Model(class_name, fields_dict), settings))
+        push!(Instructions, Models.Model_to_str(Models.Model(class_name, fields_dict), render_settings))
     end
-    
+
   end
 
-  generate_models_from_db(file, Instructions, settings, path=model_path)
+  generate_models_from_db(file, Instructions, render_settings, path=model_path)
 end
 
 function parse_class(model_py_string::String)
@@ -485,6 +507,11 @@ function parse_value(value::AbstractString)
       return true
   elseif value == "False"
       return false
+  elseif value == "None"
+      # Python's None literal (e.g. default=None) is a null value; map it to
+      # Julia's `nothing`. Passing "None" verbatim would crash typed converters
+      # such as ForeignKey's default (parse(Int64, "None")).
+      return nothing
   elseif value == "list"
       return "[]"
   elseif value == "dict"

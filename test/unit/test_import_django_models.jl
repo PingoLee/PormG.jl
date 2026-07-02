@@ -243,6 +243,101 @@ class ReporteProblema(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: output_path and django_prefix overrides for foreign apps
+# When staging a foreign Django app (its models.py copied into a sibling folder),
+# the caller resolves Settings via `db` but must be able to redirect the output
+# directory and the generated table-name prefix without mutating the shared
+# config. This verifies both overrides and that the resolved config is untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer honors output_path and django_prefix overrides" begin
+    # A named config whose Settings carry the "main app" folder and prefix.
+    folder = mktempdir()
+    out_folder = mktempdir()
+    config_key = "unit_django_import_override_key"
+    db_dir_existed = isdir(PormG.MODEL_PATH)
+    PormG.config[config_key] = PormG.Configuration.Settings(
+        db_def_folder = folder,
+        django_prefix = "dash",
+    )
+    output_file = "override_django_unit.jl"
+
+    django_text = """
+from django.db import models
+
+class Dim_ibge(models.Model):
+    cidade = models.CharField(max_length=250)
+"""
+
+    try
+        import_models_from_django(
+            django_text;
+            db = config_key,
+            file = output_file,
+            output_path = out_folder,       # redirect away from db_def_folder
+            django_prefix = "estoque",      # override the config's "dash" prefix
+            force_replace = true,
+        )
+
+        # The file lands in the override folder, not the config's db_def_folder.
+        @test isfile(joinpath(out_folder, output_file))
+        @test !isfile(joinpath(folder, output_file))
+
+        generated = read(joinpath(out_folder, output_file), String)
+        # Table name uses the overridden prefix...
+        @test occursin("Models.Model(\"estoque_dim_ibge\"", generated)
+        # ...never the config's "dash" prefix.
+        @test !occursin("dash_dim_ibge", generated)
+
+        # The shared config Settings must be left untouched by the overrides.
+        @test PormG.config[config_key].db_def_folder == folder
+        @test PormG.config[config_key].django_prefix == "dash"
+    finally
+        delete!(PormG.config, config_key)
+        isdir(folder) && rm(folder; recursive = true)
+        isdir(out_folder) && rm(out_folder; recursive = true)
+        if !db_dir_existed && isdir(PormG.MODEL_PATH) && isempty(readdir(PormG.MODEL_PATH))
+            rm(PormG.MODEL_PATH)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: Python None defaults map to a null (nothing) default
+# Regression for default=None on a ForeignKey, which crashed the importer:
+# parse_value returned the literal "None" string, and ForeignKey's typed default
+# converter then tried parse(Int64, "None"). None must import as a null default
+# (nothing) and be omitted from the generated field, never leaked as a string.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer maps Python None defaults to nothing" begin
+    django_text = """
+from django.db import models
+
+class Bm2_map_ext_am(models.Model):
+    ord = models.IntegerField(default=0)
+
+class Bm2_map_aliq_am(models.Model):
+    plan = models.ForeignKey('Bm2_map_ext_am', on_delete=models.SET_DEFAULT, default=None, blank=True, null=True, db_constraint=False)
+"""
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        django_text;
+        output_file = "none_default_django_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+        # The foreign key still imports, keeping its non-null options...
+        @test occursin("plan_id = Models.ForeignKey(\"Bm2_map_ext_am\"", generated)
+        @test occursin("on_delete=SET_DEFAULT", generated)
+        @test occursin("db_constraint=false", generated)
+        # ...but None must never surface as a literal default value.
+        @test !occursin("default=None", generated)
+        @test !occursin("default=\"None\"", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer: positive small integers map to PositiveSmallIntegerField
 # This covers Django's PositiveSmallIntegerField (a real PormG SMALLINT field)
 # plus callable JSON defaults such as default=list, which import to a concrete

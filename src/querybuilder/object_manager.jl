@@ -282,7 +282,13 @@ function Base.getproperty(m::PormGModel, sym::Symbol)
     # M2M accessor names are validated through format_fild_name which rejects reserved
     # names, so a user-defined M2M field cannot shadow a Model_Type struct field.
     return getfield(m, sym)
-  elseif Models.has_many_to_many_accessor(m, String(sym))
+  elseif hasfield(typeof(m), :cache) && hasfield(typeof(m), :related_objects) &&
+         Models.has_many_to_many_accessor(m, String(sym))
+    # Guard the M2M branch on the `cache`/`related_objects` struct fields it reads. Only Model_Type
+    # has them; PormGField subtypes are also <: PormGModel but do NOT, so without this guard
+    # has_many_to_many_accessor would re-enter getproperty on a field's absent `.cache` and recurse
+    # forever — a StackOverflowError on ANY absent-property access to a field object (issue #108).
+    # Fields fall through to the plain getfield below, which raises a clean FieldError.
     Models.ensure_model_initialized(m)
     return ManyToManyDescriptor(m, String(sym), Models.get_many_to_many_relation(m, String(sym)))
   else

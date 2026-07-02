@@ -53,7 +53,6 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 - [#70](https://github.com/PingoLee/PormG.jl/issues/70) — `Model_to_str` silently drops a field when rendering throws (swallowed catch)
 - [#73](https://github.com/PingoLee/PormG.jl/issues/73) — `bulk_update` parameters snapshot/restore leaves partial state on mid-chunk failure
 - [#80](https://github.com/PingoLee/PormG.jl/issues/80) — Dead identifier-whitelist helpers + skill-doc claims a contract the code doesn't exercise (`documentation`)
-- [#108](https://github.com/PingoLee/PormG.jl/issues/108) — `getproperty` on a field object (`PormGField`) with an absent property infinitely recurses → `StackOverflowError`
 
 ## 🧮 SQL correctness & dialect alignment
 

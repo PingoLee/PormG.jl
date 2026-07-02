@@ -217,3 +217,43 @@ end
   @test desc_rev isa PormG.QueryBuilder.ManyToManyDescriptor
   @test desc_rev.accessor == "championships"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regression (#108): the getproperty override dispatches M2M accessors by calling
+# has_many_to_many_accessor(m, …), which reads m.cache / m.related_objects. Those are
+# Model_Type struct fields — but PormGField subtypes are ALSO <: PormGModel and do NOT
+# have them, so for a FIELD object the M2M branch used to re-enter getproperty on the
+# absent `.cache` and recurse forever: a StackOverflowError on ANY absent-property access
+# to a field object. The fix guards the M2M branch on `hasfield(…, :cache/:related_objects)`,
+# so field objects fall through to a clean getfield/FieldError.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PormGModel.getproperty: absent property on a field object doesn't recurse (#108)" begin
+  # A field object (PormGField <: PormGModel) that lacks cache/related_objects.
+  cf = Models.CharField(max_length = 5)
+
+  # Real attribute access still works — the guard must not disturb normal field reads.
+  @test cf.max_length == 5
+
+  # Absent property on a FIELD object must raise a clean FieldError. Pre-fix this recursed
+  # through the M2M branch and blew the stack (StackOverflowError, not FieldError).
+  field_err = try
+    getproperty(cf, :nonexistent_xyz)
+    nothing
+  catch e
+    e
+  end
+  @test field_err isa FieldError   # the #108 regression signal (was StackOverflowError)
+
+  # Model_Type still raises a clean FieldError on an absent property too (it HAS
+  # cache/related_objects, so it was never affected — assert it to pin the guard's discrimination).
+  model_err = try
+    getproperty(M2M.Driver_championship, :nonexistent_xyz)
+    nothing
+  catch e
+    e
+  end
+  @test model_err isa FieldError
+
+  # Positive control: the guard did NOT break real M2M accessor dispatch.
+  @test M2M.Driver_championship.drivers isa PormG.QueryBuilder.ManyToManyDescriptor
+end

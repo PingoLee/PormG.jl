@@ -47,7 +47,7 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 
 ## 🔍 Review possible issues
 
-- [#43](https://github.com/PingoLee/PormG.jl/issues/43) — ⚠️ Shared mutable state in read/copy path: `.list()` mutates the live query, `.copy()` aliases CTE state (pre-publish)
+- [#112](https://github.com/PingoLee/PormG.jl/issues/112) — ⚠️ `.copy()` aliases custom_join state: extending `on()`/`cjoin()` on a copy mutates the original (build-time residual of #43) (pre-publish)
 - [#44](https://github.com/PingoLee/PormG.jl/issues/44) — CTE ergonomics: reference CTE fields via `F()` in the main query
 - [#68](https://github.com/PingoLee/PormG.jl/issues/68) — Refactor `_build_row_join`: collapse duplicated first-hop/loop join resolution (tech debt; behavior-preserving)
 - [#70](https://github.com/PingoLee/PormG.jl/issues/70) — `Model_to_str` silently drops a field when rendering throws (swallowed catch)

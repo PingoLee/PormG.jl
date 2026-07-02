@@ -150,19 +150,9 @@ flowchart TD
 
 ## Known architectural edges
 
-The macro-structure above is sound — Django-shaped layers and a clean backend seam. But a skeptical
-audit also turned up one **confirmed correctness bug** and two characterizations worth stating
-plainly. These are listed first; the maintainability notes follow.
-
-### Confirmed correctness bugs (pre-publish)
-
-- **Shared mutable state in the read/copy path** —
-  [#43](https://github.com/PingoLee/PormG.jl/issues/43). `.list()`/`.first()` build directly on the
-  caller's query object (writing back `q.object.parameters`) and `_build_cte_custom_model` mutates
-  the CTE dict in place, while `Base.deepcopy(::SQLObjectQuery)` does a **shallow** `copy(obj.ctes)`.
-  Result: a read mutates the live query, and `.copy()` does not give an independent query when CTEs
-  are involved. `.count()`/`.exists()` `deepcopy` first and are safe — `.list()` does not, an
-  inconsistency rather than a design.
+The macro-structure above is sound — Django-shaped layers and a clean backend seam. A skeptical
+audit turned up no outstanding confirmed correctness bugs; the notes below are maintainability
+characterizations worth stating plainly.
 
 ### Maintainability edges (no correctness impact)
 

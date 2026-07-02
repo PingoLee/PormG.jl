@@ -160,6 +160,28 @@ end
 function Base.deepcopy(obj::SQLObjectHandler)
   return ObjectHandler(object=deepcopy(obj.object))
 end
+
+# #43: CTE state must be copied deeply enough that a copy's execution can't mutate
+# the original. A shallow `copy(ctes)` aliases the inner CTEDict values, so
+# materializing the per-build "model" (see _build_cte_custom_model) on one copy
+# clobbers the other. Rebuild each CTEDict with a fresh dict: deep-copy the sub-query
+# handler (recursion covers nested CTEs), carry the scalar join config by reference
+# (Pair/String are immutable), and DROP the transient "model" — it is re-derived on
+# every build and holds a Model_Type → Module reference that deepcopy cannot traverse
+# (the very reason the original copy was shallow).
+function _copy_ctes(ctes::Dict{String,CTEDict})::Dict{String,CTEDict}
+  out = Dict{String,CTEDict}()
+  for (name, cte_dict) in ctes
+    fresh = CTEDict()
+    for (k, v) in cte_dict
+      k == "model" && continue  # transient per-build artifact; re-materialized each build
+      fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
+    end
+    out[name] = fresh
+  end
+  return out
+end
+
 function Base.deepcopy(obj::SQLObjectQuery)
   try
     return SQLObjectQuery(
@@ -176,7 +198,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
       list_joins=deepcopy(obj.list_joins),
       row_join=deepcopy(obj.row_join),
       distinct=obj.distinct,
-      ctes=copy(obj.ctes),  # shallow copy: CTEDict values contain PormGModel → Module that deepcopy can't handle
+      ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (deep sub-query, drop transient "model")
       custom_join=copy(obj.custom_join)  # shallow copy: PormGField refs contain Model_Type → Module that deepcopy can't handle
     )
   catch e

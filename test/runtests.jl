@@ -33,6 +33,7 @@ end
     @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
+    @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
     @testset "Aggregate Fan-out Guard (#74)" include("unit/test_aggregate_fanout.jl")
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")

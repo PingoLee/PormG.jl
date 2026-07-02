@@ -101,6 +101,12 @@ inspection = q |> inspect_query()
 ```
 """
 function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, operation::Union{Nothing, Symbol} = nothing)
+  # #43: inspection must not mutate the caller. The dry-runs below (query/insert/update)
+  # write back onto the handler they build — q.object.parameters, the transient CTE "model"
+  # into q.object.ctes, and update()'s auto-now fields into q.object.insert. Build on a copy
+  # so inspect_query() matches the execution read path (query_list), which already copies.
+  q = deepcopy(q)
+
   # Force builder to run without execution
   # We reuse the internal query building logic
   settings, conn, conn_key = get_settings(q, connection=connection)
@@ -269,7 +275,8 @@ function query(q::SQLObjectHandler;
   end
   return resposta
 end
-show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(q; show_query=mode)
+# #43: build on a copy so inspecting a query never mutates the caller (see inspect_query).
+show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(deepcopy(q); show_query=mode)
 
 # ---
 # Count or check if exists
@@ -1064,11 +1071,18 @@ function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
 
-  sql = query(objct, connection=connection, show_query=show_query)
+  # #43: build on a copy so the read path never mutates the caller's handler.
+  # query() writes back q.object.parameters and materializes the per-build CTE
+  # "model" into q.object.ctes; doing that on `objct` would give .list()/.first()
+  # a hidden write side effect and make .copy() aliasing corrupt re-execution.
+  # deepcopy(SQLObjectQuery) now clones CTE state independently (see _copy_ctes),
+  # so the copy is fully isolated. Mirrors do_count/do_exists/get, which already copy.
+  q = deepcopy(objct)
+  sql = query(q, connection=connection, show_query=show_query)
   if show_query !== :execute
      return sql
   end
-  return fetch(settings, sql, objct.object.parameters) 
+  return fetch(settings, sql, q.object.parameters)
 end
 
 """

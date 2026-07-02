@@ -579,3 +579,46 @@ end
     end
 
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared mutable state in the read/copy path (#43)
+# A CTE query must be re-executable and copy-independent: `.list()`/`DataFrame`
+# must not write back onto the caller, and `.copy()` must not alias CTE state.
+# Runs against whichever backend the suite is bound to (db_2 / db_sl), so it
+# exercises both PostgreSQL and SQLite. See test/unit/test_shared_state_readpath.jl
+# for the deterministic SQL-shape counterpart.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "CTE copy-independence and re-execution (#43)" begin
+    dup = M.Result.objects
+    dup.filter("statusid" => 1)
+    dup.values("driverid", "dias" => Count("resultid"))
+
+    q = M.Result.objects
+    q.with("tb_dup" => dup, join_field="driverid" => "driverid")
+    q.filter("resultid__@lte" => 100)
+    q.values("resultid", "driverid", "tb_dup__dias")
+    q.order_by("resultid")   # deterministic row order so DataFrame equality is stable
+
+    # AC4: re-executing the same query returns identical results (no accumulation).
+    # isequal (not ==): tb_dup__dias comes from a LEFT join and can be `missing`, and
+    # DataFrame `==` returns `missing` (not a Bool) when any cell is missing — which
+    # would ERROR @test rather than fail. isequal treats missing == missing and yields Bool.
+    df_first = q |> DataFrame
+    df_second = q |> DataFrame
+    @test nrow(df_first) == 100
+    @test isequal(df_first, df_second)
+
+    # AC1: the read did not mutate the caller (no parameters write-back, no CTE "model" leak).
+    @test q.object.parameters === nothing
+    @test !haskey(q.object.ctes["tb_dup"], "model")
+
+    # AC2/AC3: a copy given a divergent filter executes independently; original unaffected.
+    q2 = q.copy()
+    @test q2.object.ctes["tb_dup"] !== q.object.ctes["tb_dup"]   # #43: fresh CTE state, not an alias
+    q2.filter("resultid__@lte" => 10)                            # narrows the copy to 10 rows
+
+    df_copy = q2 |> DataFrame
+    df_orig_again = q |> DataFrame
+    @test nrow(df_copy) == 10
+    @test isequal(df_orig_again, df_first)    # original still renders/returns its own 100-row result
+end

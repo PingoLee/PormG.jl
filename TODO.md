@@ -76,6 +76,7 @@ Focus on parity with Django-style ORM capabilities and PostgreSQL power features
 - [#84](https://github.com/PingoLee/PormG.jl/issues/84) — Bulk insert/update has no parameter-limit-aware chunking (overflows SQLite 999 / PG 65535)
 - [#85](https://github.com/PingoLee/PormG.jl/issues/85) — `bulk_update` is non-atomic on SQLite (multi-chunk partial update on mid-chunk failure)
 - [#86](https://github.com/PingoLee/PormG.jl/issues/86) — `bulk_copy` NULL/empty-string collision + formatter bypass (silent data divergence vs `create`/`bulk_insert`)
+- [#114](https://github.com/PingoLee/PormG.jl/issues/114) — Strengthen `bulk_copy` datetime mutation coverage under a non-UTC session (test-strength follow-up to #86; low urgency / medium effort)
 - [#88](https://github.com/PingoLee/PormG.jl/issues/88) — SQLite `allocate_primary_keys` is racy outside `run_in_transaction` (read-then-write; reservation no-op at tx depth 0)
 
 ## 🔗 Custom Join (`cjoin`) Gaps

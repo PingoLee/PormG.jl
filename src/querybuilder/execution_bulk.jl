@@ -763,6 +763,13 @@ bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_inser
 bulk_insert(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_insert(objct, df; kwargs...)
 bulk_insert(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_insert(objct, df; kwargs...)
 
+# bulk_copy NULL sentinel (#86) — PostgreSQL's conventional NULL marker. Safe because bulk_copy
+# force-quotes every string value (CSV.write quotestrings=true): a genuine string equal to this
+# sentinel is written *quoted* and read back as the literal string, while a `missing`/`nothing`
+# is written *unquoted* and read as NULL. So "" (quoted) ≠ NULL (unquoted \N). The COPY `NULL '…'`
+# clause and CSV.write's `missingstring` must use this same value.
+const _BULK_COPY_NULL = "\\N"
+
 """
     bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; kwargs...)
 
@@ -814,8 +821,9 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   safe_table_name = safe_table_identifier(string(model.name), connection)
   quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
 
-  # Construct the COPY command (using CSV format for safety)
-  sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE)"
+  # Construct the COPY command (CSV format for safety). NULL marker disambiguates ""
+  # (quoted, an empty string) from missing (unquoted sentinel, NULL) — see _BULK_COPY_NULL (#86).
+  sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE, NULL '$(_BULK_COPY_NULL)')"
   
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, Symbol("bulk_copy"))
@@ -829,28 +837,32 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     for i in 1:chunk_size:total_rows
       end_idx = min(i + chunk_size - 1, total_rows)
 
-      for row_index in i:end_idx
-        row = df[row_index, :]
-        try
-          for field in fields_df
-            validate_field_data(model, field, row[mapping[field]], "bulk_copy"; allow_primary_key = true)
-            model.fields[field].formater(row[mapping[field]])
+      # Build a FORMATTED chunk so COPY stores the SAME values as bulk_insert/create().
+      # Each cell is validated and then serialized through the field formatter (as bulk_insert
+      # does) — missing/nothing stays missing (every formatter returns missing for it) and is
+      # written as the NULL sentinel. Columns are built in fields_df order so they align
+      # positionally with the COPY column list (HEADER FALSE). #86
+      formatted = DataFrames.DataFrame()
+      for field in fields_df
+        src = df[i:end_idx, mapping[field]]
+        formatted[!, field] = map(eachindex(src)) do offset
+          value = src[offset]
+          row_index = i + offset - 1
+          try
+            validate_field_data(model, field, value, "bulk_copy"; allow_primary_key = true)
+            model.fields[field].formater(value)
+          catch e
+            throw(ErrorException("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
           end
-        catch e
-          throw(ErrorException("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
         end
       end
-      
-      # Select columns based on mapping and ensure they are in the correct order for the COPY command
-      df_chunk = df[i:end_idx, [mapping[f] for f in fields_df]]
-      # Rename columns in the chunk to match model field names (for CSV writer)
-      DataFrames.rename!(df_chunk, [mapping[f] => f for f in fields_df])
-      
-      # Use CSV to format the data safely as a block
+
+      # Force-quote strings and mark missing with the NULL sentinel so an empty string ("")
+      # round-trips as "" (quoted) while missing round-trips as NULL (unquoted \N). #86
       io = IOBuffer()
-      CSV.write(io, df_chunk; header=false)
+      CSV.write(io, formatted; header=false, quotestrings=true, missingstring=_BULK_COPY_NULL)
       csv_data = String(take!(io))
-      
+
       fetch_copy(settings, sql, [csv_data])
     end
 

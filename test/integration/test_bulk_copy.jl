@@ -376,5 +376,81 @@ end
     @test occursin("expected Int64 or an integer string", string(err_type))
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# bulk_copy data fidelity (#86)
+# bulk_copy must store the SAME values as bulk_insert / create(): it now serializes
+# through the field formatter (so a naive DateTime becomes UTC, matching the other
+# paths) and it disambiguates an empty string from NULL (an unquoted \N sentinel is
+# NULL; a quoted "" is the empty string). Pre-fix, bulk_copy wrote the raw DataFrame
+# values (naive datetime) and let "" collapse to NULL — a silent divergence.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_copy stores identical values to bulk_insert / create() (#86)" begin
+    scratch = () -> M.Bulk_copy_fidelity_scratch.objects
+
+    # A naive DateTime: the DateTimeField formatter converts it to UTC (format_timezone_sql).
+    # Pre-fix bulk_copy wrote the naive value → a different stored instant than bulk_insert.
+    dt = DateTime(2021, 3, 14, 9, 26, 53)
+
+    # Row 1 exercises "" (empty string, must stay "") and the naive-datetime conversion.
+    # Row 2 exercises missing across char/float/datetime (must become NULL) and bool false.
+    # Row 3 is a second populated row so id-order comparison covers more than one live row.
+    df = DataFrames.DataFrame(
+        name       = Union{Missing, String}["", missing, "brake bias"],
+        amount     = Union{Missing, Float64}[1.5, missing, 0.1],
+        active     = Union{Missing, Bool}[true, false, missing],
+        event_time = Union{Missing, DateTime}[dt, missing, dt],
+    )
+
+    read_back = () -> begin
+        q = scratch()
+        q.order_by("id")                                   # ids assigned in insert order == df order
+        q.values("name", "amount", "active", "event_time")
+        q.list(:dict)
+    end
+
+    # ── bulk_insert baseline ──────────────────────────────────────────────────
+    scratch().exists() && scratch().delete(allow_delete_all = true)
+    bulk_insert(scratch(), df)
+    insert_rows = read_back()
+
+    # ── bulk_copy under test ──────────────────────────────────────────────────
+    scratch().delete(allow_delete_all = true)
+    bulk_copy(scratch(), df)
+    copy_rows = read_back()
+
+    @test length(insert_rows) == 3
+    @test length(copy_rows) == 3
+
+    # AC1/AC3: identical stored values across every field (datetime/bool/float/string),
+    # row for row. isequal so a NULL (missing) matches a NULL. Pre-fix the datetime and
+    # empty-string columns diverged here.
+    for f in (:name, :amount, :active, :event_time)
+        @test isequal([r[f] for r in copy_rows], [r[f] for r in insert_rows])
+    end
+
+    # AC2: an empty string round-trips as "" (NOT NULL); a missing round-trips as NULL.
+    # isequal (not ==): pre-fix this value is `missing`, and `missing == ""` is `missing`,
+    # which would ERROR @test rather than fail cleanly. isequal yields a Bool.
+    @test isequal(copy_rows[1][:name], "")     # pre-fix: became missing/NULL (or NOT NULL error)
+    @test ismissing(copy_rows[2][:name])       # genuine missing → NULL
+
+    # Three-way parity: create() (the canonical single-row path) agrees with bulk_copy on the
+    # divergence-prone fields (naive datetime → UTC, empty string, bool, float).
+    scratch().delete(allow_delete_all = true)
+    created = scratch().create("name" => "", "amount" => 1.5, "active" => true, "event_time" => dt)
+    cq = scratch()
+    cq.filter("id" => created[:id])
+    cq.values("name", "amount", "active", "event_time")
+    created_row = cq.list(:dict) |> first
+
+    @test isequal(created_row[:name], "")
+    @test isequal(created_row[:event_time], copy_rows[1][:event_time])   # same UTC instant
+    @test isequal(created_row[:active], copy_rows[1][:active])
+    @test isequal(created_row[:amount], copy_rows[1][:amount])
+
+    # Cleanup
+    scratch().exists() && scratch().delete(allow_delete_all = true)
+end
+
 end # End of if adapter_name != "SQLite"
 

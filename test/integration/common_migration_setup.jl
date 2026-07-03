@@ -272,6 +272,30 @@ function index_names(pool::PormG.PormGPostgres, table_name::String)::Vector{Stri
 end
 
 """
+    foreign_key_count(pool, table_name::String) → Int
+
+Return the number of FOREIGN KEY constraints on `table_name`. Used to assert that a migration
+removed an FK (#83): after the constraint is dropped the count must be 0.
+"""
+function foreign_key_count(pool::PormG.PormGSQLite, table_name::String)::Int
+  conn = PormG.ConnectionPool.acquire_connection(pool)
+  try
+    # PRAGMA foreign_key_list returns one row per (constraint, column) pair; distinct `id` = distinct FK.
+    fks = PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_key_list('$table_name')", conn=conn) |> DataFrame
+    return nrow(fks) == 0 ? 0 : length(unique(fks[!, :id]))
+  finally
+    PormG.ConnectionPool.release_connection(pool, conn)
+  end
+end
+
+function foreign_key_count(pool::PormG.PormGPostgres, table_name::String)::Int
+  rows = PormG.ConnectionPool.fetch(pool,
+    "SELECT count(*) FROM information_schema.table_constraints WHERE table_schema = 'public' AND table_name = '$table_name' AND constraint_type = 'FOREIGN KEY';")
+  df = DataFrame(rows)
+  return nrow(df) > 0 ? Int(df[1, 1]) : 0
+end
+
+"""
     all_table_names(pool) → Vector{String}
 
 Return the names of all user tables in the database.

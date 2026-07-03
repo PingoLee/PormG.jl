@@ -335,6 +335,59 @@ end
     @test "test_id" in cols
   end
 
+  # ── Phase 4b: Remove an FK constraint via field alteration (#83) ──
+  # SQLite's `drop_foreign_key` used to call an undefined `get_constraints` and crash makemigrations,
+  # and it embedded its own BEGIN/COMMIT. FK removal is now routed through the table rebuild (which
+  # omits the FK) with the planner's SQLite FK-drop as a no-op. Seed a parent+child row, flip
+  # `test_id` to `db_constraint=false`, migrate, and assert the FK is gone AND the data survives the
+  # rebuild — with no embedded transaction control in the generated plan. Runs on both backends.
+  @testset "Phase 4b: Remove Foreign Key Constraint (#83)" begin
+    # Baseline: phase 4 left secondtable with an FK on test_id.
+    @assert foreign_key_count(pool, "secondtable") >= 1 "Phase 4b requires the FK created in phase 4"
+
+    # Seed a parent + child row (raw SQL; explicit ids keep the child's parent reference deterministic).
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (900, 'fk-parent-83');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "secondtable" ("id", "test_id", "description") VALUES (901, 900, 'fk-child-83');""")
+
+    # Desired model: keep the column, drop only the DB-level FK constraint.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    """)
+
+    # Must NOT raise UndefVarError (the old broken SQLite drop_foreign_key path).
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    # AC2: the generated plan must not embed its own transaction control (the old draft did).
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # AC1: the FK constraint is gone, and the column is preserved.
+    @test foreign_key_count(pool, "secondtable") == 0
+    @test "test_id" in column_names(pool, "secondtable")
+
+    # Data fidelity: the child row survived the table rebuild with its values intact.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "test_id", "description" FROM "secondtable" WHERE "id" = 901;""") |> DataFrame
+    @test nrow(surviving) == 1
+    # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
+    @test isequal(surviving[1, :test_id], 900)
+    @test isequal(surviving[1, :description], "fk-child-83")
+
+    # Cleanup: restore the empty-table precondition later phases assume.
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "secondtable" WHERE "id" = 901;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 900;""")
+  end
+
   # ── Phase 5: Indexes and unique constraints ───────────────────────
   @testset "Phase 5: Indexes and Unique Constraints" begin
     write_edge_models("""
@@ -739,9 +792,9 @@ end
   # ── Phase 8f: Data survival when adding NOT NULL temporal to table with rows ──
   #
   # Regression test for the bug where alter_field(conn::PormGSQLite, model::PormGModel, ...)
-  # called get_columns() at PLANNING TIME to build the INSERT column list for the
-  # table-recreation step. Because get_columns() reads the live database, it could
-  # not see columns that were queued via ADD COLUMN but had not yet executed.
+  # built the INSERT column list at PLANNING TIME by reading the live database's
+  # columns for the table-recreation step. Reading the live DB could not see columns
+  # that were queued via ADD COLUMN but had not yet executed.
   #
   # Consequently the generated SQL was:
   #   INSERT INTO "migrationtest_new" ("id", "full_name", ...) -- missing "last_seen"!
@@ -751,9 +804,9 @@ end
   # existing row SQLite raises "NOT NULL constraint failed: migrationtest_new.last_seen"
   # and the entire migration is rolled back.
   #
-  # The fix: use model.fields directly instead of get_columns(). ADD COLUMN statements
-  # are always queued BEFORE the recreation in the migration plan, so at execution time
-  # every model field is present in the old table.
+  # The fix: build the INSERT column list from model.fields directly instead of reading
+  # the live-DB columns. ADD COLUMN statements are always queued BEFORE the recreation in
+  # the migration plan, so at execution time every model field is present in the old table.
   #
   # Assertion strategy:
   #   1. dry_run: the INSERT statement in the plan must reference "last_seen"
@@ -797,8 +850,8 @@ end
 
     # ── SQL-text assertion (both adapters) ──────────────────────────────
     # The INSERT statement in the recreation block must reference "last_seen".
-    # Before the fix it was generated from get_columns() (live DB at planning
-    # time) and would only list columns that existed before the ADD COLUMN ran.
+    # Before the fix it was generated by reading the live-DB columns at planning
+    # time and would only list columns that existed before the ADD COLUMN ran.
     if adapter_name == "SQLite"
       insert_stmts = filter(
         s -> occursin("INSERT INTO", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),

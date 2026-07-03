@@ -876,32 +876,6 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   return join(sql_statements, "\n")
 end
 
-function alter_field(conn::PormGSQLite, table_name::String, field_name::String, new_field::PormGField)
-  # SQLite does not support altering column types directly.
-  # You need to recreate the table. Here's a simplified example.
-  # Note: This is a complex operation and may require handling additional constraints.
-
-  # Define a unique identifier for the new table
-  new_table_name = "$(table_name)_new"
-
-  # Retrieve existing columns excluding the one to be altered
-  existing_columns = Dialect.get_columns(conn, table_name)  # You need to implement this function
-  columns_sql = join([col == field_name ? field_to_column(field_name, new_field, conn) : "\"$col\"" for col in existing_columns], ", ")
-
-  # Begin transaction
-  migration_sql = [
-    "BEGIN TRANSACTION;",
-    """CREATE TABLE "$new_table_name" ($columns_sql);""",
-    """INSERT INTO "$new_table_name" SELECT * FROM "$table_name";""",
-    """DROP TABLE "$table_name";""",
-    """ALTER TABLE "$new_table_name" RENAME TO "$table_name";""",
-    "COMMIT;"
-  ]
-
-  return join(migration_sql, "\n")
-
-end
-
 function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
   return """ALTER TABLE "$table_name" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
@@ -917,11 +891,6 @@ end
 function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
   # Modern SQLite supports DROP COLUMN. If not, we'd need recreation.
   return """ALTER TABLE "$table_name" DROP COLUMN "$field_name";"""
-end
-
-function get_columns(conn::PormGSQLite, table_name::String)
-  res = fetch(conn, "PRAGMA table_info(\"$table_name\")") |> DataFrame
-  return res.name
 end
 
 function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
@@ -956,11 +925,11 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   # 2. Build the INSERT column list from model.fields.
   # At execution time every ADD COLUMN statement queued before this recreation
   # has already run, so all model fields are present in the old table.
-  # Using get_columns() at planning time would omit columns that were just
-  # queued via ADD COLUMN (they are not in the live DB yet), causing a NOT NULL
-  # constraint failure when the INSERT tries to populate the new table from the
-  # old one — the new table's CREATE has the column as NOT NULL but the INSERT
-  # simply doesn't mention it.
+  # Reading the live database's columns at planning time would omit columns that
+  # were just queued via ADD COLUMN (they are not in the live DB yet), causing a
+  # NOT NULL constraint failure when the INSERT tries to populate the new table
+  # from the old one — the new table's CREATE has the column as NOT NULL but the
+  # INSERT simply doesn't mention it.
   # Physical column names (db_column when set) — both old and new tables use these,
   # so the column-aligned copy stays correct for db_column-mapped fields (#50).
   model_cols = [field_db_column(f, string(k)) for (k, f) in model.fields]
@@ -983,38 +952,10 @@ function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_na
   return """ALTER TABLE "$table_name" DROP CONSTRAINT "$constraint_name";"""
 end
 
-function drop_foreign_key(conn::PormGSQLite, table_name::String, constraint_name::String)
-  # SQLite does not support dropping foreign keys directly.
-  # Implement the workaround by recreating the table without the foreign key.
-
-  # Define a unique identifier for the new table
-  new_table_name = "$(table_name)_new"
-
-  # Retrieve existing columns and constraints excluding the foreign key
-  # You need to implement Dialect.get_columns and Dialect.get_constraints excluding the specific foreign key
-  existing_columns = Dialect.get_columns(conn, table_name)  # Implement this function
-  existing_constraints = Dialect.get_constraints(conn, table_name)  # Implement this function
-
-  # Remove the specific foreign key constraint from constraints
-  filtered_constraints = [c for c in existing_constraints if c != constraint_name]
-
-  # Recreate the CREATE TABLE statement without the foreign key constraint
-  columns_sql = join(["\"$col\"" for col in existing_columns], ", ")
-  constraints_sql = isempty(filtered_constraints) ? "" : ", " * join(["FOREIGN KEY ($fk_col) REFERENCES $ref_table($ref_col)" for (fk_col, ref_table, ref_col) in filtered_constraints], ", ")
-
-  # Begin transaction
-  migration_sql = [
-    "BEGIN TRANSACTION;",
-    """CREATE TABLE "$new_table_name" ($columns_sql$constraints_sql);""",
-    """INSERT INTO "$new_table_name" SELECT * FROM "$table_name";""",
-    """DROP TABLE "$table_name";""",
-    """ALTER TABLE "$new_table_name" RENAME TO "$table_name";""",
-    "COMMIT;"
-  ]
-
-  return join(migration_sql, "\n")
-
-end
+# NOTE (#83): there is intentionally no `drop_foreign_key(::PormGSQLite, …)`. SQLite has no
+# `ALTER TABLE DROP CONSTRAINT`, so an FK is removed by rebuilding the table from the desired model
+# (see `alter_field(::PormGSQLite, model, …)` + `_sqlite_rebuild_preserving_indexes`), which omits
+# the FK clause. The planner's `_drop_fk_constraint_in_alteration` is therefore a no-op on SQLite.
 
 function drop_index(conn::PormGPostgres, index_name::String)
   return """DROP INDEX IF EXISTS "$index_name";"""

@@ -55,10 +55,14 @@ end
 function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::Union{PormGField, Nothing}, old_field::PormGField)::Nothing
   if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (new_field === nothing || !hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
     if conn isa PormGSQLite
-      # SQLite doesn't have named FK constraints that can be dropped easily without recreation
-      # For now, we rely on Dialect.drop_foreign_key which might return a recreation script
-      _configure_order_dict_migration_plan(migration_plan, model_name, "Remove foreign key: $field_name", 
-      Dialect.drop_foreign_key(conn, model_name |> string, field_name |> string))
+      # SQLite has no `ALTER TABLE DROP CONSTRAINT`; an FK can only be removed by rebuilding the
+      # table. On the field-alteration path this is a no-op ON PURPOSE: `_alter_table_fields`
+      # already emits a full table rebuild (Dialect.alter_field wrapped by
+      # _sqlite_rebuild_preserving_indexes) from the DESIRED model, and that rebuild simply omits
+      # the FOREIGN KEY clause when the desired field dropped it — so the constraint is already
+      # gone, data + indexes are preserved, and no separate FK-drop DDL exists to emit. (#83)
+      # NOTE: field DELETION (drop_field → DROP COLUMN) and column RENAME do NOT get a rebuild, so
+      # removing an FK *there* is still unsupported on SQLite — tracked separately.
       return nothing
     end
     

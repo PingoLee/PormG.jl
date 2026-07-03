@@ -232,6 +232,18 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
   nullable_int = Models.IntegerField(null = true)
 )
 
+# Fixture for the bulk_copy data-fidelity regression (#86): bulk_copy must store the SAME
+# values as bulk_insert/create() (the field formatter is applied — e.g. a naive DateTime is
+# labelled UTC) and must distinguish an empty string from NULL. Nullable char/float/bool/datetime
+# cover the parity cases.
+Bulk_copy_fidelity_scratch = Models.Model("bulk_copy_fidelity_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(null = true),
+  amount = Models.FloatField(null = true),
+  active = Models.BooleanField(null = true),
+  event_time = Models.DateTimeField(null = true)
+)
+
 # Scratch models exercising the ManyToManyField API (auto-generated through
 # table) against the F1 scenario "drivers endorsed by sponsors".
 M2m_sponsor_scratch = Models.Model("m2m_sponsor_scratch",

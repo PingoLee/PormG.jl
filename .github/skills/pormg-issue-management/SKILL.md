@@ -1,16 +1,15 @@
 ---
 name: pormg-issue-management
-description: Manage the PormG backlog with the gh CLI — create/update/close GitHub issues, bulk-migrate TODO.md items to issues, and keep TODO.md as a linked index. Covers the label taxonomy, the draft-before-create safety flow, and cross-reference discipline.
+description: Manage the PormG backlog with the gh CLI — create/update/close GitHub issues, curate labels, and keep the TODO.md release-gating index (pre-publish issues only) in sync. Covers the label taxonomy, the draft-before-create safety flow, and cross-reference discipline.
 ---
 
 # PormG Issue Management
 
 ## Purpose
 
-Use this skill for any work on the project backlog: creating or editing GitHub issues,
-migrating `TODO.md` items into issues, syncing the `TODO.md` index after issues change, or
-curating labels. It encodes the conventions settled when the backlog was first migrated so the
-tracker stays consistent.
+Use this skill for any work on the project backlog: creating or editing GitHub issues, curating
+labels, or syncing the `TODO.md` **release-gating index** when a `pre-publish` issue changes. It
+encodes the conventions settled when the backlog was first migrated so the tracker stays consistent.
 
 This is a process skill, not a code skill — it does not touch `src/`.
 
@@ -18,22 +17,25 @@ This is a process skill, not a code skill — it does not touch `src/`.
 
 - Creating one or many GitHub issues (especially bulk migration from `TODO.md`)
 - Editing, closing, commenting on, or relabeling existing issues
-- Keeping `TODO.md` in sync with the issue tracker
+- Keeping the `TODO.md` release-gating index in sync (pre-publish issues only)
 - Adding or adjusting labels
 
 ## The TODO.md ↔ Issues model
 
-- **GitHub Issues are the source of truth.** `TODO.md` is a *curated linked index of OPEN work
-  only*: one line per open item, grouped by the historical sections, each linking to its `#issue`.
-- **When an item is solved, remove its line from `TODO.md`** — do not keep a completed list. The full
-  history (discussion, linked commits/PRs, close reason, timestamps) already lives in GitHub's closed
-  issues: `gh issue list --state closed`. A parallel archive in `TODO.md` only duplicates that and
-  drifts. (Work completed *before* the issue tracker existed lives in git history, not GitHub issues.)
+- **GitHub Issues are the source of truth for the entire backlog.** `TODO.md` is **not** a mirror of
+  open issues — it is a **release-gating index only**: it lists just the `pre-publish`-labeled issues
+  (under the required `⚠️ do BEFORE the first General-registry publish` heading), each linking to its
+  `#issue`. Subsystem/priority views come from GitHub labels (`gh issue list --label migrations`), not
+  from sections in this file.
+- **The `pre-publish` label is the source of truth for what's gating.** The `TODO.md` list must equal
+  `gh issue list --label pre-publish`. To make an issue gating, add the `pre-publish` label (then add
+  its line); to un-gate, remove the label (then remove its line).
+- **Touch `TODO.md` only for `pre-publish` issues.** Opening, closing, or (un)labeling a `pre-publish`
+  issue updates the list; every ordinary issue is opened and closed with **no `TODO.md` edit at all**.
 - **Do not delete `TODO.md`.** `.github/instructions/general.instructions.md` references it for the
   `⚠️ do BEFORE the first General-registry publish` release-gating tag. That exact phrase and the
   pre-publish items must remain visible in the index (linking to their issues) so the reference
   resolves.
-- Edit **issues** for status/discussion; touch `TODO.md` only when an item is opened or closed.
 
 ## Tooling
 
@@ -82,13 +84,15 @@ before hitting the API.** A single targeted issue the user asked for can be crea
    otherwise `#11` etc. silently links to an unrelated old issue or PR.
 7. **Verify after.** Check the open count, label assignment, and spot-check that a rich body (task
    lists, blockquotes, code fences) rendered: `gh issue view <n> --json body -q '.body'`.
-8. **Update the index.** Rewrite `TODO.md` to link each item to its issue, keep the section grouping
-   and the `⚠️` gating note, and move shipped work to the Completed archive.
+8. **Update the release-gating index — only for `pre-publish` items.** If any newly-created issue is
+   `pre-publish`-labeled, add its line to `TODO.md` under the `⚠️` heading. Non-gating issues are not
+   listed there — GitHub Issues + labels are their only home.
 
 ## Closing a resolved issue
 
-Closing the issue and syncing the index are **one operation**, not two — never close an issue
-without updating `TODO.md` in the same pass.
+Closing a `pre-publish`-labeled issue and syncing the index are **one operation** — never close a
+gating issue without updating `TODO.md` in the same pass. Closing an **ordinary**
+(non-`pre-publish`) issue needs **no `TODO.md` edit at all**.
 
 1. **Link the fix.** Prefer letting GitHub auto-close: put `Closes #N` (or `Fixes #N`) in the PR
    description or the commit message that lands the work, so the issue closes on merge *with a
@@ -99,19 +103,21 @@ without updating `TODO.md` in the same pass.
    finished boxes (`- [ ]` → `- [x]`) in the body via `gh issue edit <n> --body-file …` and comment
    on what landed. Close only when every box is done — or split the remainder into a new issue and
    close the original with a pointer to it.
-3. **Remove it from `TODO.md`.** Delete the item's line from its section in the same pass — do not
-   archive it in `TODO.md`; its history is the closed GitHub issue. If closing spawned a
-   residual/follow-up issue, make sure that new one is listed in the index. Keep the `⚠️` pre-publish
-   note even as its gated items close.
-4. **Verify.** Confirm the issue is closed (`gh issue view <n> --json state,closed`) and the index no
-   longer lists it.
+3. **Sync the gating index — only if the issue was `pre-publish`.** If the closed issue carried the
+   `pre-publish` label, delete its line from `TODO.md` in the same pass (its history is the closed
+   GitHub issue). Ordinary issues don't appear there, so skip this for them. If closing spawned a
+   `pre-publish` follow-up, add that new one. Keep the `⚠️ do BEFORE the first General-registry
+   publish` note even as its gated items close.
+4. **Verify.** Confirm the issue is closed (`gh issue view <n> --json state,closed`); for a
+   `pre-publish` issue, also confirm the index no longer lists it.
 
 ## Do Not
 
 - Bulk-create issues without showing a draft and getting confirmation first.
 - Close an issue that still has unfinished task-list items — check them off or split them out first.
 - Close an issue without a comment/PR/commit reference saying what resolved it.
-- Close or open an issue without syncing the `TODO.md` index in the same pass.
+- Close or open a `pre-publish` issue without syncing the `TODO.md` gating index in the same pass.
+  (Ordinary issues do **not** touch `TODO.md` — do not re-add per-issue mirror lines.)
 - Delete `TODO.md` or drop the `⚠️ do BEFORE the first General-registry publish` tag from it.
 - Put draft/placeholder numbers in issue bodies and leave them — resolve to real `#numbers`.
 - Inline rich bodies on the command line — use `--body-file`.

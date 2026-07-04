@@ -950,6 +950,102 @@ end
         end
 
         # ─────────────────────────────────────────────────────────────────────────────
+        # Bulk Update: a mid-chunk DB failure rolls back every chunk (#85)
+        #
+        # bulk_update wraps its multi-chunk loop in a single transaction on both
+        # backends, so if a later chunk fails, the already-flushed earlier chunks roll
+        # back too. Before the fix this wrap was gated to PostgreSQL only, so on SQLite
+        # each chunk auto-committed and chunk-K's failure left chunks 1…K-1 persisted.
+        #
+        # Trigger choice: a UNIQUE index, not an FK. The runtime SQLite connection does
+        # not enable PRAGMA foreign_keys, so an FK violation is not a reliable mid-chunk
+        # failure there; a UNIQUE index is enforced by default. And unlike a pre-flight
+        # validation error (bad length / wrong type), a UNIQUE collision passes
+        # validation (999 is a valid integer) and only fails once the chunk hits the DB —
+        # which is exactly the transactional path under test. On PostgreSQL this passes
+        # both before and after the fix (already wrapped); on SQLite it fails before the
+        # fix and passes after.
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "Bulk Update is atomic on a mid-chunk DB failure" begin
+            _clear_bulk_update_scratch_rows!()
+            pool = PormG.config[PORMG_DB_FOLDER].connections
+            unique_index_name = "ux_bulk_update_payload_atomic"
+
+            try
+                # Seed one required parent plus five payload rows with distinct
+                # nullable_int values (101..105) and known labels ("orig-1".."orig-5").
+                required_ids, _ = _seed_bulk_update_scratch_parents!(["req-atomic"], String[])
+                req_id = required_ids["req-atomic"]
+
+                seeded_rows = [
+                    M.Bulk_update_payload_scratch.objects.create(
+                        "label" => "orig-$(index)",
+                        "required_parent_id" => req_id,
+                        "nullable_int" => 100 + index,
+                    )
+                    for index in 1:5
+                ]
+                seeded_ids = [Int64(row[:id]) for row in seeded_rows]
+
+                # Enforce uniqueness on nullable_int at the DB. Created after seeding, when
+                # the values are already distinct, so the index builds cleanly.
+                PormG.ConnectionPool.fetch(pool,
+                    "CREATE UNIQUE INDEX IF NOT EXISTS \"$(unique_index_name)\" " *
+                    "ON \"bulk_update_payload_scratch\" (\"nullable_int\")")
+
+                # chunk_size=2 → chunk 1 = rows 1-2, chunk 2 = rows 3-4, chunk 3 = row 5.
+                # Row 1 sets nullable_int=999 (chunk 1, succeeds); row 3 also sets 999
+                # (chunk 2), colliding with row 1 → UNIQUE violation mid-operation.
+                update_df = DataFrame(
+                    id = seeded_ids,
+                    label = ["upd-$(index)" for index in 1:5],
+                    nullable_int = [index in (1, 3) ? 999 : 100 + index for index in 1:5],
+                )
+
+                err = try
+                    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+                        bulk_update(
+                            M.Bulk_update_payload_scratch.objects,
+                            update_df,
+                            columns = ["label", "nullable_int"],
+                            match_on = ["id"],
+                            chunk_size = 2,
+                        )
+                    end
+                    nothing
+                catch e
+                    e
+                end
+                @test err !== nothing
+                # Assert the throw is the UNIQUE collision itself (raw DB error propagates
+                # unwrapped through run_in_transaction), not a pre-flight reject — otherwise a
+                # future validation that rejected 999 before any chunk ran would leave every row
+                # unchanged and pass the atomicity checks below trivially. SQLite: "UNIQUE
+                # constraint failed"; PostgreSQL: "duplicate key value violates unique constraint".
+                @test occursin(r"unique|duplicate"i, string(err))
+
+                # Atomicity: the mid-chunk failure must roll back EVERY chunk, including the
+                # already-flushed first chunk. Pre-fix on SQLite, chunk 1 auto-committed and
+                # row 1 would read back as "upd-1" / 999.
+                persisted = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+                by_id = Dict(Int64(row[:id]) => row for row in persisted)
+                for (index, id) in enumerate(seeded_ids)
+                    row = by_id[id]
+                    @test row[:label] == "orig-$(index)"
+                    @test row[:nullable_int] == 100 + index
+                end
+            finally
+                try
+                    PormG.ConnectionPool.fetch(pool,
+                        "DROP INDEX IF EXISTS \"$(unique_index_name)\"")
+                catch
+                    # Index may never have been created (e.g. seeding failed) — safe to ignore.
+                end
+                _clear_bulk_update_scratch_rows!()
+            end
+        end
+
+        # ─────────────────────────────────────────────────────────────────────────────
         # Bulk Update: combined DateTimeField + nullable IntegerField + FK + BooleanField
         #
         # This mirrors the production call shape that prompted the test:

@@ -22,16 +22,14 @@ This is a process skill, not a code skill — it does not touch `src/`.
 
 ## The TODO.md ↔ Issues model
 
-- **GitHub Issues are the source of truth for the entire backlog.** `TODO.md` is **not** a mirror of
-  open issues — it is a **release-gating index only**: it lists just the `pre-publish`-labeled issues
-  (under the required `⚠️ do BEFORE the first General-registry publish` heading), each linking to its
-  `#issue`. Subsystem/priority views come from GitHub labels (`gh issue list --label migrations`), not
-  from sections in this file.
-- **The `pre-publish` label is the source of truth for what's gating.** The `TODO.md` list must equal
-  `gh issue list --label pre-publish`. To make an issue gating, add the `pre-publish` label (then add
-  its line); to un-gate, remove the label (then remove its line).
-- **Touch `TODO.md` only for `pre-publish` issues.** Opening, closing, or (un)labeling a `pre-publish`
-  issue updates the list; every ordinary issue is opened and closed with **no `TODO.md` edit at all**.
+- **GitHub Issues are the source of truth for the entire backlog; `TODO.md` is a release-gating index
+  only.** It lists just the `pre-publish`-labeled issues (under the required `⚠️ do BEFORE the first
+  General-registry publish` heading), each linking to its `#issue`. Subsystem/priority views come from
+  GitHub labels (`gh issue list --label migrations`), not from sections in this file.
+- **The `pre-publish` label decides what's in the index — nothing else.** The `TODO.md` list must equal
+  `gh issue list --label pre-publish`: add the label → add the line; remove the label → remove the
+  line. Opening, closing, or relabeling an ordinary (non-`pre-publish`) issue needs **no `TODO.md` edit
+  at all**.
 - **Do not delete `TODO.md`.** `.github/instructions/general.instructions.md` references it for the
   `⚠️ do BEFORE the first General-registry publish` release-gating tag. That exact phrase and the
   pre-publish items must remain visible in the index (linking to their issues) so the reference
@@ -90,9 +88,7 @@ before hitting the API.** A single targeted issue the user asked for can be crea
 
 ## Closing a resolved issue
 
-Closing a `pre-publish`-labeled issue and syncing the index are **one operation** — never close a
-gating issue without updating `TODO.md` in the same pass. Closing an **ordinary**
-(non-`pre-publish`) issue needs **no `TODO.md` edit at all**.
+Closing a `pre-publish`-labeled issue and syncing the index are **one operation** — see step 3.
 
 1. **Link the fix.** Prefer letting GitHub auto-close: put `Closes #N` (or `Fixes #N`) in the PR
    description or the commit message that lands the work, so the issue closes on merge *with a

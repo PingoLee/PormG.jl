@@ -298,60 +298,7 @@ Full SQL-shape examples: `docs/src/read/filters_and_aggregates.md` and `docs/src
 
 ---
 
-## 8. Bulk Operations
-
-For large datasets, always use bulk operations instead of loops:
-
-```julia
-using CSV, DataFrames
-
-# Standard batch insert (all dialects)
-df = CSV.File("drivers.csv") |> DataFrame
-bulk_insert(M.Driver.objects, df)
-bulk_insert(M.Driver.objects, df, chunk_size=500)  # custom chunk size
-
-# Ultra-fast COPY (PostgreSQL only — 10-100x faster than bulk_insert)
-bulk_copy(M.Driver.objects, df)
-bulk_copy(M.Driver.objects, df, chunk_size=10_000)
-
-# Map DataFrame columns to model fields
-bulk_copy(M.Driver.objects, df, columns=[
-    "first_name" => "forename",
-    "last_name"  => "surname"
-])
-
-# Batch update from DataFrame
-bulk_update(M.Result.objects, df,
-    columns  = ["points"],     # fields to SET
-    match_on = ["resultid"]    # per-row keys to match on (WHERE); filters= is for constant predicates
-)
-```
-
-**Pre-process CSV nulls before bulk operations:**
-```julia
-for col in [:position, :milliseconds, :rank]
-    df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, df[!, col])
-end
-```
-
----
-
-## 9. Transactions
-
-```julia
-using PormG
-
-# Wrap multiple operations in a single atomic transaction
-PormG.run_in_transaction("db") do
-    M.Race.objects.create("year" => 2025, "name" => "New Race", "date" => today())
-    bulk_insert(M.Result.objects, results_df)
-end
-# All operations commit together, or all roll back on error
-```
-
----
-
-## 10. Query Inspection & Debugging
+## 8. Query Inspection & Debugging
 
 Every terminal method accepts `show_query`:
 
@@ -383,7 +330,7 @@ println(inspection[:dialect])
 
 ---
 
-## 11. Multi-Database & Multi-Tenancy
+## 9. Multi-Database & Multi-Tenancy
 
 ```julia
 # Route a single query to a different connection pool
@@ -395,7 +342,7 @@ PormG.Configuration.load_many(["db/conn_primary.yml", "db/conn_replica.yml"])
 
 ---
 
-## 12. Anti-Patterns
+## 10. Anti-Patterns
 
 ### Alias identifier rules
 

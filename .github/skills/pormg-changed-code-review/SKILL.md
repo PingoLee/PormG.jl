@@ -146,7 +146,7 @@ In the final pass, review `docs`, `ext`, `.github`, `.cursor`, `db`, and any rem
 
 ## PormG-Specific Heuristics
 
-Always re-read `.github/instructions/general.instructions.md` (step 1 of Review Method) so that new subsystems added to the architecture checkpoints are automatically included in the review. The bullets below are permanent baselines, not an exhaustive list.
+The bullets below are permanent baselines, not an exhaustive list — Review Method step 1 keeps them current with newly added subsystems.
 
 - Prefer findings that catch raw SQL drift away from the ORM surface
 - Flag any change that makes PostgreSQL and SQLite differ without an explicit justification
@@ -159,7 +159,7 @@ Always re-read `.github/instructions/general.instructions.md` (step 1 of Review 
 
 ## After Reporting Findings
 
-This project is single-developer: unstaged changes are reviewed first, then staged, committed, and pushed directly to `main`. After reporting:
+After reporting:
 
 - If findings are blocking (bugs, security issues, missing tests for changed behavior): offer to fix them inline in the same conversation.
 - If findings are advisory only (style, doc gaps, architecture notes): state the residual risk clearly and let the developer decide.

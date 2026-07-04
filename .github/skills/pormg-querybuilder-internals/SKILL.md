@@ -74,11 +74,7 @@ Integration touchpoints:
 - `test/integration/test_cjoin.jl`
 - `test/integration/test_cte.jl`
 
-Testing boundary:
-
-- use unit tests for exact bucket placement, flatten order, marker alignment, and context transitions
-- use integration tests for user-visible semantics such as HAVING alias promotion correctness or join behavior against real data
-- if a bug spans both layers, add one narrow integration regression and one deterministic unit alignment test
+For the unit-vs-integration split, see *Boundary With Public API Work* above and *Test Placement Rules* below.
 
 ### Identifier sanitization contract
 

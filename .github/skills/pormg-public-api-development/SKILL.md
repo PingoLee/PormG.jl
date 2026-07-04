@@ -199,14 +199,6 @@ Add both:
 
 Follow the canonical [PormG Test Writing Standard](../../instructions/test-writing.md): standardized `@testset` header comments, heavily commented test logic, isolated setup with explicit cleanup, and never weakening field contracts to fit dirty fixtures (normalize at the import/setup layer).
 
-## Domain Rules
-
-- Use Formula 1 dataset examples for user-facing docs and examples
-- Keep Julia model bindings capitalized even when SQL tables are snake_case
-- Prefer expressive ORM filters and joins over raw SQL
-- Preserve async-first assumptions and transaction safety
-- When importing Formula 1 fixtures, normalize bad source values in the import or test layer rather than weakening field contracts
-
 ## Workflow
 
 1. Read the relevant source and failing tests first

@@ -663,4 +663,93 @@ end
             _clear_bulk_update_scratch_rows!()
         end
     end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # bulk_insert auto-chunks below the backend bind-parameter limit (#84)
+    #
+    # Each row binds one param per field, so a flushed statement carries
+    # chunk_rows × ncols bind params. bulk_insert must derive an effective chunk of
+    # fld(limit, ncols) from the backend ceiling instead of blindly using chunk_size.
+    # The 8-column payload table with chunk_size == nrows (== fld(limit, 8) + 1) is
+    # exactly one row past a single capped chunk, so the fix must split it into two.
+    #
+    # Two assertions with distinct jobs:
+    #   1. show_query=:sql — builds the INSERTs WITHOUT a DB round-trip and returns one
+    #      entry per chunk. This gates the wiring on BOTH backends independently of the
+    #      driver's true limit: post-fix → a 2-element Vector; pre-fix (uncapped) → a
+    #      single un-split SQL String, so `res isa Vector` fails (mutation gate).
+    #   2. execute — proves the auto-split writes the FULL row set correctly across the
+    #      chunk boundary. On PostgreSQL 65535 is a hard wire-protocol limit, so pre-fix
+    #      this also overflows the driver; on SQLite the runtime limit can exceed our
+    #      conservative 32766 default, so there the execute is a correctness check (the
+    #      show_query assertion is the SQLite gate).
+    #
+    # nrows tracks the live backend limit: 4096 rows on SQLite (32766), 8192 on PG.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "auto-chunks to respect the backend bind-parameter limit (#84)" begin
+        _clear_bulk_update_scratch_rows!()
+
+        pool  = PormG.config[PORMG_DB_FOLDER].connections
+        limit = PormG.QueryBuilder._backend_parameter_limit(pool)
+
+        # Pin the CONCRETE limit value. Every other assertion here derives from `limit`
+        # (nrows, chunk count), so it would stay self-consistent — and silently green —
+        # even if _backend_parameter_limit returned a wrong (especially under-estimated)
+        # value. This is the one check that actually fails if the constant is wrong.
+        # SQLite: the shipped SQLite.jl is ≥3.32.0, so the default is 32766 (a regression
+        # to 999 on an ancient build would fail here, which is the correct signal).
+        @test limit == (PORMG_DB_FOLDER == "db_sl" ? 32766 : 65535)
+
+        ncols = 8                              # all payload columns, incl. the explicit id
+        nrows = fld(limit, ncols) + 1          # one row past a single capped chunk
+
+        try
+            required_ids, optional_ids = _seed_bulk_update_scratch_parents!(
+                ["req-84-autochunk"], ["opt-84-autochunk"],
+            )
+            req_id = required_ids["req-84-autochunk"]
+            opt_id = optional_ids["opt-84-autochunk"]
+
+            base_id = 5_000_000
+            columns = ["id", "label", "required_parent_id", "optional_parent_id",
+                       "event_date", "is_active", "event_time", "nullable_int"]
+            insert_df = DataFrame(
+                id                 = [base_id + i for i in 1:nrows],
+                label              = ["autochunk-$(i)" for i in 1:nrows],
+                required_parent_id = fill(req_id, nrows),
+                optional_parent_id = fill(opt_id, nrows),
+                event_date         = fill(Date(2024, 1, 1), nrows),
+                is_active          = fill(true, nrows),
+                event_time         = fill(DateTime(2024, 1, 1, 0, 0, 0), nrows),
+                nullable_int       = collect(1:nrows),
+            )
+
+            # (1) Driver-independent wiring gate: chunk_size == nrows must still split
+            # into exactly two statements because the cap trims it to fld(limit, 8).
+            res = bulk_insert(
+                M.Bulk_update_payload_scratch.objects, insert_df,
+                columns = columns, chunk_size = nrows, show_query = :sql,
+            )
+            @test res isa Vector       # pre-fix returns one un-split SQL String → gate
+            @test length(res) == 2     # effective rows + 1 → two capped chunks
+
+            # (2) End-to-end correctness: the auto-split writes the full set, not a subset.
+            bulk_insert(
+                M.Bulk_update_payload_scratch.objects, insert_df,
+                columns = columns, chunk_size = nrows,
+            )
+            @test M.Bulk_update_payload_scratch.objects.count() == nrows
+
+            # Spot-check the first and last rows (they straddle the chunk boundary)
+            # persisted with the correct values, not just that the count matched.
+            first_row = M.Bulk_update_payload_scratch.objects.filter("id" => base_id + 1).list() |> first
+            last_row  = M.Bulk_update_payload_scratch.objects.filter("id" => base_id + nrows).list() |> first
+            @test first_row[:label] == "autochunk-1"
+            @test first_row[:nullable_int] == 1
+            @test last_row[:label] == "autochunk-$(nrows)"
+            @test last_row[:nullable_int] == nrows
+        finally
+            _clear_bulk_update_scratch_rows!()
+        end
+    end
 end

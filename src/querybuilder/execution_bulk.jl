@@ -1121,8 +1121,14 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     end
   end
 
+  # Wrap the whole chunk loop in one transaction on BOTH backends so a mid-chunk
+  # failure rolls back every already-flushed chunk (#85). This mirrors bulk_insert
+  # (`:749`) and bulk_copy (`:873`); a prior `!(connection isa PormGPostgres)` term
+  # here routed SQLite to the bare loop, leaving chunks 1…K-1 committed on a chunk-K
+  # failure. Skip the wrap only for dry-runs (`show_query !== :execute`) or when an
+  # outer transaction is already open (`has_active_tx`, to avoid a nested BEGIN).
   has_active_tx = transaction_connection_for(settings) !== nothing
-  if show_query !== :execute || !(connection isa PormGPostgres) || has_active_tx
+  if show_query !== :execute || has_active_tx
     update_loop()
   else
     run_in_transaction(update_loop, settings)

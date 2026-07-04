@@ -9,6 +9,7 @@ import PormG: config
 import PormG: SQLType, SQLConn, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 import PormG: PormGsuffix, PormGtransform, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
+import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task
 import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for,

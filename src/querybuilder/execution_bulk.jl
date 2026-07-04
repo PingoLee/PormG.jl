@@ -641,6 +641,58 @@ function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
 end
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Parameter-limit-aware chunking (#84)
+#
+# Each bulk row binds one parameter per mapped field, so a flushed statement carries
+# `chunk_rows × ncols` bind parameters. Backends cap that per statement, and the fixed
+# `chunk_size = 1000` default ignores column count — a wide table (PG) or the SQLite
+# 999-variable build silently overflows with only a raw driver error. We derive the
+# *effective* chunk from the column count and the backend's ceiling so the caller never
+# has to hand-tune `chunk_size` per table width. `bulk_copy` is exempt (it streams CSV
+# over COPY, not bind params).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SQLITE_MAX_VARIABLE_NUMBER default: 999 before 3.32.0, 32766 from 3.32.0 on. Split out as a
+# pure function of the packed library version (e.g. 3039000) so the boundary is unit-testable
+# without an old SQLite build.
+_sqlite_param_limit(version_number::Integer) = version_number >= 3032000 ? 32766 : 999
+
+# Max bind parameters one prepared statement accepts, dispatched on the pool MARKER type so
+# core never names a concrete driver (see src/Backend.jl). PostgreSQL: 65535 (the Int16 param
+# count in the wire-protocol Bind message). SQLite: probed from the library version.
+_backend_parameter_limit(::PormGPostgres) = 65535
+_backend_parameter_limit(conn::PormGSQLite) = _sqlite_param_limit(backend_sqlite_version(conn))
+
+# Cap the requested chunk so that `fixed + effective × per_row` never exceeds `limit` (#84).
+# `per_row` is the parameters each row binds; `fixed` is the per-statement constant params
+# (bulk_update WHERE filters; 0 for insert). If a single row already blows the budget, no
+# chunk_size can help, so we fail closed with an actionable error naming the counts and limit.
+#
+# Note: array-valued fields on SQLite expand to multiple positional params per value
+# (parameters.jl `add_parameter!(::PormGSQLiteParam, ::AbstractArray)`), so `per_row = ncols`
+# under-counts them. That is a rare edge case outside #84's "one parameter per field" framing
+# and is not handled here.
+function _effective_chunk_size(requested::Integer, per_row::Integer, fixed::Integer,
+                               limit::Integer, op::Symbol, backend::AbstractString)
+  per_row <= 0 && return requested            # nothing bound per row → no cap possible or needed
+  max_rows = fld(limit - fixed, per_row)
+  if max_rows < 1
+    throw(_argerr("Error in $op: each row binds $per_row parameter(s)" *
+      (fixed > 0 ? " plus $fixed constant filter parameter(s)" : "") *
+      ", exceeding the $backend limit of $limit bind parameters per statement — no chunk_size " *
+      "can fit a single row. Reduce the columns per $op call (split the column set or the table)."))
+  end
+  # A non-positive `requested` (degenerate chunk_size) must still be capped to the
+  # backend-safe maximum, not collapse to a single un-chunked statement that overflows.
+  return requested < 1 ? max_rows : min(requested, max_rows)
+end
+
+# Backend label used only in the error text above.
+_backend_label(::PormGPostgres) = "PostgreSQL"
+_backend_label(::PormGSQLite) = "SQLite"
+
+
 """
 Inserts multiple rows into the database in bulk from a DataFrame.
 
@@ -706,6 +758,14 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   _columns = _normalize_bulk_columns(columns)
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert, settings)
 
+  # Cap the chunk so `effective_chunk × ncols` stays under the backend's bind-parameter limit
+  # (#84). Each INSERT row binds one param per field and adds nothing else, so per_row = ncols
+  # and there is no fixed per-statement overhead.
+  effective_chunk = _effective_chunk_size(chunk_size, length(fields_df), 0,
+    _backend_parameter_limit(connection), :bulk_insert, _backend_label(connection))
+  effective_chunk < chunk_size &&
+    @debug "bulk_insert: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
+
   # Build a list of row value strings by applying each model field formatter.
   results = []
   insert_loop = () -> begin
@@ -733,7 +793,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
-      if count == chunk_size || index == total
+      if count == effective_chunk || index == total
         # @pormg_debug
         res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
         push!(results, res)
@@ -1083,6 +1143,16 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   parameters_initial =  deepcopy(instruction.parameters)
   joined_columns = unique(vcat(fields_df, dinanic_filters))
 
+  # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
+  # limit (#84). Each row binds one param per set column *and* per match key (joined_columns);
+  # the static-filter WHERE params in `parameters_initial` are re-included on every chunk, so
+  # they are the per-statement fixed overhead.
+  effective_chunk = _effective_chunk_size(chunk_size, length(joined_columns),
+    parameters_initial.parameter_count, _backend_parameter_limit(connection), :bulk_update,
+    _backend_label(connection))
+  effective_chunk < chunk_size &&
+    @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
+
   results = []
   update_loop = () -> begin
     count::Integer = 0
@@ -1109,7 +1179,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
-      if count == chunk_size || index == total      
+      if count == effective_chunk || index == total
         res = _bulk_update(model, settings, connection, joined_columns, rows, safe_set_clause, dinanic_filters, show_query, instruction)
         push!(results, res)
         count = 0

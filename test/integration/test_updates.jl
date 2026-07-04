@@ -1046,6 +1046,54 @@ end
         end
 
         # ─────────────────────────────────────────────────────────────────────────────
+        # Bulk Update auto-chunks below the backend bind-parameter limit (#84)
+        #
+        # bulk_update wires the parameter-limit cap at its own flush site, separate from
+        # bulk_insert's — so the pure-math unit test alone can't prove bulk_update uses
+        # it. This gates that wiring cheaply: `show_query = :sql` builds the UPDATE
+        # statements WITHOUT a DB round-trip (no rows to seed) and returns one entry per
+        # chunk. Each row binds one param per SET column plus the id match key (8 total),
+        # so a single un-chunked statement of nrows × 8 would exceed the backend ceiling.
+        # With chunk_size == nrows: pre-fix (uncapped) that is one statement → a lone SQL
+        # String; post-fix the chunk auto-caps to fld(limit, 8) so nrows splits into
+        # exactly two chunks → a 2-element Vector. Reverting the cap makes `res` a String
+        # and fails the `isa Vector` assertion (mutation gate).
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "Bulk Update auto-chunks to respect the bind-parameter limit (#84)" begin
+            pool    = PormG.config[PORMG_DB_FOLDER].connections
+            limit   = PormG.QueryBuilder._backend_parameter_limit(pool)
+            per_row = 8                          # 7 SET columns + the id match key
+            effective = fld(limit, per_row)      # 4095 on SQLite (32766), 8191 on PG (65535)
+            nrows   = effective + 1              # one row past a single capped chunk
+
+            # No static filters ⇒ zero fixed WHERE overhead, so the effective chunk is
+            # exactly fld(limit, 8) and nrows splits into precisely two chunks.
+            update_df = DataFrame(
+                id                 = collect(1:nrows),
+                label              = ["upd-$(i)" for i in 1:nrows],
+                required_parent_id = fill(1, nrows),
+                optional_parent_id = fill(1, nrows),
+                event_date         = fill(Date(2024, 1, 1), nrows),
+                is_active          = fill(true, nrows),
+                event_time         = fill(DateTime(2024, 1, 1, 0, 0, 0), nrows),
+                nullable_int       = collect(1:nrows),
+            )
+
+            res = bulk_update(
+                M.Bulk_update_payload_scratch.objects,
+                update_df,
+                columns    = ["label", "required_parent_id", "optional_parent_id",
+                              "event_date", "is_active", "event_time", "nullable_int"],
+                match_on   = ["id"],
+                chunk_size = nrows,
+                show_query = :sql,
+            )
+
+            @test res isa Vector       # pre-fix returns one un-split SQL String → gate
+            @test length(res) == 2     # effective rows + 1 → two capped chunks
+        end
+
+        # ─────────────────────────────────────────────────────────────────────────────
         # Bulk Update: combined DateTimeField + nullable IntegerField + FK + BooleanField
         #
         # This mirrors the production call shape that prompted the test:

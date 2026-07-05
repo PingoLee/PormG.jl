@@ -287,6 +287,86 @@ end
 end
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ORDER BY NULL placement is normalized across backends (#75).
+#
+# PostgreSQL and SQLite default NULLs to OPPOSITE ends of an ORDER BY, so ordering a
+# nullable column used to return different rows on each backend — and with .first()/.page()
+# that changed WHICH row you got, not just its position. PormG now emits an explicit
+# NULLS clause matching PostgreSQL's default on both backends: ASC → NULLS LAST,
+# DESC → NULLS FIRST, overridable per term via SQLOrder(field; nulls=:first|:last).
+#
+# This test asserts the (now backend-independent) expected order on whichever backend is
+# running. Pre-fix it FAILS on SQLite (NULLs would sort first for ASC) — the cross-backend
+# mutation gate. It uses the permanent `bulk_update_payload_scratch` fixture (nullable_int
+# column) with try/finally cleanup so the F1 tables are untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ORDER BY NULL placement normalized across backends (#75)" begin
+    # Scratch helpers are loaded in-suite by runtests.jl; load them for standalone runs too.
+    if !isdefined(Main, :_clear_bulk_update_scratch_rows!)
+        include("common_bulk_scratch_setup.jl")
+    end
+
+    _is_nullish(x) = x === nothing || ismissing(x)
+
+    _clear_bulk_update_scratch_rows!()
+    try
+        required_ids, _ = _seed_bulk_update_scratch_parents!(["req-nulls-75"], String[])
+        pid = required_ids["req-nulls-75"]
+
+        # Four rows: three non-NULL sort keys plus one NULL. Labels identify rows regardless
+        # of how a NULL integer renders back (nothing/missing).
+        M.Bulk_update_payload_scratch.objects.create("label" => "n75-a", "required_parent_id" => pid, "nullable_int" => 30)
+        M.Bulk_update_payload_scratch.objects.create("label" => "n75-b", "required_parent_id" => pid, "nullable_int" => 10)
+        M.Bulk_update_payload_scratch.objects.create("label" => "n75-c", "required_parent_id" => pid)  # nullable_int → NULL
+        M.Bulk_update_payload_scratch.objects.create("label" => "n75-d", "required_parent_id" => pid, "nullable_int" => 20)
+
+        our_labels = ["n75-a", "n75-b", "n75-c", "n75-d"]
+        labels_of(rows) = [r[:label] for r in rows]
+
+        # Ascending: non-NULL keys ascend, NULL sorts LAST (PostgreSQL's default, now on SQLite too).
+        asc_rows = M.Bulk_update_payload_scratch.objects.
+            filter("label__@in" => our_labels).
+            order_by("nullable_int").
+            values("label", "nullable_int").
+            list()
+        @test labels_of(asc_rows) == ["n75-b", "n75-d", "n75-a", "n75-c"]
+        @test _is_nullish(asc_rows[end][:nullable_int])          # the NULL row is last
+
+        # The concrete #75 symptom: .first() over the ascending nullable key must return the
+        # smallest non-NULL row (n75-b / 10) on BOTH backends — pre-fix SQLite returned the NULL row.
+        first_asc = M.Bulk_update_payload_scratch.objects.
+            filter("label__@in" => our_labels).
+            order_by("nullable_int").
+            first()
+        @test first_asc !== nothing
+        @test first_asc[:label] == "n75-b"
+
+        # Descending: NULL sorts FIRST (matches PostgreSQL DESC default).
+        desc_rows = M.Bulk_update_payload_scratch.objects.
+            filter("label__@in" => our_labels).
+            order_by("-nullable_int").
+            values("label", "nullable_int").
+            list()
+        @test labels_of(desc_rows) == ["n75-c", "n75-a", "n75-d", "n75-b"]
+        @test _is_nullish(desc_rows[1][:nullable_int])           # the NULL row is first
+
+        # Override: ascending order but NULLs forced to the FRONT via SQLOrder(...; nulls=:first).
+        ovr_rows = M.Bulk_update_payload_scratch.objects.
+            filter("label__@in" => our_labels).
+            order_by(PormG.QueryBuilder.SQLOrder(
+                PormG.QueryBuilder.SQLField("nullable_int", "nullable_int");
+                orientation = "ASC", nulls = :first)).
+            values("label", "nullable_int").
+            list()
+        @test labels_of(ovr_rows) == ["n75-c", "n75-b", "n75-d", "n75-a"]
+        @test _is_nullish(ovr_rows[1][:nullable_int])            # override put the NULL row first
+    finally
+        _clear_bulk_update_scratch_rows!()
+    end
+end
+
+
 @testset "Filtering" begin
     # Contains and icontains
     query = M.Result.objects.filter("raceid__circuitid__name__@contains" => "Monaco");

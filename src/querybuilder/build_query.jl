@@ -54,6 +54,39 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
   end
 end
 
+# NULLS FIRST/LAST syntax landed in SQLite 3.30.0; older builds need the portable
+# `(expr IS NULL)` prefix instead (#75).
+const SQLITE_NULLS_ORDER_MIN_VERSION = 3030000
+
+# Resolve NULL placement for one ORDER BY term (#75). The canonical default matches PostgreSQL
+# (NULL sorts as the largest value): ASC → :last, DESC → :first — so ordering a nullable column
+# returns the same rows on both backends. An explicit SQLOrder(...; nulls=:first|:last) overrides it.
+function _nulls_placement(orientation::AbstractString, nulls::Union{Symbol,Nothing})
+  nulls === :first && return :first
+  nulls === :last  && return :last
+  nulls === nothing || throw(_argerr("Invalid nulls placement $(repr(nulls)); use :first or :last"))
+  return uppercase(strip(String(orientation))) == "DESC" ? :first : :last
+end
+
+# Render one ORDER BY term with explicit NULL placement, portable across backends (#75).
+function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn)
+  if conn isa PormGSQLite && backend_sqlite_version(conn) < SQLITE_NULLS_ORDER_MIN_VERSION
+    # SQLite < 3.30 has no NULLS syntax → emulate placement by sorting on the null-flag first.
+    # NULLS FIRST means nulls (flag 1) come first → DESC on the flag; NULLS LAST → ASC on the flag.
+    # This references `expr` twice. A resolved ORDER BY column/alias is a bare identifier, but a
+    # function-valued order term could render a positional `?` placeholder; duplicating that would
+    # bind the value once yet reference it twice → parameter misalignment. Guard against it: only
+    # emulate when `expr` is placeholder-free. For the rare parameterized order term on this ancient
+    # SQLite, emit the plain term (native NULL placement) — normalization is skipped, never corrupted.
+    if occursin('?', string(expr))
+      return string(expr, " ", orientation)
+    end
+    flag_dir = placement === :first ? "DESC" : "ASC"
+    return string("(", expr, " IS NULL) ", flag_dir, ", ", expr, " ", orientation)
+  end
+  return string(expr, " ", orientation, " ", placement === :first ? "NULLS FIRST" : "NULLS LAST")
+end
+
 function get_order_query(object::SQLObject, instruc::SQLInstruction)
   for v in object.order
     found_in_select = false
@@ -85,7 +118,8 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
-    push!(instruc.order, string(v_field_copy.field, " ", v.orientation))
+    placement = _nulls_placement(v.orientation, v.nulls)
+    push!(instruc.order, _order_term_sql(v_field_copy.field, v.orientation, placement, instruc.connection))
     instruc.cache[v_field_copy._as] = v_field_copy
 
     if !found_in_select

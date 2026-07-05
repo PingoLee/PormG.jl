@@ -126,9 +126,12 @@ mutable struct SQLOrder <: SQLTypeOrder
   order::Union{Integer,Nothing}
   orientation::String
   _as::OptionalString
+  # NULL placement for this term (#75): `nothing` = apply the canonical backend-aligned default
+  # (ASC → NULLS LAST, DESC → NULLS FIRST); `:first`/`:last` force the placement explicitly.
+  nulls::Union{Symbol,Nothing}
 end
-SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing) = SQLOrder(field, order, orientation, _as)
-Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as)
+SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
+Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as, x.nulls)
 
 #
 # SQLObject Objects (main object to build a query)

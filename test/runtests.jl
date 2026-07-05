@@ -49,6 +49,7 @@ end
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
+    @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")

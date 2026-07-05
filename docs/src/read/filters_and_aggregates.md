@@ -386,6 +386,59 @@ query.filter(Qor("constructorid" => 1, "constructorid" => 9))
 
 ---
 
+## Ordering and NULL Placement
+
+`order_by(...)` sorts the result. Prefix a field with `-` for descending; pass several fields to break ties left to right:
+
+```julia
+# By nationality (A→Z), then surname (A→Z) within each nationality
+query = M.Driver.objects
+query.values("surname", "nationality")
+query.order_by("nationality", "surname")
+```
+
+### Where NULLs land
+
+Nullable sort keys are normalized to sort **the same way on PostgreSQL and SQLite** (the two
+backends have *opposite* native defaults, which used to make `order_by(...).first()` return
+different rows on each). PormG standardizes on PostgreSQL's convention — **NULL sorts as the
+largest value** — on every backend:
+
+| Direction | NULL placement |
+|-----------|----------------|
+| `order_by("field")` (ASC)  | NULLs **last**  |
+| `order_by("-field")` (DESC) | NULLs **first** |
+
+```julia
+# nationality is nullable. Ascending → the rows with a NULL nationality come LAST,
+# identically on PostgreSQL and SQLite.
+M.Driver.objects.values("surname", "nationality").order_by("nationality").list()
+```
+
+### Overriding placement per term
+
+Pass a `SQLOrder` object with `nulls = :first` or `nulls = :last` to force placement independently
+of the sort direction:
+
+```julia
+using PormG.QueryBuilder: SQLOrder, SQLField
+
+# Ascending by nationality, but push NULL nationalities to the FRONT
+M.Driver.objects.values("surname", "nationality").order_by(
+    SQLOrder(SQLField("nationality", "nationality"); orientation = "ASC", nulls = :first)
+).list()
+```
+
+On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG emits the portable
+`(field IS NULL)` sort prefix, so the placement is identical there too.
+
+!!! note
+    `nulls` normalization and the `SQLOrder(...; nulls=…)` override apply to the query's top-level
+    `ORDER BY`. Ordering **inside** a window frame (`WindowOver(order_by=…)`) is not yet normalized —
+    its NULL placement still follows each backend's native default.
+
+---
+
 ## Counting
 
 `count()` is a terminal that returns a scalar `Int` for the current query (filters included). It has four forms:

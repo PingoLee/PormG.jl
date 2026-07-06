@@ -38,3 +38,8 @@ test/unit/db_r/
 test/integration/db_test_migration/
 test/integration/db_test_migration_pg/models.jl
 test/integration/db_test_migration_pg/migrations/
+
+# ...but DO commit the credential-free isolated fixture config (issue #36). The blanket
+# *connection.yml rule (top of this file) would otherwise exclude it; this negation re-includes
+# it (git last-match-wins). host/username/password are blank and hydrated in-memory at runtime.
+!test/integration/db_test_migration_pg/connection.yml

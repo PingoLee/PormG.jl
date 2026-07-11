@@ -72,37 +72,111 @@ function ensure_postgres_test_config!(edge_db_path::String)::Bool
 end
 
 """
-    hydrate_postgres_test_config!(edge_db_path::String, source_settings::PormG.SQLConn)
+    hydrate_postgres_settings!(edge_settings, source_settings, folder::String)
 
-Populate blank PostgreSQL connection.yml values in the edge-case migration DB folder
-using the currently selected integration database settings.
+Fill blank connection values (host/username/password/etc.) on an already-loaded edge-case
+`Settings` from the currently selected integration DB — entirely IN-MEMORY, then rebuild the
+connection pool. The committed `connection.yml` is never rewritten, so no credentials ever land
+in git (issue #36).
 
-This keeps committed test fixtures credential-free while still allowing the
-PostgreSQL migration edge-case suite to run against the active integration DB.
+Why rebuild the pool: `Configuration.load` builds the pool eagerly, freezing host/user/pass into
+`pool.connection_string`, so mutating `db_config_settings` after load has no effect until the pool
+is rebuilt via `_build_connection_pool!`.
+
+`database` is preserved (non-blank in the committed fixture → the loop below skips it), which is
+exactly what keeps the edge DB isolated from the selected integration DB.
 """
-function hydrate_postgres_test_config!(edge_db_path::String, source_settings::PormG.SQLConn)
-  config_path = joinpath(edge_db_path, "connection.yml")
-  raw = YAML.load_file(config_path)
-  env_name = get(raw, "env", source_settings.app_env)
-  env_key = String(env_name)
-  haskey(raw, env_key) || error("Missing '$env_key' section in $(config_path)")
-
-  edge_cfg = raw[env_key]
+function hydrate_postgres_settings!(edge_settings::PormG.SQLConn,
+                                    source_settings::PormG.SQLConn, folder::String)
+  edge_cfg = edge_settings.db_config_settings
   source_cfg = source_settings.db_config_settings
 
+  changed = false
   for key in ("database", "host", "username", "password", "port", "url")
     current_value = get(edge_cfg, key, nothing)
     source_value = get(source_cfg, key, nothing)
     if (current_value === nothing || isempty(strip(string(current_value)))) &&
        !(source_value === nothing || isempty(strip(string(source_value))))
       edge_cfg[key] = source_value
+      changed = true
     end
   end
 
-  open(config_path, "w") do io
-    YAML.write(io, raw)
+  if changed
+    # The pool built at load time used the blank credentials but was never dialed (connections
+    # open lazily on first fetch); close it and rebuild from the hydrated dict.
+    try; PormG.Configuration.close_pool!(folder); catch; end
+    PormG.Configuration._build_connection_pool!(edge_settings, folder)
   end
 
+  return nothing
+end
+
+# ── Auto-provisioning of the disposable PostgreSQL DB (Django/Rails/Prisma style) ──────────────
+# The edge-case suite creates its dedicated throwaway DB if absent and drops it at teardown, so
+# there is no manual pre-create step. The connecting role needs the CREATEDB privilege.
+
+# The disposable DB name must be a validated, hardcoded identifier: DDL cannot bind identifiers,
+# so CREATE/DROP DATABASE must interpolate it — this allowlist makes that injection-safe. (Same
+# principle as _reset_postgres! interpolating pg_tables names into `DROP TABLE "$tbl"` above.)
+_is_safe_pg_ident(name::AbstractString) = occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", name)
+
+# Build an ad-hoc pool to the `postgres` maintenance DB using the (already-hydrated) host/port/
+# user/password from the edge settings, so we can CREATE/DROP the disposable DB from outside it.
+function _maintenance_pool(edge_settings::PormG.SQLConn)
+  cfg = copy(edge_settings.db_config_settings)
+  cfg["database"] = "postgres"     # connect to the always-present maintenance DB
+  delete!(cfg, "url")              # force param-based DNS so the `database` override takes effect
+  maint = PormG.Configuration.Settings(app_env = edge_settings.app_env,
+                                       db_config_settings = cfg)
+  PormG.Configuration._build_connection_pool!(maint, "db_test_migration_pg::maint")
+  return maint
+end
+
+"""
+    ensure_postgres_database!(edge_settings, dbname::String)
+
+Create the disposable `dbname` database if it does not already exist, connecting to the `postgres`
+maintenance DB with the hydrated edge credentials. No-op when the DB is already present.
+"""
+function ensure_postgres_database!(edge_settings::PormG.SQLConn, dbname::String)
+  _is_safe_pg_ident(dbname) || error("Refusing unsafe database identifier: $(repr(dbname))")
+  maint = _maintenance_pool(edge_settings)
+  try
+    # The lookup VALUE is bindable, so parameterize it ($1). Only the CREATE identifier below must
+    # be interpolated (validated + quoted) — DDL cannot bind identifiers.
+    lookup = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
+    placeholder = PormG.QueryBuilder.add_parameter!(lookup, dbname)
+    rows = PormG.ConnectionPool.fetch(maint.connections,
+      "SELECT 1 AS present FROM pg_database WHERE datname = $(placeholder);"; params=lookup)
+    if nrow(DataFrame(rows)) == 0
+      PormG.ConnectionPool.fetch(maint.connections, "CREATE DATABASE \"$(dbname)\";")  # not txn-able
+    end
+  finally
+    try; PormG.Configuration.close_pool!(maint.connections); catch; end
+  end
+  return nothing
+end
+
+"""
+    drop_postgres_database!(edge_settings, dbname::String)
+
+Best-effort drop of the disposable `dbname` database at teardown (`WITH (FORCE)` terminates any
+straggler connections; requires PostgreSQL 13+). Failure only warns — the next run re-creates it.
+Close the edge pool for `dbname` before calling this.
+"""
+function drop_postgres_database!(edge_settings::PormG.SQLConn, dbname::String)
+  _is_safe_pg_ident(dbname) || return nothing
+  maint = _maintenance_pool(edge_settings)
+  try
+    PormG.ConnectionPool.fetch(maint.connections, "DROP DATABASE IF EXISTS \"$(dbname)\" WITH (FORCE);")
+  catch e
+    # Log a scrubbed message only — attaching the raw exception could echo the maintenance DSN
+    # (which carries the password) if the failure happens at connection time.
+    @warn "best-effort drop of disposable migration DB failed" db=dbname reason=sprint(showerror, e)
+  finally
+    try; PormG.Configuration.close_pool!(maint.connections); catch; end
+  end
   return nothing
 end
 

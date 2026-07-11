@@ -228,29 +228,37 @@ end
     yml_content = replace(yml_content, "database: database.sqlite" => "database: migration_test.sqlite")
     open(yml_path, "w") do f; write(f, yml_content); end
   else
-    # PostgreSQL: use the committed connection.yml when available, otherwise
-    # generate a blank fixture and hydrate it from the selected DB settings.
+    # PostgreSQL: load the committed credential-free fixture (issue #36) and hydrate
+    # host/username/password IN-MEMORY from the selected DB — the tracked connection.yml is
+    # never rewritten. ensure_postgres_test_config! only regenerates a blank fixture if the
+    # committed file was deleted.
     selected_settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
     edge_db_fixture_generated[] = ensure_postgres_test_config!(joinpath(@__DIR__, edge_db_name))
-    hydrate_postgres_test_config!(joinpath(@__DIR__, edge_db_name), selected_settings)
 
-    # Detect whether the edge-case database actually points at the same
-    # PostgreSQL instance/database as the selected integration environment.
-    # That is not ideal, but the final reactivation block below will rebuild
-    # the selected schema from its real models as a fallback.
     PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
     pg_edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
+    hydrate_postgres_settings!(pg_edge_settings, selected_settings, joinpath(@__DIR__, edge_db_name))
+
+    # Detect whether the edge-case database resolves to the SAME PostgreSQL database as the
+    # selected integration environment. With the committed fixture (distinct `database`) this is
+    # false; it can only be true in the degraded case where the fixture was removed and
+    # regenerated blank, in which case the final reactivation block rebuilds the selected schema.
     edge_db_reuses_selected_db[] = postgres_connection_identity(selected_settings) == postgres_connection_identity(pg_edge_settings)
+    # #36 acceptance: with the committed fixture the edge DB MUST resolve to a database distinct
+    # from the selected one. Guards runtime isolation — if hydration ever overwrote `database`,
+    # this fails (a silent @warn + fallback would otherwise keep the suite green). Skipped only in
+    # the degraded case where the committed fixture was deleted and regenerated blank.
+    !edge_db_fixture_generated[] && @test !edge_db_reuses_selected_db[]
     if edge_db_reuses_selected_db[]
-      @warn "db_test_migration_pg/connection.yml points to the same PostgreSQL database as the selected integration DB; the final bootstrap step will rebuild $(PORMG_DB_FOLDER) as a fallback." db=PORMG_DB_FOLDER edge_db=edge_db_name
+      @warn "db_test_migration_pg/connection.yml resolves to the same PostgreSQL database as the selected integration DB; the final bootstrap step will rebuild $(PORMG_DB_FOLDER) as a fallback." db=PORMG_DB_FOLDER edge_db=edge_db_name
+    else
+      # Auto-create the dedicated disposable DB if absent (Django/Rails/Prisma style), so there is
+      # no manual pre-create step; the connecting role just needs CREATEDB. The name is read from
+      # the loaded fixture (not hardcoded) so it always matches what the edge pool connects to.
+      ensure_postgres_database!(pg_edge_settings, string(pg_edge_settings.db_config_settings["database"]))
     end
 
-    # Reset the public schema to start clean
-    try; PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name)); catch; end
-    delete!(PormG.config, joinpath(@__DIR__, edge_db_name))
-
-    PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
-    pg_edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
+    # Reset the public schema to start clean.
     _reset_postgres!(pg_edge_settings.connections)
     PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
     delete!(PormG.config, joinpath(@__DIR__, edge_db_name))
@@ -262,6 +270,12 @@ end
 
   PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
   edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
+  if adapter_name != "SQLite"
+    # This reload re-read the credential-free fixture, so re-hydrate in-memory (PG only). The
+    # edge-case tests below reuse this pool and never reload the fixture, so one hydrate suffices.
+    hydrate_postgres_settings!(edge_settings,
+      PormG.Configuration.get_settings(PORMG_DB_FOLDER), joinpath(@__DIR__, edge_db_name))
+  end
   pool = edge_settings.connections
 
   # ── Phase 1: Initial table creation ───────────────────────────────
@@ -1247,6 +1261,11 @@ end
     # SQLite: remove the entire disposable folder
     ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
   else
+    # Best-effort drop of the disposable DB (the edge pool was just closed above). Guarded: never
+    # drop when the edge DB resolved to the shared selected DB (degraded regenerated-fixture case).
+    if !edge_db_reuses_selected_db[]
+      drop_postgres_database!(edge_settings, string(edge_settings.db_config_settings["database"]))
+    end
     if edge_db_fixture_generated[]
       # Remove the entire temporary fixture if this test had to create it.
       ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)

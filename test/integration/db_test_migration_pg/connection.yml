@@ -1,0 +1,46 @@
+# Isolated PostgreSQL fixture for the migration edge-case suite (issue #36).
+#
+# Credential-free by design: host/username/password are left blank and hydrated
+# IN-MEMORY at runtime from the selected integration DB (see hydrate_postgres_settings!
+# in test/integration/common_migration_setup.jl). The tracked file is NEVER rewritten,
+# so no secrets ever land in git. NEVER commit real credentials here.
+#
+# `database` is a DEDICATED disposable DB — the edge-case suite DROPs every table in it
+# and auto-creates/drops it — so it must NOT be the shared pormg_teste.
+env: dev
+
+dev:
+  adapter: "PostgreSQL"
+  database: "pormg_migration_test"
+  host: ~
+  username: ~
+  password: ~
+  port: 5432
+  config:
+    time_zone: "UTC"
+    change_db: true
+    change_data: true
+
+test:
+  adapter: "PostgreSQL"
+  database: "pormg_migration_test"
+  host: ~
+  username: ~
+  password: ~
+  port: 5432
+  config:
+    time_zone: "UTC"
+    change_db: true
+    change_data: true
+
+prod:
+  adapter: "PostgreSQL"
+  database: "pormg_migration_test"
+  host: ~
+  username: ~
+  password: ~
+  port: 5432
+  config:
+    time_zone: "UTC"
+    change_db: true
+    change_data: true

@@ -93,12 +93,14 @@ bulk_copy(M.Driver.objects, df, columns=[
 
 # Batch update from DataFrame
 bulk_update(M.Result.objects, df,
-    columns  = ["points"],     # fields to SET
-    match_on = ["resultid"]    # per-row keys to match on (WHERE)
+    columns  = ["points"],     # participating fields (+ any "df_col" => "field" mappings)
+    match_on = ["resultid"]    # per-row merge keys, bare model field names (WHERE)
 )
-# `filters=` is reserved for *constant* predicates AND'd onto every row
-# (e.g. filters = ["constructorid" => 131]). Putting a per-row DataFrame
-# column in filters= now raises a migration error — use match_on= for keys.
+# `columns=` is the ONLY place a df column is mapped to a model field; a field
+# selected by match_on= is used for matching, never SET. `filters=` is reserved
+# for *constant* predicates AND'd onto every row (e.g. filters =
+# ["constructorid" => 131]). Putting a per-row DataFrame column in filters=,
+# or a "df_col" => "field" pair in match_on=, raises a migration error.
 ```
 
 **Pre-process CSV nulls before bulk operations:**

@@ -306,9 +306,11 @@ bulk_copy(M.Result.objects, results_df, chunk_size=10000)
 
 `bulk_update()` updates multiple rows from a `DataFrame`. It separates three concerns:
 
-- **`columns=`** — the fields to **SET** (`"df_col" => "model_field"`, or a bare string when the names match).
-- **`match_on=`** — the **per-row match keys** that identify which row each DataFrame row updates (the merge condition `Tb.field = source.df_col`). Same grammar as `columns=`. If omitted, the model primary key(s) are used.
+- **`columns=`** — the **participating fields and their mappings**. This is the **single place** a DataFrame column is mapped to a model field (`"df_col" => "model_field"`, or a bare string when the names match). Fields selected by `match_on=` are used for matching only — they are **not** SET.
+- **`match_on=`** — the **per-row match keys** that identify which row each DataFrame row updates (the merge condition `Tb.field = source.field`). Bare **model field names** only; the source column is the `columns=` mapping for that field when declared, otherwise a DataFrame column with the field's own name. If omitted, the model primary key(s) are used.
 - **`filters=`** — **constant** predicates AND'd onto every row's `WHERE` (`"model_field" => value`), e.g. `"category_id" => 172100` or `"points__@in" => [18, 25]`.
+
+**One border crossing.** `columns=` is the only argument where DataFrame names appear; `match_on=` and `filters=` always speak the model's field language. That keeps every `=>` in the bulk API meaning the same thing — "df column *to* model field" — and it appears exactly once.
 
 PormG validates every row up front, then emits a multi-row `UPDATE` using a `VALUES` source (PostgreSQL) or `WITH source(...) AS (VALUES ...)` form (SQLite).
 
@@ -316,6 +318,9 @@ PormG validates every row up front, then emits a multi-row `UPDATE` using a `VAL
     Earlier versions packed both row-matching keys and constant predicates into `filters=`. Row matching now lives in `match_on=`. Passing a per-row match key in `filters=` (a bare string, or a `"df_col" => "model_field"` pair) raises an error telling you to move it to `match_on=` — there is no silent fallback.
 
     This migration error is a **temporary deprecation aid** and will be removed in a future release; once your call sites use `match_on=`, you will not see it again.
+
+!!! note "Migrated from the `match_on=` pair grammar (#107)"
+    Earlier versions also accepted `"df_col" => "model_field"` pairs in `match_on=`, so the same mapping could be declared in two places. Pairs in `match_on=` now raise a migration error showing the rewrite: move the pair into `columns=` and keep the bare field name in `match_on=` — e.g. `match_on=["record_id" => "id"]` becomes `columns=[..., "record_id" => "id"], match_on=["id"]`. Like the `filters=` shim above, this error is temporary.
 
 ### Basic Usage
 
@@ -359,8 +364,9 @@ custom_df = DataFrame(
 )
 
 bulk_update(query, custom_df,
-    columns=["new_score" => "points"],      # SET: map 'new_score' to field 'points'
-    match_on=["record_id" => "id"]          # match key: map 'record_id' to field 'id'
+    columns=["new_score" => "points",       # SET: map 'new_score' to field 'points'
+             "record_id" => "id"],          # mapping for the match key (not SET)
+    match_on=["id"]                         # merge key, by model field name
 )
 ```
 
@@ -378,9 +384,10 @@ WHERE "Tb"."id" = source."id"::bigint
 
 ### Matching and Execution Rules
 
-- **Case-sensitive DataFrame matching**: PormG resolves `columns` and `match_on` against `DataFrame` column names **exactly**. A name that differs only in case from the model field (e.g. `ID` vs `id`) is rejected with an error that names the candidate column and suggests the fix — either `rename!(df, lowercase.(names(df)))` or an explicit `"DF_COL" => "field"` mapping. (An explicit `columns=` mapping is always honored, even when its source column differs in case from the field name.)
-- **Primary key fallback**: If you omit `match_on=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame`.
-- **Missing column errors**: A `match_on` column absent from the `DataFrame` raises an `ArgumentError` rather than silently degrading to a constant filter. An explicit `columns=` mapping (`"df_col" => "field"`) whose source column is absent likewise raises — it is never silently bound to a non-existent column.
+- **Case-sensitive DataFrame matching**: PormG resolves `columns` and `match_on` against `DataFrame` column names **exactly**. A name that differs only in case from the model field (e.g. `ID` vs `id`) is rejected with an error that names the candidate column and suggests the fix — either `rename!(df, lowercase.(names(df)))` or an explicit `"DF_COL" => "field"` mapping in `columns=`. (An explicit `columns=` mapping is always honored, even when its source column differs in case from the field name.)
+- **Mapping-first match keys**: A `match_on` field with a `columns=` mapping always uses that mapping as its source. If the `DataFrame` *also* carries a column with the field's own name, the mapping still wins and the same-named column is ignored — with a warning, so the ambiguity is visible.
+- **Primary key fallback**: If you omit `match_on=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame` (or mapped in `columns=`).
+- **Missing column errors**: A `match_on` field with no source — no `columns=` mapping and no same-named `DataFrame` column — raises an `ArgumentError` rather than silently degrading to a constant filter. An explicit `columns=` mapping (`"df_col" => "field"`) whose source column is absent likewise raises — it is never silently bound to a non-existent column.
 - **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `match_on=` and `filters=`. Pass every predicate you need through those arguments rather than relying on prior `query.filter(...)` state.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
 - **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.
@@ -395,15 +402,17 @@ each call by splitting `filters=` into **`match_on=`** (row-matching keys) and
 | Old call | New call |
 |----------|----------|
 | `filters=["id"]` | `match_on=["id"]` |
-| `filters=["record_id" => "id"]` | `match_on=["record_id" => "id"]` |
+| `filters=["record_id" => "id"]` | `columns=[..., "record_id" => "id"], match_on=["id"]` |
+| `match_on=["record_id" => "id"]` *(pre-#107 pair)* | `columns=[..., "record_id" => "id"], match_on=["id"]` |
 | `filters=["id", "category_id" => 172100]` | `match_on=["id"], filters=["category_id" => 172100]` |
 | `filters=["category_id" => 172100]` *(constant only)* | unchanged — stays in `filters=` |
 | `filters=[]` or `filters` omitted | unchanged — the primary key is inferred |
 
 **Rule of thumb:**
 
-- If an entry references a **DataFrame column** — a bare string (`"id"`) or a
-  `"df_col" => "field"` pair — it is a per-row key → move it to `match_on=`.
+- If an entry references a **DataFrame column** it is a per-row key: the bare field name
+  goes to `match_on=`, and any `"df_col" => "field"` mapping goes to `columns=` (a field
+  listed in both is used for matching only — it is never SET).
 - If an entry is `"field" => value` with a **literal value** (number, string, bool,
   array, `__@` lookup) → it is a constant predicate → leave it in `filters=`.
 
@@ -458,14 +467,15 @@ end
 
 `bulk_update()` combines **per-row match keys** (`match_on=`, driven by DataFrame values) with **constant filters** (`filters=`, the same value for every row).
 
-- **`match_on=`**: `["id"]` or `["record_id" => "id"]`. Always resolved against the DataFrame; identifies which row each DataFrame row updates.
+- **`match_on=`**: bare model field names, e.g. `["id"]`. Each key's per-row values come from the DataFrame — through the `columns=` mapping when one is declared, otherwise from the same-named DataFrame column; the keys identify which row each DataFrame row updates.
 - **`filters=`**: `["status" => "active"]`. Always a constant predicate AND'd onto the `WHERE` clause for every row.
 
 ```julia
 # Per-row match key + constant scope guard
 bulk_update(query, df,
-    columns=["new_points" => "points"],
-    match_on=["record_id" => "id"],   # match DB 'id' against DF 'record_id'
+    columns=["new_points" => "points",
+             "record_id" => "id"],    # mapping for the match key (not SET)
+    match_on=["id"],                  # match DB 'id' against DF 'record_id'
     filters=["category_id" => 172100] # constant: only rows where category_id is 172100
 )
 ```

@@ -118,8 +118,11 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     else
       v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
     end
-    placement = _nulls_placement(v.orientation, v.nulls)
-    push!(instruc.order, _order_term_sql(v_field_copy.field, v.orientation, placement, instruc.connection))
+    # Re-validate at render: SQLOrder is mutable, so a post-construction reassignment could
+    # bypass the constructor whitelist (#77) — same render-time guard the window path has.
+    orientation = _normalize_order_orientation(v.orientation)
+    placement = _nulls_placement(orientation, v.nulls)
+    push!(instruc.order, _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection))
     instruc.cache[v_field_copy._as] = v_field_copy
 
     if !found_in_select

@@ -617,11 +617,9 @@ function _resolve_window_expression(v, instruc::SQLInstruction)
   end
 end
 
-function _normalize_window_orientation(orientation::AbstractString)::String
-  normalized = uppercase(strip(String(orientation)))
-  normalized in ("ASC", "DESC") || throw(ArgumentError("Window ORDER BY orientation must be ASC or DESC, got $(repr(orientation))"))
-  return normalized
-end
+# Delegates to the shared whitelist (types.jl, #77) so the ORDER BY and window paths can't drift.
+_normalize_window_orientation(orientation::AbstractString)::String =
+  _normalize_order_orientation(orientation; context="Window ORDER BY")
 
 function _resolve_window_order(v::String, instruc::SQLInstruction)::String
   isempty(v) && throw(ArgumentError("Window ORDER BY fields cannot be empty"))

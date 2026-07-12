@@ -120,6 +120,15 @@ SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, n
 SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing)
 Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as)
 
+# `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
+# uppercase. Single whitelist for every orientation path — the window path
+# (_normalize_window_orientation, build_helpers.jl) delegates here with its own context label.
+function _normalize_order_orientation(orientation::AbstractString; context::String="ORDER BY")::String
+  normalized = uppercase(strip(String(orientation)))
+  normalized in ("ASC", "DESC") || throw(_argerr("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))
+  return normalized
+end
+
 # Return a order of field to sql query
 mutable struct SQLOrder <: SQLTypeOrder
   field::Union{SQLTypeField,String}
@@ -129,6 +138,9 @@ mutable struct SQLOrder <: SQLTypeOrder
   # NULL placement for this term (#75): `nothing` = apply the canonical backend-aligned default
   # (ASC → NULLS LAST, DESC → NULLS FIRST); `:first`/`:last` force the placement explicitly.
   nulls::Union{Symbol,Nothing}
+  # Inner constructor: every construction path (keyword, positional, deepcopy) passes the
+  # orientation whitelist (#77), so an injection-shaped direction never reaches the renderer.
+  SQLOrder(field, order, orientation, _as, nulls) = new(field, order, _normalize_order_orientation(orientation), _as, nulls)
 end
 SQLOrder(field::Union{SQLTypeField,String}; order::Union{Integer,Nothing}=nothing, orientation::String="ASC", _as::OptionalString=nothing, nulls::Union{Symbol,Nothing}=nothing) = SQLOrder(field, order, orientation, _as, nulls)
 Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as, x.nulls)

@@ -345,26 +345,32 @@ end
 end
 
 # ------------------------------------------------------------------
-# match_on / filters separation contract.
+# match_on / filters separation contract (#107 "one border crossing").
 #
-#   match_on = per-row merge keys (df_col => model_field), always dynamic.
+#   columns  = participating fields + the ONLY place a df column is
+#              mapped to a model field ("df_col" => "model_field").
+#   match_on = per-row merge keys, bare MODEL FIELD names, always
+#              dynamic; a field listed in both is matched, never SET.
 #   filters  = constant predicates (model_field => value), always static.
 #
-# The legacy single-`filters` dynamic usage is rejected with a migration
-# error so call sites move loudly rather than silently misbehaving.
+# The legacy single-`filters` dynamic usage and the pre-#107
+# `match_on` pair grammar are rejected with migration errors so call
+# sites move loudly rather than silently misbehaving.
 # ------------------------------------------------------------------
 @testset "bulk_update: match_on / filters separation" begin
 
-    # match_on accepts a "df_col" => "model_field" mapping just like columns.
-    @testset "match_on supports df_col => model_field mapping" begin
+    # The #107 motivating golden: every df→field mapping is declared in columns=;
+    # match_on selects the merge key by field name. The match key ("id", sourced from
+    # df "record_id") appears in the source list and WHERE, but never in SET.
+    @testset "columns= carries the mapping; bare match_on selects the merge key" begin
         custom_df = DataFrames.DataFrame(
             record_id = [4606],
             new_w     = [9],
         )
         res = bulk_update(
             Metric.objects, custom_df,
-            columns    = ["new_w" => "weight"],
-            match_on   = ["record_id" => "id"],
+            columns    = ["new_w" => "weight", "record_id" => "id"],
+            match_on   = ["id"],
             show_query = :dict
         )
         sql = res[:sql_text]
@@ -373,7 +379,51 @@ end
         @test occursin("\"Tb\".\"id\" = source.\"id\"", sql)
         set_text = match(r"SET(.*?)FROM"s, sql).captures[1]
         @test occursin("\"weight\"", set_text)
+        @test !occursin("\"id\" =", set_text)   # match key is not SET
         # Source order: update column first, then the match key.
+        @test res[:parameters] == Any[9, 4606]
+    end
+
+    # The pre-#107 pair grammar must fail loudly with the rewrite, not silently
+    # remap — the migration error is the deprecation shim's whole point.
+    @testset "match_on pair form raises the migration error" begin
+        custom_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+        err = try
+            bulk_update(
+                Metric.objects, custom_df,
+                columns    = ["new_w" => "weight"],
+                match_on   = ["record_id" => "id"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        # The message must show the exact rewrite: mapping moves to columns=,
+        # match_on keeps the bare field name.
+        @test occursin("no longer accepts", msg)
+        @test occursin("columns  = [..., \"record_id\" => \"id\"]", msg)
+        @test occursin("match_on = [\"id\"]", msg)
+    end
+
+    # Mapping-first resolution: when columns= maps a field AND the df also carries a
+    # column with the field's own name, the declared mapping is authoritative and the
+    # same-named column is ignored — loudly (@warn), so the ambiguity is visible.
+    @testset "columns= mapping wins over a same-named df column (with @warn)" begin
+        conflict_df = DataFrames.DataFrame(
+            record_id = [4606],   # the declared source for field id
+            id        = [999],    # same-named column that must be IGNORED
+            new_w     = [9],
+        )
+        res = @test_logs (:warn, r"same-named DataFrame column is ignored") bulk_update(
+            Metric.objects, conflict_df,
+            columns    = ["new_w" => "weight", "record_id" => "id"],
+            match_on   = ["id"],
+            show_query = :dict
+        )
+        # Params prove the mapping won: 4606 (df.record_id), not 999 (df.id).
         @test res[:parameters] == Any[9, 4606]
     end
 
@@ -419,38 +469,51 @@ end
         @test occursin("match_on", sprint(showerror, err))
     end
 
+    # The advice for a PAIR must be the #107 two-part rewrite (mapping → columns=,
+    # bare field → match_on=) — recommending `match_on = [pair]` would send the
+    # caller straight into the match_on pair error.
     @testset "legacy df_col => field filter raises migration error" begin
         custom_df = DataFrames.DataFrame(record_id = [4606], weight = [1])
-        @test_throws ArgumentError bulk_update(
-            Metric.objects, custom_df,
-            columns    = ["weight"],
-            filters    = ["record_id" => "id"],
-            show_query = :dict
-        )
+        err = try
+            bulk_update(
+                Metric.objects, custom_df,
+                columns    = ["weight"],
+                filters    = ["record_id" => "id"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        @test occursin("columns  = [..., \"record_id\" => \"id\"]", msg)
+        @test occursin("match_on = [\"id\"]", msg)
+        @test !occursin("match_on = [\"record_id\" => \"id\"]", msg)   # the stale advice
     end
 
-    # A match_on column absent from the DataFrame is a hard error, never a
-    # silent fall-through.
-    @testset "missing match_on column raises" begin
-        @test_throws ArgumentError bulk_update(
-            Metric.objects, df_upd,
-            columns    = ["weight"],
-            match_on   = ["does_not_exist" => "id"],
-            show_query = :dict
-        )
-    end
-
-    # An explicit match_on pair with a typoed source column must raise even when
-    # the target field is already mapped by columns= — the typo must not be
-    # silently swallowed by reusing the columns= mapping.
-    @testset "explicit match_on typo raises even when field is mapped by columns" begin
+    # A match key with no source — no columns= mapping for the field and no df column
+    # with the field's own name — is a hard error, never a silent fall-through.
+    @testset "match_on field without any source column raises" begin
         custom_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
-        @test_throws ArgumentError bulk_update(
-            Metric.objects, custom_df,
-            columns    = ["new_w" => "weight", "record_id" => "id"],
-            match_on   = ["typo_id" => "id"],
-            show_query = :dict
-        )
+        err = try
+            bulk_update(
+                Metric.objects, custom_df,
+                columns    = ["new_w" => "weight"],
+                match_on   = ["id"],   # field id: unmapped, and no "id" df column
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        # Assert the error CLASS and SUBJECT, not just substrings: a bare
+        # occursin("id", msg) also matches "record_id" in the column dump, so it
+        # cannot discriminate. The \S* tolerates ANSI codes around the field name.
+        @test occursin(r"match_on column \S*id\S* not found", msg)
+        @test occursin("no columns= mapping targets that field", msg)
     end
 
     # No match_on and no filters => fall back to the model primary key.
@@ -515,8 +578,7 @@ end
         @test res isa Dict || res isa Vector
     end
 
-    # A match_on key that is not a model field is a hard error (covers both the
-    # bare-key and the explicit-pair target-field validation branch).
+    # A match_on key that is not a model field is a hard error.
     @testset "match_on referencing a non-field raises" begin
         @test_throws ArgumentError bulk_update(
             Metric.objects, df_upd,
@@ -524,29 +586,23 @@ end
             match_on   = ["not_a_field"],
             show_query = :dict
         )
-        @test_throws ArgumentError bulk_update(
-            Metric.objects, df_upd,
-            columns    = ["weight"],
-            match_on   = ["id" => "not_a_field"],
-            show_query = :dict
-        )
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
-    # Case-sensitive matching: match_on= explicit pair (Site C)
-    # Bulk column matching is exact/case-sensitive. An explicit match_on source column
-    # that differs only in case from a real DataFrame column must FAIL LOUDLY — naming
-    # the candidate and the fix — rather than silently case-fold (the pre-9958a16 risk
-    # of mapping the wrong mixed-case column). This is the inverse of the old contract.
+    # Case-sensitive matching: bare match_on key (Site C)
+    # Bulk column matching is exact/case-sensitive. A bare match key whose identity
+    # source column exists only in a different case must FAIL LOUDLY — naming the
+    # candidate and the columns= mapping fix — rather than silently case-fold (the
+    # pre-9958a16 risk of mapping the wrong mixed-case column).
     # ─────────────────────────────────────────────────────────────────────────────
-    @testset "explicit match_on pair with case-only mismatch raises" begin
-        # df column is "record_id"; match_on asks for "RECORD_ID" — same name, wrong case.
-        ci_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+    @testset "bare match_on with case-only source mismatch raises" begin
+        # field "id" is unmapped; the df only carries "ID" — same name, wrong case.
+        ci_df = DataFrames.DataFrame(ID = [4606], new_w = [9])
         err = try
             bulk_update(
                 Metric.objects, ci_df,
                 columns    = ["new_w" => "weight"],
-                match_on   = ["RECORD_ID" => "id"],   # differs only in case from "record_id"
+                match_on   = ["id"],
                 show_query = :dict
             )
             nothing
@@ -555,9 +611,11 @@ end
         end
         @test err isa ArgumentError
         msg = sprint(showerror, err)
-        # The error must name the case-only candidate and point at the case-sensitivity.
-        @test occursin("record_id", msg)
+        # The error must name the case-only candidate and point at the case-sensitivity,
+        # and the suggested fix is a columns= mapping (the single border crossing).
+        @test occursin("ID", msg)
         @test occursin("case", msg)
+        @test occursin("columns = [..., \"ID\" => \"id\"]", msg)
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -614,13 +672,13 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
-    # Case-sensitive matching: an EXPLICIT columns= mapping still wins (allow_reuse)
-    # A bare match_on key reuses the column mapping established by columns=, even when
-    # the mapped DataFrame column differs in case from the field name. The user already
-    # spelled out the mapping, so no case error fires — this guards the reorder that put
-    # the columns= reuse ahead of the case-mismatch check.
+    # Case-sensitive matching: an EXPLICIT columns= mapping is authoritative (#107)
+    # A bare match_on key resolves through the mapping established by columns=, even
+    # when the mapped DataFrame column differs in case from the field name. The user
+    # already spelled out the mapping, so no case error fires — mapping-first
+    # resolution checks columns= before looking for a same-named df column.
     # ─────────────────────────────────────────────────────────────────────────────
-    @testset "bare match_on reuses an explicit columns= mapping across case" begin
+    @testset "bare match_on resolves through an explicit columns= mapping across case" begin
         # "ID" => "id" explicitly maps the mixed-case DataFrame column to field id.
         df_reuse = DataFrames.DataFrame(ID = [4606], weight = [9])
         res = bulk_update(

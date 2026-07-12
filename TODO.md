@@ -19,16 +19,15 @@
 > **Settled & merged:** Tier 1 (migration-format / tracking-table contract, frozen schema
 > conventions) · Tier 2 (#34 adapter decoupling → #35 export curation) · field-name case
 > preservation (#57) + lowercase convention (#58) · the full `db_column` authority family —
-> authoritative DDL/queries (#50), string FK targets (#62), ManyToMany/CTE join keys (#64).
+> authoritative DDL/queries (#50), string FK targets (#62), ManyToMany/CTE join keys (#64) ·
+> isolated PG migration fixture (#36) · pool-exhaustion investigation (#37 → follow-ups
+> #124–#128) · `ORDER BY` NULL placement (#75) · `.copy()` state aliasing (#43 → #112).
 >
 > **Remaining gating work** — the `pre-publish` label is the source of truth, so this list is exactly
 > [`gh issue list --label pre-publish`](https://github.com/PingoLee/PormG.jl/issues?q=is%3Aopen+label%3Apre-publish):
 
-- [#36](https://github.com/PingoLee/PormG.jl/issues/36) — Isolated PostgreSQL migration fixture (`db_test_migration_pg/`)
-- [#37](https://github.com/PingoLee/PormG.jl/issues/37) — Investigate PG pool exhaustion under remote-latency integration runs
-- [#75](https://github.com/PingoLee/PormG.jl/issues/75) — `ORDER BY` NULL placement diverges PG vs SQLite (no `NULLS FIRST/LAST` normalization)
-- [#107](https://github.com/PingoLee/PormG.jl/issues/107) — Reconsider `=>` direction/semantics across the query API (predicate vs projection vs mapping)
-- [#112](https://github.com/PingoLee/PormG.jl/issues/112) — `.copy()` aliases custom_join state: extending `on()`/`cjoin()` on a copy mutates the original (build-time residual of #43)
+- [#107](https://github.com/PingoLee/PormG.jl/issues/107) — Bulk mapping contract (decided): `columns=` is the single df→model border; `match_on=` takes model fields only
+- [#132](https://github.com/PingoLee/PormG.jl/issues/132) — Bulk ops: drop the `copy=` deepcopy default — non-mutating zero-copy pipeline
 
 ---
 

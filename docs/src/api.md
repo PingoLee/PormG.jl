@@ -396,10 +396,11 @@ bulk_update(M.Result.objects, df_with_changes, columns=["points"], match_on=["re
 
 Key contracts:
 
-- `columns=` sets fields; `match_on=` gives the per-row keys that identify each row; `filters=` are constant predicates applied to every row.
-- DataFrame columns are matched **case-sensitively** for both `columns` and `match_on`. A column that differs only in case from the model field (e.g. `RaceId` vs `raceid`) raises an error naming the candidate; normalize headers with `rename!(df, lowercase.(names(df)))` or map explicitly with `"DF_COL" => "field"`.
+- `columns=` names the participating fields and is the **single place** a DataFrame column is mapped to a model field (`"df_col" => "field"`); `match_on=` selects the per-row merge keys by **bare model field name** (a field in both is matched, never SET); `filters=` are constant predicates applied to every row.
+- A `match_on` field's source column is its `columns=` mapping when declared — the mapping is authoritative even if a same-named DataFrame column also exists (that case warns) — otherwise a DataFrame column with the field's own name.
+- DataFrame columns are matched **case-sensitively** for both `columns` and `match_on`. A column that differs only in case from the model field (e.g. `RaceId` vs `raceid`) raises an error naming the candidate; normalize headers with `rename!(df, lowercase.(names(df)))` or map explicitly with `"DF_COL" => "field"` in `columns=`.
 - If `match_on` is omitted, PormG infers the model primary key columns and uses those to identify rows.
-- A per-row match key passed in `filters=` (a bare string or `"df_col" => "field"` pair) raises a migration error directing you to `match_on=`; there is no silent fallback. This migration error is a temporary deprecation aid and will be removed in a future release.
+- A per-row match key passed in `filters=` (a bare string or `"df_col" => "field"` pair) raises a migration error directing you to `match_on=`; there is no silent fallback. Likewise, the pre-#107 pair grammar in `match_on=` (`["record_id" => "id"]`) raises a migration error showing the rewrite (`columns=[..., "record_id" => "id"], match_on=["id"]`). Both migration errors are temporary deprecation aids and will be removed in a future release.
 - `bulk_update()` rebuilds the `WHERE` clause from `match_on=` and `filters=` and does not preserve filters that were already attached to the handler.
 - Constant lookup filters on base-table columns are supported, but relation traversals that would require JOINs are rejected.
 - Foreign-key columns accept scalar primary-key values, including `0` when that referenced row exists; use `nothing` or `missing` to write SQL `NULL` on nullable FK columns.

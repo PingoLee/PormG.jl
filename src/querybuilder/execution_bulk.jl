@@ -29,6 +29,61 @@ function _normalize_bulk_columns(columns)
   return _columns
 end
 
+# #107 "one border crossing": `columns=` is the ONLY place a DataFrame column is mapped
+# to a model field. `match_on=` selects merge keys by bare model-field name; its old
+# `"df_col" => "model_field"` pair form is rejected with a migration error below.
+function _normalize_bulk_match_on(match_on)::Vector{String}
+  _match_on = String[]
+  if match_on === nothing
+  elseif match_on isa AbstractString
+    push!(_match_on, match_on)
+  elseif match_on isa Pair
+    throw(ArgumentError(_match_on_pair_migration_msg(match_on)))
+  elseif match_on isa Vector
+    for key in match_on
+      if key isa AbstractString
+        push!(_match_on, key)
+      elseif key isa Pair
+        throw(ArgumentError(_match_on_pair_migration_msg(key)))
+      else
+        throw(ArgumentError("Invalid match_on specification: $key"))
+      end
+    end
+  else
+    throw(ArgumentError("Invalid match_on argument: $match_on"))
+  end
+  return _match_on
+end
+
+# ============================================================================
+# DEPRECATION SHIM — TEMPORARY (remove once the pre-#107 pair grammar is retired)
+#
+# Before #107, `match_on=` accepted the same `"df_col" => "model_field"` grammar as
+# `columns=`, so the df→field mapping could be declared in two places. The PERMANENT
+# contract is: mappings live in `columns=` only; `match_on=` is bare model-field names.
+# This helper only turns the removed pair form into an actionable migration error.
+#
+# TO REMOVE after the deprecation window: delete this helper and let the pair fall
+# through to `_normalize_bulk_match_on`'s generic "Invalid match_on specification" error.
+# ============================================================================
+function _match_on_pair_migration_msg(pair::Pair)
+  shown = "\"$(pair.first)\" => \"$(pair.second)\""
+  return """
+  bulk_update: `match_on=` no longer accepts `"df_col" => "model_field"` pairs (DEPRECATED API).
+  `columns=` is the single place a DataFrame column is mapped to a model field; `match_on=`
+  selects the merge keys by model field name. A field listed in both is used only for
+  matching — match keys are never SET.
+
+    Change:  match_on = [$(shown)]
+    To:      columns  = [..., $(shown)], match_on = ["$(pair.second)"]
+
+  This migration error is temporary and will be removed in a future release.
+  """
+end
+# ============================================================================
+# end deprecation shim
+# ============================================================================
+
 function _normalize_bulk_filters(filters)
   _filters::Vector{Union{String, Pair{String, <:Any}}} = []
   if filters === nothing
@@ -503,35 +558,39 @@ function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
   return nothing
 end
 
-# Map one match key into mapping / fields_df / dynamic_filters. Unlike the legacy
-# `filters=` path, a missing DataFrame column is a hard error rather than a silent
-# fall-through to a static predicate.
+# Map one match key (a bare MODEL FIELD name — #107) into mapping / fields_df /
+# dynamic_filters. Unlike the legacy `filters=` path, a missing source column is a hard
+# error rather than a silent fall-through to a static predicate.
 #
-# `allow_reuse` lets a bare key (and the PK fallback) fall back to a mapping already
-# established by `columns=` when `df_col` is not a DataFrame column on its own. It MUST
-# stay `false` for an explicit `"df_col" => "field"` pair, otherwise a typoed source
-# column would be silently swallowed by the existing `columns=` mapping instead of
-# raising the documented hard error.
+# Source resolution is MAPPING-FIRST: a mapping declared in `columns=` is authoritative
+# for its field. Only when no mapping exists does a DataFrame column with the field's own
+# name serve as the source. (Pre-#107 the order was reversed — an exact df column won over
+# the mapping — which made a same-named column silently override the declared mapping.)
 function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   mapping::Dict{String, String}, fields_df::Vector{String},
-  dynamic_filters::Vector{String}, field::String, df_col::String;
-  kind::String="match_on", allow_reuse::Bool=true)
+  dynamic_filters::Vector{String}, field::String;
+  kind::String="match_on")
 
   field in model.field_names ||
     throw(_argerr("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
 
-  resolved = if df_col in names(df)
-    df_col                                # exact (case-sensitive) match wins
-  elseif allow_reuse && haskey(mapping, field)
-    mapping[field]                        # bare key / PK fallback: reuse the columns= mapping
+  resolved = if haskey(mapping, field)
+    # `columns=` mapping wins. If the df ALSO carries a column named exactly like the
+    # field, it is ignored in favor of the declared mapping — surface that loudly.
+    if mapping[field] != field && field in names(df)
+      @warn "bulk_update: $(kind) resolved through the columns= mapping; the same-named DataFrame column is ignored" field=field mapped_source=mapping[field] ignored_column=field
+    end
+    mapping[field]
+  elseif field in names(df)
+    field                                 # identity: df column named like the field
   else
-    # No exact match and nothing to reuse. A column differing only in case is a loud
-    # error, not a silent fold (see the case-sensitive matching contract above).
-    candidates = _case_fold_candidates(df_col, names(df))
+    # No mapping and no exact same-named column. A column differing only in case is a
+    # loud error, not a silent fold (see the case-sensitive matching contract above).
+    candidates = _case_fold_candidates(field, names(df))
     isempty(candidates) ||
-      throw(_argerr(_bulk_case_mismatch_msg(:update, df_col, candidates,
-        "\"$(candidates[1])\" => \"$(field)\"")))
-    throw(_argerr("bulk_update: $(kind) column \e[4m\e[31m$(df_col)\e[0m not found in the DataFrame (columns: $(names(df)))"))
+      throw(_argerr(_bulk_case_mismatch_msg(:update, field, candidates,
+        "columns = [..., \"$(candidates[1])\" => \"$(field)\"]")))
+    throw(_argerr("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: $(names(df))) and no columns= mapping targets that field"))
   end
 
   mapping[field] = resolved
@@ -565,13 +624,20 @@ end
 
 function _bulk_update_migration_msg(f)
   shown = f isa Pair ? "\"$(f.first)\" => \"$(f.second)\"" : "\"$(f)\""
+  # #107: match_on= takes bare field names only, so a pair's rewrite is two-part —
+  # the mapping moves to columns=, the bare field name goes to match_on=. Advising
+  # `match_on = [pair]` here would send the caller straight into the pair error.
+  to = f isa Pair ?
+    "columns  = [..., $(shown)], match_on = [\"$(f.second)\"]" :
+    "match_on = [$(shown)]"
   return """
   bulk_update: `filters=` no longer accepts per-row match keys (DEPRECATED API).
-  $(shown) references a DataFrame column, so it is a match key — move it to `match_on=`.
-  `filters=` is now for constant predicates only.
+  $(shown) references a DataFrame column, so it is a match key — match keys live in
+  `match_on=` (bare model field names), with any `"df_col" => "field"` mapping declared
+  in `columns=`. `filters=` is now for constant predicates only.
 
     Change:  filters  = [$(shown)]
-    To:      match_on = [$(shown)]
+    To:      $(to)
 
   Use `filters=` only for constant predicates, e.g. filters = ["category_id" => 172100].
   This migration error is temporary and will be removed in a future release.
@@ -588,14 +654,16 @@ _bulk_update_static_only_msg(f) =
 # Classify `match_on` into per-row merge keys (dynamic_filters) and `filters` into
 # constant predicates (static_filters). Returns (dynamic_filters, static_filters).
 #
-# - `match_on` resolves to per-row merge keys; explicit pairs must exist in the df.
+# - `match_on` entries are bare model-field names (#107); each resolves to a per-row
+#   merge key whose source column comes from the `columns=` mapping or, failing that,
+#   a DataFrame column with the field's own name.
 # - `filters` entries are constant `field => value` predicates.
 # - When `match_on` is omitted and no key is produced, the model primary key(s) are used.
 # - TEMPORARY: when `match_on` is absent, the old dynamic-in-`filters` usage raises a
 #   migration error (see the deprecation-shim banner above).
 function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
   mapping::Dict{String, String}, fields_df::Vector{String},
-  match_on::Vector{Union{String, Pair{String, String}}},
+  match_on::Vector{String},
   filters::Vector{Union{String, Pair{String, <:Any}}},
   pks::Vector{String})
 
@@ -603,15 +671,9 @@ function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
   static_filters = Pair{String, Any}[]
   match_on_given = !isempty(match_on)
 
-  # match_on: always per-row merge keys ("df_col" => "model_field")
+  # match_on: per-row merge keys, selected by model field name
   for key in match_on
-    if key isa Pair
-      # Explicit column: it must exist in the DataFrame — no reuse of a columns= mapping.
-      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, key.second, key.first; allow_reuse=false)
-    else
-      # Bare key: match on this field using whatever column already maps to it.
-      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, key, key; allow_reuse=true)
-    end
+    _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, key)
   end
 
   # filters: permanent contract is constant `field => value` predicates.
@@ -633,7 +695,7 @@ function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
     isempty(pks) && throw(ArgumentError(
       "bulk_update: no match_on= given and model $(model.name) has no primary key to match on"))
     for pk in pks
-      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, pk, pk; kind="primary key")
+      _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, pk; kind="primary key")
     end
   end
 
@@ -720,7 +782,8 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   # Map DataFrame column "author_name" to model field "author"
   # Exclude "ignore_me" by not including it in the columns argument
   bulk_insert(query, df, columns=["title", "year", "author_name" => "author"])
-  # the df will be modified to only include the columns "title", "year", and "author_name" (renamed to "author").
+  # Only "title", "year", and "author_name" (as field "author") participate in the INSERT;
+  # the DataFrame's columns are never renamed or removed — the mapping is internal.
 
   # If you want to copy the DataFrame before processing, set `copy=true`:
   bulk_insert(query, df, columns=["title", "year", "author_name" => "author"], copy=true)
@@ -1030,8 +1093,8 @@ Performs a bulk update operation on a database table using the provided `DataFra
 # Arguments
 - `objct::SQLObjectHandler`: The database handler object.
 - `df::DataFrames.DataFrame`: The DataFrame containing the data to be used for the update.
-- `columns`: (Optional) Which columns to **SET**. Each entry is a `String` (DataFrame column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the DataFrame.
-- `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.df_col`). Same grammar as `columns`: a `String` or `"df_col" => "model_field"`. If omitted, the model primary key(s) are used and must be present in the DataFrame.
+- `columns`: (Optional) The **participating fields and their mappings** — the single place a DataFrame column is mapped to a model field. Each entry is a `String` (DataFrame column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the DataFrame. Fields selected by `match_on` are used for matching only and are **not** SET.
+- `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.col`). Bare **model field names** only — the source column is the `columns=` mapping for that field when declared, otherwise a DataFrame column with the field's own name. If omitted, the model primary key(s) are used and must be present in the DataFrame.
 - `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
 - `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
@@ -1045,10 +1108,13 @@ bulk_update(objct, df)
 # Set name/dof, matching rows on security_id
 bulk_update(objct, df, columns=["name", "dof"], match_on=["security_id"])
 
-# Map differing DataFrame names and add a constant scope guard
+# Map differing DataFrame names and add a constant scope guard. ALL df→field
+# mappings live in columns=; match_on selects merge keys by model field name
+# (a field listed in both is used only for matching — it is not SET).
 bulk_update(objct, df,
-    columns  = ["new_score" => "points"],   # df "new_score" → field "points"
-    match_on = ["record_id" => "id"],        # match Tb.id = source.record_id
+    columns  = ["new_score" => "points",     # df "new_score" → field "points" (SET)
+                "record_id" => "id"],        # df "record_id" → field "id" (match key)
+    match_on = ["id"],                       # match Tb.id = source.id
     filters  = ["category_id" => 172100])    # constant: only this category
 ```
 """
@@ -1061,7 +1127,7 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     copy::Bool=true)
 
   _columns  = _normalize_bulk_columns(columns)
-  _match_on = _normalize_bulk_columns(match_on)   # same grammar as columns: "df_col" => "model_field"
+  _match_on = _normalize_bulk_match_on(match_on)  # bare model-field names only (#107)
   _filters  = _normalize_bulk_filters(filters)
 
   _bulk_update(objct, df, _columns, _match_on, _filters, show_query, chunk_size, copy)
@@ -1073,7 +1139,7 @@ bulk_update(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_update(objct, df;
 
 function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   columns::Vector{Union{String, Pair{String, String}}},
-  match_on::Vector{Union{String, Pair{String, String}}},
+  match_on::Vector{String},
   filters::Vector{Union{String, Pair{String, <:Any}}},
   show_query::Symbol,
   chunk_size::Integer=1000,

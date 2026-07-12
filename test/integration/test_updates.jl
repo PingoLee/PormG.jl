@@ -686,10 +686,12 @@ end
                 "new_val" => [100, 200, 300]
             )
             
-            # Update points for specific IDs BUT only if category is Cat1
+            # Update points for specific IDs BUT only if category is Cat1.
+            # #107: all df→field mappings live in columns=; match_on selects the
+            # merge key by field name (a field in both is matched, never SET).
             bulk_update(query, df,
-                columns=["new_val" => "test_result"],
-                match_on=["df_id" => "id"],   # Dynamic (Mapping)
+                columns=["new_val" => "test_result", "df_id" => "id"],
+                match_on=["id"],              # Dynamic (merge key)
                 filters=["name" => "Cat1"]    # Static (Query criteria)
             )
             

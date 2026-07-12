@@ -49,6 +49,7 @@ end
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
+    @testset "Bulk No-Mutation Contract (#132)" include("unit/test_bulk_no_mutation.jl")
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

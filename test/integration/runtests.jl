@@ -48,6 +48,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Custom Joins (cjoin)"         begin include("test_cjoin.jl")              end    
     @testset "Cached Joins"                 begin include("test_cache_join.jl")         end
     @testset "Transactions"                 begin include("test_transactions.jl")       end
+    @testset "Connection Pool (#37)"        begin include("test_connection_pool.jl")    end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end

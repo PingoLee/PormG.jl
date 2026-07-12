@@ -14,6 +14,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, with_savepoint
 export acquire_connection, release_connection
+export PoolTimeoutError
 # NOTE: close_pool! is intentionally NOT exported here. Configuration owns the public
 # `close_pool!` (it dispatches on a pool OR a db-name String and delegates the pool case to
 # this module's `close_pool!`). Exporting it from both modules made `PormG.close_pool!`
@@ -28,6 +29,32 @@ const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 # must be opened. The before_connect hook then runs OUTSIDE the lock and the
 # block is re-entered. Keeps long hooks (VPN, tunnels) off the pool lock.
 const _BEFORE_CONNECT_PENDING = :__pormg_before_connect_pending__
+
+# A pool starts at `pool_size` connections and may grow lazily (on demand) up to
+# `pool_size * POOL_EXPANSION_FACTOR` before acquisition fails with a PoolTimeoutError (#37).
+# The base stays small (idle footprint) while the ceiling gives async fan-out real headroom.
+const POOL_EXPANSION_FACTOR = 10
+
+"""
+    PoolTimeoutError <: Exception
+
+Thrown by `acquire_connection` when no connection becomes available within the retry/timeout budget —
+i.e. the pool is saturated at its ceiling (`pool_size * POOL_EXPANSION_FACTOR`). It is a catchable
+`Exception` (apps can e.g. translate it to a 503 / back off and retry). Remedy: raise `pool_size` in
+`connection.yml`.
+"""
+struct PoolTimeoutError <: Exception
+  adapter::String        # "PostgreSQL" | "SQLite"
+  pool_size::Int
+  max_size::Int
+  attempts::Int
+  elapsed_seconds::Float64
+end
+
+Base.showerror(io::IO, e::PoolTimeoutError) = print(io,
+  "PoolTimeoutError: no available ", e.adapter, " connection after ", e.attempts, " attempts / ",
+  round(e.elapsed_seconds, digits=1), "s (pool_size=", e.pool_size, ", max=", e.max_size,
+  "). Raise pool_size (connection.yml `pool_size:`) to add capacity.")
 
 function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
   if !ensure_before_connect!(pool)
@@ -219,15 +246,23 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
         end
       end
 
-      # If we reach here, no available connections found
-      # Try to expand the pool if we haven't reached the limit
-      if length(pool.connections) < (pool.pool_size * 5)
+      # If we reach here, no available connections found.
+      # Try to expand the pool if we haven't reached the ceiling. This runs inside the pool lock
+      # and `pool.connections` is append-only (dead slots are replaced in-place, never removed), so
+      # the `== ceiling` check below is race-free even under `-t auto`: exactly one locked push
+      # transitions length to the ceiling → the @warn fires exactly once (#37).
+      if length(pool.connections) < (pool.pool_size * POOL_EXPANSION_FACTOR)
         before_connect_done || return _BEFORE_CONNECT_PENDING
         try
           new_conn = backend_connect(pool)
           push!(pool.connections, new_conn)
           push!(pool.available, false)
-          @warn "PG pool expanded beyond initial size" current_size=length(pool.connections) initial_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+          new_size = length(pool.connections)
+          if new_size == pool.pool_size * POOL_EXPANSION_FACTOR
+            @warn "PG pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+          else
+            @debug "PG pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
+          end
           return new_conn
         catch e
           @error "Failed to expand PG pool: $e"
@@ -250,20 +285,23 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
       return connection
     end
 
-    # No connection available, wait and retry
+    # No connection available, wait and retry. @debug (not @info): under saturation this fires every
+    # 100ms across many concurrent acquires; the actionable signals are the once-at-ceiling @warn above
+    # and the PoolTimeoutError below (#37).
     retry_count += 1
-    @info "No available PG connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
+    @debug "No available PG connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
     sleep(0.1)  # Wait 100ms before retrying
   end
 
-  # If we've exhausted all retries
+  # Exhausted the retry/timeout budget → genuine starvation. This is a recoverable, caller-handleable
+  # condition (the typed error lets apps back off / return 503), so log at @warn, not @error — an app
+  # that catches PoolTimeoutError shouldn't see a scary error on every gracefully-handled timeout.
   if retry_count >= max_retries
-    @error "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-    throw("No available PG connections in the pool after $max_retries attempts")
+    @warn "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
   else
-    @error "Timeout after $(timeout_seconds) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-    throw("No available PG connections in the pool after $(timeout_seconds) seconds")
+    @warn "Timeout after $(timeout_seconds) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
   end
+  throw(PoolTimeoutError("PostgreSQL", pool.pool_size, pool.pool_size * POOL_EXPANSION_FACTOR, retry_count, time() - start_time))
 end
 
 function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_retries::Int = 300, mode::Symbol = :any)
@@ -305,15 +343,21 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
         end
       end
 
-      # Expand pool logic
-      can_expand = !pool.split_read_write && length(pool.connections) < (pool.pool_size * 5)
+      # Expand pool logic (append-only + under the lock → the `== ceiling` warn below is race-free; see
+      # the PostgreSQL twin for the full rationale, #37).
+      can_expand = !pool.split_read_write && length(pool.connections) < (pool.pool_size * POOL_EXPANSION_FACTOR)
       if can_expand
         before_connect_done || return _BEFORE_CONNECT_PENDING
         try
           new_conn = backend_connect(pool)
           push!(pool.connections, new_conn)
           push!(pool.available, false)
-          @warn "SQLite pool expanded beyond initial size" current_size=length(pool.connections) initial_size=pool.pool_size connection_string=pool.connection_string
+          new_size = length(pool.connections)
+          if new_size == pool.pool_size * POOL_EXPANSION_FACTOR
+            @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=pool.connection_string
+          else
+            @debug "SQLite pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
+          end
           return new_conn
         catch e
           @error "Failed to expand SQLite pool: $e"
@@ -333,17 +377,18 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
       return connection
     end
 
+    # @debug (not @info): see the PostgreSQL twin — avoids per-retry spam under saturation (#37).
     retry_count += 1
-    @info "No available SQLite connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
+    @debug "No available SQLite connections, retrying ($retry_count/$max_retries) in 100ms..." pool_size=pool.pool_size
     sleep(0.1)
   end
 
-  error_msg = retry_count >= max_retries ?
-    "No available SQLite connections in the pool after $max_retries attempts" :
-    "Timeout after $(timeout_seconds) seconds waiting for available SQLite connection"
-
-  @error error_msg pool_size=pool.pool_size connection_string=pool.connection_string
-  throw(error_msg)
+  # Exhausted the retry/timeout budget → genuine starvation. Recoverable + caller-handleable, so
+  # @warn not @error (see the PostgreSQL twin).
+  @warn (retry_count >= max_retries ?
+    "Exceeded maximum retry attempts ($max_retries) to acquire SQLite connection" :
+    "Timeout after $(timeout_seconds) seconds waiting for available SQLite connection") pool_size=pool.pool_size connection_string=pool.connection_string
+  throw(PoolTimeoutError("SQLite", pool.pool_size, pool.pool_size * POOL_EXPANSION_FACTOR, retry_count, time() - start_time))
 end
 
 function release_connection(pool::PormGPostgres, conn)

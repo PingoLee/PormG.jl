@@ -140,7 +140,7 @@ end
         df[!, col] = map(x -> ismissing(x) || x == "\\N" || x == "" ? missing : x, df[!, col])
     end
     try
-        bulk_insert(query, df, copy=true)
+        bulk_insert(query, df)
     catch e
         @error "Error in bulk_insert for Race after pre-processing" error=e
     end

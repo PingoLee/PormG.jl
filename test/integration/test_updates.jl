@@ -1647,66 +1647,55 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bulk Update: copy flag controls whether caller DataFrames are mutated
+# Bulk Update never mutates the caller's DataFrame (#132)
 #
-# The default copy=true deep-copies df_o before processing so the caller's
-# DataFrame is never modified by ORM-side auto-population. Use the
-# Django_contract_scratch model here because updated_at has auto_now=true, so
-# _prepare_bulk_df! will inject an updated_at column during bulk_update.
-# That makes the copy/no-copy distinction externally visible.
+# The pipeline works on a zero-copy wrapper (shared column vectors), so ORM-side
+# auto-population is invisible to the caller — unconditionally, with no copy= knob.
+# Use the Django_contract_scratch model here because updated_at has auto_now=true,
+# so _prepare_bulk_df! injects an updated_at column during bulk_update: if the
+# working frame leaked, the caller's df would gain that column. Column-vector
+# identity is pinned too: a write-through into a shared vector would keep the
+# vector identical but change its values, so we assert both `===` and equality.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Bulk Update copy flag controls caller DataFrame mutation" begin
-    safe_label = "copy-flag-safe-9903"
-    inplace_label = "copy-flag-inplace-9904"
+@testset "Bulk Update never mutates the caller DataFrame (#132)" begin
+    safe_label = "no-mutation-9903"
 
     M.Django_contract_scratch.objects.filter("label" => safe_label).exists() &&
         M.Django_contract_scratch.objects.filter("label" => safe_label).delete()
-    M.Django_contract_scratch.objects.filter("label" => inplace_label).exists() &&
-        M.Django_contract_scratch.objects.filter("label" => inplace_label).delete()
 
     try
         safe_row = M.Django_contract_scratch.objects.create("label" => safe_label, "price" => "10.50")
         df_safe = DataFrame(id = [safe_row[:id]], price = ["11.50"])
         @test !("updated_at" in names(df_safe))
+        cols_before  = names(df_safe)
+        id_vec       = df_safe[!, "id"]
+        price_vec    = df_safe[!, "price"]
+        id_before    = copy(id_vec)
+        price_before = copy(price_vec)
 
         bulk_update(
             M.Django_contract_scratch.objects,
             df_safe,
             columns = ["price"],
             match_on = ["id"],
-            copy    = true,
         )
 
+        # Caller df untouched: same column set, same vector objects, same values.
+        @test names(df_safe) == cols_before
         @test !("updated_at" in names(df_safe))
+        @test df_safe[!, "id"] === id_vec
+        @test df_safe[!, "price"] === price_vec
+        @test id_vec == id_before
+        @test price_vec == price_before
 
+        # …while the UPDATE itself went through, including the auto_now injection.
         safe_persisted = M.Django_contract_scratch.objects.filter("label" => safe_label).values("price", "updated_at").list() |> first
         @test parse(Float64, string(safe_persisted[:price])) == 11.5
         @test !(safe_persisted[:updated_at] === nothing || ismissing(safe_persisted[:updated_at]))
 
-        inplace_row = M.Django_contract_scratch.objects.create("label" => inplace_label, "price" => "20.50")
-        df_inplace = DataFrame(id = [inplace_row[:id]], price = ["21.50"])
-        @test !("updated_at" in names(df_inplace))
-
-        bulk_update(
-            M.Django_contract_scratch.objects,
-            df_inplace,
-            columns = ["price"],
-            match_on = ["id"],
-            copy    = false,
-        )
-
-        @test "updated_at" in names(df_inplace)
-        @test all(x -> !(x === nothing || ismissing(x)), df_inplace[!, "updated_at"])
-
-        inplace_persisted = M.Django_contract_scratch.objects.filter("label" => inplace_label).values("price", "updated_at").list() |> first
-        @test parse(Float64, string(inplace_persisted[:price])) == 21.5
-        @test !(inplace_persisted[:updated_at] === nothing || ismissing(inplace_persisted[:updated_at]))
-
     finally
         M.Django_contract_scratch.objects.filter("label" => safe_label).exists() &&
             M.Django_contract_scratch.objects.filter("label" => safe_label).delete()
-        M.Django_contract_scratch.objects.filter("label" => inplace_label).exists() &&
-            M.Django_contract_scratch.objects.filter("label" => inplace_label).delete()
     end
 end
 

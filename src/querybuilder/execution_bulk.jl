@@ -29,6 +29,16 @@ function _normalize_bulk_columns(columns)
   return _columns
 end
 
+# #132: the bulk pipeline never mutates the caller's DataFrame — and never copies its
+# data either. The working frame is a zero-copy wrapper (`copycols=false` shares the
+# column vectors); every internal write is a WHOLE-COLUMN replacement or addition
+# (`df[!, col] = ...`), which rebinds only the wrapper's column slot and leaves the
+# caller's frame untouched. INVARIANT for future writers: never broadcast-assign
+# (`.=`), `push!`, or `deleteat!` into an existing column/row of the working frame —
+# that would write through the shared vectors into the caller's data. Only
+# whole-column replacement/addition is safe here.
+_bulk_working_frame(df_o::DataFrames.DataFrame) = DataFrames.select(df_o, :; copycols = false)
+
 # #107 "one border crossing": `columns=` is the ONLY place a DataFrame column is mapped
 # to a model field. `match_on=` selects merge keys by bare model-field name; its old
 # `"df_col" => "model_field"` pair form is rejected with a migration error below.
@@ -186,9 +196,11 @@ no concurrent writer can claim the same range in between.
   is consulted — any filters, ordering, or annotations attached to the handler are
   **ignored**, since pk allocation is a table-level operation independent of any query.
 - `df`: The `DataFrame` that will be bulk-inserted.
-- `clone::Bool = true`: When `true` (default) the returned DataFrame is a fresh shallow
-  copy and the caller's DataFrame is left untouched. Set to `false` to write the new pk
-  column in place and avoid the extra allocation.
+- `clone::Bool = true`: When `true` (default) the returned DataFrame is a genuine copy
+  with independent column vectors — the new pk column exists only on the returned frame,
+  the caller's DataFrame is left untouched, and element writes on either frame never
+  reach the other. Set to `false` to write the new pk column into the caller's DataFrame
+  in place and skip the copy.
 
 # Notes
 - The returned pk column is a plain `Vector{Int}`. If the input DataFrame had a
@@ -222,6 +234,10 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   settings, connection, conn_key = get_settings(objct)
   !settings.change_data && throw(_argerr("Error in allocate_primary_keys, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
+  # NOT the #132 zero-copy wrapper: unlike the bulk ops' internal working frames, this
+  # frame is RETURNED to the caller, so shared vectors would be user-visible aliasing —
+  # "clone" must mean independent columns (element writes on one frame never reach the
+  # other). clone=false remains the explicit opt-in for in-place pk writing.
   df = clone ? Base.copy(df_o) : df_o
   n = DataFrames.nrow(df)
   n == 0 && return df
@@ -764,7 +780,9 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns from the DataFrame are used.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
   - `show_query::Bool`: Optional. If true, prints the generated SQL query (default: false).
-  - `copy::Bool`: Optional. If true, creates a copy of the DataFrame before processing (default: false).
+
+  The caller's DataFrame is never mutated (and never copied — the pipeline works on a
+  zero-copy wrapper), so there is no `copy=` knob to think about.
 
   #### Examples
   ```julia
@@ -784,18 +802,13 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   bulk_insert(query, df, columns=["title", "year", "author_name" => "author"])
   # Only "title", "year", and "author_name" (as field "author") participate in the INSERT;
   # the DataFrame's columns are never renamed or removed — the mapping is internal.
-
-  # If you want to copy the DataFrame before processing, set `copy=true`:
-  bulk_insert(query, df, columns=["title", "year", "author_name" => "author"], copy=true)
-    
   ```
 """
-function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
-    columns = nothing, 
+function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
+    columns = nothing,
     chunk_size::Integer = 1000,
-    show_query::Symbol = :execute,
-    copy::Bool = true
-  ) 
+    show_query::Symbol = :execute
+  )
   model = objct.object.model
   ensure_model_transaction_scope(model)
 
@@ -815,7 +828,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     return nothing
   end
 
-  df = copy ? deepcopy(df_o) : df_o 
+  df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
 
   # Prepare columns and DataFrame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
@@ -903,19 +916,20 @@ This is significantly faster than `bulk_insert` for large datasets.
 - `objct::SQLObjectHandler`: The database handler object (e.g., `M.Model`).
 - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
 - `columns`: (Optional) Specifies which columns to insert. Can be a `String`, a `Pair{String, String}`, or a `Vector` of these.
-- `copy::Bool = true`: If `true`, creates a copy of the DataFrame before processing.
 - `show_query::Bool = false`: If `true`, prints the `COPY` command (note: data stream is not printed).
+
+The caller's DataFrame is never mutated (and never copied — the pipeline works on a
+zero-copy wrapper).
 
 # Example
 ```julia
 bulk_copy(M.Driver, df)
 ```
 """
-function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; 
-    columns = nothing, 
-    show_query::Symbol = :execute,
-    copy::Bool = true
-  ) 
+function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
+    columns = nothing,
+    show_query::Symbol = :execute
+  )
   model = objct.object.model
   ensure_model_transaction_scope(model)
   
@@ -933,7 +947,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     return nothing
   end
 
-  df = copy ? deepcopy(df_o) : df_o 
+  df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
 
   # Prepare columns and DataFrame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
@@ -1098,7 +1112,9 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
 - `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
-- `copy::Bool`: (Optional) If `true`, creates a copy of the DataFrame before processing. Defaults to `true`. Set to `false` to modify the original DataFrame and improve performance, but this may lead to unintended side effects when the operation is performed in asynchronous contexts.
+
+The caller's DataFrame is never mutated (and never copied — the pipeline works on a
+zero-copy wrapper), so the operation is safe in asynchronous contexts without a `copy=` knob.
 
 # Example
 ```julia
@@ -1123,14 +1139,13 @@ function bulk_update(objct::SQLObjectHandler, df::DataFrames.DataFrame;
     match_on=nothing,
     filters=nothing,
     show_query::Symbol=:execute,
-    chunk_size::Integer=1000,
-    copy::Bool=true)
+    chunk_size::Integer=1000)
 
   _columns  = _normalize_bulk_columns(columns)
   _match_on = _normalize_bulk_match_on(match_on)  # bare model-field names only (#107)
   _filters  = _normalize_bulk_filters(filters)
 
-  _bulk_update(objct, df, _columns, _match_on, _filters, show_query, chunk_size, copy)
+  _bulk_update(objct, df, _columns, _match_on, _filters, show_query, chunk_size)
 
 end
 bulk_update(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_update(model |> object, df; kwargs...)
@@ -1142,8 +1157,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   match_on::Vector{String},
   filters::Vector{Union{String, Pair{String, <:Any}}},
   show_query::Symbol,
-  chunk_size::Integer=1000,
-  copy::Bool=true)
+  chunk_size::Integer=1000)
 
   model = objct.object.model
   ensure_model_transaction_scope(model)
@@ -1160,7 +1174,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
     return nothing
   end
 
-  df = copy ? deepcopy(df_o) : df_o 
+  df = _bulk_working_frame(df_o)   # #132: zero-copy, never mutates df_o (see helper)
 
   # Prepare columns and DataFrame using centralized helpers
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)

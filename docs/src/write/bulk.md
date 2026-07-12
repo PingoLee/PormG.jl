@@ -11,13 +11,11 @@ All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:
 ### The Mapping Adaptor Strategy ⭐
 
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
-- **Default-Safe**: With `copy=true` (the default), PormG deep-copies the input `DataFrame` before applying defaults, timestamps, or other ORM-side normalization.
+- **Never Mutates, Never Copies**: The pipeline works on a zero-copy wrapper of the input `DataFrame` (shared column vectors). Defaults, timestamps, and other ORM-side normalization happen on that internal frame only — your `DataFrame` is untouched, unconditionally, and no data is duplicated. There is no `copy=` knob because there is nothing to protect against.
 - **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
 - **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by **exact, case-sensitive** name. A column differing only in case from a model field (e.g. `RaceId` vs `raceid`) raises an error instead of being silently folded — normalize first with `rename!(df, lowercase.(names(df)))` or map it explicitly.
 - **Centralized Validation**: Every row is automatically checked against the model's constraints (`max_length`, `nullability`, etc.) before reaching the database.
 - **Relation Value Semantics**: Foreign-key columns accept scalar key values (including `0` if present in the target table). Use `nothing` or `missing` when you want SQL `NULL` on nullable relation columns.
-
-If you are processing a very large frame and no longer need the original values, pass `copy=false` to let the bulk path mutate the caller's `DataFrame` in place and avoid the defensive deep copy.
 
 ---
 
@@ -113,7 +111,7 @@ If the DataFrame already contains the primary key column with at least one non-b
 - **Handler filters are ignored.** `allocate_primary_keys()` operates on the model that backs the handler. Any filters or annotations attached to `M.Model.objects.filter(...)` have no effect — pk allocation is always table-wide.
 - **Column dtype narrows.** If you pass a DataFrame with a `Vector{Union{Missing, Int}}` pk column, the returned column is a plain `Vector{Int}`. Downstream code expecting the missing-able element type must be adjusted.
 - **PostgreSQL schema scope.** The PG path looks up the sequence via `pg_get_serial_sequence('table', 'col')` without a schema prefix and therefore assumes the model's table lives in the default search path (typically `public`).
-- **`clone` keyword.** `allocate_primary_keys(handler, df; clone=false)` skips the defensive copy and writes the new pk column straight into `df`. The default (`clone=true`) is the safe choice; flip it only when memory pressure justifies it.
+- **`clone` keyword.** With the default `clone=true`, the returned `DataFrame` is a genuine copy with independent column vectors — the new pk column exists only on the returned frame, the caller's `DataFrame` is untouched, and later element writes on either frame never affect the other. (Unlike the bulk operations' internal zero-copy working frames, this frame is *returned* to you, so it must not alias your data.) `allocate_primary_keys(handler, df; clone=false)` instead writes the new pk column straight into `df`, for when you deliberately want the caller's frame updated in place.
 
 ### Pre-processing and Error Handling
 
@@ -517,7 +515,7 @@ bulk_update(M.Result.objects, df, columns=["points"], match_on=["resultid"])
 
 - **Atomicity**: All rows updated together or none.
 - **Speed**: Much faster than individual `update()` calls (100-1000x for large datasets).
-- **Memory**: By default PormG deep-copies the input frame to keep caller-owned data unchanged. Pass `copy=false` to reduce peak memory when you explicitly want in-place mutation.
+- **Memory**: PormG never copies the input frame — the pipeline works on a zero-copy wrapper (shared column vectors), and caller-owned data is unconditionally unchanged. Peak memory is bounded by the ORM-side columns it adds internally (e.g. `updated_at`), not by your data.
 - **Chunking**: For very large datasets, process the `DataFrame` in chunks:
 
 ```julia

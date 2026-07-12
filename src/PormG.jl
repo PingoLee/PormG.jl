@@ -152,6 +152,7 @@ end
 export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, with_savepoint  # Async-first API
+export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)
 export with_tx_context, in_transaction_context  # Transaction context helpers
 export setup, install_ai_skills
 

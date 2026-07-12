@@ -50,6 +50,24 @@ const PORMG_DB_FOLDER = get(ENV, "PORMG_DB", "db_2")
 # Load configurations once
 PormG.Configuration.load(PORMG_DB_FOLDER)
 
+# #37: the async integration suite (`-t auto`, heavy fan-out) saturates a small PostgreSQL pool
+# against a possibly-remote DB. Size the pool to the run's concurrency for this run only
+# (env-overridable) and rebuild so the initial slots are pre-sized instead of grown via the
+# expansion path. We cannot use `db_2/connection.yml` (git-ignored), so this is the code-level
+# equivalent of bumping the pool in the test environment. Keep PORMG_TEST_POOL_SIZE modest:
+# with the ×10 ceiling a value of 20 means a max of 200 connections — far above the suite's real
+# peak (~20-30) but a high value could exhaust the PostgreSQL server's max_connections.
+let s = PormG.config[PORMG_DB_FOLDER]
+    if s.connections isa PormG.PormGPostgres
+        pool_n = parse(Int, get(ENV, "PORMG_TEST_POOL_SIZE", "20"))
+        if pool_n != s.connections.pool_size
+            s.db_config_settings["pool_size"] = pool_n
+            PormG.Configuration.close_pool!(s.connections)   # close the size-3 pool; config[key] still → s
+            PormG.Configuration._build_connection_pool!(s, PORMG_DB_FOLDER)
+        end
+    end
+end
+
 # Load the models and expose the alias `M`
 # Using the new @import_models macro which handles registration automatically
 if PORMG_DB_FOLDER == "db_sl"

@@ -19,7 +19,7 @@ const EXPECTED_TOPLEVEL = Set([
     # Query builder
     :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :show_query, :inspect_query,
     # Rows & exceptions
-    :PormGRow, :DoesNotExist, :MultipleObjectsReturned,
+    :PormGRow, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
     # Async API

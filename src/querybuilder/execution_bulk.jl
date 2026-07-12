@@ -196,10 +196,11 @@ no concurrent writer can claim the same range in between.
   is consulted — any filters, ordering, or annotations attached to the handler are
   **ignored**, since pk allocation is a table-level operation independent of any query.
 - `df`: The `DataFrame` that will be bulk-inserted.
-- `clone::Bool = true`: When `true` (default) the returned DataFrame is a zero-copy
-  wrapper sharing the input's column vectors (#132) — the new pk column exists only on
-  the returned frame and the caller's DataFrame is left untouched. Set to `false` to
-  write the new pk column into the caller's DataFrame in place.
+- `clone::Bool = true`: When `true` (default) the returned DataFrame is a genuine copy
+  with independent column vectors — the new pk column exists only on the returned frame,
+  the caller's DataFrame is left untouched, and element writes on either frame never
+  reach the other. Set to `false` to write the new pk column into the caller's DataFrame
+  in place and skip the copy.
 
 # Notes
 - The returned pk column is a plain `Vector{Int}`. If the input DataFrame had a
@@ -233,7 +234,11 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   settings, connection, conn_key = get_settings(objct)
   !settings.change_data && throw(_argerr("Error in allocate_primary_keys, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
 
-  df = clone ? _bulk_working_frame(df_o) : df_o   # #132: clone is zero-copy (shared vectors)
+  # NOT the #132 zero-copy wrapper: unlike the bulk ops' internal working frames, this
+  # frame is RETURNED to the caller, so shared vectors would be user-visible aliasing —
+  # "clone" must mean independent columns (element writes on one frame never reach the
+  # other). clone=false remains the explicit opt-in for in-place pk writing.
+  df = clone ? Base.copy(df_o) : df_o
   n = DataFrames.nrow(df)
   n == 0 && return df
 

@@ -112,15 +112,22 @@ end
         @test occursin("\"updated_at\"", res[:sql_text])
     end
 
-    @testset "allocate_primary_keys clone=true: pk lands on the returned frame only" begin
+    @testset "allocate_primary_keys clone=true: independent copy, pk on the returned frame only" begin
         # DB-free path: explicit ids present → returns before any backend call, but the
-        # clone wrapper is already built, pinning that clone= stays zero-copy and safe.
+        # clone is already built. Unlike the bulk ops' INTERNAL working frames, this frame
+        # is RETURNED to the caller, so clone=true must mean genuinely independent columns
+        # (#132 review) — a zero-copy wrapper here would be user-visible aliasing.
         df = DataFrames.DataFrame(id = [10, 20], surname = ["Lauda", "Hunt"])
         snap = snapshot(df)
         out = PormG.allocate_primary_keys(Bnm_result.objects, df)
 
         assert_untouched(df, snap)
         @test out[!, "id"] == [10, 20]
-        @test out[!, "surname"] === df[!, "surname"]   # zero-copy: vectors are shared
+        @test out[!, "surname"] !== df[!, "surname"]   # independent vectors…
+        @test out[!, "surname"] == df[!, "surname"]    # …with equal values
+        # Independence is bidirectional: an element write on the returned frame must
+        # never reach the caller's frame.
+        out[1, "surname"] = "Regazzoni"
+        @test df[1, "surname"] == "Lauda"
     end
 end

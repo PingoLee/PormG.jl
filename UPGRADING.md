@@ -56,8 +56,9 @@ default (`copy=true`) deep-copied the entire DataFrame on every call; `copy=fals
 ORM-side normalization (default fills, `auto_now` columns) leak into the caller's frame.
 The pipeline now works on a **zero-copy wrapper** (shared column vectors): the caller's
 DataFrame is **never mutated and never copied**, unconditionally — strictly better than
-both old modes. `allocate_primary_keys` keeps `clone=` (its `false` form deliberately
-writes the pk column in place), but `clone=true` is now zero-copy as well.
+both old modes. `allocate_primary_keys` is unchanged: `clone=true` still returns an
+independent copy (that frame is *returned* to the caller, so it must not alias your
+data), and `clone=false` still writes the pk column in place.
 
 ### How to find the calls to migrate
 

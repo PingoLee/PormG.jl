@@ -185,6 +185,32 @@ function _copy_ctes(ctes::Dict{String,CTEDict})::Dict{String,CTEDict}
   return out
 end
 
+# #112: custom_join is the build-time sibling of the #43 CTE aliasing. A shallow
+# `copy(custom_join)` shares the inner per-join Dicts, and on() mutates those in place
+# ("filters" / "join_type") — so extending a join path on a copy rewrote the original's
+# join definition. Rebuild a fresh inner dict per path: copy the "filters" vector into a
+# new Vector (its FilterType elements are shared — on() replaces the whole vector, it
+# never mutates elements in place), share the "field" PormGField by reference (it holds
+# a Model_Type → Module that deepcopy cannot traverse — the very reason this copy was
+# shallow), and carry scalar entries ("join_type") as-is.
+function _copy_custom_join(custom_join::Dict{String,Any})::Dict{String,Any}
+  out = Dict{String,Any}()
+  for (path, config) in custom_join
+    if config isa AbstractDict
+      # AbstractDict (not just Dict{String,Any}) so a future writer storing a differently
+      # typed inner dict still gets an independent copy instead of silently re-aliasing.
+      fresh = Dict{String,Any}()
+      for (k, v) in config
+        fresh[k] = v isa Vector ? copy(v) : v
+      end
+      out[path] = fresh
+    else
+      out[path] = config  # non-dict config: nothing produces one today (cjoin/on store Dicts)
+    end
+  end
+  return out
+end
+
 function Base.deepcopy(obj::SQLObjectQuery)
   try
     return SQLObjectQuery(
@@ -202,7 +228,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
       row_join=deepcopy(obj.row_join),
       distinct=obj.distinct,
       ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (deep sub-query, drop transient "model")
-      custom_join=copy(obj.custom_join)  # shallow copy: PormGField refs contain Model_Type → Module that deepcopy can't handle
+      custom_join=_copy_custom_join(obj.custom_join)  # #112: fresh per-join dicts; "field" shared by ref (Module — deepcopy can't traverse)
     )
   catch e
     @pormg_debug false

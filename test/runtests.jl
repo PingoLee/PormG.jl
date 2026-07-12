@@ -51,6 +51,7 @@ end
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
+    @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")
     @testset "PG Migration Fixture Isolated + Credential-free (#36)" include("unit/test_migration_pg_fixture.jl")
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")

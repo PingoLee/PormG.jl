@@ -429,6 +429,10 @@ M.Driver.objects.values("surname", "nationality").order_by(
 ).list()
 ```
 
+`orientation` must be `"ASC"` or `"DESC"` (case-insensitive); any other value — including a
+user-supplied sort-direction string forwarded as-is — raises an `ArgumentError` at construction
+instead of reaching the SQL.
+
 On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG emits the portable
 `(field IS NULL)` sort prefix, so the placement is identical there too.
 

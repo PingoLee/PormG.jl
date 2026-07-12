@@ -569,7 +569,10 @@ Converts a model object to a string representation to create the model.
 - `contants_julia::Vector{String}=reserved_words`: A vector of reserved words in Julia.
 
 # Returns
-- `String`: The string representation of the model object.
+- `String`: The string representation of the model object. A field whose rendering fails is
+  omitted from the constructor call and surfaced instead as a `# PormG: field '<name>' … could
+  not be rendered …` comment line prepended above the model definition (#70), plus a structured
+  `@warn` — never dropped silently.
 
 # Examples
 ```julia
@@ -582,11 +585,13 @@ users = Models.Model("users",
 """
 function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; contants_julia::Vector{String}=reserved_words)::String
   fields::String = ""
+  render_failures::Vector{String} = String[]
   django_prefix::Bool = settings.django_prefix === nothing ? false : true
   for (field_name, field) in pairs(model.fields) |> sort
     occursin(r"__|@|^_", field_name) && throw(ArgumentError("The field name $field_name in the model $model contains __ or @ or starts with _"))
+    db_field_name::String = field_name  # real column name, before reserved-word prefixing — diagnostics must show this one
     field_name in contants_julia && (field_name = "_$field_name")
-    struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol    
+    struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol
     sets::Vector{String} = []
     try
       fields = if struct_name in [:ForeignKey, :OneToOneField]
@@ -597,14 +602,22 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
         _model_to_str_general(field_name, field, struct_name, sets, fields)
       end
     catch e
-      # @pormg_debug
+      # Never drop a field silently (#70). Program-state errors surface loudly (#69 guard);
+      # anything else logs and emits a visible marker comment in the generated output —
+      # the inspectdb/schema-dump convention: the artifact itself shows the gap.
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      @warn "Model_to_str: field render failed — emitting marker comment" model=model.name field=db_field_name field_type=struct_name exception=e
+      push!(render_failures, "# PormG: field '$(db_field_name)' ($(struct_name)) could not be rendered: $(replace(sprint(showerror, e), "\n" => " ")) — field omitted.")
     end
   end
   model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
   model_var_name = uppercasefirst(model.name)
-  @info("""$(model_var_name) = Models.Model("$(model_name_abs)"$fields)""")
+  # Marker comments sit directly above the model definition in the generated file (#70).
+  marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
+  result = """$(marker)$(model_var_name) = Models.Model("$(model_name_abs)"$fields)"""
+  @info(result)
 
-  return """$(model_var_name) = Models.Model("$(model_name_abs)"$fields)"""
+  return result
 end
 function _model_to_str_general(field_name, field, struct_name, sets, fields)
   stadard_field = getfield(@__MODULE__, struct_name)()

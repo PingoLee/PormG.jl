@@ -22,12 +22,13 @@
 > authoritative DDL/queries (#50), string FK targets (#62), ManyToMany/CTE join keys (#64) ·
 > isolated PG migration fixture (#36) · pool-exhaustion investigation (#37 → follow-ups
 > #124–#128) · `ORDER BY` NULL placement (#75) · `.copy()` state aliasing (#43 → #112) ·
-> bulk mapping contract, `columns=` as the single df→model border (#107).
+> bulk mapping contract, `columns=` as the single df→model border (#107) · non-mutating
+> zero-copy bulk pipeline, `copy=` kwarg removed (#132).
 >
 > **Remaining gating work** — the `pre-publish` label is the source of truth, so this list is exactly
 > [`gh issue list --label pre-publish`](https://github.com/PingoLee/PormG.jl/issues?q=is%3Aopen+label%3Apre-publish):
 
-- [#132](https://github.com/PingoLee/PormG.jl/issues/132) — Bulk ops: drop the `copy=` deepcopy default — non-mutating zero-copy pipeline
+*(none — the gating list is empty; new `pre-publish`-labeled issues appear here as they open)*
 
 ---
 

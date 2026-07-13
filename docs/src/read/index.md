@@ -167,6 +167,22 @@ page2 = M.Driver.objects.order_by("surname").limit(20).offset(20).list()
 nationalities = M.Driver.objects.values("nationality").distinct().list()
 ```
 
+!!! warning "`distinct()` + `order_by()`: the sort key must be projected"
+    Under `distinct()`, every column you `order_by(...)` must appear in `values(...)`. Ordering a
+    `DISTINCT` query by a column outside its projection is rejected by PostgreSQL (and the SQL
+    standard), and returns rows in a nondeterministic order on SQLite — so PormG raises the same clear
+    error on both backends:
+
+    ```julia
+    # ✗ raises: surname is not in the SELECT DISTINCT projection
+    M.Driver.objects.values("nationality").distinct().order_by("surname").list()
+
+    # ✓ include the sort key in values() (distinct over both columns) …
+    M.Driver.objects.values("nationality", "surname").distinct().order_by("surname").list()
+
+    # ✓ … or drop distinct() if you meant "one row per nationality, ordered by an aggregate"
+    ```
+
 ### Copying a Query for Reuse
 
 ```julia

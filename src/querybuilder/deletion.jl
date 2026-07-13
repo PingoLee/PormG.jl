@@ -167,8 +167,14 @@ function delete(objct::SQLObjectHandler;
         # Commit transaction
         with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
       catch e
-        # Rollback on error
-        with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
+        # Rollback on error. A rollback failure must not mask the body's error — log it
+        # and rethrow the original; the pool has already renewed or discarded the
+        # connection inside with_transaction (#71).
+        try
+          with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
+        catch rollback_error
+          @error "Failed to rollback delete transaction" exception=rollback_error
+        end
         rethrow(e)
       end
     end

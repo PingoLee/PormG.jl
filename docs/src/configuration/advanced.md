@@ -16,6 +16,7 @@ dev:
   pool_size: 10   # base 10 → grows to 100 under burst
 ```
 - **Thread Safety:** PormG uses `ReentrantLock` for pool management.
+- **Failed-rollback self-healing:** If a transaction's `ROLLBACK` itself fails (e.g. the connection died mid-transaction), the pool never returns that connection as-is. It is renewed in its slot (PostgreSQL: `LibPQ.reset!`; SQLite: a fresh handle, with the old one closed so it releases the database file write-lock) or — if renewal also fails — closed and its slot cleared so the next borrower opens a fresh connection.
 
 ---
 

@@ -188,8 +188,13 @@ Reads the starting point from `max(MAX(pk), sqlite_sequence.seq)`, assigns the n
 `N` ids from there, and bumps the table's `sqlite_sequence` counter to the end of the
 reserved range. That keeps both later autoincrement inserts and later
 `allocate_primary_keys()` calls from reusing ids that were reserved but not yet
-inserted. Wrap the whole pre-allocation + insert workflow in `run_in_transaction` so
-no concurrent writer can claim the same range in between.
+inserted. This read-then-write is self-protecting: if it is not already running inside a
+transaction on this connection it auto-opens one (`run_in_transaction`, i.e. `BEGIN
+IMMEDIATE` + the in-process write lock) so no concurrent writer can claim the same range
+in between — mirroring `bulk_insert`/`bulk_copy`/`bulk_update`. Wrapping the whole
+pre-allocation **and** insert together in `run_in_transaction` is still recommended: then a
+rolled-back insert also releases the reserved ids, whereas a standalone allocation whose
+later insert fails durably burns its range (a harmless gap, exactly like PostgreSQL).
 
 # Arguments
 - `objct`: A `SQLObjectHandler` (typically `M.Model.objects`). Only the underlying model
@@ -274,7 +279,17 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   ids = if connection isa PormGPostgres
     _allocate_pg_ids(model, connection, pk_field, n)
   elseif connection isa PormGSQLite
-    _allocate_sqlite_ids(model, connection, pk_field, n, settings)
+    # #88: SQLite id reservation is a read-then-write on sqlite_sequence and must run under
+    # BEGIN IMMEDIATE / with_sqlite_write_lock so concurrent writers can't claim the same range.
+    # Reuse the caller's transaction if one is open on this pool (the reservation overlay stays
+    # active); otherwise auto-wrap — same idiom as bulk_insert/bulk_copy/bulk_update.
+    if transaction_connection_for(settings) !== nothing
+      _allocate_sqlite_ids(model, connection, pk_field, n, settings)
+    else
+      run_in_transaction(settings) do
+        _allocate_sqlite_ids(model, connection, pk_field, n, settings)
+      end
+    end
   else
     throw(ArgumentError("allocate_primary_keys: unsupported connection type $(typeof(connection))"))
   end
@@ -321,8 +336,13 @@ end
 #      that has not been inserted yet.
 # This prevents a second allocate_primary_keys() call from reusing ids that were
 # already handed out. INSERT OR REPLACE handles the case where the sqlite_sequence
-# row does not yet exist (empty AUTOINCREMENT table). Caller should be inside
-# run_in_transaction to avoid concurrent races.
+# row does not yet exist (empty AUTOINCREMENT table). This read-then-write must run
+# inside a transaction on this connection (BEGIN IMMEDIATE + with_sqlite_write_lock) to
+# avoid concurrent races — a future direct caller MUST preserve that invariant. Both
+# current callers do: allocate_primary_keys auto-wraps this in run_in_transaction whenever
+# one isn't already active (#88), and the create() path (execution.jl) reaches here only
+# when get_sqlite_reserved_primary_key_max returned non-nothing, which already implies an
+# open transaction (reservation overlay is a no-op at depth 0).
 function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::SQLConn)
   safe_table = string(model.name |> lowercase)
   safe_table_name = safe_table_identifier(safe_table, connection)

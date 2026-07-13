@@ -722,6 +722,44 @@ end
         @test all(df_ne.driverid .!= 1)
     end
 
+    @testset "DISTINCT + ORDER BY must project the sort key (#76)" begin
+        # A DISTINCT query that orders by a column outside its projection is rejected by PostgreSQL
+        # (and the SQL standard) but runs with a nondeterministic DISTINCT/order interaction on
+        # SQLite. PormG raises on both backends so the behavior is identical whichever backend this
+        # suite runs against. See issue #76.
+
+        # Misaligned: distinct driverids ordered by surname (not projected) -> raises everywhere.
+        @test_throws ArgumentError begin
+            M.Driver.objects.values("driverid").distinct().order_by("surname") |> DataFrame
+        end
+
+        # The error is actionable and discriminating (names the column + the DISTINCT context) —
+        # not a bare @test_throws that any ArgumentError would satisfy.
+        err = try
+            M.Driver.objects.values("driverid").distinct().order_by("surname") |> DataFrame
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        msg = sprint(showerror, err)
+        @test occursin("surname", msg)
+        @test occursin("DISTINCT", msg)
+
+        # The guard does not over-fire: aligned forms still execute end to end.
+        #   - the order key IS the projected column
+        df_aligned = M.Driver.objects.values("driverid").distinct().order_by("driverid") |> DataFrame
+        @test issorted(df_aligned.driverid)
+        #   - the sort key is included in a multi-column projection. driverid is the PK, so distinct
+        #     (driverid, surname) is exactly one row per driver — the same 861 the fixture seeds.
+        #     (Row *order* is left to the backend collation — asserting it here with Julia's codepoint
+        #     `issorted` would spuriously fail on accented/mixed-case surnames; NULL/collation ordering
+        #     is covered by the #75 tests. What matters for #76 is that the guard did not over-fire.)
+        df_both = M.Driver.objects.values("driverid", "surname").distinct().order_by("surname") |> DataFrame
+        @test nrow(df_both) == 861
+        @test Set(names(df_both)) == Set(["driverid", "surname"])
+    end
+
     @testset "Range Operator (range / BETWEEN)" begin
         # Test: driverid BETWEEN 50 AND 100
         q_range = M.Driver.objects.filter("driverid__@range" => [50, 100]).order_by("driverid").values("driverid")

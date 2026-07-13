@@ -445,6 +445,14 @@ On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG 
     `ORDER BY`. Ordering **inside** a window frame (`WindowOver(order_by=…)`) is not yet normalized —
     its NULL placement still follows each backend's native default.
 
+!!! note "Ordering a `distinct()` query"
+    When a query uses `distinct()`, every `order_by(...)` column must be part of the
+    projection (`values(...)`). Ordering a `DISTINCT` result by an unprojected column — or by a
+    *function* of a projected column, e.g. `order_by("created_at__@date")` while only `created_at` is
+    selected — is rejected by PostgreSQL and the SQL standard, so PormG raises on both backends rather
+    than let SQLite return nondeterministic rows. Add the exact ordering expression to `values(...)`,
+    or drop `distinct()`.
+
 ---
 
 ## Counting

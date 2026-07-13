@@ -40,8 +40,20 @@ function _sqlite_with_retry(op::Function)
   end
 end
 
+# Unicode-aware LOWER for SQLite case-insensitive lookups (#78). SQLite's built-in LOWER()
+# folds ASCII only, so `icontains` missed accented uppercase (e.g. "RÄIKKÖNEN" vs "Räikkönen")
+# while PostgreSQL's ILIKE matched. Julia `lowercase` is Unicode-aware. Registered per-connection
+# (below) as the SQL function `pormg_lower`, which src/Dialect.jl emits in the SQLite i* renderers.
+# A SQL NULL arrives as `missing` and must round-trip to SQL NULL, not throw; non-text values are
+# coerced to text (mirroring SQLite's built-in LOWER).
+_pormg_lower(x::AbstractString) = lowercase(x)
+_pormg_lower(::Missing) = missing
+_pormg_lower(x) = lowercase(string(x))
+
 function _create_sqlite_connection(connection_string::String; read_only::Bool = false)
   new_conn = SQLite.DB(connection_string)
+  # Unicode-aware case folding for the i* lookups (#78). Deterministic so it stays index-eligible.
+  SQLite.register(new_conn, _pormg_lower; nargs = 1, name = "pormg_lower", isdeterm = true)
   SQLite.execute(new_conn, "PRAGMA journal_mode = WAL;")
   SQLite.execute(new_conn, "PRAGMA synchronous = NORMAL;")
   SQLite.execute(new_conn, "PRAGMA busy_timeout = 30000;")

@@ -587,7 +587,11 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
   fields::String = ""
   render_failures::Vector{String} = String[]
   django_prefix::Bool = settings.django_prefix === nothing ? false : true
-  for (field_name, field) in pairs(model.fields) |> sort
+  # Iterate fields by name for deterministic output. Use `sort(collect(...))` rather than
+  # `sort(::Dict)` (via `pairs(...) |> sort`), which is deprecated and emits a Warn-level
+  # depwarn — that surfaces under CI's depwarn-enabled `Pkg.test` run and trips the #70
+  # render-failure test's "healthy model → no warn" assertion.
+  for (field_name, field) in sort(collect(model.fields); by = first)
     occursin(r"__|@|^_", field_name) && throw(ArgumentError("The field name $field_name in the model $model contains __ or @ or starts with _"))
     db_field_name::String = field_name  # real column name, before reserved-word prefixing — diagnostics must show this one
     field_name in contants_julia && (field_name = "_$field_name")

@@ -128,3 +128,46 @@ elseif _UNACCENT_ADAPTER == "SQLite"
 else
     @warn "Skipping unaccent extension tests for unknown adapter" adapter = _UNACCENT_ADAPTER
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# icontains is Unicode-case-insensitive on BOTH backends (#78)
+# PostgreSQL ILIKE folds Unicode case; SQLite historically used ASCII-only LOWER(),
+# so an all-caps accented query ("RÄIKKÖNEN") matched on PG but returned 0 rows on
+# SQLite. With the per-connection pormg_lower UDF, SQLite folds Unicode too, so both
+# backends return the SAME row for any casing. Runs unconditionally (outside the
+# adapter branch above) so the alignment is asserted on whichever backend is under test.
+# Mutation gate: reverting the SQLite renderer to bare LOWER makes the all-caps/mixed
+# assertions return no rows on SQLite, failing this testset.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "icontains Unicode case-insensitivity aligns PG and SQLite (#78)" begin
+    # Stored surname is "Räikkönen" (ä/ö). Every casing of the accented spelling must
+    # match it — this is the bug: "RÄIKKÖNEN" returned 0 rows on SQLite before the fix.
+    for term in ("RÄIKKÖNEN", "räikkönen", "RäiKkönen")  # upper / lower / mixed
+        q = M.Driver.objects
+        q.filter("surname__@icontains" => term)
+        df = q |> DataFrame
+        @test "Räikkönen" in df.surname
+    end
+
+    # A second accented surname with a different diacritic (ü/Ü) — guards that the fix
+    # is general Unicode case folding, not a one-off for ä/ö.
+    q_h = M.Driver.objects
+    q_h.filter("surname__@icontains" => "HÜLKENBERG")
+    df_h = q_h |> DataFrame
+    @test "Hülkenberg" in df_h.surname
+
+    # The alignment contract: upper- and lower-case accented queries return the SAME rows.
+    up = M.Driver.objects
+    up.filter("surname__@icontains" => "RÄIKKÖNEN")
+    lo = M.Driver.objects
+    lo.filter("surname__@icontains" => "räikkönen")
+    @test Set((up |> DataFrame).surname) == Set((lo |> DataFrame).surname)
+
+    # Negative / accent sensitivity: pormg_lower folds CASE, not ACCENTS. The ASCII
+    # spelling "raikkonen" must NOT match the accented "Räikkönen" — accent-insensitive
+    # matching remains the job of the PG-only iunaccent_* lookups (see ~line 59-64 above).
+    q_ascii = M.Driver.objects
+    q_ascii.filter("surname__@icontains" => "raikkonen")
+    df_ascii = q_ascii |> DataFrame
+    @test !("Räikkönen" in (nrow(df_ascii) > 0 ? df_ascii.surname : String[]))
+end

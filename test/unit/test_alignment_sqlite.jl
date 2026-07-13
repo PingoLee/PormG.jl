@@ -105,7 +105,7 @@ end
     @test contains(sql, "EXISTS (SELECT 1")
     @test contains(sql, "FROM \"just_a_test_deletion\" as \"R1\"")
     @test contains(sql, "\"R1\".\"test_result\" = \"Tb\".\"resultid\"")
-    @test contains(sql, "LOWER(\"R1\".\"name\") LIKE LOWER(?)")
+    @test contains(sql, "pormg_lower(\"R1\".\"name\") LIKE pormg_lower(?)")
     @test contains(sql, "LIMIT 1)")
     @test !contains(sql, "\"R1\".\"id\" as id")
 

@@ -115,7 +115,11 @@ count = query.count()
 ```
 
 > [!NOTE]
-> `@icontains` uses `ILIKE` on PostgreSQL. On SQLite (which is case-insensitive for ASCII by default), it uses `LIKE`.
+> `@icontains` uses `ILIKE` on PostgreSQL. On SQLite it renders `pormg_lower(col) LIKE pormg_lower(val)`,
+> where `pormg_lower` is a Unicode-aware case-folding function PormG registers on every SQLite
+> connection — so accented text folds case on SQLite as it does on PostgreSQL
+> (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on both backends). It folds case but
+> preserves accents; for accent-insensitive matching use the PostgreSQL-only `@iunaccent_*` lookups below.
 
 ### Prefix / Suffix (`@startswith`, `@endswith`)
 

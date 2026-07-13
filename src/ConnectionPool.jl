@@ -470,6 +470,97 @@ function reconnect_db(pool::PormGSQLite, conn)
   return nothing
 end
 
+"""
+    _discard_connection!(pool, conn) -> Bool
+
+Remove `conn` from its pool slot (the slot becomes `nothing` and is marked available, so the
+next `acquire_connection` opens a fresh physical connection through the empty-slot path) and
+best-effort `close` it. Used when a connection is known-dirty — e.g. a failed ROLLBACK (#71)
+— and renewal via `reconnect_db` also failed. Returns whether the slot was found. Never
+throws (callers run it while an original error is propagating).
+"""
+function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn)::Bool
+  found = Base.lock(pool.lock) do
+    for i in 1:length(pool.connections)
+      if pool.connections[i] === conn
+        pool.connections[i] = nothing
+        pool.available[i] = true
+        return true
+      end
+    end
+    return false
+  end
+  # Close OUTSIDE the pool lock: a driver close can block on I/O. On SQLite this also
+  # releases the database file write-lock an aborted `BEGIN IMMEDIATE` may still hold.
+  try
+    close(conn)
+  catch close_error
+    @debug "Error closing discarded connection" exception=close_error
+  end
+  found || @warn "Connection to discard not found in the pool - it may already have been replaced"
+  return found
+end
+
+"""
+    _renew_or_discard_connection!(pool, conn) -> Nothing
+
+Post-failed-ROLLBACK cleanup (#71). Renews `conn` in its slot via `reconnect_db`
+(PostgreSQL: `LibPQ.reset!`, which aborts any open transaction and may return the SAME
+handle; SQLite: a fresh handle) and releases the RENEWED handle back to the pool — never
+the dirty one (`reconnect_db` swaps the slot in place and `release_connection` matches by
+identity, so releasing the stale handle would leak the slot as permanently busy). If
+renewal fails — including a `before_connect` hook abort, which `reconnect_db` surfaces as
+a throw — the slot is discarded instead so the next borrower opens a fresh connection.
+Never throws: the transaction's original error must keep propagating through the caller's
+`finally`.
+"""
+function _renew_or_discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn)
+  new_conn = try
+    reconnect_db(pool, conn)  # replaces the slot in place; does NOT flip `available`
+  catch renew_error
+    # reconnect_db only throws via the before_connect hook; driver renewal errors are
+    # caught inside it and returned as `nothing`.
+    @error "Connection renewal after failed rollback threw; discarding the connection" exception=renew_error
+    nothing
+  end
+  if new_conn === nothing
+    _discard_connection!(pool, conn)
+  else
+    if new_conn !== conn
+      # A brand-new handle replaced the dirty one (always on SQLite; on PG only when
+      # reset! fell back to a fresh Connection). Close the old handle now rather than
+      # waiting for GC — on SQLite it may still hold the database file write-lock.
+      try
+        close(conn)
+      catch close_error
+        @debug "Error closing replaced connection" exception=close_error
+      end
+    end
+    release_connection(pool, new_conn)
+  end
+  return nothing
+end
+
+"""
+    _is_benign_rollback_error(pool, e) -> Bool
+
+Classify a failed `ROLLBACK` as benign, meaning the connection is known-clean and may be
+released normally. SQLite-only divergence: SQLite auto-rolls-back some failures, after
+which `ROLLBACK` reports "no transaction is active"; PostgreSQL's `ROLLBACK` outside a
+transaction merely warns, it never throws. Unwraps before matching: async failures arrive
+as `TaskFailedException`, whose `string()` does not include the driver message.
+"""
+_is_benign_rollback_error(pool::Union{PormGPostgres, PormGSQLite}, e) =
+  pool isa PormGSQLite && occursin("no transaction is active", string(_unwrap_async_exception(e)))
+
+# A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
+# "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
+# trigger connection renewal.
+function _is_transaction_rollback(sql::AbstractString)
+  s = uppercase(strip(sql))
+  return startswith(s, "ROLLBACK") && !startswith(s, "ROLLBACK TO")
+end
+
 #
 # Connection Execution
 #
@@ -511,7 +602,10 @@ function _ensure_sqlite_async_worker!()
         item = take!(_sqlite_async_work_queue)
         try
           # Dispatches into the SQLite extension's backend_execute (materialized + retry).
-          result = backend_execute(item.pool, item.conn, item.sql, item.params)
+          # invokelatest: this task lives forever and Julia tasks run in the world age
+          # they were created in, so without it the worker cannot see backend_execute
+          # methods defined after it spawned (Revise hot-reloads, test mocks).
+          result = Base.invokelatest(backend_execute, item.pool, item.conn, item.sql, item.params)
           put!(item.response, SQLiteAsyncResponse(true, result))
         catch e
           put!(item.response, SQLiteAsyncResponse(false, e))
@@ -785,6 +879,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
   params::Union{Nothing, AbstractPormGParam} = nothing)
 
   conn_acquired = false
+  rollback_failed = false
   if conn === nothing
     if pool isa PormGSQLite
       conn = acquire_connection(pool; mode=:write)
@@ -804,17 +899,21 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     result = Base.fetch(task)
     return result, conn
   catch e
+    # A transaction-ending ROLLBACK that itself failed may leave the connection with an
+    # open/aborted transaction — it must never return to the pool as-is (#71); both
+    # release points below renew or discard it instead.
+    rollback_failed = _is_transaction_rollback(sql) && !_is_benign_rollback_error(pool, e)
     # If we acquired the connection here and the command failed (like BEGIN),
     # and we were not asked to release it (which means the caller expected it back),
     # we MUST release it now because the caller won't receive it in the return.
     if conn_acquired && !release_conn
-      release_connection(pool, conn)
+      rollback_failed ? _renew_or_discard_connection!(pool, conn) : release_connection(pool, conn)
     end
     @error "Failed to execute SQL transaction, rolling back: $e"
     throw(e)
   finally
     if release_conn
-      release_connection(pool, conn)
+      rollback_failed ? _renew_or_discard_connection!(pool, conn) : release_connection(pool, conn)
     end
   end
 end
@@ -943,6 +1042,7 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     acquire_connection(pool)
   end
   tx_started = false
+  rollback_failed = false
   try
     # Begin transaction
     if pool isa PormGPostgres
@@ -984,15 +1084,26 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
           Base.fetch(task)
         end
       catch rollback_error
-        # Only log if it's not a "no transaction active" error in SQLite
-        if !(pool isa PormGSQLite && occursin("no transaction is active", string(rollback_error)))
-            @error "Failed to rollback transaction: $rollback_error"
+        if _is_benign_rollback_error(pool, rollback_error)
+          # SQLite already auto-rolled-back; the connection is clean → the finally
+          # releases it normally.
+        else
+          # The connection may still hold an open/aborted transaction that the acquire
+          # liveness probe cannot detect. It must NOT return to the pool as-is (#71);
+          # the finally renews or discards it instead.
+          rollback_failed = true
+          @error "Failed to rollback transaction; connection will be renewed before returning to the pool" exception=_unwrap_async_exception(rollback_error)
         end
       end
     end
     root === e ? rethrow() : throw(root)
   finally
-    release_connection(pool, conn)
+    if rollback_failed
+      # Never releases the dirty handle; never throws (the original error keeps propagating).
+      _renew_or_discard_connection!(pool, conn)
+    else
+      release_connection(pool, conn)
+    end
   end
 end
 

@@ -459,4 +459,69 @@ settings = PormG.config[PORMG_DB_FOLDER]
     @test df[1, :test_result2] === missing  # no update applied
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Transactions (#71): failed-ROLLBACK renewal, end-to-end smoke against a real server
+  # Kill our own PostgreSQL backend mid-transaction (pg_terminate_backend on our own
+  # pid) so the transaction body error AND the subsequent ROLLBACK genuinely fail,
+  # driving the renewal path (LibPQ.reset!) against a live server: no crash, no hang,
+  # pool stays consistent, nothing commits. NOTE this is a smoke test, not the
+  # regression gate: a terminated backend leaves a DEAD socket, which the acquire-time
+  # liveness probe already replaced before the #71 fix — the true #71 hazard (an ALIVE
+  # connection stuck in aborted-transaction state) can't be forced on a healthy server
+  # and is gated by the unit mocks in test/unit/test_transaction_rollback_renewal.jl.
+  # The @test_logs gate below asserts the renewal branch actually ran: its message
+  # exists only in the #71 code path, so reverting the fix fails this testset.
+  # The terminate statement is issued DIRECTLY via backend_execute_async on the tx
+  # connection — this test is explicitly about pool internals, and going through
+  # fetch() would engage its lost-connection retry, which re-runs the statement on
+  # a fresh connection outside the transaction (a separate latent issue).
+  # PG-only: SQLite has no server-side session to terminate.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Failed rollback renews the pooled connection (#71)" begin
+    if adapter_name == "PostgreSQL"
+      M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+      pool = settings.connections
+
+      got_error = false
+      # Log-gate: this @error is emitted only by the #71 renewal branch (the pre-fix
+      # code logged a different message), so the fix being active is what makes this
+      # assertion pass. match_mode=:any tolerates the driver's own error logs.
+      @test_logs (:error, r"connection will be renewed") match_mode=:any begin
+        try
+          PormG.run_in_transaction(settings) do
+            # A write inside the doomed transaction — it must NOT survive.
+            # test_result is a nullable FK to result(resultid); keep it NULL (see the
+            # concurrent-writers testset above).
+            M.Just_a_test_deletion.objects.create("name" => "dirty-tx", "test_result" => nothing)
+
+            conn = get_tx_connection()
+            # Our own backend dies mid-statement: the fetch below throws, and the
+            # ROLLBACK the transaction wrapper then attempts fails on the dead socket.
+            t = PormG.backend_execute_async(pool, conn, "SELECT pg_terminate_backend(pg_backend_pid());", nothing)
+            Base.fetch(t)
+            # Belt-and-braces: if the terminate somehow returned, the dead connection
+            # must throw on the next statement.
+            t2 = PormG.backend_execute_async(pool, conn, "SELECT 1;", nothing)
+            Base.fetch(t2)
+            error("unreachable: connection survived pg_terminate_backend")
+          end
+        catch
+          got_error = true
+        end
+      end
+      @test got_error
+
+      # The next borrowers must get a CLEAN connection: a read and a write both work
+      # (no leftover aborted-transaction state), and the doomed write never committed.
+      q = M.Just_a_test_deletion.objects
+      @test q.count() == 0
+      M.Just_a_test_deletion.objects.create("name" => "post-heal", "test_result" => nothing)
+      @test q.count() == 1
+
+      M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    else
+      @test_skip "PG-only: pg_terminate_backend has no SQLite equivalent"
+    end
+  end
+
 end

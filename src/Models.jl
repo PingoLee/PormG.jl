@@ -960,6 +960,19 @@ function format_date_sql(value)
 end
 
 
+# Precompiled once (issue #79): the datetime canonicalizer runs per row on bulk string
+# inserts/filters, so avoid rebuilding the DateFormat / UTC zone on every call (the read
+# path already uses a compile-time `dateformat"..."` macro — this keeps the write path parity).
+const _DATETIME_DATEFORMAT = DateFormat(DATETIME_FORMAT)
+const _DATETIME_UTC_TZ = TimeZone("UTC")
+
+# Canonical UTC ISO-8601 form for DateTimeField values (issue #79): every equivalent
+# instant collapses to ONE string (`yyyy-mm-ddTHH:MM:SS.sss+00:00`, = DATETIME_FORMAT),
+# so SQLite's lexicographic TEXT comparison agrees with PostgreSQL's timestamptz instant
+# comparison. Mirrors Django USE_TZ / Rails / SQLAlchemy. Idempotent.
+_canonicalize_datetime_utc(value::ZonedDateTime)::String =
+  Dates.format(astimezone(value, _DATETIME_UTC_TZ), _DATETIME_DATEFORMAT)
+
 function format_timezone_sql(value::String; format::String=DATETIME_FORMAT)
   return validate_timezone(value, format)
 end
@@ -967,14 +980,15 @@ function format_timezone_sql(value::Union{Missing, Nothing})
     return missing
 end
 function format_timezone_sql(value::ZonedDateTime)
-    # return string("'", value, "'")    
-  return value |> string
+  return _canonicalize_datetime_utc(value)
 end
 function format_timezone_sql(value::DateTime)
-  return format_timezone_sql(value, "UTC") |> string
+  # A naive DateTime is interpreted as UTC (matches Django USE_TZ default).
+  return _canonicalize_datetime_utc(ZonedDateTime(value, _DATETIME_UTC_TZ))
 end
 function format_timezone_sql(value::DateTime, timezone::String)
-  # function used just in create 
+  # Returns a ZonedDateTime (NOT a canonical string) — the migration planner re-feeds it
+  # through the 1-arg ::ZonedDateTime method, which canonicalizes. Never used as a bind value directly.
   return ZonedDateTime(value, TimeZone(timezone))
 end
 
@@ -1417,16 +1431,39 @@ function validate_default(default, expected_type::Type, field_name::String, conv
   end
 end
 
-function validate_timezone(value::String, format::String) # TODO: maeby is unnecesary, i think that is better to use validate_default aproach
-  # If it looks like a full ZonedDateTime string with timezone info, return it as-is
-  # to avoid double-formatting or truncation.
-  if occursin(r"(?:Z|[+-]\d{2}:\d{2})$", value)
-      return value
-  end
-  try
-    return DateTime(value, format) |> string
-  catch e
-    throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
+function validate_timezone(value::String, format::String)
+  # Canonicalize any datetime string to one UTC ISO-8601 form (issue #79) so SQLite's
+  # lexicographic TEXT comparison matches PostgreSQL. Accepts a `Z`/`±HH:MM` offset or a
+  # naive value, a `T` or single-space separator, and 0-n sub-second digits; converts the
+  # instant to UTC and formats as DATETIME_FORMAT (`yyyy-mm-ddTHH:MM:SS.sss+00:00`).
+  s = replace(strip(value), ' ' => 'T', count = 1)
+  # Julia's DateTime is millisecond-precision: truncate any sub-millisecond digits (e.g.
+  # Python's microsecond `isoformat()`) so naive and offset spellings of the same instant
+  # agree — the offset branch's normalize also truncates, so keep the naive branch aligned.
+  s = replace(s, r"(\.\d{3})\d+" => s"\1")
+  if occursin(r"(?:Z|[+-]\d{2}:\d{2})$", s)
+    # Reject impossible offsets (issue #79 review): TimeZones silently normalizes e.g. `+25:00`
+    # or `+00:60` into a shifted instant instead of erroring. An offset hour > 23 or minute > 59
+    # cannot denote a real instant, so treat it as invalid (Z has no digits and is skipped).
+    local off = match(r"[+-](\d{2}):(\d{2})$", s)
+    if off !== nothing && (parse(Int, off[1]) > 23 || parse(Int, off[2]) > 59)
+      throw(ArgumentError("Invalid UTC offset (out of range) in datetime value: $value"))
+    end
+    # Offset-bearing: pad sub-seconds to exactly 3 digits (normalize_sqlite_datetime_string),
+    # then parse — the `zzzz` token consumes both `Z` and `±HH:MM`.
+    try
+      zdt = ZonedDateTime(normalize_sqlite_datetime_string(s), _DATETIME_DATEFORMAT)
+      return _canonicalize_datetime_utc(zdt)
+    catch
+      throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
+    end
+  else
+    # Naive (no offset) is assumed UTC; Julia's default ISO parser handles `.s`/no-subsecond.
+    try
+      return _canonicalize_datetime_utc(ZonedDateTime(DateTime(s), _DATETIME_UTC_TZ))
+    catch
+      throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
+    end
   end
 end
 

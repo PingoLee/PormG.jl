@@ -1154,8 +1154,8 @@ end
 Parse a raw string value read from a SQLite DATETIME column into a Julia temporal type.
 
 SQLite stores datetime values as TEXT.  PormG serialises `DateTimeField` values (including
-`auto_now` / `auto_now_add`) as ZonedDateTime strings, e.g. `"2026-04-07T18:30:23.741-03:00"`.
-This function converts those strings back into proper Julia types so that the SQLite backend
+`auto_now` / `auto_now_add`) as canonical UTC ISO-8601 strings, e.g. `"2026-04-07T21:30:23.741+00:00"`
+(issue #79). This function converts those strings back into proper Julia types so that the SQLite backend
 returns the same high-level types as the PostgreSQL backend (which returns `ZonedDateTime`
 natively via LibPQ).
 

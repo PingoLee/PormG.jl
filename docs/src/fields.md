@@ -605,9 +605,10 @@ Invoice = Models.Model(
 
 **Current Contract**:
 - `default` values are normalized to `Union{ZonedDateTime, DateTime, Nothing}`.
-- Passing `ZonedDateTime` preserves the instant and is the recommended path for shared Django/PostgreSQL tables.
-- Passing a plain Julia `DateTime` through the standard formatter path currently interprets that value as `UTC`.
-- Internal `auto_now` and `auto_now_add` paths attach `settings.time_zone` to generated timestamps before serialization.
+- **Canonicalized to UTC (issue #79):** every `DateTimeField` value — written, bound, or used as a filter value — is canonicalized to one UTC ISO-8601 string, `yyyy-mm-ddTHH:MM:SS.sss+00:00` (millisecond precision, `+00:00` offset). This mirrors Django `USE_TZ` / Rails / SQLAlchemy and makes SQLite's lexicographic TEXT comparison agree with PostgreSQL's `timestamptz` instant comparison: equality and range filters return the **same rows on both backends** regardless of how the input instant is spelled (`Z` vs `+00:00`, `.0`/`.000`/no-subsecond, or a non-UTC offset such as `-03:00`/`+05:30`).
+- Passing `ZonedDateTime` preserves the instant (converted to UTC for storage) and is the recommended path for shared Django/PostgreSQL tables.
+- Passing a plain Julia `DateTime` is interpreted as `UTC`.
+- Internal `auto_now` and `auto_now_add` timestamps are generated in `settings.time_zone` and then canonicalized to UTC on serialization — the same instant, stored in the UTC spelling.
 - The same semantics are exercised on both PostgreSQL and SQLite integration backends, including `bulk_insert` and `bulk_update` paths for `DateTimeField` values.
 - If your Django app uses `USE_TZ=True` with a non-UTC active timezone, you should treat plain `DateTime` as a deliberate UTC input and use `ZonedDateTime` for local civil times.
 

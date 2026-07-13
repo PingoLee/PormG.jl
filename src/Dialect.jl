@@ -7,7 +7,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
-import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column
+import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql
 
 import PormG: @pormg_debug
 
@@ -454,7 +454,12 @@ function _format_default_sql_value(default_value)
     return "'$(replace(default_value, "'" => "''"))'"
   elseif default_value isa Bool
     return default_value ? "TRUE" : "FALSE"
-  elseif default_value isa Union{Date, DateTime, ZonedDateTime, Time}
+  elseif default_value isa Union{DateTime, ZonedDateTime}
+    # Canonicalize DateTimeField defaults to UTC (issue #79) so a DEFAULT-filled row is stored
+    # in the same canonical form as explicitly-written values — otherwise a canonical equality/
+    # range filter would miss the DEFAULT-filled row on SQLite (TEXT comparison).
+    return "'$(format_timezone_sql(default_value))'"
+  elseif default_value isa Union{Date, Time}
     return "'$default_value'"
   end
 

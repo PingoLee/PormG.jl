@@ -94,7 +94,7 @@ end
 # TIMESTAMPTZ Round-Trip (both backends)
 #
 # PostgreSQL uses a native TIMESTAMPTZ column — the DB engine normalises to UTC.
-# SQLite stores the value as TEXT with an ISO 8601 offset (e.g. "2024-06-15T14:30:00-03:00").
+# SQLite stores the value as TEXT in canonical UTC (e.g. "2024-06-15T17:30:00.000+00:00", issue #79).
 # PormG's read path (_parse_sqlite_datetime) reconstructs a ZonedDateTime from that string,
 # and _to_utc_datetime converts both backends to a plain UTC DateTime for comparison.
 # The semantic contract is therefore identical on both adapters.
@@ -377,5 +377,87 @@ end
         _cleanup_django_scratch!(label_a)
         _cleanup_django_scratch!(label_b)
         _cleanup_django_scratch!(label_c)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #79 — DateTimeField equality/range filters agree across formats & offsets
+#
+# SQLite stores DateTimeField values as TEXT and compares them lexicographically, so two
+# spellings of the SAME instant (`Z` vs `+00:00`, `.0`/`.000`, or a non-UTC offset like
+# `-03:00` / `+05:30`) used to match on PostgreSQL but MISS on SQLite. PormG now
+# canonicalizes every DateTimeField value to one UTC ISO-8601 form on BOTH the write/bind
+# and the filter paths, so a plain TEXT comparison is correct and both backends agree.
+#
+# Three rows are stored at KNOWN, distinct UTC instants, each written through a DIFFERENT
+# offset, then queried by spellings that differ from how each was stored. Pre-fix, the
+# equality-across-spellings and cross-offset range assertions fail on SQLite (db_sl).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django Contract: #79 DateTimeField filters agree across formats/offsets" begin
+    label_a = "django-79-utc10"   # 2020-01-01 10:00:00 UTC (stored as naive → UTC)
+    label_b = "django-79-brt"     # 2020-01-01 13:00:00 UTC (stored as 10:00 -03:00)
+    label_c = "django-79-ist"     # 2020-01-01 04:30:00 UTC (stored as 10:00 +05:30)
+    labels  = [label_a, label_b, label_c]
+    for l in labels; _cleanup_django_scratch!(l); end
+
+    try
+        # Store each instant through a different offset spelling.
+        M.Django_contract_scratch.objects.create(
+            "label" => label_a, "event_time" => DateTime(2020, 1, 1, 10, 0, 0))                      # naive → UTC 10:00
+        M.Django_contract_scratch.objects.create(
+            "label" => label_b,
+            "event_time" => ZonedDateTime(DateTime(2020, 1, 1, 10, 0, 0), TimeZone("America/Sao_Paulo")))  # UTC 13:00
+        M.Django_contract_scratch.objects.create(
+            "label" => label_c,
+            "event_time" => ZonedDateTime(DateTime(2020, 1, 1, 10, 0, 0), TimeZone("Asia/Kolkata")))       # UTC 04:30
+
+        # --- Equality across spellings: every equivalent spelling of A's instant
+        #     (2020-01-01 10:00:00 UTC) must match EXACTLY label_a on both backends.
+        equal_spellings = Any[
+            "2020-01-01T10:00:00Z",                                                    # Z, no sub-seconds
+            "2020-01-01T10:00:00.000+00:00",                                           # explicit +00:00, .000
+            "2020-01-01T10:00:00.0Z",                                                  # single sub-second digit
+            "2020-01-01 10:00:00Z",                                                    # space separator
+            ZonedDateTime(DateTime(2020, 1, 1, 7, 0, 0), TimeZone("America/Sao_Paulo")),  # 07:00 -03:00 = 10:00 UTC
+        ]
+        for spelling in equal_spellings
+            q = M.Django_contract_scratch.objects
+            q.filter("event_time" => spelling)
+            q.filter("label__@in" => labels)
+            rows = q.values("label").list()
+            @test length(rows) == 1
+            @test rows[1][:label] == label_a
+        end
+
+        # Cross-offset equality: C was stored as +05:30 (04:30 UTC); its UTC spelling finds it.
+        qc = M.Django_contract_scratch.objects
+        qc.filter("event_time" => "2020-01-01T04:30:00Z")
+        qc.filter("label__@in" => labels)
+        rows_c = qc.values("label").list()
+        @test length(rows_c) == 1
+        @test rows_c[1][:label] == label_c
+
+        # --- Range / ordering (lexicographic == chronological only after canonicalization):
+        #     UTC instants are C=04:30 < A=10:00 < B=13:00.
+        qgte = M.Django_contract_scratch.objects
+        qgte.filter("event_time__@gte" => "2020-01-01T10:00:00Z")
+        qgte.filter("label__@in" => labels)
+        got_gte = Set(r[:label] for r in qgte.values("label").list())
+        @test got_gte == Set([label_a, label_b])           # 10:00 and 13:00
+
+        qlt = M.Django_contract_scratch.objects
+        qlt.filter("event_time__@lt" => "2020-01-01T10:00:00Z")
+        qlt.filter("label__@in" => labels)
+        got_lt = Set(r[:label] for r in qlt.values("label").list())
+        @test got_lt == Set([label_c])                     # only 04:30
+
+        # Range covering only the middle instant: (04:31 .. 12:00] UTC → {A} (10:00), not B/C.
+        qrange = M.Django_contract_scratch.objects
+        qrange.filter("event_time__@range" => ["2020-01-01T04:31:00Z", "2020-01-01T12:00:00+00:00"])
+        qrange.filter("label__@in" => labels)
+        got_range = Set(r[:label] for r in qrange.values("label").list())
+        @test got_range == Set([label_a])
+    finally
+        for l in labels; _cleanup_django_scratch!(l); end
     end
 end

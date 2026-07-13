@@ -208,9 +208,10 @@ user_type = models.CharField(
 When PormG writes into tables that are also managed by Django, timezone semantics need to be explicit.
 
 - `DateTimeField` defaults are stored as `Union{ZonedDateTime, DateTime, Nothing}`.
-- A user-supplied naive Julia `DateTime` is currently serialized as `UTC` through the default formatter path.
-- A `ZonedDateTime` preserves the intended instant and is the recommended type when the source system has a real business timezone.
-- Internal `auto_now` and `auto_now_add` behavior attaches `settings.time_zone` when generating timestamps inside PormG.
+- **Every `DateTimeField` value is canonicalized to one UTC ISO-8601 string** (`yyyy-mm-ddTHH:MM:SS.sss+00:00`) on write, bind, and filter (issue #79) — the same convention as Django `USE_TZ=True`. Equality/range filters return the same rows on PostgreSQL and SQLite regardless of the input's spelling.
+- A user-supplied naive Julia `DateTime` is serialized as `UTC` through the formatter path.
+- A `ZonedDateTime` preserves the intended instant (converted to UTC for storage) and is the recommended type when the source system has a real business timezone.
+- Internal `auto_now` and `auto_now_add` timestamps are generated in `settings.time_zone` and then canonicalized to UTC on serialization — the same instant, stored in the UTC spelling.
 - If your Django app uses `USE_TZ=True` and `TIME_ZONE = "America/Sao_Paulo"`, passing a plain `DateTime(2026, 3, 13, 9, 0)` from Julia does not mean "09:00 Sao Paulo"; it means "09:00 UTC". Use `ZonedDateTime(DateTime(2026, 3, 13, 9, 0), tz"America/Sao_Paulo")` when the civil timezone matters.
 
 

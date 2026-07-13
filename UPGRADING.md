@@ -108,9 +108,59 @@ that previously missed on SQLite:
 
 ---
 
+## `distinct().order_by()` — the sort key must be in the projection (raises otherwise)
+
+- **PormG ref**: issue #76 ; `src/querybuilder/build_query.jl`
+- **Recorded**: 2026-07-13
+- **Severity**: behavior change (new `ArgumentError`)
+
+### What changed
+
+A `DISTINCT` query that orders by a column outside its projection —
+`.values("a").distinct().order_by("b")` with `b` not in `values(...)` — now raises a clear
+`ArgumentError` on **both** backends. Previously PostgreSQL rejected it with a raw DB error while
+SQLite silently ran it, returning rows in a nondeterministic `DISTINCT`/order interaction. Ordering a
+`DISTINCT` result by an unprojected column is rejected by PostgreSQL and the SQL standard (SQL Server,
+Oracle, DB2, and default-mode MySQL all reject it); PormG now makes SQLite conform too. The guard
+matches the resolved SQL *expression*, so ordering by a *function of* a projected column
+(`order_by("created_at__@date")` while only `created_at` is selected) is likewise rejected — that too
+is a PostgreSQL error.
+
+### How to find the calls to migrate
+
+Run the app or its tests: the new error reads
+`DISTINCT query cannot ORDER BY <col>: it is not in the SELECT DISTINCT projection`. Grep for
+`.distinct()` and check each one's `order_by(...)` — every ordered column (or the exact ordering
+expression) must also appear in `values(...)`. **Postgres-backed apps already errored on these; only
+SQLite-tested queries could have been running silently.**
+
+### Migrate your app
+
+```julia
+# ✗ raises: surname is ordered but not projected
+M.Driver.objects.values("nationality").distinct().order_by("surname").list()
+
+# ✓ include the sort key in values() (distinct is now over both columns) …
+M.Driver.objects.values("nationality", "surname").distinct().order_by("surname").list()
+
+# ✓ … or drop distinct() if you meant "one row per nationality, ordered by an aggregate"
+M.Driver.objects.values("nationality", "n" => Count("driverid")).order_by("n").list()
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
 ## bulk ops `copy=` kwarg removed — the pipeline never mutates (and never copies) your DataFrame
 
-- **PormG ref**: issue #132 ; `src/querybuilder/execution_bulk.jl`
+- **PormG ref**: issue #132 / PR #137 ; `src/querybuilder/execution_bulk.jl`
 - **Recorded**: 2026-07-12
 - **Severity**: breaking (kwarg removed) / behavior improvement
 
@@ -165,7 +215,7 @@ was never supported — it just happened to be masked by the default deepcopy).
 
 ## `bulk_update(match_on=)` — pairs removed; `columns=` is the single df→field mapping point
 
-- **PormG ref**: issue #107 ; `src/querybuilder/execution_bulk.jl`
+- **PormG ref**: issue #107 / PR #135 ; `src/querybuilder/execution_bulk.jl`
 - **Recorded**: 2026-07-12
 - **Severity**: breaking
 
@@ -201,6 +251,184 @@ bulk_update(query, df,
 
 Bare-name calls (`match_on = ["id"]` with an `id` DataFrame column, or relying on the
 primary-key fallback) need no change.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
+## `SQLOrder` orientation is now whitelisted — only `"ASC"`/`"DESC"` (case-insensitive) construct and render
+
+- **PormG ref**: issue #77 / PR #133 ; `src/querybuilder/types.jl`, `src/querybuilder/build_query.jl`
+- **Recorded**: 2026-07-12
+- **Severity**: behavior change (new `ArgumentError`; closes an injection seam)
+
+### What changed
+
+A directly constructed `SQLOrder` used to accept **any** string as `orientation` and interpolate
+it verbatim into the rendered `ORDER BY` — a SQL-injection seam for apps forwarding a
+user-controlled sort direction. Every construction path (and render, guarding post-construction
+mutation) now normalizes (`uppercase` + `strip`) and whitelists against `"ASC"`/`"DESC"`, raising
+`ArgumentError` for anything else. The documented string API — `.order_by("field")` /
+`.order_by("-field")` — was always safe and is unchanged.
+
+### How to find the calls to migrate
+
+Grep the app for direct `SQLOrder(` construction. Only call sites passing a *dynamic*
+(user- or data-derived) `orientation` need action; literal `"ASC"`/`"DESC"` in any case keep
+working.
+
+### Migrate your app
+
+```julia
+# ✗ before — a user-controlled direction string reached the SQL verbatim
+dir = params["dir"]   # e.g. "ASC; DROP TABLE results" used to render as-is
+query.order_by(SQLOrder(SQLField("points", "points"); orientation = dir))
+
+# ✓ after — map untrusted input onto the whitelist yourself (or handle the ArgumentError)
+query.order_by(SQLOrder(SQLField("points", "points");
+    orientation = lowercase(dir) == "desc" ? "DESC" : "ASC"))
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
+## Pool exhaustion now raises typed `PoolTimeoutError`; expansion ceiling raised to `pool_size × 10`
+
+- **PormG ref**: issue #37 / PR #129 ; `src/ConnectionPool.jl`
+- **Recorded**: 2026-07-12
+- **Severity**: behavior change (error type changed; pool sizing change)
+
+### What changed
+
+Exhausting the connection pool used to throw a **bare `String`** after a noisy busy-retry loop.
+Both the PostgreSQL and SQLite acquire paths now throw `PormG.PoolTimeoutError` (exported; fields
+`adapter` / `pool_size` / `max_size` / `attempts` / `elapsed`, with a "raise pool_size" remedy in
+`showerror`). The lazy expansion ceiling grew from `pool_size × 5` to `pool_size × 10` (default
+pool: 3 base → up to 30 on demand; idle footprint unchanged), and per-retry logging dropped to
+`@debug` — a single actionable `@warn` fires only when the pool hits its ceiling.
+
+### How to find the calls to migrate
+
+Grep the app for `catch` blocks that match the old exhaustion message as a string
+(e.g. `occursin("No available"` …). Most apps have none — then there is nothing to change; the
+new error type and quieter logs just apply.
+
+### Migrate your app
+
+```julia
+# ✗ before — the only way to detect exhaustion was string-matching a bare String throw
+catch e
+    e isa String && occursin("No available", e) && back_off()
+
+# ✓ after — catch the typed error; consider raising pool_size in connection.yml if it fires
+catch e
+    e isa PormG.PoolTimeoutError || rethrow()
+    back_off()
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
+## `order_by` on nullable columns — NULL placement normalized to PostgreSQL's convention on both backends
+
+- **PormG ref**: issue #75 / PR #120 ; `src/querybuilder/build_query.jl`
+- **Recorded**: 2026-07-12
+- **Severity**: behavior change (result order can change on SQLite)
+
+### What changed
+
+Top-level `ORDER BY` used to render a bare `expr ASC|DESC`, and PostgreSQL and SQLite default
+NULLs to **opposite ends** — so ordering a nullable column returned different rows per backend,
+and with `.first()` / `.page()` that changed *which* rows you got. PormG now emits an explicit
+NULLS clause matching PostgreSQL's default on **both** backends: ASC → `NULLS LAST`,
+DESC → `NULLS FIRST` (SQLite < 3.30.0 gets an equivalent portable `(expr IS NULL)` prefix).
+Per-term override: `SQLOrder(field; nulls = :first | :last)`. Window `OVER(...)` ordering is
+**not** yet normalized (follow-up pending).
+
+**PostgreSQL-backed apps see no change.** SQLite-backed apps: any `order_by` on a nullable key
+may now sort NULL rows to the other end.
+
+### How to find the calls to migrate
+
+No API change and nothing errors. In SQLite-backed apps, review `order_by` calls on **nullable**
+columns whose consumers depend on row order — `.first()`, pagination, "top N" reports.
+
+### Migrate your app
+
+```julia
+# Only if the app depended on SQLite's old NULLS-first-on-ASC ordering — pin it explicitly:
+using PormG.QueryBuilder: SQLOrder, SQLField
+
+M.Driver.objects.values("surname", "nationality").order_by(
+    SQLOrder(SQLField("nationality", "nationality"); orientation = "ASC", nulls = :first)
+).list()
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | |
+| app-2 | ⏳ | |
+| app-3 | ⏳ | |
+| app-4 | ⏳ | |
+
+---
+
+## `bulk_copy` — field formatters now applied; `""` and `missing` no longer collapse to NULL
+
+- **PormG ref**: issue #86 / PR #115 ; `src/querybuilder/execution_bulk.jl`
+- **Recorded**: 2026-07-12
+- **Severity**: behavior change (persisted values can differ)
+
+### What changed
+
+`bulk_copy` wrote **raw** DataFrame values (each field's formatter result was validated, then
+discarded), so datetime/bool/float values could silently diverge from what `bulk_insert` /
+`create()` store; and the COPY payload carried no NULL marker, collapsing `""` and `missing`
+into the same NULL. It now formats every cell exactly like `bulk_insert` and serializes with a
+`\N` NULL sentinel: `missing` → SQL `NULL`, `""` → empty string, and the two round-trip
+distinctly.
+
+### How to find the calls to migrate
+
+No API change. Review `bulk_copy` call sites that (a) pre-formatted datetimes/bools/floats to
+compensate for the old raw write — the workaround is now redundant (but harmless), or
+(b) relied on empty strings being stored as NULL.
+
+### Migrate your app
+
+```julia
+# The old behavior stored NULL for BOTH of these; they now persist differently:
+df = DataFrames.DataFrame(surname = ["Senna", "Prost"], code = ["", missing])
+bulk_copy(M.Driver.objects, df)   # row 1 code → '' (empty string), row 2 code → NULL
+
+# Keep the NULL semantics only where you actually want it — coerce before the call:
+df[!, :code] = map(x -> !ismissing(x) && x == "" ? missing : x, df[!, :code])
+```
 
 ### Per-app rollout
 

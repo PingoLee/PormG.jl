@@ -166,13 +166,16 @@ const _E = _OperTestEvent
     @test contains(r_c[:sql_text], "ESCAPE")
     @test r_c[:parameters] == ["%lew%"]
 
-    # icontains → ILIKE '%val%' (Postgres) or LIKE with LOWER (SQLite)
-    # The bound value must be lowercased so the wildcard match is case-insensitive.
+    # icontains → ILIKE '%val%' (PostgreSQL) or pormg_lower(col) LIKE pormg_lower('%val%') (SQLite, #78).
+    # NOTE: these _OperTest models render through a PostgreSQL mock (_MockPostgresOper), so this checks
+    # the operator SHAPE only — it is NOT a SQLite gate. The SQLite pormg_lower rendering is gated in
+    # test_alignment_sqlite.jl and the UDF's folding behavior in test_pormg_lower_udf.jl. The bound
+    # value is passed as-is; case folding happens in SQL.
     q_ic = _D.objects.filter("forename__@icontains" => "LEW")
     r_ic = q_ic.list(show_query=:dict)
-    @test contains(r_ic[:sql_text], "ILIKE") || contains(r_ic[:sql_text], "LIKE")
+    @test contains(r_ic[:sql_text], "ILIKE") || contains(r_ic[:sql_text], "pormg_lower")
     @test contains(r_ic[:sql_text], "ESCAPE")
-    @test r_ic[:parameters] == ["%LEW%"] 
+    @test r_ic[:parameters] == ["%LEW%"]
 
     # iunaccent_contains → public.immutable_unaccent(column) ILIKE public.immutable_unaccent('%val%')
     q_iua = _D.objects.filter("forename__@iunaccent_contains" => "sao jose")

@@ -126,6 +126,37 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     instruc.cache[v_field_copy._as] = v_field_copy
 
     if !found_in_select
+      # #76: Under DISTINCT, an ORDER BY term that is not part of the projection is rejected by
+      # PostgreSQL and the SQL standard (SQL Server / Oracle / DB2 / default-mode MySQL all reject
+      # it), while SQLite silently runs it with a nondeterministic DISTINCT/order interaction. Refuse
+      # it on both backends so the two stay aligned. Match on the resolved SQL *expression*
+      # (v_field_copy.field was resolved just above), not the base column: PG rejects `ORDER BY
+      # DATE(x)` even when `x` is projected, yet accepts an aliased column (`SELECT x AS y ... ORDER
+      # BY x`) — expression membership captures both. Skip when there is no explicit projection
+      # (`SELECT DISTINCT *`) or the projection carries a `*` wildcard that already covers the column.
+      if object.distinct && !isempty(object.values) && !any(_is_wildcard_projection, object.values)
+        order_expr = string(v_field_copy.field)
+        in_projection = false
+        for i in eachindex(instruc.select)
+          isassigned(instruc.select, i) || continue
+          if string(instruc.select[i].field) == order_expr
+            in_projection = true
+            break
+          end
+        end
+        if !in_projection
+          # Keep the suggestion generic (`.values(...)`) rather than echoing v_field_copy._as: for a
+          # transform order term the alias is the internal name (e.g. "created_at__date"), which is NOT
+          # valid input syntax to paste back (the user wrote "created_at__@date"), so a specific token
+          # would mislead. The offending term is still named in the diagnosis.
+          throw(_argerr(
+            "DISTINCT query cannot ORDER BY \e[4m\e[31m$(v_field_copy._as)\e[0m: it is not in the " *
+            "SELECT DISTINCT projection. PostgreSQL (and the SQL standard) rejects this; SQLite " *
+            "would return rows in a nondeterministic order. Add the ordering column or expression " *
+            "to \e[4m\e[32m.values(...)\e[0m so it is projected, or drop " *
+            "\e[4m\e[32m.distinct()\e[0m and order by an aggregate if you meant one row per key."))
+        end
+      end
       push!(instruc.group, v_field_copy.field)
     end
 

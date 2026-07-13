@@ -10,7 +10,7 @@ All tests use mock PostgreSQL connections (no live database required).
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField
+using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField
 using PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, inspect_query, list, update, delete, bulk_insert, bulk_update
 import DataFrames
 
@@ -328,6 +328,81 @@ PormG.config["default"] = MockSettings
     
     @test contains(res[:sql_text], "DISTINCT")
     @test res[:parameters] == ["French"]
+  end
+
+  # ===== Section 11b: DISTINCT + ORDER BY projection guard (#76) =====
+  @testset "Distinct + Order By must project the sort key (#76)" begin
+    # Under SELECT DISTINCT, an ORDER BY term that is not part of the projection is rejected by
+    # PostgreSQL and the SQL standard (SQL Server / Oracle / DB2 / default-mode MySQL all reject it)
+    # while SQLite runs it with a nondeterministic DISTINCT/order interaction. PormG raises on both
+    # backends so they stay aligned. The guard matches the resolved SQL *expression*, not the base
+    # column, so it tolerates aliased columns yet still rejects `ORDER BY f(x)` when only `x` is
+    # projected. See issue #76.
+    DistinctModel = Model("distinct_drivers",
+      id = IDField(),
+      surname = CharField(),
+      nationality = CharField(null = true),
+      created_at = DateTimeField(null = true),
+    )
+    DistinctModel.connect_key = "default"
+
+    @testset "unselected plain column raises with an actionable message" begin
+      # The reported bug: distinct nationalities ordered by a column that isn't projected.
+      err = try
+        DistinctModel.objects.values("nationality").distinct().order_by("surname").list(show_query = :sql)
+        nothing
+      catch e
+        e
+      end
+      @test err isa ArgumentError
+      msg = sprint(showerror, err)
+      # Discriminating: names the offending column, the DISTINCT context, and the .values() fix —
+      # not a bare @test_throws that any ArgumentError would satisfy.
+      @test occursin("surname", msg)
+      @test occursin("DISTINCT", msg)
+      @test occursin(".values(", msg)
+    end
+
+    @testset "ordering by a function of a selected column raises" begin
+      # PG rejects `ORDER BY DATE(created_at)` even though created_at is projected: the *expression*
+      # (not the base column) must be in the select list. A crude column-membership check would wrongly
+      # allow this; the expression-membership guard matches PG. Cause-check the message (not a bare
+      # @test_throws) so an unrelated ArgumentError — e.g. a future transform-resolution change — can't
+      # masquerade as a pass.
+      err = try
+        DistinctModel.objects.values("created_at").distinct().
+          order_by("created_at__@date").list(show_query = :sql)
+        nothing
+      catch e
+        e
+      end
+      @test err isa ArgumentError
+      msg = sprint(showerror, err)
+      @test occursin("created_at", msg)   # names the offending order term
+      @test occursin("DISTINCT", msg)
+      @test occursin("projection", msg)
+    end
+
+    @testset "valid distinct + order forms still render (no false positives)" begin
+      # aligned: the order key is the (only) projected column
+      @test DistinctModel.objects.values("nationality").distinct().
+        order_by("nationality").list(show_query = :sql) isa String
+      # no explicit projection => SELECT DISTINCT * (the sort key is covered by *)
+      sql_star = DistinctModel.objects.distinct().order_by("surname").list(show_query = :sql)
+      @test occursin("DISTINCT *", sql_star)
+      # explicit wildcard projection likewise covers the sort key
+      @test DistinctModel.objects.values("*").distinct().
+        order_by("surname").list(show_query = :sql) isa String
+      # aliased source: SELECT surname AS nm ... ORDER BY surname — surname IS the selected expression
+      @test DistinctModel.objects.values("nm" => "surname").distinct().
+        order_by("surname").list(show_query = :sql) isa String
+      # projected function: the DATE(created_at) expression is itself in the select list
+      @test DistinctModel.objects.values("created_at", "d" => "created_at__@date").distinct().
+        order_by("created_at__@date").list(show_query = :sql) isa String
+      # scope guard: the check is DISTINCT-only — a non-distinct unselected order must NOT raise
+      @test DistinctModel.objects.values("nationality").
+        order_by("surname").list(show_query = :sql) isa String
+    end
   end
 
   # ===== Section 12: Deep Copy Safety =====

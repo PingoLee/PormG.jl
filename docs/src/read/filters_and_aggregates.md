@@ -115,7 +115,11 @@ count = query.count()
 ```
 
 > [!NOTE]
-> `@icontains` uses `ILIKE` on PostgreSQL. On SQLite (which is case-insensitive for ASCII by default), it uses `LIKE`.
+> `@icontains` uses `ILIKE` on PostgreSQL. On SQLite it renders `pormg_lower(col) LIKE pormg_lower(val)`,
+> where `pormg_lower` is a Unicode-aware case-folding function PormG registers on every SQLite
+> connection — so accented text folds case on SQLite as it does on PostgreSQL
+> (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on both backends). It folds case but
+> preserves accents; for accent-insensitive matching use the PostgreSQL-only `@iunaccent_*` lookups below.
 
 ### Prefix / Suffix (`@startswith`, `@endswith`)
 
@@ -440,6 +444,14 @@ On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG 
     `nulls` normalization and the `SQLOrder(...; nulls=…)` override apply to the query's top-level
     `ORDER BY`. Ordering **inside** a window frame (`WindowOver(order_by=…)`) is not yet normalized —
     its NULL placement still follows each backend's native default.
+
+!!! note "Ordering a `distinct()` query"
+    When a query uses `distinct()`, every `order_by(...)` column must be part of the
+    projection (`values(...)`). Ordering a `DISTINCT` result by an unprojected column — or by a
+    *function* of a projected column, e.g. `order_by("created_at__@date")` while only `created_at` is
+    selected — is rejected by PostgreSQL and the SQL standard, so PormG raises on both backends rather
+    than let SQLite return nondeterministic rows. Add the exact ordering expression to `values(...)`,
+    or drop `distinct()`.
 
 ---
 

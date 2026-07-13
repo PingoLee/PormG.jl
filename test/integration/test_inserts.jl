@@ -528,6 +528,53 @@ end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #88: allocate_primary_keys on SQLite reserves ids via a read-then-write on
+# sqlite_sequence. It must run under BEGIN IMMEDIATE / with_sqlite_write_lock even when
+# the caller did NOT open a transaction — otherwise two concurrent callers could read the
+# same MAX and hand out overlapping ranges. These checks deliberately call it OUTSIDE
+# run_in_transaction: the fix makes the bare call self-protecting by auto-wrapping in
+# run_in_transaction (same idiom as bulk_insert/bulk_copy/bulk_update). SQLite-only —
+# PostgreSQL uses an atomic nextval() and never took this path.
+# ─────────────────────────────────────────────────────────────────────────────
+if PORMG_DB_FOLDER == "db_sl"
+    @testset "allocate_primary_keys self-protects outside a transaction (#88)" begin
+        # Reservation only: no rows are inserted, so there is nothing to clean up — the calls
+        # just bump sqlite_sequence (harmless gaps, like a rolled-back PostgreSQL nextval()).
+
+        # 1. Two back-to-back calls with NO surrounding transaction stay disjoint: each
+        #    auto-opened transaction durably persists its reservation to sqlite_sequence,
+        #    so the second call reads the bumped counter and starts above the first range.
+        first_seq  = allocate_primary_keys(M.Django_contract_scratch.objects,
+                                           DataFrame(label = ["alloc-pk-untx-1a", "alloc-pk-untx-1b"]))
+        second_seq = allocate_primary_keys(M.Django_contract_scratch.objects,
+                                           DataFrame(label = ["alloc-pk-untx-2a", "alloc-pk-untx-2b"]))
+        @test length(first_seq.id) == 2
+        @test first_seq.id  == collect(minimum(first_seq.id):maximum(first_seq.id))    # contiguous
+        @test second_seq.id == collect(minimum(second_seq.id):maximum(second_seq.id))  # contiguous
+        @test minimum(second_seq.id) > maximum(first_seq.id)                           # disjoint & ordered
+
+        # 2. Concurrent un-wrapped allocations never overlap. Post-fix each call auto-opens
+        #    run_in_transaction, so with_sqlite_write_lock + BEGIN IMMEDIATE serialize the
+        #    read-then-write; the pre-fix bare path could interleave two SELECT MAX reads and
+        #    duplicate a range. SQLite serializes writers, so this is deterministic post-fix.
+        n_tasks  = 8
+        per_task = 3
+        reserved = Vector{Vector{Int}}(undef, n_tasks)
+        @sync for i in 1:n_tasks
+            @async begin
+                df = allocate_primary_keys(M.Django_contract_scratch.objects,
+                        DataFrame(label = ["alloc-pk-race-$(i)-$(j)" for j in 1:per_task]))
+                reserved[i] = Vector{Int}(df.id)
+            end
+        end
+        all_ids = reduce(vcat, reserved)
+        @test length(all_ids) == n_tasks * per_task
+        @test length(unique(all_ids)) == length(all_ids)   # no range overlap across tasks
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Bulk scratch payload: bulk_insert on Bulk_update_*_scratch tables
 #
 # Uses shared helpers from common_bulk_scratch_setup.jl. bulk_update regressions

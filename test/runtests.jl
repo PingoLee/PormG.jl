@@ -36,6 +36,7 @@ end
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "custom_join Copy Isolation (#112)" include("unit/test_custom_join_copy.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")
     @testset "Aggregate Fan-out Guard (#74)" include("unit/test_aggregate_fanout.jl")
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")

@@ -1031,7 +1031,9 @@ function icontains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
 function icontains(conn::PormGSQLite, column::String, value::String)::String
-  return "LOWER($(column)) LIKE LOWER($(value))$(_like_escape_clause())"
+  # pormg_lower = Unicode-aware LOWER UDF registered per-connection in PormGSQLiteExt (#78), so case
+  # folding matches PostgreSQL ILIKE; case_sensitive_like=ON makes LIKE exact on the folded text.
+  return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function icontains(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -1082,7 +1084,8 @@ function istartswith(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
 function istartswith(conn::PormGSQLite, column::String, value::String)::String
-  return "LOWER($(column)) LIKE LOWER($(value))$(_like_escape_clause())"
+  # Unicode-aware case folding via the pormg_lower UDF (#78) — see icontains above.
+  return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function istartswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))
@@ -1104,7 +1107,8 @@ function iendswith(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
 function iendswith(conn::PormGSQLite, column::String, value::String)::String
-  return "LOWER($(column)) LIKE LOWER($(value))$(_like_escape_clause())"
+  # Unicode-aware case folding via the pormg_lower UDF (#78) — see icontains above.
+  return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function iendswith(conn::PormGAbstractType, column::String, value)
   throw(ArgumentError("The value must be a String"))

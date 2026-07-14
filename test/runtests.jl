@@ -73,7 +73,7 @@ end
     @testset "Migration Runner (checksum, guardrails)" include("unit/test_migrations_runner.jl")
     @testset "SQLite Rebuild Index Filter (#116)" include("unit/test_sqlite_index_filter.jl")
     @testset "Migration Diff Fail-Safe (#69)" include("unit/test_migration_diff_failsafe.jl")
-    @testset "Model_to_str Render Failure (#70)" include("unit/test_model_to_str_render_failure.jl")
+    @testset "Model_to_str Render Failure (#70/#134)" include("unit/test_model_to_str_render_failure.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
     @testset "Public Export Surface (#35)" include("unit/test_public_exports.jl")

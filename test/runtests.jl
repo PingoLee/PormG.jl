@@ -57,6 +57,7 @@ end
     @testset "PG Migration Fixture Isolated + Credential-free (#36)" include("unit/test_migration_pg_fixture.jl")
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")
+    @testset "No Lost-Connection Retry Inside Transactions (#138)" include("unit/test_fetch_retry_transaction.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")

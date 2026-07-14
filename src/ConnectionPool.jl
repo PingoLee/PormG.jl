@@ -797,12 +797,20 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     return await_result(fetch_task)
   catch e
     root = _unwrap_async_exception(e)
-    if backend_is_connection_error(connection, root)
+    # Never retry inside a transaction context or on a caller-pinned conn (#138): the retry
+    # re-runs the statement on a fresh autocommit session (a write that should die with the
+    # transaction gets committed) and reconnect_db + await_result would swap and release the
+    # transaction's pool slot mid-transaction. Propagate instead so run_in_transaction's
+    # rollback/renewal path (#71) owns the cleanup on the original pinned connection.
+    if conn === nothing && !fetch_task.in_transaction && backend_is_connection_error(connection, root)
       @warn "Lost connection to database. Attempting to reconnect..."
-      # Get a fresh connection and retry
+      # Renew the dead handle in its slot, then retry through NORMAL pool acquisition —
+      # never by pinning `conn=new_conn`: the failed task's finally already marked the slot
+      # available, so a pinned retry would run on a connection a concurrent borrower can
+      # acquire at the same time. Acquisition flips the slot unavailable under the lock.
       new_conn = reconnect_db(connection, fetch_task.conn)
       if new_conn !== nothing
-        retry_task = fetch_async(connection, sql; conn=new_conn, params=params, ignore_tx=ignore_tx)
+        retry_task = fetch_async(connection, sql; params=params, ignore_tx=ignore_tx)
         return await_result(retry_task)
       end
     end

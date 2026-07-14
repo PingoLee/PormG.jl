@@ -86,23 +86,18 @@ The connection is automatically returned to the pool when the block exits. If an
 When you update multiple tables and need them to succeed or fail together:
 
 ```julia
-# Real-world scenario: Record a pit stop and update driver stats
+# Real-world scenario: a stewards' decision moves 2 championship points from one
+# driver to another — the deduction and the award must commit together
 PormG.run_in_transaction("db_2") do
-  # Record the pit stop
-  stop_query = M.Pit_stop.objects
-  stop_query.create(
-    "raceid" => 900,
-    "driverid" => 1,
-    "stop" => 1,
-    "lap" => 42,
-    "time" => 35,
-    "duration" => 22.5,
-  )
+  # Deduct from the penalized driver
+  penalized = M.Driver_standings.objects
+  penalized.filter("raceid" => 841, "driverid" => 20)
+  penalized.update("points" => F("points") - 2)
   
-  # Update driver pit-stop count
-  driver_query = M.Driver.objects
-  driver_query.filter("driverid" => 1)
-  driver_query.update("pit_stops_count" => F("pit_stops_count") + 1)
+  # Award to the promoted driver
+  promoted = M.Driver_standings.objects
+  promoted.filter("raceid" => 841, "driverid" => 1)
+  promoted.update("points" => F("points") + 2)
   
   # Both changes succeed together, or both roll back
 end
@@ -112,22 +107,22 @@ end
 ```sql
 BEGIN;
 
--- Pit stop insert
-INSERT INTO "pit_stop" ("raceid", "driverid", "stop", "lap", "time", "duration") 
-VALUES (\$1, \$2, \$3, \$4, \$5, \$6) 
-RETURNING *
--- Parameters: [900, 1, 1, 42, 35, 22.5]
+-- Deduction using an F() expression
+UPDATE "driver_standings" AS "Tb"
+SET "points" = ("Tb"."points" - \$1)
+WHERE "Tb"."raceid" = \$2 AND "Tb"."driverid" = \$3
+-- Parameters: [2, 841, 20]
 
--- Driver stats update using F() expression
-UPDATE "driver" AS "Tb" 
-SET "pit_stops_count" = "Tb"."pit_stops_count" + 1 
-WHERE "Tb"."driverid" = \$1
--- Parameters: [1]
+-- Award using an F() expression
+UPDATE "driver_standings" AS "Tb"
+SET "points" = ("Tb"."points" + \$1)
+WHERE "Tb"."raceid" = \$2 AND "Tb"."driverid" = \$3
+-- Parameters: [2, 841, 1]
 
 COMMIT;
 ```
 
-If the driver update fails, the pit stop is never recorded. This keeps championship data consistent.
+If the award fails, the deduction is never applied — the standings never lose points into thin air. This keeps championship data consistent.
 
 ### Avoiding Partial States
 
@@ -394,6 +389,46 @@ PormG.run_in_transaction("db_2") do
   
   # Even though we caught the error, it was already logged
   # The outer transaction will still roll back when this block exits
+end
+```
+
+### Connection Loss During a Transaction
+
+If the database connection drops mid-transaction (server restart, network failure, terminated
+backend), PormG **never reconnects or re-runs statements within the transaction** — a retried
+statement would execute on a fresh autocommit session, silently committing work that should have
+died with the transaction. Instead, the connection error propagates out of the block like any
+other exception: the transaction rolls back (or is already gone with the dead session) and the
+pooled connection is renewed or discarded before returning to the pool, so the next borrower
+always gets a clean connection.
+
+Outside transactions, plain queries still recover transparently: the pooled connection is
+renewed and the statement retried once.
+
+If the work must survive connection loss, retry the **whole transaction** at the application
+level — the standard contract across ORMs:
+
+```julia
+# Retry the whole unit of work, never a single statement
+for attempt in 1:3
+  try
+    PormG.run_in_transaction("db_2") do
+      (M.Pit_stops.objects).create(
+        "raceid" => 841,
+        "driverid" => 153,
+        "stop" => 3,
+        "lap" => 42,
+        "time" => "17:05:23",
+        "duration" => "22.500",
+        "milliseconds" => 22500,
+      )
+      # ... more work sharing the same transaction
+    end
+    break   # committed
+  catch e
+    attempt == 3 && rethrow()
+    @warn "Transaction failed; retrying" attempt exception=e
+  end
 end
 ```
 

@@ -454,9 +454,16 @@ Return the `CREATE INDEX` DDL for every *user-created* secondary index on `table
 `sqlite_master`. Auto-indexes backing column-level `UNIQUE` constraints have a NULL `sql` and are excluded —
 they are recreated automatically by the rebuilt `CREATE TABLE`. Used by the SQLite table-rebuild path to
 re-create the indexes that the rebuild's `DROP TABLE` would otherwise silently lose (#82).
+
+`column_renames` (old ⇒ new physical name) supports the rename-with-FK-change rebuild (#150): the DDL is
+snapshotted from the LIVE schema at planning time (old column name), but the rebuilt table carries the new
+name, so each renamed column is mapped through this dict both when testing `surviving_columns` membership
+(else the renamed column's index would be wrongly filtered out and lost) and when rewriting the emitted DDL.
+Default empty ⇒ no rewriting, so every existing #82/#116 call site is unaffected.
 """
 function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol};
-                                  surviving_columns::Union{Nothing,Set{String}} = nothing)::Vector{String}
+                                  surviving_columns::Union{Nothing,Set{String}} = nothing,
+                                  column_renames::Dict{String,String} = Dict{String,String}())::Vector{String}
   tname = replace(string(table_name), "'" => "''")
   # `name` is fetched alongside `sql` so we can probe each index's columns via pragma_index_info
   # when filtering (#116). Auto-created indexes (UNIQUE/PK) carry a NULL `sql` and are excluded here,
@@ -482,8 +489,16 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
     if surviving_columns !== nothing
       idxname = replace(string(r.name), "'" => "''")
       cols = fetch(conn, "SELECT name FROM pragma_index_info('$(idxname)')") |> DataFrame
-      referenced = String[string(c) for c in cols.name if c !== missing]
+      # #150: the live index references the OLD column name; map it to the rebuilt table's new name
+      # before the membership test so a renamed-but-surviving column keeps its index.
+      referenced = String[get(column_renames, string(c), string(c)) for c in cols.name if c !== missing]
       any(c -> !(c in surviving_columns), referenced) && continue
+    end
+    # #150: rewrite renamed columns in the snapshotted DDL. PormG emits quoted identifiers
+    # (create_index in Dialect.jl), so replacing the quoted `"old"` token is precise — it can't
+    # touch the index name or table name. Empty dict ⇒ no-op for the #82/#116 call sites.
+    for (oldc, newc) in column_renames
+      stmt = replace(stmt, "\"$oldc\"" => "\"$newc\"")
     end
     push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
   end

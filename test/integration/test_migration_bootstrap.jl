@@ -555,6 +555,214 @@ end
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 930;""")
   end
 
+  # ── Phase 4e: Rename an FK field whose FK constraint also changes (#150) ─
+  # The rename-path sibling of #83/#116. On SQLite the FK clause lives inside CREATE TABLE, so a plain
+  # `RENAME COLUMN` keeps the OLD constraint; renaming an FK field while ALSO changing its FK — here
+  # flipping db_constraint true→false, i.e. dropping the constraint — must route through the same
+  # model-based table rebuild. Before the fix, SQLite renamed the column but silently KEPT the FK
+  # (foreign_key_count stays 1); after, the rebuild drops it (→ 0) with data + the field's secondary index
+  # preserved (the index is re-created against the RENAMED column via `column_renames`, so a broken rewrite
+  # would fail "no such column"). PostgreSQL is clean either way (DROP CONSTRAINT + RENAME COLUMN). Field-
+  # rename detection is INTERACTIVE (readline), so the rename step feeds the confirmation number via a
+  # redirected stdin. Uses a dedicated child table; carries childfktable through unchanged so the setup is
+  # a pure table-ADD (no add/remove pairing ⇒ no table-rename prompt to consume the fed answer).
+  @testset "Phase 4e: Rename FK Field + Change FK Constraint (#150)" begin
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        old_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true),
+        note = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # Baseline: one live FK on the indexed old_parent_id column, plus the field's secondary index (db_index).
+    @assert foreign_key_count(pool, "renamefkchild") == 1 "Phase 4e requires a live FK on renamefkchild"
+    @test "old_parent_id" in column_names(pool, "renamefkchild")
+    idx_before = index_names(pool, "renamefkchild")
+    @assert !isempty(idx_before) "Phase 4e requires the db_index secondary index on the FK field"
+
+    # Seed a parent + child row whose FK value must survive the rebuild.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (940, 'fk-parent-150');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "renamefkchild" ("id", "old_parent_id", "note") VALUES (941, 940, 'child-150');""")
+
+    # Desired: RENAME old_parent_id → new_parent_id AND flip db_constraint true→false (drop the FK) in the
+    # same migration. Everything else is identical so the only interactive decision is this one field rename.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    """)
+
+    # Field-rename detection is interactive: feed "1" (old_parent_id is the sole rename candidate) to the
+    # readline prompt via a redirected stdin. EOF would yield "no" ⇒ a loud failure below, never a hang.
+    mktemp() do _path, io
+      write(io, "1\n"); flush(io); seekstart(io)
+      redirect_stdin(io) do
+        makemigrations(joinpath(@__DIR__, edge_db_name), interactive=true)
+      end
+    end
+
+    # AC2: the generated block carries no embedded transaction control (composes with the runner tx).
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # Must NOT raise. Pre-fix on SQLite the rename emitted only RENAME COLUMN (no rebuild); the rebuild here
+    # re-creates the field's secondary index against the RENAMED column, so a broken column_renames rewrite
+    # would abort with "no such column: old_parent_id".
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # The column is renamed and the FK constraint change took effect on BOTH backends.
+    cols = column_names(pool, "renamefkchild")
+    @test !("old_parent_id" in cols)
+    @test "new_parent_id" in cols
+    @test foreign_key_count(pool, "renamefkchild") == 0   # #150: FK actually dropped (was silently kept on SQLite)
+    # The field's secondary index survived the rebuild (count preserved, not lost to the DROP TABLE)…
+    @test length(index_names(pool, "renamefkchild")) == length(idx_before)
+    # …and on SQLite it now references the RENAMED column — direct proof the `column_renames` rewrite ran
+    # (a naïve rebuild would have re-created it against old_parent_id and aborted "no such column").
+    if adapter_name == "SQLite"
+      idxcols = String[]
+      for idx in index_names(pool, "renamefkchild")
+        info = PormG.ConnectionPool.fetch(pool, """PRAGMA index_info("$(idx)");""") |> DataFrame
+        append!(idxcols, string.(info.name))
+      end
+      @test "new_parent_id" in idxcols
+      @test !("old_parent_id" in idxcols)
+    end
+
+    # Data fidelity: the child row survived with its (renamed) FK value intact.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "new_parent_id", "note" FROM "renamefkchild" WHERE "id" = 941;""") |> DataFrame
+    @test nrow(surviving) == 1
+    # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
+    @test isequal(surviving[1, :new_parent_id], 940)
+    @test isequal(surviving[1, :note], "child-150")
+
+    # Cleanup child-then-parent (renamefkchild is dropped by Phase 5's model redefinition).
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "renamefkchild" WHERE "id" = 941;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 940;""")
+  end
+
+  # ── Phase 4f: Rename FK field (constraint change) + delete another field, same migration (#150) ─
+  # Regression for the co-occurrence the rename-rebuild must handle: renaming an FK field whose constraint
+  # changes AND deleting a DIFFERENT field on the SAME table in one migration. The rebuild is generated from
+  # `current_model` (which already omits the deleted field), so the deletion loop must DEFER to it — emitting
+  # a separate `DROP COLUMN` for the already-removed column would abort "no such column" on SQLite (the bug
+  # this phase guards). Carries the prior phases' tables forward unchanged so adding RenameDelChild is a pure
+  # table-ADD (no table-rename prompt). PostgreSQL takes RENAME COLUMN + DROP CONSTRAINT + DROP COLUMN.
+  @testset "Phase 4f: Rename FK Field + Delete Field Together (#150)" begin
+    base_models = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    """
+    # Setup: add RenameDelChild with a live FK (link_id) plus a doomed non-FK column.
+    write_edge_models(base_models * """
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true),
+        zztombstone = Models.CharField(null=true),
+        note = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @assert foreign_key_count(pool, "renamedelchild") == 1 "Phase 4f requires a live FK on renamedelchild"
+    @assert "zztombstone" in column_names(pool, "renamedelchild") "Phase 4f requires the doomed column"
+
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (950, 'fk-parent-150f');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "renamedelchild" ("id", "link_id", "zztombstone", "note") VALUES (951, 950, 'gone', 'child-150f');""")
+
+    # Desired: rename link_id → link_ref_id (flip db_constraint true→false) AND delete zztombstone.
+    write_edge_models(base_models * """
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_ref_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    """)
+
+    # Interactive: the sole addition (link_ref_id) prompts once with the name-sorted deletion candidates
+    # "1 - link_id, 2 - zztombstone" (sorting is now deterministic, see _colect_numbered_fields); feed "1"
+    # to map it onto link_id, leaving zztombstone as a pure deletion on the same table.
+    mktemp() do _path, io
+      write(io, "1\n"); flush(io); seekstart(io)
+      redirect_stdin(io) do
+        makemigrations(joinpath(@__DIR__, edge_db_name), interactive=true)
+      end
+    end
+
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # Must NOT raise: pre-fix on SQLite the deletion loop emitted `DROP COLUMN "zztombstone"` AFTER the
+    # rename-rebuild already dropped it → "no such column". The deletion-loop skip defers to the rebuild.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "renamedelchild")
+    @test !("link_id" in cols)        # renamed away
+    @test "link_ref_id" in cols       # renamed to
+    @test !("zztombstone" in cols)    # deleted in the SAME migration (handled by the rebuild, not a DROP COLUMN)
+    @test foreign_key_count(pool, "renamedelchild") == 0   # FK dropped by the db_constraint flip
+
+    # Data fidelity: the row survived the combined rebuild with its renamed FK value intact.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "link_ref_id", "note" FROM "renamedelchild" WHERE "id" = 951;""") |> DataFrame
+    @test nrow(surviving) == 1
+    @test isequal(surviving[1, :link_ref_id], 950)
+    @test isequal(surviving[1, :note], "child-150f")
+
+    # Cleanup child-then-parent (renamedelchild is dropped by Phase 5's model redefinition).
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "renamedelchild" WHERE "id" = 951;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 950;""")
+  end
+
   # ── Phase 5: Indexes and unique constraints ───────────────────────
   @testset "Phase 5: Indexes and Unique Constraints" begin
     write_edge_models("""

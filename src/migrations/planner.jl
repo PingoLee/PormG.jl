@@ -46,12 +46,15 @@ end
 # elsewhere can't fail this migration; the rename preserves the table name + PKs, so children of this table
 # stay valid and need no check.
 function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sql::AbstractString;
-                                            surviving_columns::Union{Nothing,Set{String}} = nothing)::String
+                                            surviving_columns::Union{Nothing,Set{String}} = nothing,
+                                            column_renames::Dict{String,String} = Dict{String,String}())::String
   (!(conn isa PormGSQLite) || isempty(rebuild_sql)) && return String(rebuild_sql)
   # #116: when the rebuild removes columns (FK-field deletion), pass the rebuilt table's columns so an
   # index on a just-dropped column isn't re-created ("no such column"). `nothing` (the default) preserves
   # every live index, i.e. the pre-#116 behavior for pure alterations where no column disappears.
-  idx_ddls = get_secondary_index_ddls(conn, table_name; surviving_columns = surviving_columns)
+  # #150: `column_renames` (old ⇒ new physical name) maps a renamed column so its live index survives the
+  # filter and is re-created under the new name; empty (the default) for every non-rename rebuild.
+  idx_ddls = get_secondary_index_ddls(conn, table_name; surviving_columns = surviving_columns, column_renames = column_renames)
   safe_tbl = replace(table_name, "\"" => "\"\"")
   return join(String[String(rebuild_sql); idx_ddls; "PRAGMA foreign_key_check(\"$(safe_tbl)\");"], "\n")
 end
@@ -62,6 +65,22 @@ end
 # across a rebuild that drops a column (#116).
 _model_physical_columns(model::PormGModel)::Set{String} =
   Set(Models.field_db_column(f, string(k)) for (k, f) in model.fields)
+
+# #150: true when the FK definition differs between the old and the desired field — the signal that a
+# renamed FK field also needs a SQLite table rebuild (RENAME COLUMN alone keeps the old FK clause). Covers
+# an FK being added/removed by the rename (incl. a db_constraint true⇄false flip) and, when both sides are
+# live FKs, a change of target model, target column, or on_delete. Reuses the same FK comparison the
+# alteration path uses (`Models._compare_field_foreign_key` / `Models.fk_target_column`).
+function _fk_definition_changed(new_field::PormGField, old_field::PormGField)::Bool
+  new_fk = hasfield(typeof(new_field), :to) && new_field.db_constraint
+  old_fk = hasfield(typeof(old_field), :to) && old_field.db_constraint
+  new_fk != old_fk && return true
+  (new_fk && old_fk) || return false
+  return !Models._compare_field_foreign_key(new_field, old_field) ||
+         Models.fk_target_column(new_field) != Models.fk_target_column(old_field) ||
+         (hasfield(typeof(new_field), :on_delete) && hasfield(typeof(old_field), :on_delete) &&
+          new_field.on_delete != old_field.on_delete)
+end
 
 function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::Union{PormGField, Nothing}, old_field::PormGField)::Nothing
   if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (new_field === nothing || !hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
@@ -388,11 +407,37 @@ function _resolve_table_fields(
           return
         end
         old_field_name = old_field_sym |> string
-        _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, old_field_name, current_model.fields[current_fields_map[field_name]], model.fields[model_fields_map[old_field_name]])
-        !current_model.fields[current_fields_map[field_name]].primary_key && _drop_index(conn, migration_plan, model_name, old_field_name)
-        _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name", 
-        Dialect.rename_field(conn, model_name, old_field_name, field_name))
-        _add_constrains(conn, migration_plan, model_name, current_model, field_name, current_model.fields[current_fields_map[field_name]], _hash_field_name(model_name, field_name))
+        new_field = current_model.fields[current_fields_map[field_name]]
+        old_field = model.fields[model_fields_map[old_field_name]]
+        if conn isa PormGSQLite && _fk_definition_changed(new_field, old_field)
+          # #150: on SQLite the FK clause lives inside CREATE TABLE and `RENAME COLUMN` keeps the OLD clause,
+          # so a rename whose FK definition ALSO changes needs the same model-based table rebuild the
+          # alteration (#83) and deletion (#116) paths use. RENAME COLUMN is emitted FIRST so the rebuild's
+          # INSERT..SELECT — which copies by the NEW physical name — finds the column; the rebuild then
+          # re-creates the table from `current_model` with the new FK clause, preserving the secondary
+          # indexes (renamed via `column_renames`) under the stable "Alter table:" key. A plain FK rename
+          # (no FK change) takes the cheap path below — SQLite updates the FK's local column reference
+          # natively. Co-occurring field DELETIONS on this table are handled: the deletion loop below defers
+          # to this rebuild (which already drops every removed column). Residual limitation: a co-occurring
+          # field ALTERATION re-emits "Alter table:" WITHOUT column_renames (the renamed column's index may
+          # be dropped), and a second rename/addition on the same table is unsupported (the rebuild copies by
+          # `current_model`'s names, which the other change hasn't applied to the old table yet) — both rare,
+          # and both fail safely (the runner transaction rolls back). Tracked as a #150 follow-up.
+          old_phys = Models.field_db_column(old_field, old_field_name)
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
+          Dialect.rename_field(conn, model_name, old_field_name, field_name))
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
+          _sqlite_rebuild_preserving_indexes(conn, current_model.name |> lowercase,
+            Dialect.alter_field(conn, current_model, field_name, new_field, old_field, Symbol[]);
+            surviving_columns = _model_physical_columns(current_model),
+            column_renames = Dict(old_phys => field_name)))
+        else
+          _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, old_field_name, new_field, old_field)
+          !new_field.primary_key && _drop_index(conn, migration_plan, model_name, old_field_name)
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
+          Dialect.rename_field(conn, model_name, old_field_name, field_name))
+          _add_constrains(conn, migration_plan, model_name, current_model, field_name, new_field, _hash_field_name(model_name, field_name))
+        end
         # Update model.fields to reflect rename to avoid double processing if needed
         model.fields[model_fields_map[old_field_name]] = model.fields[model_fields_map[old_field_name]] # effectively stays same but we can update key if we want to sync
         # remove the old field from colect_deletion
@@ -401,7 +446,14 @@ function _resolve_table_fields(
     end      
     filter!(x -> x != field_name_sym, colect_addition)
   end
-  if !isempty(colect_deletion)
+  # #150: a rename-with-FK-change may already have scheduled a full SQLite rebuild for this model (keyed
+  # "Alter table: $model_name"). That rebuild is generated from `current_model`, which omits EVERY deleted
+  # field, so it already drops this table's remaining deletions. Running the per-column deletion handling
+  # below as well would emit `DROP COLUMN "<other>"` for a column the rebuild already removed ("no such
+  # column"), so defer to the rebuild when it is present (SQLite only; PostgreSQL uses plain DROP COLUMN).
+  sqlite_rename_rebuild = conn isa PormGSQLite && haskey(migration_plan, model_name) &&
+    haskey(migration_plan[model_name], "Alter table: $model_name")
+  if !isempty(colect_deletion) && !sqlite_rename_rebuild
     # #116: On SQLite an FK column can't be removed with `ALTER TABLE DROP COLUMN` (SQLite forbids it and
     # has no `ALTER TABLE DROP CONSTRAINT`), so deleting an FK field needs a full table rebuild. The rebuild
     # is generated from `current_model`, which already omits EVERY deleted field, so ONE rebuild drops all of
@@ -448,11 +500,15 @@ function _resolve_table_fields(
 end
 
 function _colect_numbered_fields(colect::Vector{Symbol})
+  # Number the rename candidates in a deterministic (name-sorted) order so the prompt — and the index the
+  # user answers with — is stable across runs regardless of the underlying set-iteration order. Sorting a
+  # copy leaves the caller's `colect_deletion` untouched (it's still needed for the later `filter!`).
+  colect = sort(colect, by = string)
   colect_numbered = Dict{Int64, Symbol}()
   for (index, field_name) in enumerate(colect)
     colect_numbered[index] = field_name
   end
-  return colect_numbered, join([string(index, " - ", colect[index]) for index in keys(colect_numbered)], ", ")
+  return colect_numbered, join([string(index, " - ", colect_numbered[index]) for index in sort(collect(keys(colect_numbered)))], ", ")
 end
 function _get_temporary_default_value(field::PormGField, settings::SQLConn)
   if field |> typeof == Models.sDateTimeField

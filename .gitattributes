@@ -7,3 +7,6 @@
 # and the trailing CR breaks the `$`-anchored line scan (and would desync a byte-frozen
 # fixture). Pin LF so the working tree matches the index (already LF) on every platform.
 *.jl text eol=lf
+# Shell scripts must stay LF: a CRLF `#!/usr/bin/env bash\r` shebang / `set -euo\r` breaks
+# under bash on a Windows checkout (autocrlf=true would otherwise rewrite LF -> CRLF).
+*.sh text eol=lf

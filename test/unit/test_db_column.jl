@@ -356,6 +356,53 @@ end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # #65: `resolve_fk_target!` is the SINGLE source of FK/O2O resolution + pk_field
+  # defaulting that BOTH load lifecycles (runtime `set_models`, the migration prelude)
+  # call. These assertions lock the two axes that matter: (A) on a resolvable target the
+  # strict and best-effort modes are byte-for-byte equivalent — the anti-drift guarantee;
+  # if a future edit lets the runtime and migration paths diverge, (A) breaks. (B)
+  # strictness is the ONLY behavioral difference, and only on an unresolvable target.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "resolve_fk_target! single-sources FK resolution (#65)" begin
+    rfk = PormG.Models.resolve_fk_target!
+
+    # Parent whose PK carries a db_column, plus two IDENTICAL children (string FK target,
+    # no pk_field) — one driven strict (runtime mode), one best-effort (migration mode).
+    r65_parent   = Model("r65_parent", code = IDField(db_column="parent_code"), label = CharField(null=true))
+    r65_child_s  = Model("r65_child_s", id = IDField(), parent = ForeignKey("R65Parent", db_column="pfk", null=true))
+    r65_child_b  = Model("r65_child_b", id = IDField(), parent = ForeignKey("R65Parent", db_column="pfk", null=true))
+    r65_orphan_s = Model("r65_orphan_s", id = IDField(), ref = ForeignKey("R65NoSuch", db_column="rfk", null=true))
+    r65_orphan_b = Model("r65_orphan_b", id = IDField(), ref = ForeignKey("R65NoSuch", db_column="rfk", null=true))
+    mod = Module(:r65_resolver_module)
+    Core.eval(mod, :(const R65Parent = $r65_parent))   # the only resolvable binding in `mod`
+
+    # (A) Anti-drift: strict=true (runtime) and strict=false (migration) agree on a resolvable target.
+    gs = rfk(r65_child_s.fields["parent"], "parent", "r65_child_s", mod; strict=true)
+    gb = rfk(r65_child_b.fields["parent"], "parent", "r65_child_b", mod; strict=false)
+    @test gs === r65_parent === gb                                       # same resolved model object
+    @test r65_child_s.fields["parent"].to === r65_child_b.fields["parent"].to === r65_parent
+    @test r65_child_s.fields["parent"].pk_field == r65_child_b.fields["parent"].pk_field == "code"
+    @test fk_target_column(r65_child_s.fields["parent"]) == fk_target_column(r65_child_b.fields["parent"]) == "parent_code"
+
+    # Idempotent: re-resolving an already-resolved field is a no-op (safe on set_models re-runs / reload).
+    @test rfk(r65_child_s.fields["parent"], "parent", "r65_child_s", mod; strict=true) === r65_parent
+    @test r65_child_s.fields["parent"].to === r65_parent
+    @test r65_child_s.fields["parent"].pk_field == "code"
+
+    # (B) Strictness is the only axis of difference — and only on an UNRESOLVABLE target.
+    #  best-effort: nothing returned, `.to` left a string, pk_field NOT defaulted (the continue-skip).
+    @test rfk(r65_orphan_b.fields["ref"], "ref", "r65_orphan_b", mod; strict=false) === nothing
+    @test r65_orphan_b.fields["ref"].to == "R65NoSuch"
+    @test r65_orphan_b.fields["ref"].pk_field === nothing
+    #  strict: throws ArgumentError naming the target, the field, and the model — and does NOT write back
+    #  (the message must still name the originally-declared string, so the throw precedes the write-back).
+    err = try; rfk(r65_orphan_s.fields["ref"], "ref", "r65_orphan_s", mod; strict=true); nothing; catch e; e; end
+    @test err isa ArgumentError
+    @test occursin("R65NoSuch", err.msg) && occursin("field ref", err.msg) && occursin("model r65_orphan_s", err.msg)
+    @test r65_orphan_s.fields["ref"].to == "R65NoSuch"                   # strict throw did NOT mutate the field
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # Serializer: a model-instance `.to` serializes to the SAME string a user would have
   # declared (uppercasefirst(model.name)) — the write-back can't change snapshot output.
   # ─────────────────────────────────────────────────────────────────────────────

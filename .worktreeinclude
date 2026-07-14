@@ -1,0 +1,18 @@
+# .worktreeinclude — gitignored local state auto-copied into each new worktree at creation
+# (Claude Code feature; .gitignore syntax; only files that match a pattern AND are gitignored
+# are copied, so tracked files are never duplicated). This gives a fresh worktree the untracked
+# state it needs to load PormG and run the unit suite without any manual copying.
+#
+# NOT listed on purpose:
+#   - test/integration/db_2/migrations  — TRACKED (already present in every worktree).
+#   - test/integration/db_sl/f1.sqlite  — 42 MB + torn-WAL risk on unconditional copy; copied
+#                                          on demand (guarded) by scripts/worktree_setup.sh,
+#                                          needed only for db_sl integration runs.
+#
+# Still run after creation: `julia --project=. -e 'import Pkg; Pkg.instantiate()'`
+# (instantiate is not a file copy, so .worktreeinclude cannot do it). See scripts/worktree_setup.sh.
+
+Manifest.toml
+test/integration/db_sl/connection.yml
+test/integration/db_2/connection.yml
+test/integration/db_sl/migrations/

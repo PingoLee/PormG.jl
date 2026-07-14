@@ -63,3 +63,56 @@ import PormG.Migrations: get_secondary_index_ddls
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #150: rename-aware index preservation via the `column_renames` kwarg.
+#
+# When a rename-with-FK-change rebuilds the table, `get_secondary_index_ddls` still
+# snapshots the LIVE (pre-rename) index DDL — with the OLD column name — but the
+# rebuilt table carries the NEW name. `column_renames` (old ⇒ new) maps each renamed
+# column so its index (a) survives the `surviving_columns` filter (keyed on the NEW
+# names) and (b) is re-created with the new column name. PormG emits quoted
+# identifiers (create_index in Dialect.jl), so the rewrite targets the quoted `"old"`
+# token — precise enough to leave an index NAME that merely contains the column
+# substring untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "get_secondary_index_ddls column_renames (#150)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "idxrename.sqlite"); pool_size = 1)
+    try
+      fetch(pool, "CREATE TABLE t (old_col INTEGER, keep INTEGER);")
+      # Index name deliberately CONTAINS the column substring, to prove the quoted-token
+      # rewrite touches only the parenthesised column reference, never the name.
+      fetch(pool, "CREATE INDEX \"old_col_ix\" ON \"t\" (\"old_col\");")
+      fetch(pool, "CREATE INDEX \"multi_ix\" ON \"t\" (\"old_col\", \"keep\");")
+
+      renames = Dict("old_col" => "new_col")
+      surviving = Set(["new_col", "keep"])   # the rebuilt table's physical columns (post-rename)
+
+      # Without the map, `surviving` is keyed on the NEW names while the live index still
+      # references `old_col`, so BOTH indexes are filtered out — i.e. the renamed column's
+      # index would be silently lost. This is exactly what column_renames must prevent.
+      lost = get_secondary_index_ddls(pool, "t"; surviving_columns = surviving)
+      @test isempty(lost)
+
+      # With the map: both indexes survive (old_col maps onto the surviving new_col) and the
+      # emitted DDL references the NEW column name.
+      kept = get_secondary_index_ddls(pool, "t"; surviving_columns = surviving, column_renames = renames)
+      @test length(kept) == 2
+      for ddl in kept
+        @test occursin("\"new_col\"", ddl)      # column rewritten to the new name
+        @test !occursin("\"old_col\"", ddl)     # no bare old-column ref remains (name is not a match)
+      end
+      # The index NAME "old_col_ix" (contains the substring) is preserved verbatim — the
+      # quoted-token rewrite matched only the column, never the name.
+      @test any(occursin("\"old_col_ix\"", d) for d in kept)
+      @test any(occursin("\"keep\"", d) for d in kept)   # untouched column in the multi-col index
+
+      # Mutation gate: drop the DDL rewrite and `"old_col"` stays in the output → the
+      # `!occursin("\"old_col\"")` checks fail. Drop the filter mapping and `kept` goes empty.
+    finally
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      close_pool!(pool)
+    end
+  end
+end

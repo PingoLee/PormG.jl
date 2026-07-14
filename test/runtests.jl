@@ -72,6 +72,7 @@ end
     @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     @testset "Migration Runner (checksum, guardrails)" include("unit/test_migrations_runner.jl")
     @testset "SQLite Rebuild Index Filter (#116)" include("unit/test_sqlite_index_filter.jl")
+    @testset "FK Rename Rebuild Gate (#150)" include("unit/test_fk_rename_rebuild.jl")
     @testset "Migration Diff Fail-Safe (#69)" include("unit/test_migration_diff_failsafe.jl")
     @testset "Model_to_str Render Failure (#70/#134)" include("unit/test_model_to_str_render_failure.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")

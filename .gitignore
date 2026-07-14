@@ -43,3 +43,7 @@ test/integration/db_test_migration_pg/migrations/
 # *connection.yml rule (top of this file) would otherwise exclude it; this negation re-includes
 # it (git last-match-wins). host/username/password are blank and hydrated in-memory at runtime.
 !test/integration/db_test_migration_pg/connection.yml
+
+# Claude Code parallel-session worktrees live here; keep their contents out of the main
+# checkout's status (they are provisioned per-worktree, see .worktreeinclude).
+.claude/worktrees/

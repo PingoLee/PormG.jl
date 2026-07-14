@@ -572,7 +572,10 @@ Converts a model object to a string representation to create the model.
 - `String`: The string representation of the model object. A field whose rendering fails is
   omitted from the constructor call and surfaced instead as a `# PormG: field '<name>' … could
   not be rendered …` comment line prepended above the model definition (#70), plus a structured
-  `@warn` — never dropped silently.
+  `@warn` — never dropped silently. If *every* field fails to render (so the constructor call
+  would be fieldless), the whole model definition is emitted **commented out** with a
+  `# PormG: model '<name>' had no renderable fields …` marker instead of a throwing
+  `Models.Model("<name>")` call, so the generated file still `include`s cleanly (#134).
 
 # Examples
 ```julia
@@ -618,7 +621,17 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
   model_var_name = uppercasefirst(model.name)
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
-  result = """$(marker)$(model_var_name) = Models.Model("$(model_name_abs)"$fields)"""
+  if fields == ""
+    # Every field failed to render (or the model has none): a bare `Models.Model("name")` call throws
+    # ArgumentError at include time (the single-arg constructor requires ≥1 field), which would abort
+    # loading the ENTIRE generated module (#134). Comment the definition out — with an explanatory
+    # marker — so the file still loads and the user sees exactly which model to fix by hand. Mirrors
+    # Rails' SchemaDumper, which comments out a table it can't dump so schema.rb stays loadable.
+    note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
+    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model("$(model_name_abs)")"""
+  else
+    result = """$(marker)$(model_var_name) = Models.Model("$(model_name_abs)"$fields)"""
+  end
   @info(result)
 
   return result

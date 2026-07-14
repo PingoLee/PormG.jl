@@ -91,3 +91,60 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
   end
 
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# All-fields-failed guard (#134). When EVERY field fails to render, `fields == ""` and the old
+# code still emitted a bare `Var = Models.Model("name")` line. The single-arg constructor
+# `Model(name::String)` throws ArgumentError unconditionally, so `include`-ing the generated file
+# aborted loading the ENTIRE module — every healthy model died with the one bad one. Model_to_str
+# must instead comment the definition out (with an explanatory marker), keeping the file loadable —
+# the load-time sibling of the #70 field-level fix, matching Rails' SchemaDumper per-table rescue.
+#
+# Mutation gate: reverting the `fields == ""` branch in Models.jl restores the bare throwing
+# `Model(...)` line — the `include_string` load below then throws (loaded == false) and the
+# "no bare Model call" assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Model_to_str all-fields-failed guard (#134)" begin
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Every field raises during rendering → `fields == ""`. The model definition must be emitted
+  # commented out (with per-field markers AND a model-level note), never as a throwing call, so
+  # the generated file still loads.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "all fields fail → definition commented out, file still loads (#134)" begin
+    m = _mk_render_model(Dict{String, PormG.PormGField}(
+      "alpha" => _ThrowingRenderField(nothing),   # rendering raises UndefVarError
+      "beta"  => _ThrowingRenderField(nothing),   # rendering raises UndefVarError
+    ))
+
+    # Both fields fail, so both must still warn + surface their own marker (match_mode=:any tolerates
+    # the trailing @info that prints the final string).
+    s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m, RENDER_SETTINGS)
+
+    # Every failed field is still surfaced individually (the #70 per-field markers).
+    @test occursin("# PormG: field 'alpha' (ThrowingRenderField) could not be rendered", s)
+    @test occursin("# PormG: field 'beta' (ThrowingRenderField) could not be rendered", s)
+    # A model-level note explains why the whole definition is commented out.
+    @test occursin("# PormG: model 'drivers_render_scratch' had no renderable fields", s)
+    # CRUCIAL (#134): no bare, top-level `Var = Models.Model(...)` call — that line would throw at
+    # include time. The (?m) anchors ^ to line starts so the commented `# Drivers... ` doesn't match.
+    @test !occursin(r"(?m)^Drivers_render_scratch = Models\.Model\("m, s)
+    # The definition survives, commented out, for the user to fix by hand.
+    @test occursin("# Drivers_render_scratch = Models.Model(\"drivers_render_scratch\")", s)
+
+    # End-to-end load gate: the real #134 failure is at include time. Evaluate the generated string
+    # in a fresh module exactly as @import_models `include`s the generated file, and assert it does
+    # NOT throw. With the fix reverted, `s` carries the bare `Model(...)` call → include_string
+    # throws → loaded == false → this test fails.
+    mod = Module(:PormG134Test)
+    Core.eval(mod, :(import PormG.Models))
+    loaded = try
+      include_string(mod, s)
+      true
+    catch
+      false
+    end
+    @test loaded
+  end
+
+end

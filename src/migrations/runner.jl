@@ -854,37 +854,50 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::SQLCo
   end
 
   # Begin transaction
-  result, conn = with_transaction(connection, "BEGIN;")
-  
+  _, conn = with_transaction(connection, "BEGIN;")
+  # Release/renew the transaction connection exactly once, in a single terminal finally, so a
+  # failed COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
+  local rollback_error = nothing
+
   try
     # Execute all SQL statements
     _execute_statements_pg(connection, ordered_statements; conn=conn)
-    
+
     # Record in history table (within same transaction)
     _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
-    
-    # Commit
-    with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
+
+    # Commit — release_conn=false: the finally owns the single release.
+    with_transaction(connection, "COMMIT;", conn=conn, release_conn=false)
     @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
   catch e
-    # Rollback and record failure
+    # Roll back on the still-leased connection. A rollback failure must not mask the body's
+    # error — capture it so the finally renews/discards the (now-dirty) connection instead of
+    # releasing it (#71), then rethrow the original.
     try
-      with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
+      with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=false)
     catch rollback_err
+      rollback_error = rollback_err
       @error "Failed to rollback transaction" exception=rollback_err
     end
-    
-    # Record failed status outside the rolled-back transaction
+
+    # Record failed status outside the (now rolled-back) transaction. Reuse the transaction's
+    # own connection (conn=conn) rather than acquiring a fresh one: it is still leased until the
+    # finally, and SQLite's single writer slot would otherwise deadlock this write. Trade-off: if
+    # the ROLLBACK above ALSO failed, `conn` is dirty/aborted and this INSERT fails too (logged and
+    # skipped, then the finally renews the connection) — so in that rare double-failure the `failed`
+    # row is not recorded; the error is still logged and rethrown.
     try
-      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
+      _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn=conn)
     catch record_err
       @error "Failed to record migration failure in history table" exception=record_err
     end
-    
+
     @error "Error applying migrations" exception=e
     rethrow(e)
+  finally
+    finalize_transaction_connection!(connection, conn; rollback_error=rollback_error)
   end
-  
+
   # Archive files (post-commit, best-effort)
   try
     _archive_migration_files(settings, date_str)
@@ -920,7 +933,10 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn
   # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
   with_sqlite_write_lock(connection) do
     # Begin transaction (IMMEDIATE for SQLite)
-    result, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
+    _, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
+    # Single terminal finally releases/renews the connection exactly once, so a failed COMMIT
+    # never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
+    local rollback_error = nothing
 
     try
       # Execute all SQL statements
@@ -929,25 +945,34 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn
       # Record in history table (within same transaction)
       _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
 
-      # Commit
-      with_transaction(connection, "COMMIT;", conn=conn, release_conn=true)
+      # Commit — release_conn=false: the finally owns the single release.
+      with_transaction(connection, "COMMIT;", conn=conn, release_conn=false)
       @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
     catch e
+      # Roll back on the still-leased connection; capture a rollback failure so the finally
+      # renews/discards the dirty connection instead of releasing it (#71), then rethrow.
       try
-        with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=true)
+        with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=false)
       catch rollback_err
+        rollback_error = rollback_err
         @error "Failed to rollback transaction" exception=rollback_err
       end
 
-      # Record failed status outside the rolled-back transaction
+      # Record failed status outside the (now rolled-back) transaction, reusing the transaction's
+      # own connection (conn=conn): it is still leased until the finally, and acquiring a fresh
+      # writer would deadlock on SQLite's single writer slot. Trade-off: if the ROLLBACK above also
+      # failed, `conn` is dirty and this INSERT fails too (logged and skipped, then the finally
+      # renews it) — so the `failed` row is not recorded in that rare double-failure.
       try
-        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive)
+        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn=conn)
       catch record_err
         @error "Failed to record migration failure in history table" exception=record_err
       end
 
       @error "Error applying migrations" exception=e
       rethrow(e)
+    finally
+      finalize_transaction_connection!(connection, conn; rollback_error=rollback_error)
     end
   end
   

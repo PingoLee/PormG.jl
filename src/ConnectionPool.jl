@@ -175,7 +175,7 @@ function _sqlite_candidate_slots!(pool::PormGSQLite, mode::Symbol)::Vector{Int}
   return ordered
 end
 
-function close_pool!(pool::PormGPostgres)
+function close_pool!(pool::PostgresConnectionPool)
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       conn = pool.connections[i]
@@ -193,7 +193,7 @@ function close_pool!(pool::PormGPostgres)
   end
 end
 
-function close_pool!(pool::PormGSQLite)
+function close_pool!(pool::SQLiteConnectionPool)
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       conn = pool.connections[i]
@@ -210,6 +210,14 @@ function close_pool!(pool::PormGSQLite)
     end
   end
 end
+
+# The two methods above dispatch on the CONCRETE pool structs so they only ever touch real
+# pool fields (`lock`/`connections`/`available`). Any other `PormGPostgres`/`PormGSQLite`
+# value is not a real connection pool — e.g. a lightweight mock that SQL-inspection unit
+# tests register in `config` to satisfy dialect dispatch — so cleanup must SKIP it rather
+# than trip on its missing fields. Without this fallback, `__cleanup__` (which closes every
+# `config` entry) aborts with a `FieldError` the first time it reaches a leaked test mock (#147).
+close_pool!(::Union{PormGPostgres, PormGSQLite}) = nothing
 
 function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_retries::Int = 300)
   start_time = time()

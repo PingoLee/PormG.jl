@@ -257,3 +257,40 @@ end
   # Positive control: the guard did NOT break real M2M accessor dispatch.
   @test M2M.Driver_championship.drivers isa PormG.QueryBuilder.ManyToManyDescriptor
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #65: a ManyToManyRelation now carries the two sides as resolved model objects,
+# populated wherever a relation is built (`_relation_from_many_to_many`), and swapped
+# in the reverse relation. `ManyToManyUnitModels` above already ran `set_models`, so the
+# relations are fully wired. This completes the "resolve every lazy reference once"
+# guarantee for M2M; the query builder doesn't consume the slots yet (that is #68/#41).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ManyToManyRelation carries resolved model slots (#65)" begin
+  # Forward relation (owner = Driver_championship, related = Driver), from the owner's cache.
+  fwd = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
+  @test fwd.owner_model_resolved === M2M.Driver_championship
+  @test fwd.related_model_resolved === M2M.Driver
+
+  # Reverse relation (stored on the related model under the inverse accessor) — slots swapped
+  # to match the swapped string fields, so each side still names its own model.
+  rev = Models.get_many_to_many_relation(M2M.Driver, "championships")
+  @test rev.reverse
+  @test rev.owner_model_resolved === M2M.Driver
+  @test rev.related_model_resolved === M2M.Driver_championship
+
+  # deepcopy SHARES the resolved slots (the deepcopy_internal override) instead of cloning the
+  # related-model graph. This is also REQUIRED for correctness: a resolved model carries a
+  # `_module::Module`, and Julia cannot deepcopy a Module — so without the override, deep-copying
+  # a relation (e.g. via deepcopy(model.related_objects)) would throw "deepcopy of Modules not
+  # supported". The override copies the value fields and shares the two model references.
+  fwd_copy = deepcopy(fwd)
+  @test fwd_copy.owner_model_resolved === M2M.Driver_championship  # same object (===), not a clone
+  @test fwd_copy.related_model_resolved === M2M.Driver
+  @test fwd_copy.field_name == fwd.field_name                      # value fields still deep-copied
+
+  # A relation-bearing model whose own fields are all scalar (Driver is the M2M target) still
+  # deep-copies cleanly — its related_objects reverse relation routes through the same override.
+  # Guards that adding the resolved slots did not regress model deepcopy for such models.
+  dc_driver = deepcopy(M2M.Driver)
+  @test Models.get_many_to_many_relation(dc_driver, "championships").related_model_resolved === M2M.Driver_championship
+end

@@ -45,6 +45,12 @@ end
   related_column::String
   inverse_accessor::String
   reverse::Bool = false
+  # #65: resolved model objects for the two sides, populated wherever a relation is built
+  # (`_relation_from_many_to_many` for the forward relation, swapped in the reverse one). This
+  # completes the "resolve every lazy reference once" guarantee for M2M — the query builder still
+  # re-resolves by binding today; consuming these slots to retire that reflection is #68/#41.
+  owner_model_resolved::Union{PormGModel, Nothing} = nothing
+  related_model_resolved::Union{PormGModel, Nothing} = nothing
 end
 function deepcopy(model::Model_Type)
   try
@@ -62,6 +68,33 @@ function deepcopy(model::Model_Type)
     @error("Failed to deepcopy Model_Type: $(e)")
     rethrow(e)
   end
+end
+
+# #65: a ManyToManyRelation now carries resolved model objects (owner/related). Those are shared,
+# derived state — `set_models` repopulates them — so deep-copying them would needlessly clone the
+# whole related-model graph (a Model_Type's `related_objects` holds these relations, and
+# `deepcopy(model)` above recurses into it). Copy the value-type String/Bool fields; SHARE the two
+# resolved-model references. Mirrors the targeted override for SQLiteParameterizedQuery.
+function Base.deepcopy_internal(r::ManyToManyRelation, stackdict::IdDict)
+  haskey(stackdict, r) && return stackdict[r]
+  new = ManyToManyRelation(
+    field_name=r.field_name,
+    through_model=r.through_model,
+    owner_model=r.owner_model,
+    owner_binding=r.owner_binding,
+    owner_pk=r.owner_pk,
+    owner_column=r.owner_column,
+    related_model=r.related_model,
+    related_binding=r.related_binding,
+    related_pk=r.related_pk,
+    related_column=r.related_column,
+    inverse_accessor=r.inverse_accessor,
+    reverse=r.reverse,
+    owner_model_resolved=r.owner_model_resolved,
+    related_model_resolved=r.related_model_resolved,
+  )
+  stackdict[r] = new
+  return new
 end
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -195,18 +228,10 @@ function set_models(_module::Module, path::String)::Nothing
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey || field isa sOneToOneField
-        field_to::Union{PormGModel, Nothing} = _resolve_target_model(field.to, _module)
-        field_to === nothing && throw(ArgumentError("The model $(field.to) in the field $field_name in the model $(model.name) is not defined"))
-        # #62: persist the resolved target so `fk_target_column` honors a referenced
-        # parent's db_column for string-declared FKs too. Idempotent on reload (a model
-        # `.to` resolves to itself); the rest of this loop keeps using the local `field_to`.
-        field.to = field_to
-        if field.pk_field === nothing
-          pk_sym = get_model_pk_field(field_to)
-          if pk_sym !== nothing
-            field.pk_field = string(pk_sym)
-          end
-        end
+        # #65: single-sourced FK/O2O resolution + pk_field defaulting, shared with the migration
+        # prelude via `resolve_fk_target!`. strict=true throws on an unresolvable target, so the
+        # returned value is always a resolved model here; it drives the reverse-relation wiring below.
+        field_to::PormGModel = resolve_fk_target!(field, field_name, model.name, _module; strict=true)
         if haskey(dict_tables_c, field_to.name)
           dict_tables_c[field_to.name] += 1
           push!(dict_tables_fiels[field_to.name], field_name)
@@ -448,6 +473,42 @@ function _resolve_target_model(to, mod::Module)::Union{PormGModel, Nothing}
     e isa UndefVarError ? nothing : rethrow()
   end
   return m isa PormGModel ? m : nothing
+end
+
+"""
+    resolve_fk_target!(field, field_name, model_name, lookup; strict) -> Union{PormGModel, Nothing}
+
+Single source (#65) of the FK/O2O "resolve target → write-back `field.to` → default `pk_field`" step that
+both model-load lifecycles share — the runtime path (`set_models`) and the migration prelude
+(`_load_current_models` → `_resolve_fk_targets_and_pk!`). Side-effect-free with respect to globals: it
+mutates only `field.to`/`field.pk_field`, never `REGISTERED_MODULES`, `Configuration`, or reverse relations.
+
+`strict=true` (runtime) throws `ArgumentError` on an unresolvable target; `strict=false` (migrations) is
+best-effort — it leaves `field.to` a string, emits a `@debug`, and returns `nothing`, which skips the
+`pk_field` default (so an unresolved field keeps both its string `.to` and a `nothing` `.pk_field`, matching
+the pre-#65 migration behavior). The statement order is load-bearing: the strict throw fires *before* the
+write-back so the message still names the originally-declared target string.
+
+`field` is left untyped because `sForeignKey`/`sOneToOneField` are defined later in the load order (in
+`models/fields.jl`); both call sites already guard with `field isa sForeignKey || field isa sOneToOneField`,
+so only FK/O2O fields (which carry `.to`/`.pk_field`) ever reach here.
+"""
+function resolve_fk_target!(field, field_name::AbstractString,
+                            model_name::AbstractString, lookup::Module; strict::Bool)::Union{PormGModel, Nothing}
+  resolved = _resolve_target_model(field.to, lookup)
+  if resolved === nothing
+    strict && throw(ArgumentError("The model $(field.to) in the field $field_name in the model $model_name is not defined"))
+    @debug "makemigrations: FK target $(field.to) of field $field_name in model $model_name is not a model binding in the models module; leaving as a string"
+    return nothing
+  end
+  # #62: persist the resolved target so `fk_target_column` honors a referenced parent's db_column for
+  # string-declared FKs too. Idempotent on reload (a resolved `.to` resolves to itself).
+  field.to = resolved
+  if field.pk_field === nothing
+    pk_sym = get_model_pk_field(resolved)
+    pk_sym !== nothing && (field.pk_field = string(pk_sym))
+  end
+  return resolved
 end
 
 # Resolve a field-name string to its physical column within `model` (db_column when
@@ -1254,6 +1315,10 @@ function _relation_from_many_to_many(
     related_column=related_column,
     inverse_accessor=inverse_accessor,
     reverse=false,
+    # #65: persist the already-resolved model objects (both sides arrive here resolved from either
+    # load lifecycle) so the relation is a fully-resolved reference, not just strings.
+    owner_model_resolved=owner_model,
+    related_model_resolved=related_model,
   )
 end
 
@@ -1271,6 +1336,9 @@ function _reverse_many_to_many_relation(relation::ManyToManyRelation, reverse_ac
     related_column=relation.owner_column,
     inverse_accessor=relation.field_name,
     reverse=true,
+    # #65: swap the resolved sides to match the swapped string fields above.
+    owner_model_resolved=relation.related_model_resolved,
+    related_model_resolved=relation.owner_model_resolved,
   )
 end
 

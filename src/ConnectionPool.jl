@@ -13,7 +13,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, with_savepoint
-export acquire_connection, release_connection
+export acquire_connection, release_connection, finalize_transaction_connection!
 export PoolTimeoutError
 # NOTE: close_pool! is intentionally NOT exported here. Configuration owns the public
 # `close_pool!` (it dispatches on a pool OR a db-name String and delegates the pool case to
@@ -561,6 +561,32 @@ as `TaskFailedException`, whose `string()` does not include the driver message.
 _is_benign_rollback_error(pool::Union{PormGPostgres, PormGSQLite}, e) =
   pool isa PormGSQLite && occursin("no transaction is active", string(_unwrap_async_exception(e)))
 
+"""
+    finalize_transaction_connection!(pool, conn; rollback_error=nothing) -> Nothing
+
+Terminal step of a manually-driven `BEGIN`/`COMMIT`/`ROLLBACK` lifecycle: return `conn` to the
+pool exactly once. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK
+ran cleanly. If `rollback_error` is supplied — the cleanup ROLLBACK threw — and it is not a benign
+"no transaction is active" error, `conn` may still hold an open/aborted transaction that the acquire
+liveness probe cannot detect, so it is renewed or discarded instead of released (#71).
+
+Call this from a single terminal `finally`, exactly as `run_in_transaction` does, so a lifecycle
+never releases its connection to the pool before its ROLLBACK has run on it — the release-then-
+rollback use-after-release race of #139. Never throws: it runs while the transaction's original
+error is propagating.
+"""
+function finalize_transaction_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; rollback_error = nothing)
+  if rollback_error !== nothing && !_is_benign_rollback_error(pool, rollback_error)
+    _renew_or_discard_connection!(pool, conn)
+  else
+    release_connection(pool, conn)
+  end
+  return nothing
+end
+# SQLConn overload — delegates to the underlying pool, mirroring with_transaction(::SQLConn).
+finalize_transaction_connection!(pool::SQLConn, conn; rollback_error = nothing) =
+  finalize_transaction_connection!(pool.connections, conn; rollback_error = rollback_error)
+
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
 # trigger connection renewal.
@@ -1058,7 +1084,7 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     acquire_connection(pool)
   end
   tx_started = false
-  rollback_failed = false
+  local rollback_error = nothing
   try
     # Begin transaction
     if pool isa PormGPostgres
@@ -1099,27 +1125,27 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
           task = sqlite_execute_async(pool, conn, "ROLLBACK;", nothing)
           Base.fetch(task)
         end
-      catch rollback_error
-        if _is_benign_rollback_error(pool, rollback_error)
-          # SQLite already auto-rolled-back; the connection is clean → the finally
-          # releases it normally.
-        else
-          # The connection may still hold an open/aborted transaction that the acquire
-          # liveness probe cannot detect. It must NOT return to the pool as-is (#71);
-          # the finally renews or discards it instead.
-          rollback_failed = true
-          @error "Failed to rollback transaction; connection will be renewed before returning to the pool" exception=_unwrap_async_exception(rollback_error)
+      catch rb
+        # Capture the rollback error so the finally can decide release-vs-renew (a benign
+        # SQLite "no transaction is active" is clean → released; anything else may leave the
+        # connection with an open/aborted transaction → renewed or discarded, #71).
+        rollback_error = rb
+        # This re-classifies the error that `finalize_transaction_connection!` also classifies in
+        # the finally — intentional, not a leftover: the "will be renewed" log must fire here in the
+        # catch, while the actual release/renew decision lives in the terminal finally. The cost is
+        # one extra cheap string check on the (rare) rollback-failure path. Alternatives (a bool
+        # passed to the helper, or logging inside it) either force `_is_benign_rollback_error` into
+        # the migration/delete submodules or perturb the log the #71 tests assert — both worse.
+        if !_is_benign_rollback_error(pool, rb)
+          @error "Failed to rollback transaction; connection will be renewed before returning to the pool" exception=_unwrap_async_exception(rb)
         end
       end
     end
     root === e ? rethrow() : throw(root)
   finally
-    if rollback_failed
-      # Never releases the dirty handle; never throws (the original error keeps propagating).
-      _renew_or_discard_connection!(pool, conn)
-    else
-      release_connection(pool, conn)
-    end
+    # Single terminal release/renew, shared with the migration/delete lifecycles (#139).
+    # Never releases a dirty handle; never throws (the original error keeps propagating).
+    finalize_transaction_connection!(pool, conn; rollback_error = rollback_error)
   end
 end
 

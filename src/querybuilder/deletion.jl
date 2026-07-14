@@ -160,22 +160,28 @@ function delete(objct::SQLObjectHandler;
     # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
     with_sqlite_write_lock(settings) do
       _, conn = with_transaction(settings, begin_sql)
+      # Release/renew the connection exactly once in a single terminal finally, so a failed
+      # COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
+      local rollback_error = nothing
       try
         with_tx_context(settings.connections, conn) do
           run_deletions(conn)
         end
-        # Commit transaction
-        with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
+        # Commit — release_conn=false: the finally owns the single release.
+        with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
       catch e
-        # Rollback on error. A rollback failure must not mask the body's error — log it
-        # and rethrow the original; the pool has already renewed or discarded the
-        # connection inside with_transaction (#71).
+        # Roll back on the still-leased connection. A rollback failure must not mask the body's
+        # error — capture it so the finally renews/discards the dirty connection instead of
+        # releasing it (#71), then rethrow the original.
         try
-          with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
-        catch rollback_error
-          @error "Failed to rollback delete transaction" exception=rollback_error
+          with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=false)
+        catch rollback_err
+          rollback_error = rollback_err
+          @error "Failed to rollback delete transaction" exception=rollback_err
         end
         rethrow(e)
+      finally
+        finalize_transaction_connection!(settings, conn; rollback_error=rollback_error)
       end
     end
   end

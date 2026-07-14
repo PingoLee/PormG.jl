@@ -441,14 +441,19 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
 - **`with_tx_context(conn_pool, conn::LibPQ.Connection, block)`**: Install a connection in thread-local storage so child tasks inherit it.
 - **`with_transaction(settings, sql, conn=nothing, release_conn=false)`**: Execute raw SQL inside a transaction context.
 - **`get_tx_connection()`**: Check if a transaction context is active and return the connection.
+- **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
 
 ### Example: Manual Savepoint
 
 ```julia
-import PormG.Configuration: with_tx_context, with_transaction, get_tx_connection
+import PormG.Configuration: with_tx_context, get_tx_connection
+import PormG.ConnectionPool: with_transaction, finalize_transaction_connection!
 
 settings = PormG.Configuration.get_settings("db_2")
 result, conn = with_transaction(settings, "BEGIN;")
+# Return the connection to the pool exactly once, in a single terminal `finally`, so a failed
+# COMMIT never hands it back before your cleanup ROLLBACK runs on it (#139).
+rollback_error = nothing
 try
   with_tx_context(settings.connections, conn) do
     # Insert first batch
@@ -464,21 +469,29 @@ try
       (M.Result.objects).create("raceid" => i, "driverid" => 2, ...)
     end
     
-    # If this fails, we can rollback just the second batch
+    # If this fails, we can roll back just the second batch
     if some_validation_error
       with_transaction(settings, "ROLLBACK TO sp1;", conn=conn)
     end
   end
   
-  # Commit
-  with_transaction(settings, "COMMIT;", conn=conn, release_conn=true)
+  # Commit — release_conn=false: the finally owns the single release.
+  with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
 catch e
-  with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=true)
+  # Roll back on the still-leased connection; capture a rollback failure so the finally
+  # renews/discards the connection instead of releasing it, then rethrow the original error.
+  try
+    with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=false)
+  catch rollback_err
+    rollback_error = rollback_err
+  end
   rethrow(e)
+finally
+  finalize_transaction_connection!(settings, conn; rollback_error=rollback_error)
 end
 ```
 
-**Important:** When manually managing connections, always pair `get_tx_connection()` calls with `release_conn=true` so the pool recovers the connection.
+**Important:** When you hand-roll a `BEGIN`/`COMMIT`/`ROLLBACK` lifecycle, do the cleanup ROLLBACK on the *still-leased* connection and return it to the pool exactly once from a single `finally` via `finalize_transaction_connection!`, as above. Running `COMMIT`/`ROLLBACK` with `release_conn=true` releases the connection *even when the statement fails*, which can hand it back to the pool before your ROLLBACK runs on it — a use-after-release race (#139). Prefer `run_in_transaction`, which does all of this for you.
 
 ---
 

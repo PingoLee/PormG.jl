@@ -60,6 +60,7 @@ end
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")
     @testset "No Lost-Connection Retry Inside Transactions (#138)" include("unit/test_fetch_retry_transaction.jl")
+    @testset "Failed COMMIT Holds Conn Until Rollback (#139)" include("unit/test_commit_failure_release.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")

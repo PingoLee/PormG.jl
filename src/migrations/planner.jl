@@ -45,12 +45,23 @@ end
 # same way. The check is SCOPED to the rebuilt table (not the whole DB) so an unrelated pre-existing orphan
 # elsewhere can't fail this migration; the rename preserves the table name + PKs, so children of this table
 # stay valid and need no check.
-function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sql::AbstractString)::String
+function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sql::AbstractString;
+                                            surviving_columns::Union{Nothing,Set{String}} = nothing)::String
   (!(conn isa PormGSQLite) || isempty(rebuild_sql)) && return String(rebuild_sql)
-  idx_ddls = get_secondary_index_ddls(conn, table_name)
+  # #116: when the rebuild removes columns (FK-field deletion), pass the rebuilt table's columns so an
+  # index on a just-dropped column isn't re-created ("no such column"). `nothing` (the default) preserves
+  # every live index, i.e. the pre-#116 behavior for pure alterations where no column disappears.
+  idx_ddls = get_secondary_index_ddls(conn, table_name; surviving_columns = surviving_columns)
   safe_tbl = replace(table_name, "\"" => "\"\"")
   return join(String[String(rebuild_sql); idx_ddls; "PRAGMA foreign_key_check(\"$(safe_tbl)\");"], "\n")
 end
+
+# Physical column names (db_column when set, else field name) of a model's rebuilt table — the exact set
+# `alter_field(::PormGSQLite, model, …)` writes into the new CREATE TABLE / INSERT (see Dialect.jl). Passed
+# as `surviving_columns` to `_sqlite_rebuild_preserving_indexes` so index preservation stays column-aware
+# across a rebuild that drops a column (#116).
+_model_physical_columns(model::PormGModel)::Set{String} =
+  Set(Models.field_db_column(f, string(k)) for (k, f) in model.fields)
 
 function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, field_name::String, new_field::Union{PormGField, Nothing}, old_field::PormGField)::Nothing
   if hasfield(old_field |> typeof, :to) && old_field.db_constraint && (new_field === nothing || !hasfield(new_field |> typeof, :to) || !new_field.db_constraint)
@@ -197,7 +208,8 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     # existing secondary indexes too (no-op on PostgreSQL).
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
       _sqlite_rebuild_preserving_indexes(conn, model.name |> lowercase,
-        Dialect.alter_field(conn, model, field_name, field, nothing, [:default])))
+        Dialect.alter_field(conn, model, field_name, field, nothing, [:default]);
+        surviving_columns = _model_physical_columns(model)))
   end
   return nothing
 end
@@ -299,7 +311,8 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
         # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
         alter_sql = _sqlite_rebuild_preserving_indexes(conn, model.name |> lowercase,
-          Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal))
+          Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal);
+          surviving_columns = _model_physical_columns(current_schema[model_name][:model]))
         _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
 
         # Check if the field is a foreign key
@@ -389,14 +402,49 @@ function _resolve_table_fields(
     filter!(x -> x != field_name_sym, colect_addition)
   end
   if !isempty(colect_deletion)
-    for field_name_sym in colect_deletion
-      field_name = field_name_sym |> string
-      _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, nothing, model.fields[model_fields_map[field_name]])
-      _drop_index(conn, migration_plan, model_name, field_name)
-      _configure_order_dict_migration_plan(migration_plan, model_name, "Remove field: $field_name", 
-      Dialect.drop_field(conn, model_name, field_name))
+    # #116: On SQLite an FK column can't be removed with `ALTER TABLE DROP COLUMN` (SQLite forbids it and
+    # has no `ALTER TABLE DROP CONSTRAINT`), so deleting an FK field needs a full table rebuild. The rebuild
+    # is generated from `current_model`, which already omits EVERY deleted field, so ONE rebuild drops all of
+    # this table's deleted columns (and their FKs/indexes) at once. Therefore if ANY deleted field forces a
+    # rebuild, route the WHOLE table's deletions through it and skip the per-column DROP COLUMNs — emitting
+    # both would race: the rebuild removes the column, then a separate `DROP COLUMN "<other>"` for a
+    # sibling deletion fails "no such column" (order-dependent on the deletion set's iteration).
+    fk_delete_idx = nothing
+    if conn isa PormGSQLite
+      fk_delete_idx = findfirst(colect_deletion) do fsym
+        f = model.fields[model_fields_map[string(fsym)]]
+        hasfield(typeof(f), :to) && f.db_constraint
+      end
+    end
+    if fk_delete_idx !== nothing
+      # `alter_field(::PormGSQLite, model, …)` rebuilds the table purely from `model.fields`; its
+      # field_name/new_field/old_field/colect_not_equal arguments are unused for the SQLite recreation, so a
+      # representative deleted field is passed only to satisfy the shared signature. `surviving_columns` keeps
+      # the dropped columns' indexes off the preserved set (see _sqlite_rebuild_preserving_indexes). The
+      # stable "Alter table:" key means a co-occurring alteration/add-default collapses into this one
+      # idempotent recreation from the same desired model.
+      rebuild_field = model.fields[model_fields_map[string(colect_deletion[fk_delete_idx])]]
+      _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
+        _sqlite_rebuild_preserving_indexes(conn, current_model.name |> lowercase,
+          Dialect.alter_field(conn, current_model, string(colect_deletion[fk_delete_idx]), rebuild_field, rebuild_field, Symbol[]);
+          surviving_columns = _model_physical_columns(current_model)))
+    else
+      # PostgreSQL, or SQLite with no FK-column deletions: plain DROP COLUMN works (the FK drop runs first on
+      # PostgreSQL; the index is pre-dropped so SQLite can drop an ordinary column).
+      for field_name_sym in colect_deletion
+        field_name = field_name_sym |> string
+        old_field = model.fields[model_fields_map[field_name]]
+        _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name, nothing, old_field)
+        _drop_index(conn, migration_plan, model_name, field_name)
+        _configure_order_dict_migration_plan(migration_plan, model_name, "Remove field: $field_name",
+        Dialect.drop_field(conn, model_name, field_name))
+      end
     end
   end
+  # `_configure_order_dict_migration_plan` returns the created OrderedDict when it makes a fresh table
+  # entry; the FK-rebuild branch above ends on that call, so return `nothing` explicitly to satisfy this
+  # function's `::Nothing` contract (otherwise Julia tries to `convert(Nothing, OrderedDict)` and errors).
+  return nothing
 end
 
 function _colect_numbered_fields(colect::Vector{Symbol})

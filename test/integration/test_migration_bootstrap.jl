@@ -402,6 +402,159 @@ end
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 900;""")
   end
 
+  # ── Phase 4c: Delete a live FK field (#116) ───────────────────────
+  # Sibling of #83: #83 dropped an FK *constraint* via field alteration; this deletes the whole FK
+  # *field*. On SQLite `ALTER TABLE DROP COLUMN` refuses a column bound by a FOREIGN KEY, so the
+  # deletion path must route through the same model-based table rebuild the alteration path uses —
+  # which omits the deleted column + its FK clause and preserves the survivors. It also exercises the
+  # column-aware index filter: an FK field is db_index=true by default, so a naïve rebuild would try to
+  # re-create the dropped column's index and fail "no such column" (the Django #33899 crash).
+  #
+  # Uses a DEDICATED child table with TWO FKs defined in CREATE TABLE (guaranteed-live, indexed FKs) plus
+  # a plain `doomed` column. The deletion removes BOTH the `drop_id` FK field AND the non-FK `doomed`
+  # column in one migration — exercising that a single table rebuild drops every removed column at once (a
+  # per-column DROP COLUMN for `doomed` after the rebuild would race with "no such column"). `keep_id`
+  # (sibling FK) and `label` survive. Placed after 4b so it can't disturb 4b's baseline; the leftover table
+  # is swept away by Phase 5's model redefinition. Runs on both backends (PostgreSQL takes the plain
+  # DROP CONSTRAINT + DROP COLUMN path; SQLite takes the rebuild).
+  @testset "Phase 4c: Delete Foreign Key Field (#116)" begin
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        keep_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true),
+        drop_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true),
+        doomed = Models.CharField(null=true),
+        label = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # Baseline: the new table has TWO live FKs (both created via CREATE TABLE) and the doomed column.
+    @assert foreign_key_count(pool, "childfktable") == 2 "Phase 4c requires two live FKs on childfktable"
+    @test "drop_id" in column_names(pool, "childfktable")
+    @test "doomed" in column_names(pool, "childfktable")
+
+    # Seed a parent + child; keep_id/label carry data that must survive the rebuild.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (920, 'fk-parent-116');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "childfktable" ("id", "keep_id", "drop_id", "doomed", "label") VALUES (921, 920, 920, 'gone-116', 'child-116');""")
+
+    # Desired model: delete BOTH the `drop_id` FK field and the plain `doomed` column (keep keep_id + label).
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        keep_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true),
+        label = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    # AC2: the generated plan must not embed its own transaction control (composes with the runner tx).
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # AC1: this must NOT raise (pre-fix, SQLite `DROP COLUMN "drop_id"` aborts because drop_id is an FK
+    # column; a naïve rebuild would instead fail re-creating drop_id's index — both are the #116 bug).
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # Both deleted columns are gone (drop_id via the FK-forced rebuild, doomed swept up in the same rebuild);
+    # the sibling FK column, its FK, and the remaining columns survive.
+    cols = column_names(pool, "childfktable")
+    @test !("drop_id" in cols)
+    @test !("doomed" in cols)
+    @test "keep_id" in cols
+    @test "label" in cols
+    @test foreign_key_count(pool, "childfktable") == 1   # drop_id's FK removed; keep_id's preserved
+
+    # Data fidelity: the child row survived the rebuild with its surviving values intact.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "keep_id", "label" FROM "childfktable" WHERE "id" = 921;""") |> DataFrame
+    @test nrow(surviving) == 1
+    # `isequal` (not `==`) so a would-be NULL never propagates `missing` into `@test` (house convention).
+    @test isequal(surviving[1, :keep_id], 920)
+    @test isequal(surviving[1, :label], "child-116")
+
+    # Cleanup child-then-parent so the DELETE never depends on ON DELETE CASCADE (childfktable itself is
+    # dropped later by Phase 5's model redefinition).
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "childfktable" WHERE "id" = 921;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 920;""")
+  end
+
+  # ── Phase 4d: Alter a field AND delete an FK field together (#116) ─
+  # Gates the COMBINED path on one SQLite table in a single migration: the FK deletion forces a table
+  # rebuild, and the field alteration ALSO rebuilds under the same "Alter table:" key. Both must feed
+  # `surviving_columns` so the deleted FK column's index is dropped from the preserved set — if the
+  # ALTERATION-site rebuild re-created keep_id's index, `migrate` would fail "no such column: keep_id".
+  # After Phase 4c, childfktable = {id, keep_id (FK, nullable), label (nullable)}. Runs on both backends
+  # (PostgreSQL: DROP CONSTRAINT/COLUMN for keep_id + ALTER COLUMN label SET NOT NULL; SQLite: one rebuild).
+  @testset "Phase 4d: Alter Field + Delete FK Field Together (#116)" begin
+    @assert foreign_key_count(pool, "childfktable") == 1 "Phase 4d requires childfktable's keep_id FK from 4c"
+    @assert column_nullable(pool, "childfktable", "label") "Phase 4d requires label to start nullable"
+
+    # Seed a parent + child; label carries data that must survive, and must be non-NULL for SET NOT NULL.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "migrationtest" ("id", "name") VALUES (930, 'fk-parent-116d');""")
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "childfktable" ("id", "keep_id", "label") VALUES (931, 930, 'child-116d');""")
+
+    # Desired model: delete keep_id (FK) AND alter label (null=true -> null=false) in the SAME migration.
+    write_edge_models("""
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # Must NOT raise: on SQLite the FK-delete rebuild and the label alteration collapse into one recreation
+    # whose preserved indexes exclude keep_id's (a broken alteration-site filter → "no such column: keep_id").
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "childfktable")
+    @test !("keep_id" in cols)                            # FK field deleted
+    @test "label" in cols
+    @test foreign_key_count(pool, "childfktable") == 0    # keep_id's FK gone
+    @test !column_nullable(pool, "childfktable", "label") # the alteration applied: label is now NOT NULL
+
+    # Data fidelity: the row survived the combined rebuild.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "label" FROM "childfktable" WHERE "id" = 931;""") |> DataFrame
+    @test nrow(surviving) == 1
+    @test isequal(surviving[1, :label], "child-116d")
+
+    # Cleanup (childfktable is dropped by Phase 5's model redefinition).
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "childfktable" WHERE "id" = 931;""")
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 930;""")
+  end
+
   # ── Phase 5: Indexes and unique constraints ───────────────────────
   @testset "Phase 5: Indexes and Unique Constraints" begin
     write_edge_models("""

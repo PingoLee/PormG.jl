@@ -68,13 +68,15 @@ The exact on-disk file layout, checksum algorithm, and tracking-table columns ar
 ## Database-Specific Behavior
 
 ### SQLite: Table Recreation
-SQLite has limited `ALTER TABLE` support (it cannot change types or modify nullability/unique constraints directly on existing tables). 
+SQLite has limited `ALTER TABLE` support. It can rename tables/columns and add or drop plain columns, but it **cannot** change a column's type, modify nullability/`UNIQUE`/`CHECK` constraints in place, remove a foreign key (there is no `ALTER TABLE ... DROP CONSTRAINT`), or `DROP COLUMN` on a column that participates in a `FOREIGN KEY`.
 
-To handle these types of changes, PormG automatically:
-- Creates a new temporary table with the desired schema.
-- Migrates existing data from the old table to the new one.
-- Re-creates indexes and foreign keys.
-- Drops the old table and renames the new one.
+To handle any of those changes, PormG automatically rebuilds the table from your model:
+- Creates a new table with the desired schema.
+- Copies existing data from the old table into it (surviving columns only).
+- Re-creates the surviving indexes and foreign keys — an index on a *dropped* column is **not** re-created.
+- Drops the old table, renames the new one, and runs `PRAGMA foreign_key_check` to catch orphaned rows.
+
+The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping a column that is not part of a foreign key — use `ALTER TABLE` directly, without a rebuild.
 
 This process is transparent to the user but may take longer on very large tables.
 

@@ -44,40 +44,35 @@ WHERE &quot;Tb_1&quot;.&quot;year&quot; = \$1 AND &quot;Tb&quot;.&quot;positiono
 -- Parameters: [2025, 1]
 
 -- Auto-committed when the block completes successfully
-COMMIT;</code></pre><p>The connection is automatically returned to the pool when the block exits. If any exception is raised inside the block, the transaction is rolled back and the exception rethrows.</p><hr/><h2 id="Why-Use-Transactions"><a class="docs-heading-anchor" href="#Why-Use-Transactions">Why Use Transactions</a><a id="Why-Use-Transactions-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Use-Transactions" title="Permalink"></a></h2><h3 id="Atomicity-with-Multiple-Writes"><a class="docs-heading-anchor" href="#Atomicity-with-Multiple-Writes">Atomicity with Multiple Writes</a><a id="Atomicity-with-Multiple-Writes-1"></a><a class="docs-heading-anchor-permalink" href="#Atomicity-with-Multiple-Writes" title="Permalink"></a></h3><p>When you update multiple tables and need them to succeed or fail together:</p><pre><code class="language-julia hljs"># Real-world scenario: Record a pit stop and update driver stats
+COMMIT;</code></pre><p>The connection is automatically returned to the pool when the block exits. If any exception is raised inside the block, the transaction is rolled back and the exception rethrows.</p><hr/><h2 id="Why-Use-Transactions"><a class="docs-heading-anchor" href="#Why-Use-Transactions">Why Use Transactions</a><a id="Why-Use-Transactions-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Use-Transactions" title="Permalink"></a></h2><h3 id="Atomicity-with-Multiple-Writes"><a class="docs-heading-anchor" href="#Atomicity-with-Multiple-Writes">Atomicity with Multiple Writes</a><a id="Atomicity-with-Multiple-Writes-1"></a><a class="docs-heading-anchor-permalink" href="#Atomicity-with-Multiple-Writes" title="Permalink"></a></h3><p>When you update multiple tables and need them to succeed or fail together:</p><pre><code class="language-julia hljs"># Real-world scenario: a stewards&#39; decision moves 2 championship points from one
+# driver to another — the deduction and the award must commit together
 PormG.run_in_transaction(&quot;db_2&quot;) do
-  # Record the pit stop
-  stop_query = M.Pit_stop.objects
-  stop_query.create(
-    &quot;raceid&quot; =&gt; 900,
-    &quot;driverid&quot; =&gt; 1,
-    &quot;stop&quot; =&gt; 1,
-    &quot;lap&quot; =&gt; 42,
-    &quot;time&quot; =&gt; 35,
-    &quot;duration&quot; =&gt; 22.5,
-  )
+  # Deduct from the penalized driver
+  penalized = M.Driver_standings.objects
+  penalized.filter(&quot;raceid&quot; =&gt; 841, &quot;driverid&quot; =&gt; 20)
+  penalized.update(&quot;points&quot; =&gt; F(&quot;points&quot;) - 2)
   
-  # Update driver pit-stop count
-  driver_query = M.Driver.objects
-  driver_query.filter(&quot;driverid&quot; =&gt; 1)
-  driver_query.update(&quot;pit_stops_count&quot; =&gt; F(&quot;pit_stops_count&quot;) + 1)
+  # Award to the promoted driver
+  promoted = M.Driver_standings.objects
+  promoted.filter(&quot;raceid&quot; =&gt; 841, &quot;driverid&quot; =&gt; 1)
+  promoted.update(&quot;points&quot; =&gt; F(&quot;points&quot;) + 2)
   
   # Both changes succeed together, or both roll back
 end</code></pre><p><strong>Generated SQL (PostgreSQL):</strong></p><pre><code class="language-sql hljs">BEGIN;
 
--- Pit stop insert
-INSERT INTO &quot;pit_stop&quot; (&quot;raceid&quot;, &quot;driverid&quot;, &quot;stop&quot;, &quot;lap&quot;, &quot;time&quot;, &quot;duration&quot;) 
-VALUES (\$1, \$2, \$3, \$4, \$5, \$6) 
-RETURNING *
--- Parameters: [900, 1, 1, 42, 35, 22.5]
+-- Deduction using an F() expression
+UPDATE &quot;driver_standings&quot; AS &quot;Tb&quot;
+SET &quot;points&quot; = (&quot;Tb&quot;.&quot;points&quot; - \$1)
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = \$2 AND &quot;Tb&quot;.&quot;driverid&quot; = \$3
+-- Parameters: [2, 841, 20]
 
--- Driver stats update using F() expression
-UPDATE &quot;driver&quot; AS &quot;Tb&quot; 
-SET &quot;pit_stops_count&quot; = &quot;Tb&quot;.&quot;pit_stops_count&quot; + 1 
-WHERE &quot;Tb&quot;.&quot;driverid&quot; = \$1
--- Parameters: [1]
+-- Award using an F() expression
+UPDATE &quot;driver_standings&quot; AS &quot;Tb&quot;
+SET &quot;points&quot; = (&quot;Tb&quot;.&quot;points&quot; + \$1)
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = \$2 AND &quot;Tb&quot;.&quot;driverid&quot; = \$3
+-- Parameters: [2, 841, 1]
 
-COMMIT;</code></pre><p>If the driver update fails, the pit stop is never recorded. This keeps championship data consistent.</p><h3 id="Avoiding-Partial-States"><a class="docs-heading-anchor" href="#Avoiding-Partial-States">Avoiding Partial States</a><a id="Avoiding-Partial-States-1"></a><a class="docs-heading-anchor-permalink" href="#Avoiding-Partial-States" title="Permalink"></a></h3><p>Bulk operations (inserts, updates, deletes) already use transactions internally, but wrapping them in an explicit transaction ensures all-or-nothing behavior across multiple bulk calls:</p><pre><code class="language-julia hljs"># Scenario: Load a season&#39;s constructor standings
+COMMIT;</code></pre><p>If the award fails, the deduction is never applied — the standings never lose points into thin air. This keeps championship data consistent.</p><h3 id="Avoiding-Partial-States"><a class="docs-heading-anchor" href="#Avoiding-Partial-States">Avoiding Partial States</a><a id="Avoiding-Partial-States-1"></a><a class="docs-heading-anchor-permalink" href="#Avoiding-Partial-States" title="Permalink"></a></h3><p>Bulk operations (inserts, updates, deletes) already use transactions internally, but wrapping them in an explicit transaction ensures all-or-nothing behavior across multiple bulk calls:</p><pre><code class="language-julia hljs"># Scenario: Load a season&#39;s constructor standings
 bulk_data = [
   Dict(&quot;year&quot; =&gt; 2025, &quot;constructorid&quot; =&gt; 1, &quot;points&quot; =&gt; 250, &quot;position&quot; =&gt; 1),
   Dict(&quot;year&quot; =&gt; 2025, &quot;constructorid&quot; =&gt; 2, &quot;points&quot; =&gt; 240, &quot;position&quot; =&gt; 2),
@@ -251,6 +246,26 @@ q.filter(&quot;raceid&quot; =&gt; 1)
   
   # Even though we caught the error, it was already logged
   # The outer transaction will still roll back when this block exits
+end</code></pre><h3 id="Connection-Loss-During-a-Transaction"><a class="docs-heading-anchor" href="#Connection-Loss-During-a-Transaction">Connection Loss During a Transaction</a><a id="Connection-Loss-During-a-Transaction-1"></a><a class="docs-heading-anchor-permalink" href="#Connection-Loss-During-a-Transaction" title="Permalink"></a></h3><p>If the database connection drops mid-transaction (server restart, network failure, terminated backend), PormG <strong>never reconnects or re-runs statements within the transaction</strong> — a retried statement would execute on a fresh autocommit session, silently committing work that should have died with the transaction. Instead, the connection error propagates out of the block like any other exception: the transaction rolls back (or is already gone with the dead session) and the pooled connection is renewed or discarded before returning to the pool, so the next borrower always gets a clean connection.</p><p>Outside transactions, plain queries still recover transparently: the pooled connection is renewed and the statement retried once.</p><p>If the work must survive connection loss, retry the <strong>whole transaction</strong> at the application level — the standard contract across ORMs:</p><pre><code class="language-julia hljs"># Retry the whole unit of work, never a single statement
+for attempt in 1:3
+  try
+    PormG.run_in_transaction(&quot;db_2&quot;) do
+      (M.Pit_stops.objects).create(
+        &quot;raceid&quot; =&gt; 841,
+        &quot;driverid&quot; =&gt; 153,
+        &quot;stop&quot; =&gt; 3,
+        &quot;lap&quot; =&gt; 42,
+        &quot;time&quot; =&gt; &quot;17:05:23&quot;,
+        &quot;duration&quot; =&gt; &quot;22.500&quot;,
+        &quot;milliseconds&quot; =&gt; 22500,
+      )
+      # ... more work sharing the same transaction
+    end
+    break   # committed
+  catch e
+    attempt == 3 &amp;&amp; rethrow()
+    @warn &quot;Transaction failed; retrying&quot; attempt exception=e
+  end
 end</code></pre><hr/><h2 id="Lower-Level-Helpers"><a class="docs-heading-anchor" href="#Lower-Level-Helpers">Lower-Level Helpers</a><a id="Lower-Level-Helpers-1"></a><a class="docs-heading-anchor-permalink" href="#Lower-Level-Helpers" title="Permalink"></a></h2><p>If you need finer control (e.g., manual <code>SAVEPOINT</code> or multi-statement blocks), PormG exposes:</p><ul><li><strong><code>with_tx_context(conn_pool, conn::LibPQ.Connection, block)</code></strong>: Install a connection in thread-local storage so child tasks inherit it.</li><li><strong><code>with_transaction(settings, sql, conn=nothing, release_conn=false)</code></strong>: Execute raw SQL inside a transaction context.</li><li><strong><code>get_tx_connection()</code></strong>: Check if a transaction context is active and return the connection.</li></ul><h3 id="Example:-Manual-Savepoint"><a class="docs-heading-anchor" href="#Example:-Manual-Savepoint">Example: Manual Savepoint</a><a id="Example:-Manual-Savepoint-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-Manual-Savepoint" title="Permalink"></a></h3><pre><code class="language-julia hljs">import PormG.Configuration: with_tx_context, with_transaction, get_tx_connection
 
 settings = PormG.Configuration.get_settings(&quot;db_2&quot;)
@@ -286,4 +301,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../bulk/">« Bulk Insert, Copy, and Update</a><a class="docs-footer-nextpage" href="../../read/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 14 July 2026 03:28">Tuesday 14 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../bulk/">« Bulk Insert, Copy, and Update</a><a class="docs-footer-nextpage" href="../../read/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 14 July 2026 03:51">Tuesday 14 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

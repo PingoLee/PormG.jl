@@ -472,9 +472,10 @@ settings = PormG.config[PORMG_DB_FOLDER]
   # The @test_logs gate below asserts the renewal branch actually ran: its message
   # exists only in the #71 code path, so reverting the fix fails this testset.
   # The terminate statement is issued DIRECTLY via backend_execute_async on the tx
-  # connection — this test is explicitly about pool internals, and going through
-  # fetch() would engage its lost-connection retry, which re-runs the statement on
-  # a fresh connection outside the transaction (a separate latent issue).
+  # connection — this test is explicitly about pool internals and needs both the body
+  # statement and the ROLLBACK to fail deterministically. (fetch()'s lost-connection
+  # retry no longer fires inside transactions — #138 — so routing through fetch() would
+  # merely propagate; the direct calls stay for determinism, not to dodge the retry.)
   # PG-only: SQLite has no server-side session to terminate.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "Failed rollback renews the pooled connection (#71)" begin

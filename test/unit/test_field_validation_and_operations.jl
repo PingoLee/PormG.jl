@@ -32,6 +32,12 @@ MockSettings = PormG.Configuration.Settings(
 )
 PormG.config["default"] = MockSettings
 
+# issue #79: DateTimeField values are canonicalized to ONE UTC ISO-8601 string
+# (yyyy-mm-ddTHH:MM:SS.sss+00:00) on the bind path, so SQLite's lexicographic TEXT
+# comparison matches PostgreSQL. Expected parameters are derived independently here
+# (convert the instant to UTC, then format) — a missing UTC conversion would fail.
+canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_FORMAT)
+
 @testset "SECTION 1: Field type validation" begin    
     @testset "Integer Fields (IDField, IntegerField, BigIntegerField)" begin
         mock_int_model = Models.Model_Type(
@@ -330,7 +336,7 @@ PormG.config["default"] = MockSettings
             "event_time" => DateTime(2024, 6, 15, 10, 30, 0),
             show_query=:inspection
         )
-        expected_event_time = string(ZonedDateTime(DateTime(2024, 6, 15, 10, 30, 0), TimeZone("UTC")))
+        expected_event_time = canon_utc(ZonedDateTime(DateTime(2024, 6, 15, 10, 30, 0), TimeZone("UTC")))
         @test create_with_auto[:operation] === :insert
         @test create_with_auto[:parameter_count] == 3
         @test contains(create_with_auto[:sql_text], "created_at")  # Should be in SQL
@@ -344,7 +350,7 @@ PormG.config["default"] = MockSettings
             "event_time" => DateTime(2024, 7, 20, 15, 45, 30),
             show_query=:dict
         )
-        expected_updated_event_time = string(ZonedDateTime(DateTime(2024, 7, 20, 15, 45, 30), TimeZone("UTC")))
+        expected_updated_event_time = canon_utc(ZonedDateTime(DateTime(2024, 7, 20, 15, 45, 30), TimeZone("UTC")))
         @test update_with_auto[:operation] === :update
         @test contains(update_with_auto[:sql_text], "updated_at") || contains(update_with_auto[:sql_text], "UPDATE")
         @test update_with_auto[:parameter_count] == 3
@@ -1158,7 +1164,7 @@ end
             "naive_timestamp" => DateTime(2024, 6, 15, 14, 30, 0),
             show_query=:inspection
         )
-        expected_naive_timestamp = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
+        expected_naive_timestamp = canon_utc(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
         @test create_naive[:operation] === :insert
         @test contains(create_naive[:sql_text], "naive_timestamp")
         @test create_naive[:parameter_count] == 1
@@ -1170,7 +1176,7 @@ end
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")),
             show_query=:inspection
         )
-        expected_aware_utc = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
+        expected_aware_utc = canon_utc(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")))
         @test create_aware[:operation] === :insert
         @test contains(create_aware[:sql_text], "aware_timestamp")
         @test create_aware[:parameter_count] == 2
@@ -1183,7 +1189,7 @@ end
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")),
             show_query=:inspection
         )
-        expected_aware_sao_paulo = string(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")))
+        expected_aware_sao_paulo = canon_utc(ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("America/Sao_Paulo")))
         @test create_tz_sp[:operation] === :insert
         @test create_tz_sp[:parameter_count] == 2
         @test any(==(expected_naive_timestamp), create_tz_sp[:parameters])
@@ -1196,7 +1202,7 @@ end
             "aware_timestamp" => ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")),
             show_query=:dict
         )
-        expected_updated_aware_timestamp = string(ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")))
+        expected_updated_aware_timestamp = canon_utc(ZonedDateTime(DateTime(2024, 7, 20, 10, 15, 0), TimeZone("America/New_York")))
         @test update_tz[:operation] === :update
         @test contains(update_tz[:sql_text], "UPDATE")
         @test update_tz[:parameters] == [1, expected_updated_aware_timestamp]
@@ -1215,12 +1221,12 @@ end
         )
         res_bulk_tz = bulk_insert(TzModel.objects, df_tz, show_query=:dict)
         expected_bulk_naive = [
-            string(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
-            string(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("UTC")))
+            canon_utc(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
+            canon_utc(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("UTC")))
         ]
         expected_bulk_aware = [
-            string(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
-            string(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("America/Toronto")))
+            canon_utc(ZonedDateTime(DateTime(2024, 6, 15, 8, 0, 0), TimeZone("UTC"))),
+            canon_utc(ZonedDateTime(DateTime(2024, 6, 16, 14, 30, 0), TimeZone("America/Toronto")))
         ]
         @test res_bulk_tz[:operation] === :insert
         @test res_bulk_tz[:parameter_count] == 6  # 2 rows * 3 columns (naive_timestamp, aware_timestamp, scheduled_at)

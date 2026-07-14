@@ -455,15 +455,36 @@ Return the `CREATE INDEX` DDL for every *user-created* secondary index on `table
 they are recreated automatically by the rebuilt `CREATE TABLE`. Used by the SQLite table-rebuild path to
 re-create the indexes that the rebuild's `DROP TABLE` would otherwise silently lose (#82).
 """
-function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol})::Vector{String}
+function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Symbol};
+                                  surviving_columns::Union{Nothing,Set{String}} = nothing)::Vector{String}
   tname = replace(string(table_name), "'" => "''")
-  rows = fetch(conn, "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '$(tname)' AND sql IS NOT NULL") |> DataFrame
+  # `name` is fetched alongside `sql` so we can probe each index's columns via pragma_index_info
+  # when filtering (#116). Auto-created indexes (UNIQUE/PK) carry a NULL `sql` and are excluded here,
+  # exactly as before — they belong to the CREATE TABLE the rebuild already re-emits.
+  rows = fetch(conn, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '$(tname)' AND sql IS NOT NULL") |> DataFrame
   isempty(rows) && return String[]
   ddls = String[]
-  for s in rows.sql
+  for r in eachrow(rows)
+    s = r.sql
     s === missing && continue
     stmt = strip(string(s))
     isempty(stmt) && continue
+    # #116: when the caller is rebuilding a table with columns removed (FK-field deletion), an index on a
+    # dropped column must NOT be re-created — SQLite would raise "no such column". `pragma_index_info`
+    # gives the index's exact indexed-column membership (robust vs. substring-matching the DDL text); drop
+    # the index if any of its columns is no longer present in the rebuilt table. No filtering when the
+    # kwarg is `nothing`, so every existing rebuild call site keeps its current behavior.
+    #
+    # Known limitation: `pragma_index_info` reports NULL for an *expression* column and does not list a
+    # *partial* index's WHERE-clause columns, so a user-created expression/partial index over a dropped
+    # column would slip through and fail the rebuild. Accepted for #116: PormG only ever emits plain
+    # single/multi-column indexes (create_index in Dialect.jl), which pragma_index_info covers exactly.
+    if surviving_columns !== nothing
+      idxname = replace(string(r.name), "'" => "''")
+      cols = fetch(conn, "SELECT name FROM pragma_index_info('$(idxname)')") |> DataFrame
+      referenced = String[string(c) for c in cols.name if c !== missing]
+      any(c -> !(c in surviving_columns), referenced) && continue
+    end
     push!(ddls, endswith(stmt, ";") ? stmt : stmt * ";")
   end
   return ddls

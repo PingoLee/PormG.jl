@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Column-aware secondary-index preservation for the SQLite table rebuild (#116)
+#
+# Deleting a ForeignKey field on SQLite can't use `ALTER TABLE DROP COLUMN` (SQLite
+# refuses a column bound by a FOREIGN KEY), so PormG rebuilds the table from the
+# desired model — create new / INSERT…SELECT / drop / rename — and re-creates the
+# table's secondary indexes afterward. `get_secondary_index_ddls` snapshots those
+# index DDLs from the LIVE schema at planning time; if the rebuild dropped a column,
+# re-creating an index that references it would raise SQLite "no such column" (the
+# exact crash Django hit — ticket #33899).
+#
+# The `surviving_columns` kwarg fixes that: an index is preserved only when every one
+# of its columns still exists in the rebuilt table. It probes each index's exact
+# column membership via `pragma_index_info` (robust vs. substring-matching the DDL).
+# `nothing` (the default) disables filtering — the pre-#116 "copy every live index"
+# behavior every pure-alteration rebuild still relies on.
+#
+# Hermetic temp SQLite DB (same pattern as test_ignore_tables_registry.jl); no live
+# integration DB. Mutation gate: dropping the filter makes the `Set(["a","c"])` case
+# below return all three indexes instead of just the one on the surviving column.
+# ─────────────────────────────────────────────────────────────────────────────
+using Test
+using PormG
+using DataFrames
+import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
+import PormG.Migrations: get_secondary_index_ddls
+
+@testset "get_secondary_index_ddls column filter (#116)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "idxfilter.sqlite"); pool_size = 1)
+    try
+      fetch(pool, "CREATE TABLE t (a INTEGER, b INTEGER, c INTEGER);")
+      fetch(pool, "CREATE INDEX ia ON t(a);")          # single column a
+      fetch(pool, "CREATE INDEX ib ON t(b);")          # single column b
+      fetch(pool, "CREATE INDEX iab ON t(a, b);")      # multi-column: a AND b
+
+      # Baseline — no kwarg → every live secondary index is preserved (pre-#116 behavior).
+      all_ddls = get_secondary_index_ddls(pool, "t")
+      @test length(all_ddls) == 3
+      @test any(occursin("ia", d) for d in all_ddls)
+      @test any(occursin("ib", d) for d in all_ddls)
+      @test any(occursin("iab", d) for d in all_ddls)
+
+      # The #116 fix — column `b` was removed by the rebuild (surviving = {a, c}). Any index
+      # touching `b` must be filtered so it isn't re-created against a now-missing column:
+      #   ia(a)     → kept   (a survives)
+      #   ib(b)     → dropped (b gone)
+      #   iab(a, b) → dropped (b gone, even though a survives)
+      kept = get_secondary_index_ddls(pool, "t"; surviving_columns = Set(["a", "c"]))
+      @test length(kept) == 1
+      @test occursin("ia", kept[1])
+      @test !any(occursin("ib", d) for d in kept)      # single-column index on dropped col
+      @test !any(occursin("iab", d) for d in kept)     # multi-column index touching dropped col
+
+      # Passing the kwarg but dropping nothing (surviving ⊇ every column) filters nothing —
+      # proves the filter removes indexes ONLY for genuinely-absent columns (no false drops on
+      # the pure-alteration path, where existing rebuild tests must stay green).
+      kept_all = get_secondary_index_ddls(pool, "t"; surviving_columns = Set(["a", "b", "c"]))
+      @test length(kept_all) == 3
+    finally
+      # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      close_pool!(pool)
+    end
+  end
+end

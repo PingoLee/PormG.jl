@@ -1,6 +1,7 @@
 using Test
 using PormG
 using Logging
+using Dates
 
 # Mock SQLite Settings
 struct MockSQLite <: PormG.PormGSQLite end
@@ -1993,6 +1994,103 @@ end
     @test_throws MethodError PormG.QueryBuilder.topological_sort(
         Dict(CycleA => Set([CycleB]), CycleB => Set([CycleA]))
     )
+end
+
+# =============================================================================
+# F-expression date arithmetic with explicit Julia duration types (#25) — SQLite.
+#
+# SQLite rendering contract: `F(date) ± <period>` becomes a `date()`/`datetime()`
+# wrapper with one `'<sign>' || ? || ' <unit>'` modifier per component. The wrapper
+# is `datetime()` when any sub-day unit is present OR the column is TIMESTAMP/TIMESTAMPTZ
+# (to preserve time-of-day), otherwise `date()`. Weeks have no SQLite modifier and are
+# expressed as days (×7). The sign is baked into each modifier so subtraction binds a
+# positive magnitude. The typed-PostgreSQL counterpart is pinned in test_operators.jl;
+# this locks the placeholder/bucket parity so the two dialects can't silently diverge.
+# =============================================================================
+@testset "F-expression date arithmetic — SQLite date()/datetime() (#25)" begin
+    # Render a values() projection and return the inspection dict.
+    render(model, expr) = begin
+        q = model.objects
+        q.values("shifted" => expr)
+        q |> inspect_query
+    end
+
+    @testset "DATE field → date(); DAY offset" begin
+        insp = render(M.Driver, F("dob") + Day(30))
+        sql = insp[:sql_text]
+        @test contains(sql, "date(\"Tb\".\"dob\", '+' || ? || ' days')")
+        @test !contains(sql, "datetime(")                 # a pure DATE + day stays on date()
+        @test count(==('?'), sql) == 1                    # one placeholder == one component
+        @test insp[:parameters] == [30]
+        @test 30 in insp[:parameter_buckets][:select]     # values() projection → :select bucket
+    end
+
+    @testset "TIMESTAMPTZ field → datetime() via the column-type trigger" begin
+        # Day is NOT a sub-day unit, so datetime() here can come ONLY from the TIMESTAMPTZ column
+        # type — this is the discriminating case that actually exercises the `ftype` branch. Without
+        # it the row would render date() and silently truncate the stored time-of-day.
+        insp = render(M.Django_contract_scratch, F("event_time") + Day(1))
+        @test contains(insp[:sql_text], "datetime(\"Tb\".\"event_time\", '+' || ? || ' days')")
+        @test !contains(insp[:sql_text], "date(\"Tb\".\"event_time\"")
+        @test insp[:parameters] == [1]
+    end
+
+    @testset "Chained arithmetic on a TIMESTAMP column stays datetime() (no truncation)" begin
+        # `F(event_time) + Day(1) + Day(2)` nests: the outer call sees a nested FExpression as its
+        # field_name (so the column type is unknown), but the inner render is already a datetime(),
+        # so the outer must stay datetime(). Otherwise date(datetime(...)) drops the time-of-day and
+        # diverges from PostgreSQL (which keeps the full timestamp).
+        insp = render(M.Django_contract_scratch, F("event_time") + Day(1) + Day(2))
+        sql = insp[:sql_text]
+        @test !contains(sql, "date(datetime(")                              # the truncating shape must NOT appear
+        @test contains(sql, "datetime(datetime(\"Tb\".\"event_time\"")      # nested datetime() preserves time
+        @test insp[:parameters] == [1, 2]
+    end
+
+    @testset "Sub-day unit forces datetime() even on a DATE column" begin
+        # event_date is DATE, but adding hours must not truncate to a date → datetime().
+        insp = render(M.Django_contract_scratch, F("event_date") + Hour(6))
+        @test contains(insp[:sql_text], "datetime(\"Tb\".\"event_date\", '+' || ? || ' hours')")
+        @test insp[:parameters] == [6]
+    end
+
+    @testset "Compound interval → one modifier per component (largest→smallest)" begin
+        insp = render(M.Django_contract_scratch, F("event_date") + (Month(1) + Day(15)))
+        @test contains(insp[:sql_text],
+            "date(\"Tb\".\"event_date\", '+' || ? || ' months', '+' || ? || ' days')")
+        @test count(==('?'), insp[:sql_text]) == 2
+        @test insp[:parameters] == [1, 15]
+    end
+
+    @testset "Subtraction bakes the sign; magnitudes stay positive" begin
+        insp = render(M.Django_contract_scratch, F("event_date") - (Month(1) + Day(15)))
+        @test contains(insp[:sql_text],
+            "date(\"Tb\".\"event_date\", '-' || ? || ' months', '-' || ? || ' days')")
+        @test insp[:parameters] == [1, 15]                # bound values are the absolute magnitudes
+    end
+
+    @testset "Weeks are expressed as days (SQLite has no 'weeks' modifier)" begin
+        insp = render(M.Django_contract_scratch, F("event_date") + Week(2))
+        @test contains(insp[:sql_text], "date(\"Tb\".\"event_date\", '+' || ? || ' days')")
+        @test insp[:parameters] == [14]                   # 2 weeks × 7
+    end
+
+    @testset "Joined date field resolves to date() (left_side rendered before type lookup)" begin
+        # raceid__date joins result→race; the join must render (populating the field-type cache)
+        # BEFORE the date()/datetime() choice, or the joined column degrades to the unknown default.
+        insp = render(M.Result, F("raceid__date") + Day(30))
+        sql = insp[:sql_text]
+        @test contains(sql, "date(\"Tb_1\".\"date\", '+' || ? || ' days')")
+        @test contains(sql, "INNER JOIN \"race\"")
+        @test insp[:parameters] == [30]
+    end
+
+    @testset "Interval(\"01:30:00\") → datetime() with hours+minutes" begin
+        insp = render(M.Django_contract_scratch, F("event_time") + Interval("01:30:00"))
+        @test contains(insp[:sql_text],
+            "datetime(\"Tb\".\"event_time\", '+' || ? || ' hours', '+' || ? || ' minutes')")
+        @test insp[:parameters] == [1, 30]
+    end
 end
 
 

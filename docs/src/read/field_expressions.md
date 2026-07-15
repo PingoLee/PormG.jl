@@ -39,7 +39,7 @@ F("points") / 2.0                # Division
 Sum("points") / Count("resultid") # Aggregate ratios
 ```
 
-**Supported arithmetic operators:** `+`, `-`, `*`, `/`
+**Supported arithmetic operators:** `+`, `-`, `*`, `/` with numeric or field operands. For **date arithmetic**, `+` and `-` also accept Julia `Dates` durations (`Day`, `Month`, `Year`, …) and the [`Interval`](#The-Interval-helper) helper — see [Date Arithmetic](#Date-Arithmetic).
 
 ---
 
@@ -107,15 +107,61 @@ df = query |> DataFrame
 
 ### Date Arithmetic
 
-Find results within 30 days of the driver's birthday:
+Offset a date column by a whole number of **days** with a bare integer — e.g. results within 30 days of the driver's birthday:
 
 ```julia
 query = M.Result.objects
 query.filter(
     F("raceid__date") > F("driverid__dob"),
-    F("raceid__date") <= F("driverid__dob") + 30
+    F("raceid__date") <= F("driverid__dob") + 30   # integer ⇒ days
 )
 ```
+
+#### Explicit duration types
+
+For anything other than whole days, add a Julia `Dates` duration — `Day`, `Week`, `Month`, `Year`, `Hour`, `Minute`, `Second`, or any `CompoundPeriod` (e.g. `Month(1) + Day(15)`). Only `+` and `-` apply to a duration operand:
+
+```julia
+using Dates
+
+# Push the Australian GP back by a month and a half (parenthesise the compound period
+# so it renders as one interval — a bare `+ Month(1) + Day(15)` chains two instead):
+M.Race.objects.filter("raceid" => 1).update("date" => F("date") + (Month(1) + Day(15)))
+
+# Roll every race back a year:
+M.Race.objects.update("date" => F("date") - Year(1))
+```
+
+Generated SQL (PostgreSQL) — a single, strongly-typed `make_interval(...)`:
+```sql
+("Tb"."date" + make_interval(months => $1::integer, days => $2::integer))
+-- parameters: [1, 15]
+```
+
+Generated SQL (SQLite) — `date()` (or `datetime()` when a sub-day unit or a `TIMESTAMP` column is involved), one modifier per component:
+```sql
+date("Tb"."date", '+' || ? || ' months', '+' || ? || ' days')
+-- parameters: [1, 15]
+```
+
+Magnitudes are always bound as parameters; the unit keywords come from a fixed whitelist. Weeks render natively on PostgreSQL and as days (×7) on SQLite, which has no `weeks` modifier.
+
+#### The `Interval` helper
+
+`Interval(...)` is an explicit, self-documenting wrapper. It accepts a period (identical to using the bare period) or a portable time-duration string (`"HH:MM:SS"`, `"M:SS"`, or bare seconds):
+
+```julia
+F("date") + Interval(Month(3))            # same as F("date") + Month(3)
+
+# The string form is for time-of-day intervals on a TIMESTAMP / DateTimeField column:
+F("created_at") + Interval("01:30:00")    # + 1 hour 30 minutes
+```
+
+!!! note "The `Interval` name"
+    `Interval` is also a common name in the `Dates`/`Intervals.jl` ecosystems. If you `using Intervals` alongside PormG, reach PormG's helper as `PormG.QueryBuilder.Interval`.
+
+!!! warning "Sub-day math on `DATE` columns"
+    Adding a sub-day duration (`Hour`, `Minute`, `Second`) promotes the result to a timestamp. Persisting that back into a `DATE` column truncates the time — sub-day arithmetic only round-trips on `TIMESTAMP` / `DateTimeField` columns.
 
 ### When NOT to Use F
 

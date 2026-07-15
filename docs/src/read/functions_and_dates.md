@@ -457,6 +457,12 @@ Output:
 
 This generates a `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` pattern — very useful for computing conditional counts within grouped queries.
 
+!!! tip "Beyond integer days"
+    The `+ 10957` above adds a whole number of **days**. To add other calendar or time units,
+    pass a Julia `Dates` duration — `F("driverid__dob") + Year(30)` instead of `+ 10957` — or the
+    [`Interval`](field_expressions.md#The-Interval-helper) helper. See
+    [Date Arithmetic](field_expressions.md#Date-Arithmetic) for the cross-database SQL these render.
+
 ### Case in Filters
 
 `Case` expressions can be used as the right-hand side of a `filter()` predicate to apply

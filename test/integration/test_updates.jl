@@ -183,7 +183,23 @@ end
     restored_row = (race_query.list() |> first)
   restored_date = restored_row[:date] isa String ? Date(restored_row[:date]) : restored_row[:date]
   @test restored_date == orig_date
-  
+
+  # 3. Period-based date arithmetic (#25): calendar-unit intervals (Month/Day/Week) that the
+  #    integer-days path could not express. The result is checked against Julia's own Dates math
+  #    using the SAME period value, so the assertion matches the interval semantics on both
+  #    PostgreSQL and SQLite. The explicit restore below returns the row to its original date.
+  delta = Dates.Month(1) + Dates.Day(15)   # CompoundPeriod → one make_interval / date(...) call
+  race_query.update("date" => F("date") + delta)
+  period_row = (race_query.list() |> first)
+  period_date = period_row[:date] isa String ? Date(period_row[:date]) : period_row[:date]
+  @test period_date == (orig_date + delta)
+
+  # Subtraction with a single calendar unit (Week → 7 days), computed from the CURRENT value.
+  race_query.update("date" => F("date") - Dates.Week(1))
+  sub_row = (race_query.list() |> first)
+  sub_date = sub_row[:date] isa String ? Date(sub_row[:date]) : sub_row[:date]
+  @test sub_date == (period_date - Dates.Week(1))
+
   # Restore original just in case
   race_query.update("date" => orig_date)
 end

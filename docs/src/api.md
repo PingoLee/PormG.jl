@@ -208,9 +208,13 @@ M.Result.objects.values(
 
 # Atomic update (no read-modify-write race)
 M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 10)
+
+# Date arithmetic with explicit Julia durations (or the Interval helper)
+using Dates
+M.Race.objects.filter("raceid" => 1).update("date" => F("date") + (Month(1) + Day(15)))
 ```
 
-See [Field Expressions](read/field_expressions.md) for the full reference.
+`+`/`-` accept `Dates` durations (`Day`, `Month`, `Year`, …) and `Interval(...)` for cross-database date math. See [Field Expressions](read/field_expressions.md) for the full reference.
 
 ---
 
@@ -579,7 +583,7 @@ scope — the SQL function constructors are *not* among them (see
 [SQL function library](#sql-function-library-pormgfunctions)).
 
 ### Query Builder
-`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `show_query`, `inspect_query`
+`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Interval`, `show_query`, `inspect_query`
 
 ### Rows & exceptions
 `PormGRow`, `DoesNotExist`, `MultipleObjectsReturned`
@@ -620,8 +624,8 @@ M.Result.objects.values(              # …or qualify without importing
     "n" => PormG.Functions.Count("resultid"))
 ```
 
-`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef` stay at the top level — they are query
-primitives, not part of the function library.
+`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Interval` stay at the top level — they are
+query primitives, not part of the function library.
 
 **Aggregate** — `Sum`, `Avg`, `Count`, `Max`, `Min`
 **Conditional** — `Case`, `When`

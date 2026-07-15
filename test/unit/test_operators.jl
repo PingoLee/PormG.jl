@@ -486,3 +486,111 @@ const _E = _OperTestEvent
   end
 
 end  # end "PormGsuffix — Operator SQL Generation"
+
+# =============================================================================
+# F-expression date arithmetic with explicit Julia duration types (#25).
+#
+# PostgreSQL rendering contract: `F(date) ± <period>` becomes a single
+# `make_interval(...)` call with EXPLICITLY-typed placeholders — integer units as
+# `$n::integer` (never bigint: `make_interval(days => bigint)` does not exist) and
+# seconds as `$n::double precision`. The SQL operator mirrors +/-, and the raw
+# component magnitudes are bound (compound intervals keep their internal signs).
+# The SQLite counterpart (date()/datetime() + modifiers) is pinned in
+# test_alignment_sqlite.jl; this file locks the typed-PG shape and parameter order.
+# =============================================================================
+@testset "F-expression date arithmetic — PostgreSQL make_interval (#25)" begin
+  # _E = events(id, happened::DATE, logged_at::TIMESTAMPTZ) — mock PostgreSQL connection.
+
+  # Each entry: (label, expression, expected make_interval fragment, expected params).
+  # The fragment is asserted verbatim so a wrong keyword, missing cast, or dropped
+  # component fails loudly.
+  for (label, expr, frag, params) in [
+      ("+ Day(30)",             F("happened") + Day(30),
+        "(\"Tb\".\"happened\" + make_interval(days => \$1::integer))",              [30]),
+      ("+ Month(3)",            F("happened") + Month(3),
+        "(\"Tb\".\"happened\" + make_interval(months => \$1::integer))",            [3]),
+      ("+ (Month(1)+Day(15))",  F("happened") + (Month(1) + Day(15)),
+        "(\"Tb\".\"happened\" + make_interval(months => \$1::integer, days => \$2::integer))", [1, 15]),
+      ("- Hour(6)",             F("logged_at") - Hour(6),
+        "(\"Tb\".\"logged_at\" - make_interval(hours => \$1::integer))",            [6]),
+      ("+ Week(2)",             F("happened") + Week(2),
+        "(\"Tb\".\"happened\" + make_interval(weeks => \$1::integer))",             [2]),
+      # Compound with an internal negative component: the magnitude is kept as-is and
+      # the SQL operator stays '+', so the interval itself carries the -15.
+      ("+ (Month(1)+Day(-15))", F("happened") + (Month(1) + Day(-15)),
+        "(\"Tb\".\"happened\" + make_interval(months => \$1::integer, days => \$2::integer))", [1, -15]),
+      # Reversed operand order commutes to the same tree.
+      ("reversed Day(30)+F",    Day(30) + F("happened"),
+        "(\"Tb\".\"happened\" + make_interval(days => \$1::integer))",              [30]),
+    ]
+    q = _E.objects
+    q.values("shifted" => expr)
+    res = q.list(show_query=:dict)
+    @test contains(res[:sql_text], frag)      # exact typed make_interval fragment
+    @test res[:parameters] == params          # magnitudes bound in textual order
+  end
+
+  @testset "Interval(...) helper — string and period forms" begin
+    # Interval("HH:MM:SS") → time-only make_interval(hours, mins[, secs]).
+    q1 = _E.objects; q1.values("s" => F("logged_at") + Interval("01:30:00"))
+    r1 = q1.list(show_query=:dict)
+    @test contains(r1[:sql_text], "make_interval(hours => \$1::integer, mins => \$2::integer)")
+    @test r1[:parameters] == [1, 30]
+
+    # Fractional seconds bind as double precision.
+    q2 = _E.objects; q2.values("s" => F("logged_at") + Interval("00:00:01.5"))
+    r2 = q2.list(show_query=:dict)
+    @test contains(r2[:sql_text], "make_interval(secs => \$1::double precision)")
+    @test r2[:parameters] == [1.5]
+
+    # Interval(period) is interchangeable with the bare period.
+    q3 = _E.objects; q3.values("s" => F("happened") + Interval(Month(2)))
+    r3 = q3.list(show_query=:dict)
+    @test contains(r3[:sql_text], "(\"Tb\".\"happened\" + make_interval(months => \$1::integer))")
+    @test r3[:parameters] == [2]
+
+    # Bare-seconds string ≥ 100 must PARSE, not throw: the duration normalizer emits "00:00:120"
+    # (three seconds digits), which the parser must accept.
+    q4 = _E.objects; q4.values("s" => F("logged_at") + Interval("120"))
+    r4 = q4.list(show_query=:dict)
+    @test contains(r4[:sql_text], "make_interval(secs => \$1::double precision)")
+    @test r4[:parameters] == [120.0]
+  end
+
+  @testset "Chained (unparenthesised) periods nest into separate intervals" begin
+    # `F + Month(1) + Day(15)` parses left-to-right as `(F + Month(1)) + Day(15)`, so it renders
+    # as two chained make_interval() calls (correct result; parenthesise to `+ (Month(1)+Day(15))`
+    # for a single interval). This locks that the nested form still renders and binds correctly.
+    q = _E.objects
+    q.values("shifted" => F("happened") + Month(1) + Day(15))
+    res = q.list(show_query=:dict)
+    @test contains(res[:sql_text],
+      "((\"Tb\".\"happened\" + make_interval(months => \$1::integer)) + make_interval(days => \$2::integer))")
+    @test res[:parameters] == [1, 15]
+  end
+
+  @testset "Update path — SET with make_interval" begin
+    # Write path funnels through the same renderer. WHERE param is bound first ($1),
+    # the interval magnitude second ($2), matching the bitwise-update convention above.
+    q = _E.objects.filter("id" => 1)
+    res = q.update("happened" => F("happened") + Day(7), show_query=:inspection)
+    @test contains(res[:sql_text], "SET \"happened\" = (\"Tb\".\"happened\" + make_interval(days => \$2::integer))")
+    @test contains(res[:sql_text], "WHERE \"Tb\".\"id\" = \$1")
+    @test res[:parameters] == [1, 7]
+  end
+
+  @testset "Soft validation — duration on a non-date field throws" begin
+    # A duration only makes sense on a DATE/TIMESTAMP column. _D.surname is CharField.
+    err = try
+      Logging.with_logger(Logging.NullLogger()) do
+        _D.objects.values("bad" => F("surname") + Day(1)).list(show_query=:dict)
+      end
+      nothing
+    catch e
+      e
+    end
+    @test err isa ArgumentError
+    @test occursin("requires a DATE/TIMESTAMP field", err.msg)
+    @test occursin("surname", err.msg)
+  end
+end

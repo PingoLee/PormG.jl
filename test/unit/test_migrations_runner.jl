@@ -144,6 +144,52 @@ using Dates
         @test occursin("ALTER COLUMN", all_sql)
     end
 
+    @testset "Statement Ordering: CREATE INDEX after rebuild (#152)" begin
+        # #152: a newly-added db_index field queues its "Create index on X" BEFORE the same-table rebuild
+        # ("Alter table: t") in insertion order. On SQLite the rebuild DROP TABLEs the table (dropping every
+        # secondary index) and only re-creates the planning-time live-snapshot indexes — which exclude the
+        # just-queued one — so a fresh index is silently lost. _order_statements must defer every field
+        # CREATE INDEX to run AFTER the rebuild (and keep the ADD COLUMN before it, so the rebuild's
+        # INSERT..SELECT can still copy the new column).
+        plan = [
+            OrderedDict{String,String}(
+                "Add field: flag"      => """ALTER TABLE "t" ADD COLUMN "flag" INTEGER;""",
+                "Create index on flag" => """CREATE INDEX IF NOT EXISTS "t_flag_ab12cd34_idx" ON "t" ("flag");""",
+                "Alter table: t"       => """DROP TABLE IF EXISTS "t_new";\nCREATE TABLE "t_new" (...);\nINSERT INTO "t_new" SELECT * FROM "t";\nDROP TABLE "t";\nALTER TABLE "t_new" RENAME TO "t";""",
+            ),
+        ]
+
+        ordered, _ = Migrations._order_statements(plan)
+
+        add_pos     = findfirst(s -> occursin("ADD COLUMN", s), ordered)
+        rebuild_pos = findfirst(s -> occursin("RENAME TO", s), ordered)   # last step of the rebuild block
+        index_pos   = findfirst(s -> occursin("CREATE INDEX", s), ordered)
+
+        @test add_pos !== nothing && rebuild_pos !== nothing && index_pos !== nothing
+        # ADD COLUMN stays BEFORE the rebuild (so the rebuild's INSERT..SELECT finds the new column).
+        @test add_pos < rebuild_pos
+        # The #152 fix: CREATE INDEX runs AFTER the rebuild — otherwise the rebuild's DROP TABLE loses it.
+        # Mutation gate: without the index_execution bucket, index_pos (2) < rebuild_pos (3) and this fails.
+        @test index_pos > rebuild_pos
+
+        # A "Remove index …" key must NOT be swept into the deferred bucket (different prefix); it stays in
+        # its normal (last_execution) position, and a "Create many-to-many unique index" is likewise not a
+        # field index — neither should collide with the "Create index on <field>" match.
+        plan2 = [
+            OrderedDict{String,String}(
+                "Remove index on old" => """DROP INDEX IF EXISTS "t_old_idx";""",
+                "Alter table: t"      => """ALTER TABLE "t_new" RENAME TO "t";""",
+                "Create index on new" => """CREATE INDEX IF NOT EXISTS "t_new_zz_idx" ON "t" ("new");""",
+            ),
+        ]
+        ordered2, _ = Migrations._order_statements(plan2)
+        remove_pos  = findfirst(s -> occursin("DROP INDEX", s), ordered2)
+        rebuild2    = findfirst(s -> occursin("RENAME TO", s), ordered2)
+        create2     = findfirst(s -> occursin("CREATE INDEX", s), ordered2)
+        @test remove_pos < rebuild2          # DROP INDEX not deferred — runs before the rebuild
+        @test create2 > rebuild2             # CREATE INDEX deferred past the rebuild
+    end
+
     # ==============================================================================
     # SECTION 4: History Table DDL Generation
     #

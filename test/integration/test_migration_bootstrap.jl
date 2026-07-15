@@ -1982,3 +1982,84 @@ if adapter_name == "SQLite"
   end
 end
 
+# ── SQLite table-rebuild: keep an index ADDED in the SAME migration (#152) ──
+#
+# Logic: adding a db_index field queues a "Create index on X" statement; if the SAME migration also rebuilds
+#        the table (here: altering an unrelated field), the rebuild's DROP TABLE drops that fresh index —
+#        and the rebuild only re-creates indexes snapshotted from the LIVE schema at planning time, which
+#        never included it. #152 defers every field CREATE INDEX (in the runner's `_order_statements`) to run
+#        AFTER the rebuild, so the new index lands on the rebuilt table and survives.
+# Why: before the fix the newly-added index was silently lost — no error (issue #152). PostgreSQL uses real
+#      ALTER COLUMN (no rebuild), so this is SQLite-specific. Sibling of #82 (which covered PRE-EXISTING
+#      indexes surviving a rebuild; this covers an index BORN in the rebuilding migration).
+if adapter_name == "SQLite"
+  @testset "SQLite rebuild keeps a newly-added index (#152)" begin
+    db152 = "db_test_migration_152"
+    db152_path = joinpath(@__DIR__, db152)
+    write152(content::String) = open(joinpath(db152_path, "models.jl"), "w") do f
+      write(f, "module models\nimport PormG.Models\n", content, "\nend")
+    end
+    user_idx(names) = sort([n for n in names if occursin("idx", lowercase(n))])
+
+    try
+      # ── setup: fresh isolated SQLite DB (mirrors the #82 scaffolding) ──
+      try; PormG.Configuration.close_pool!(db152_path); catch; end
+      try; ispath(db152_path) && rm(db152_path, recursive=true); catch; end
+      PormG.Generator.create_db_folder_and_yml(path=db152_path, adapter="SQLite")
+      yml = joinpath(db152_path, "connection.yml")
+      yml_content = replace(read(yml, String), "database: database.sqlite" => "database: migration_152.sqlite")
+      open(yml, "w") do f; write(f, yml_content); end   # read BEFORE opening "w" (which truncates)
+      PormG.Configuration.load(db152_path)
+      pool152 = PormG.Configuration.get_settings(db152_path).connections
+
+      # ── create a table with one alterable field, and seed a row so the rebuild has data to copy ──
+      write152("""
+      IndexAdd152 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField()
+      )
+      """)
+      makemigrations(db152_path, interactive=false)
+      migrate(db152_path, interactive=false, destructive=true)
+      PormG.ConnectionPool.fetch(pool152, """INSERT INTO "indexadd152" ("name") VALUES ('row1')""")
+      @test isempty(user_idx(index_names(pool152, "indexadd152")))   # no user index yet
+
+      # ── ONE migration: ADD a db_index field (`tag`) AND alter `name` (NOT NULL → nullable), which forces a
+      #    rebuild of the same table. Insertion order is "Add field: tag" → "Create index on tag" →
+      #    "Alter table:", so pre-fix the fresh index ran before the rebuild's DROP TABLE and was lost. ──
+      write152("""
+      IndexAdd152 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField(null=true),
+          tag = Models.CharField(db_index=true, null=true)
+      )
+      """)
+      makemigrations(db152_path, interactive=false)
+      pending = read(joinpath(db152_path, "migrations", "pending_migrations.jl"), String)
+      @test !occursin("BEGIN TRANSACTION", pending)
+      migrate(db152_path, interactive=false, destructive=true)
+
+      # the new column exists, and its index SURVIVED the co-occurring rebuild — the #152 fix.
+      @test "tag" in column_names(pool152, "indexadd152")
+      @test !isempty(user_idx(index_names(pool152, "indexadd152")))   # pre-fix: empty (index silently lost)
+      # column-bound proof (Phase 4e idiom): some surviving index covers the NEW column `tag`.
+      idxcols = String[]
+      for idx in index_names(pool152, "indexadd152")
+        info = PormG.ConnectionPool.fetch(pool152, """PRAGMA index_info("$(idx)");""") |> DataFrame
+        append!(idxcols, string.(info.name))
+      end
+      @test "tag" in idxcols
+
+      # data fidelity: the seeded row survived the rebuild (and the NOT NULL→nullable alter applied).
+      survivors = PormG.ConnectionPool.fetch(pool152,
+        """SELECT "name" FROM "indexadd152" WHERE "id" = 1""") |> DataFrame
+      @test DataFrames.nrow(survivors) == 1
+      @test isequal(survivors[1, :name], "row1")
+    finally
+      try; PormG.Configuration.close_pool!(db152_path); catch; end
+      try; delete!(PormG.config, db152_path); catch; end
+      try; ispath(db152_path) && rm(db152_path, recursive=true); catch; end
+    end
+  end
+end
+

@@ -684,6 +684,132 @@ function _set_update_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc)
 end
 
+# --- Date arithmetic with explicit Julia duration types (#25) ------------------------------------
+# Unit → SQL keyword maps. These are closed whitelists: the unit symbols come only from
+# `_decompose_period`, never from user text, so the interpolated keyword can never carry injection.
+const _PG_INTERVAL_KW     = Dict(:year => "years", :month => "months", :week => "weeks",
+                                 :day => "days", :hour => "hours", :minute => "mins")  # :second → "secs"
+const _SQLITE_INTERVAL_UNIT = Dict(:year => "years", :month => "months", :day => "days",
+                                   :hour => "hours", :minute => "minutes", :second => "seconds")  # :week → converted to :day
+
+# Concrete date/time type of a plain field reference, or `nothing` if the field is not a
+# DATE/TIMESTAMP column or cannot be resolved. Sibling of `_is_date_field`; the migration-style
+# `tab_field_cache` lookup only resolves a dotted join key AFTER that join has rendered.
+function _date_field_type(field_name::String, instruc::SQLInstruction)::Union{String, Nothing}
+  model = instruc.object.model
+  if haskey(model.fields, field_name)
+    t = model.fields[field_name].type
+    return t in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? t : nothing
+  elseif haskey(instruc.tab_field_cache, field_name)
+    t = instruc.tab_field_cache[field_name].type
+    return t in ("DATE", "TIMESTAMPTZ", "TIMESTAMP") ? t : nothing
+  end
+  return nothing
+end
+
+# Whether a plain field reference resolves at all (so soft validation only fires when a field is
+# known to be a non-date column, never when its type is simply unknown — best-effort, fail-open).
+function _field_type_known(field_name::String, instruc::SQLInstruction)::Bool
+  return haskey(instruc.object.model.fields, field_name) || haskey(instruc.tab_field_cache, field_name)
+end
+
+# Decompose a Period/CompoundPeriod into an ordered [(unit, magnitude)] list (largest → smallest),
+# folding sub-second components into a single fractional `:second`. Zero-valued components are
+# dropped. Month/Year are kept as calendar units (SQL renders them natively) rather than rejected
+# the way `_duration_to_nanoseconds` does — nanosecond conversion is ambiguous, SQL interval math is not.
+function _decompose_period(period::Union{Dates.Period, Dates.CompoundPeriod})
+  cp = period isa Dates.CompoundPeriod ? period : Dates.CompoundPeriod(period)
+  acc = Dict{Symbol, Int}()
+  frac_nanos = Int64(0)
+  for p in Dates.periods(cp)
+    val = Dates.value(p)
+    if     p isa Year        ; acc[:year]   = get(acc, :year, 0)   + val
+    elseif p isa Quarter     ; acc[:month]  = get(acc, :month, 0)  + 3 * val
+    elseif p isa Month       ; acc[:month]  = get(acc, :month, 0)  + val
+    elseif p isa Week        ; acc[:week]   = get(acc, :week, 0)   + val
+    elseif p isa Day         ; acc[:day]    = get(acc, :day, 0)    + val
+    elseif p isa Hour        ; acc[:hour]   = get(acc, :hour, 0)   + val
+    elseif p isa Minute      ; acc[:minute] = get(acc, :minute, 0) + val
+    elseif p isa Second      ; acc[:second] = get(acc, :second, 0) + val
+    elseif p isa Millisecond ; frac_nanos += Int64(val) * 1_000_000
+    elseif p isa Microsecond ; frac_nanos += Int64(val) * 1_000
+    elseif p isa Nanosecond  ; frac_nanos += Int64(val)
+    else
+      throw(_argerr("Unsupported duration component $(typeof(p)) in F-expression date arithmetic"))
+    end
+  end
+  comps = Tuple{Symbol, Real}[]
+  for u in (:year, :month, :week, :day, :hour, :minute)
+    haskey(acc, u) && acc[u] != 0 && push!(comps, (u, acc[u]))
+  end
+  whole_sec = get(acc, :second, 0)
+  if frac_nanos != 0
+    push!(comps, (:second, whole_sec + frac_nanos / 1e9))
+  elseif whole_sec != 0
+    push!(comps, (:second, whole_sec))
+  end
+  return comps
+end
+
+# Render `F(date) ± <duration>` per dialect. PostgreSQL emits a single `make_interval(...)` with
+# explicitly-typed placeholders; SQLite emits one `date()`/`datetime()` modifier per component.
+function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
+  period = v.operand isa Interval ? v.operand.period : v.operand
+  comps  = _decompose_period(period)
+
+  # Resolve the left side FIRST — rendering it populates `instruc.tab_field_cache` for dotted join
+  # keys, which the SQLite wrapper choice (date vs datetime) below depends on.
+  left_side = _set_update_query_left(v.field_name, v.operation, instruc)
+
+  # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
+  # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
+  if v.field_name isa String && _field_type_known(v.field_name, instruc) &&
+     _date_field_type(v.field_name, instruc) === nothing
+    throw(_argerr("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
+  end
+
+  if instruc.connection isa PormGPostgres
+    parts = String[]
+    for (unit, value) in comps
+      if unit === :second
+        ph = add_parameter!(instruc, Float64(value); sql_type = "double precision")
+        push!(parts, "secs => $ph")
+      else
+        ph = add_parameter!(instruc, Int(value); sql_type = "integer")
+        push!(parts, "$(_PG_INTERVAL_KW[unit]) => $ph")
+      end
+    end
+    isempty(parts) && return left_side  # zero-length interval → identity
+    return "($(left_side) $(v.operation) make_interval($(join(parts, ", "))))"
+
+  elseif instruc.connection isa PormGSQLite
+    ftype   = v.field_name isa String ? _date_field_type(v.field_name, instruc) : nothing
+    subday  = any(c -> c[1] in (:hour, :minute, :second), comps)
+    # Choose datetime() when a sub-day unit is present, the column is a timestamp, OR the left side
+    # is ALREADY a datetime() expression (a chained `F(ts) + Day(1) + Day(2)`: the outer call sees a
+    # nested FExpression as field_name so `ftype` is unknown — without this, wrapping the inner
+    # datetime() in date() would silently truncate the time-of-day, diverging from PostgreSQL).
+    use_datetime = subday || ftype in ("TIMESTAMP", "TIMESTAMPTZ") || occursin("datetime(", left_side)
+    wrapper = use_datetime ? "datetime" : "date"
+    op_factor = v.operation == "-" ? -1 : 1
+    mods = String[]
+    for (unit, value) in comps
+      # SQLite has no 'weeks' modifier — express weeks as days.
+      u, mag = unit === :week ? (:day, value * 7) : (unit, value)
+      signed = op_factor * mag
+      sign   = signed < 0 ? "-" : "+"
+      ph     = add_parameter!(instruc, abs(signed))
+      push!(mods, "'$sign' || $ph || ' $(_SQLITE_INTERVAL_UNIT[u])'")
+    end
+    # Zero-length interval → identity, matching the PostgreSQL branch (never wrap, so a timestamp
+    # column is not truncated by a stray date() on a no-op interval).
+    isempty(mods) && return left_side
+    return "$wrapper($(left_side), $(join(mods, ", ")))"
+  else
+    throw("Unsupported connection type")
+  end
+end
+
 function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction)
   if isa(operand, FExpression)
     return _set_update_query(operand, instruc)
@@ -767,6 +893,11 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
     else
       throw("Unsupported connection type")
     end
+  elseif v.operation in ("+", "-") && v.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
+    # Date arithmetic with an explicit Julia duration type (#25). Handled ahead of the generic
+    # infix branch: a Period operand must NOT reach `_set_update_query_operand`, which would try to
+    # bind it as a raw SQL parameter.
+    return _render_date_period_arithmetic(v, instruc)
   else
     # Field with operation - handle nesting and date arithmetic properly
     left_side = _set_update_query_left(v.field_name, v.operation, instruc)

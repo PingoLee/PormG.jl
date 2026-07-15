@@ -327,6 +327,51 @@ end
 
 
 """
+    Interval(period)
+    Interval(duration_string)
+
+Explicit duration wrapper for F-expression date arithmetic (#25). Holds a Julia
+`Dates.Period` / `Dates.CompoundPeriod`, or parses a portable time-duration string
+(`"HH:MM:SS(.fff)"`, `"M:SS"`, or bare seconds) into a time-only `CompoundPeriod`.
+
+`Interval(...)` is interchangeable with a bare period wherever date arithmetic is used —
+`F("date") + Interval(Month(1))` is identical to `F("date") + Month(1)`. The string form is
+the escape hatch for time-based intervals: `F("logged_at") + Interval("01:30:00")`.
+
+Note: the name is shared with the `Intervals.jl` ecosystem — if you also `using Intervals`,
+disambiguate as `PormG.QueryBuilder.Interval`.
+"""
+struct Interval
+  period::Union{Dates.Period, Dates.CompoundPeriod}
+end
+
+# Parse a portable time-duration string into a time-only CompoundPeriod (Hour+Minute+Second
+# [+sub-second]). Reuses the DurationField normalizer so accepted input formats stay identical,
+# then rebuilds the period directly WITHOUT `canonicalize` (which would roll >=24h into days and
+# >=7d into weeks — surprising for a time duration and would break the portable time-only guarantee).
+function _parse_time_string_to_compoundperiod(s::AbstractString)::Dates.CompoundPeriod
+  normalized = Models._normalize_duration_string(s)  # -> "±H:MM:SS(.fff)" (fields may exceed 2 digits,
+                                                     # e.g. bare "120" seconds normalizes to "00:00:120")
+  m = match(r"^(-?)(\d+):(\d+):(\d+)(?:\.(\d+))?$", normalized)
+  m === nothing && throw(ArgumentError("Interval: could not parse normalized duration '$(normalized)'"))
+  sign = m.captures[1] == "-" ? -1 : 1
+  parts = Dates.Period[Hour(sign * parse(Int, m.captures[2])),
+                       Minute(sign * parse(Int, m.captures[3])),
+                       Second(sign * parse(Int, m.captures[4]))]
+  frac = m.captures[5]
+  if frac !== nothing
+    nanos = parse(Int, rpad(frac, 9, '0')[1:9])  # fractional seconds -> nanoseconds
+    push!(parts, Nanosecond(sign * nanos))
+  end
+  return Dates.CompoundPeriod(parts)
+end
+
+Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
+
+# Duration operands accepted by F-expression +/- date arithmetic (#25).
+const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
+
+"""
 F object for direct database field references and operations (similar to Django F expressions).
 
 Allows you to reference database fields directly in operations without pulling data into Julia.
@@ -354,7 +399,7 @@ query.values("price", "discounted_price" => F("price") * 0.9)
 @kwdef mutable struct FExpression <: SQLTypeF
   field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction}
   operation::OptionalString = nothing  # +, -, *, /, etc.
-  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Nothing} = nothing
+  operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   agregate::Bool = false
@@ -437,6 +482,37 @@ function Base.:/(f::FExpression, operand::Union{Integer,Float64,String,FExpressi
     agregate=f.agregate || _is_agg(operand)
   )
 end
+
+# Date arithmetic with explicit Julia duration types (#25): F("date") + Day(30), - Hour(6),
+# + (Month(1) + Day(15)), + Interval("01:30:00"), etc. Only + and - are meaningful — multiplying
+# or dividing a date field by a duration is nonsense (`Day(30) * 2` is resolved by Julia's own
+# Period arithmetic before it ever reaches an FExpression). A duration is never an aggregate, so
+# `agregate` propagates from `f` unchanged.
+function Base.:+(f::FExpression, operand::_DurationOperand)
+  return FExpression(
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="+",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate
+  )
+end
+
+function Base.:-(f::FExpression, operand::_DurationOperand)
+  return FExpression(
+    field_name=f.operation === nothing ? f.field_name : f,
+    operation="-",
+    operand=operand,
+    function_name="F",
+    column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
+    agregate=f.agregate
+  )
+end
+
+# Reversed + only: `Day(30) + F("date")` commutes to `F("date") + Day(30)`. Reversed - is omitted
+# on purpose (`interval - date` is not valid date arithmetic).
+Base.:+(operand::_DurationOperand, f::FExpression) = f + operand
 
 # Comparison operations for F expressions
 function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})

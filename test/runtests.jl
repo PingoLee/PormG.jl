@@ -40,6 +40,7 @@ end
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")
     @testset "Aggregate Fan-out Guard (#74)" include("unit/test_aggregate_fanout.jl")
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")
+    @testset "Date/Time Function SQL Parity (#25)" include("unit/test_date_functions_sql.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")

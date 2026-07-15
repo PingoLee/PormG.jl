@@ -61,6 +61,53 @@ VALUES
   -- ... (batched up to chunk_size rows)
 ```
 
+### Conflict Handling (ON CONFLICT)
+
+By default a duplicate key aborts the batch. When overlap is *expected* — idempotent re-seeding, or concurrent loaders filling one shared dimension table — attach an `ON CONFLICT` clause with `on_conflict=` instead of catching the error. PostgreSQL and SQLite (≥ 3.24) share the syntax, so the same call works on both backends.
+
+```julia
+# The status dimension is re-seeded on every deploy; some rows already exist.
+statuses_df = DataFrame(
+    statusid = [1, 3, 4, 130],
+    status   = ["Finished", "Accident", "Collision", "Withdrew"],
+)
+
+# Skip any row whose insert violates a unique constraint
+bulk_insert(M.Status.objects, statuses_df, on_conflict = :nothing)
+
+# Skip only when a specific target conflicts
+bulk_insert(M.Status.objects, statuses_df,
+    on_conflict = (action = :nothing, target = ["statusid"]))
+
+# Upsert: keep the existing row, refresh its label
+bulk_insert(M.Status.objects, statuses_df,
+    on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "status" ("statusid", "status")
+VALUES ($1, $2), ($3, $4), ($5, $6), ($7, $8)
+ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
+```
+
+**Accepted forms:**
+
+- `nothing` (default) — no clause; a duplicate key raises, exactly as before.
+- `:nothing` — `ON CONFLICT DO NOTHING`, untargeted: *any* unique violation skips the row.
+- `(action = :nothing, target = ["field"])` — skip only when the named columns conflict.
+- `(action = :update, target = ["field"], set = ["field", ...])` — upsert: on a `target` conflict, overwrite each `set` column with the value the batch tried to insert (`EXCLUDED.column` in SQL). Both `target` and `set` are required for `:update`.
+
+**Rules and behavior:**
+
+- `target` and `set` take **logical model field names**; PormG resolves `db_column` mappings and renders the quoted physical column names.
+- `set` columns must participate in the INSERT (be present in the DataFrame / `columns=` selection). `EXCLUDED.col` for a non-inserted column would silently write the column *default* instead of a caller value, so PormG rejects it up front.
+- `target` columns must exist on the model, but are **not** required to be declared `unique`/`primary_key` there — the database is the source of truth (partial indexes, constraints created outside PormG). A target with no matching constraint surfaces as the backend's own error (PostgreSQL: *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*).
+- **Dedupe the DataFrame on `target` first** when using `:update`. A batch that conflicts with *itself* diverges across engines: PostgreSQL raises *"cannot affect row a second time"*, while SQLite applies rows serially (last one wins). `unique(df, [:statusid])` before the call keeps behavior identical on both.
+- With `on_conflict` set, the duplicate-key → sequence-resync retry is **skipped**: a conflict is expected, not a symptom of a stale sequence. A duplicate-key error that still surfaces (a *different* constraint than your target) propagates immediately. The normal post-insert sequence synchronization for explicit primary keys still runs.
+- Under `DO NOTHING` with server-generated primary keys, PostgreSQL still consumes sequence values for skipped rows — the standard harmless gaps.
+- `bulk_copy()` cannot express `ON CONFLICT` (the COPY protocol has no such clause); use `bulk_insert(...; on_conflict=...)` when duplicates are possible.
+
 ### Auto-Generated Primary Keys
 
 Do not prefill an auto-increment primary key with `max(id) + 1` before calling `bulk_insert()` or `bulk_copy()`.
@@ -148,6 +195,7 @@ end
 
 ```julia
 # Detect duplicate key errors
+# (if duplicates are EXPECTED, prefer on_conflict = :nothing — see Conflict Handling above)
 try
     bulk_insert(M.Driver.objects, df)
 catch e
@@ -197,6 +245,9 @@ For truly massive datasets, PormG provides `bulk_copy()`, which uses PostgreSQL'
 - **Raw Speed**: Bypasses the SQL statement parser.
 - **Memory Efficient**: Streams data to the database.
 - **Safe by Design**: Inherently immune to SQL injection.
+
+!!! note
+    The COPY protocol cannot express `ON CONFLICT` — a single duplicate row makes the whole COPY fail. When duplicates are possible, use `bulk_insert(...; on_conflict = ...)` instead (see [Conflict Handling](#conflict-handling-on-conflict)).
 
 ### Basic Usage
 

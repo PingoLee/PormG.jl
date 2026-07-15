@@ -43,6 +43,76 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## `bulk_insert` conflict handling via `on_conflict=` (ON CONFLICT)
+
+- **PormG ref**: issue #123 ; `src/querybuilder/execution_bulk.jl`, `src/Dialect.jl`
+- **Recorded**: 2026-07-15
+- **Severity**: new feature — **additive, non-breaking**. Default behavior unchanged; no forced code edit.
+
+### What changed
+
+`bulk_insert` accepts an `on_conflict=` keyword that renders an `ON CONFLICT` clause (PostgreSQL
+and SQLite ≥ 3.24, identical syntax), so overlapping batches skip or merge duplicates instead of
+erroring:
+
+```julia
+bulk_insert(M.Status.objects, df, on_conflict = :nothing)                       # ON CONFLICT DO NOTHING
+bulk_insert(M.Status.objects, df,
+    on_conflict = (action = :nothing, target = ["statusid"]))                   # targeted skip
+bulk_insert(M.Status.objects, df,
+    on_conflict = (action = :update, target = ["statusid"], set = ["status"]))  # upsert
+```
+
+With `on_conflict` set, the duplicate-key → sequence-resync retry is skipped (a conflict is
+expected there, not a desync). See [Conflict Handling](docs/src/write/bulk.md).
+
+This exists to delete the raw-SQL workaround: seeding a shared dimension from concurrent workers
+previously required hand-written `LibPQ.execute("INSERT … ON CONFLICT … DO NOTHING")` with manual
+value escaping, bypassing PormG's parameterization and connection routing.
+
+### How to find the calls to migrate
+
+Nothing breaks — purely additive. **Optional adoption:** grep each app for raw conflict-handling
+inserts and replace them with the ORM call:
+
+```
+grep -rn "ON CONFLICT" src/ | grep -i "execute"
+```
+
+Concrete known call site (esus_back `src/auxiliar.jl`, `at_dim_cbo` — seeds the global
+`dash_dim_cbo` dimension from concurrent municípios):
+
+```julia
+# ✗ before — raw LibPQ with hand-built VALUES and manual '' escaping
+valores = join(map(eachrow(df)) do r
+  nome = ismissing(r.no_cbo) ? "null" : "'" * replace(string(r.no_cbo), "'" => "''") * "'"
+  "($(r.id), 0, '$(r.co_cbo)', $nome)"
+end, ", ")
+LibPQ.execute(db, """
+  INSERT INTO dash_dim_cbo (id, cat_cbo_id, co_cbo, no_cbo)
+  VALUES $valores
+  ON CONFLICT (id) DO NOTHING
+""")
+
+# ✓ after — dash_dim_cbo modeled as biM.Dim_CBO; parameterized, pooled, chunked
+df.cat_cbo_id = fill(0, nrow(df))   # was a literal in the raw INSERT
+bulk_insert(biM.Dim_CBO, df, on_conflict = (action = :nothing, target = ["id"]))
+```
+
+(The issue #123 comment sketched `(:nothing, target = ["id"])` — that tuple form is not valid
+Julia; the shipped API is the NamedTuple shown above.)
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| esus_back | ⏳ | `src/auxiliar.jl` `at_dim_cbo` — apply the before → after above (needs `dash_dim_cbo` modeled) |
+| app-2 | — | no raw ON CONFLICT inserts known |
+| app-3 | — | no raw ON CONFLICT inserts known |
+| app-4 | — | no raw ON CONFLICT inserts known |
+
+---
+
 ## Composite uniqueness (`unique_together`) via `Models.UniqueConstraint`
 
 - **PormG ref**: issue #19 ; `src/Models.jl`, `src/migrations/planner.jl`, `src/migrations/importers.jl`

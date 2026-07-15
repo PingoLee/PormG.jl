@@ -756,6 +756,33 @@ function create_unique_index(conn::PormGSQLite, index_name::String, table_name::
   return """CREATE UNIQUE INDEX IF NOT EXISTS $(index_name) ON $(table_name) ($(join(columns, ", ")));"""
 end
 
+"""
+    on_conflict_clause(action, target, set, conn) -> String
+
+Render an `ON CONFLICT` clause for an INSERT statement (#123). `target` and `set` must be
+pre-quoted physical column identifiers — quoting stays with the caller, like `create_index`.
+PostgreSQL and SQLite (≥3.24) share this syntax, so one method covers both backends.
+
+- `(:nothing, [], [])`        → `ON CONFLICT DO NOTHING`
+- `(:nothing, cols, [])`      → `ON CONFLICT (cols) DO NOTHING`
+- `(:update, cols, setcols)`  → `ON CONFLICT (cols) DO UPDATE SET c = EXCLUDED.c, …`
+"""
+function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{String},
+                            conn::Union{PormGPostgres, PormGSQLite})::String
+  action in (:nothing, :update) ||
+    throw(ArgumentError("on_conflict_clause: action must be :nothing or :update, got :$action"))
+  target_sql = isempty(target) ? "" : " ($(join(target, ", ")))"
+  if action === :nothing
+    return "ON CONFLICT$(target_sql) DO NOTHING"
+  end
+  isempty(target) &&
+    throw(ArgumentError("on_conflict_clause: action :update requires a non-empty conflict target"))
+  isempty(set) &&
+    throw(ArgumentError("on_conflict_clause: action :update requires a non-empty set column list"))
+  assignments = join(["$col = EXCLUDED.$col" for col in set], ", ")
+  return "ON CONFLICT$(target_sql) DO UPDATE SET $(assignments)"
+end
+
 function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol,String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String; on_delete::Union{String,Nothing}=nothing)
   on_delete_clause = on_delete !== nothing ? " ON DELETE $on_delete" : ""
   return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause DEFERRABLE INITIALLY DEFERRED;"""

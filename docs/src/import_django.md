@@ -152,6 +152,41 @@ Django parameters are automatically converted to PormG equivalents:
 | `on_delete=CASCADE` | `on_delete=CASCADE` | Direct mapping |
 | `choices=[]` | `choices=()` | List to tuple conversion |
 
+### Meta Options
+
+The importer reads one `class Meta:` option:
+
+| Django `Meta` option | PormG equivalent | Notes |
+|----------------------|------------------|-------|
+| `unique_together = ('a', 'b')` | `constraints=[Models.UniqueConstraint(fields=("a", "b"))]` | Composite uniqueness. A tuple-of-tuples (multiple composite keys) becomes one `UniqueConstraint` per group. |
+
+Because foreign-key fields are imported with an `_id` suffix (`item` → `item_id`), the importer
+resolves each `unique_together` member to its imported field name automatically:
+
+```python
+class Dim_item_fabricante(models.Model):
+    item = models.ForeignKey(Dim_item, on_delete=models.CASCADE)
+    fabricante = models.ForeignKey(Dim_fabricante, on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ('item', 'fabricante')
+```
+
+imports as:
+
+```julia
+Dim_item_fabricante = Models.Model("dim_item_fabricante",
+  id = Models.IDField(),
+  item_id = Models.ForeignKey("Dim_item", pk_field="id", on_delete=CASCADE),
+  fabricante_id = Models.ForeignKey("Dim_fabricante", pk_field="id", on_delete=CASCADE),
+  constraints = [Models.UniqueConstraint(fields = ("item_id", "fabricante_id",))],
+)
+```
+
+See [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)) for how the
+constraint is materialized. Django's newer `Meta.constraints = [UniqueConstraint(...)]` form is
+not parsed yet — declare it directly in PormG.
+
 ### ⚠️ Important: CharField with Choices Syntax
 
 When using `CharField` with choices, PormG requires the choices to be defined **inline** for proper parsing. External variables are not supported.

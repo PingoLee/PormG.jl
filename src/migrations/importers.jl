@@ -334,7 +334,17 @@ function import_models_from_django(
 
     # Collect all create instructions
     if !isempty(fields_dict)
-        push!(Instructions, Models.Model_to_str(Models.Model(class_name, fields_dict), render_settings))
+        model = Models.Model(class_name, fields_dict)
+        # Recover Django `Meta.unique_together` → composite UniqueConstraints (#19). Lenient:
+        # BOTH parsing and validation are wrapped — a malformed `unique_together` (e.g. duplicate
+        # fields) is warned and skipped, never aborting the whole multi-class import.
+        try
+          constraints = parse_meta_unique_together(class_content, fields_dict, class_name)
+          isempty(constraints) || Models._apply_unique_constraints!(model, constraints)
+        catch e
+          @warn "import: could not parse/apply unique_together; skipping" class=class_name exception=e
+        end
+        push!(Instructions, Models.Model_to_str(model, render_settings))
     end
 
   end
@@ -585,6 +595,116 @@ function split_field_options(field_options::AbstractString)
   if position(buffer) > 0
       push!(tokens, String(take!(buffer)) |> strip)
   end
-  
+
   return tokens
+end
+
+# ── Django `Meta.unique_together` → PormG `UniqueConstraint` (#19) ────────────────────────
+# The field regex above silently drops any non-`models.X(...)` line, so `class Meta:` options
+# never reached the model. These helpers recover `unique_together` and map it to PormG's
+# composite-uniqueness declaration. Django `Meta.constraints=[UniqueConstraint(...)]` (the newer
+# named form) is not parsed here yet — `unique_together` is the concrete #19 need.
+
+# Return the text inside the FIRST balanced (...) or [...] group in `s` (Django allows tuples
+# or lists), or nothing. Quote-aware so a paren inside a string literal is ignored.
+function _balanced_group(s::AbstractString)::Union{String, Nothing}
+  chars = collect(s)
+  start = findfirst(c -> c == '(' || c == '[', chars)
+  start === nothing && return nothing
+  depth = 0
+  buf = IOBuffer()
+  in_quotes = false
+  quote_char = ' '
+  for idx in start:length(chars)
+    c = chars[idx]
+    if in_quotes
+      c == quote_char && (in_quotes = false)
+      print(buf, c)
+    elseif c == '"' || c == '\''
+      in_quotes = true
+      quote_char = c
+      print(buf, c)
+    elseif c == '(' || c == '['
+      depth += 1
+      depth > 1 && print(buf, c)
+    elseif c == ')' || c == ']'
+      depth -= 1
+      depth == 0 && return String(take!(buf))
+      print(buf, c)
+    else
+      print(buf, c)
+    end
+  end
+  return nothing
+end
+
+# Strip surrounding quotes/whitespace off each token, dropping empties (e.g. trailing-comma
+# artifacts). `django_to_string` already normalizes `'`→`"` for file input; handle both anyway.
+function _clean_constraint_field_names(tokens)::Vector{String}
+  out = String[]
+  for t in tokens
+    n = strip(replace(String(t), "\"" => "", "'" => ""))
+    isempty(n) || push!(out, String(n))
+  end
+  return out
+end
+
+# Split the inner text of a `unique_together` value into column groups. Handles both a flat
+# single group `('a','b')` and a tuple/list of groups `(('a','b'),('c','d'))`.
+function _parse_unique_together_groups(inner::AbstractString)::Vector{Vector{String}}
+  tokens = split_field_options(inner)
+  isempty(tokens) && return Vector{String}[]
+  if any(t -> (st = strip(t); startswith(st, "(") || startswith(st, "[")), tokens)
+    groups = Vector{String}[]
+    for t in tokens
+      st = strip(t)
+      (startswith(st, "(") || startswith(st, "[")) || continue
+      innerg = _balanced_group(st)
+      innerg === nothing && continue
+      names = _clean_constraint_field_names(split_field_options(innerg))
+      isempty(names) || push!(groups, names)
+    end
+    return groups
+  else
+    names = _clean_constraint_field_names(tokens)
+    return isempty(names) ? Vector{String}[] : [names]
+  end
+end
+
+# Map a Django field name to the imported PormG field name: FK/OneToOne fields gain an `_id`
+# suffix at import (see process_class_fields!), so `item` in Django is `item_id` in PormG.
+function _resolve_django_constraint_field(name::AbstractString, fields_dict::Dict{Symbol, Any})::Union{String, Nothing}
+  haskey(fields_dict, Symbol(name)) && return String(name)
+  haskey(fields_dict, Symbol("$(name)_id")) && return "$(name)_id"
+  return nothing
+end
+
+# Build PormG UniqueConstraints from a class's `Meta.unique_together`, resolving each declared
+# Django field to its imported PormG field name. Unresolvable groups are warned and skipped
+# (lenient, matching the importer's philosophy) rather than aborting the whole import.
+function parse_meta_unique_together(class_content, fields_dict::Dict{Symbol, Any}, class_name::AbstractString)
+  content = join(string.(class_content), "\n")
+  occursin("unique_together", content) || return Models.UniqueConstraint[]
+  # `\b` anchors to a word boundary so a longer identifier ending in `unique_together`
+  # (e.g. `not_unique_together = ...`) is not mis-parsed as the Meta option.
+  m = match(r"\bunique_together\s*=\s*(.*)"s, content)
+  m === nothing && return Models.UniqueConstraint[]
+  inner = _balanced_group(m.captures[1])
+  inner === nothing && return Models.UniqueConstraint[]
+  constraints = Models.UniqueConstraint[]
+  for group in _parse_unique_together_groups(inner)
+    resolved = String[]
+    ok = true
+    for name in group
+      r = _resolve_django_constraint_field(name, fields_dict)
+      if r === nothing
+        @warn "import: unique_together field matches no imported field; skipping constraint" field=name class=class_name
+        ok = false
+        break
+      end
+      push!(resolved, r)
+    end
+    ok && !isempty(resolved) && push!(constraints, Models.UniqueConstraint(fields = resolved))
+  end
+  return constraints
 end

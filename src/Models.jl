@@ -532,6 +532,93 @@ function model_has_db_column(model::PormGModel)::Bool
 end
 
 #═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Model-level constraints (composite uniqueness · #19)
+#═══════════════════════════════════════════════════════════════════════════════
+# A model-level UNIQUE spanning one or more columns — Django's `unique_together`,
+# spelled here as named `UniqueConstraint` objects (the Django 2.2+/SQLAlchemy form).
+# Declared via the `constraints=` kwarg on `Model(...)`; materialized by the migration
+# planner as a `CREATE UNIQUE INDEX` (portable, byte-identical on PostgreSQL and SQLite),
+# reusing the exact primitive the auto ManyToManyField join-table index already uses.
+# `name === nothing` ⇒ the planner derives `<table>_<cols>_uniq` (mirrors the M2M
+# auto-index naming convention). This is NOT a `PormGField` — it carries no column of
+# its own; it references existing fields by name.
+struct UniqueConstraint
+  fields::Vector{String}
+  name::Union{String, Nothing}
+end
+function UniqueConstraint(; fields, name::Union{AbstractString, Nothing} = nothing)
+  cols = _normalize_constraint_fields(fields)
+  isempty(cols) && throw(ArgumentError("UniqueConstraint requires at least one field"))
+  length(unique(cols)) == length(cols) ||
+    throw(ArgumentError("UniqueConstraint has duplicate fields: $(cols)"))
+  # A blank name would render as an empty (invalid) index identifier; require nothing (auto-derive)
+  # or a real name.
+  name !== nothing && isempty(strip(name)) &&
+    throw(ArgumentError("UniqueConstraint name must be non-empty (pass name=nothing to auto-derive)"))
+  return UniqueConstraint(cols, name === nothing ? nothing : String(name))
+end
+
+# Accept a single field name (Symbol/String) or an iterable of them; normalize each via
+# `format_fild_name` so declared names match the model's field-dict keys (#57 is
+# case-sensitive). A lone String must NOT be iterated char-by-char — the scalar method
+# below is more specific and wins dispatch for Symbol/AbstractString.
+_normalize_constraint_fields(f::Union{Symbol, AbstractString})::Vector{String} = String[format_fild_name(String(f))]
+function _normalize_constraint_fields(f)::Vector{String}
+  out = String[]
+  for x in f
+    (x isa Symbol || x isa AbstractString) ||
+      throw(ArgumentError("UniqueConstraint fields must be Symbol or String, got $(typeof(x))"))
+    push!(out, format_fild_name(String(x)))
+  end
+  return out
+end
+
+# Coerce the `constraints=` argument (a single UniqueConstraint, an iterable of them, or
+# nothing) into a concrete Vector. Anything that is not a UniqueConstraint is an error.
+_as_constraint_vector(::Nothing)::Vector{UniqueConstraint} = UniqueConstraint[]
+_as_constraint_vector(c::UniqueConstraint)::Vector{UniqueConstraint} = UniqueConstraint[c]
+function _as_constraint_vector(cs)::Vector{UniqueConstraint}
+  out = UniqueConstraint[]
+  for c in cs
+    c isa UniqueConstraint ||
+      throw(ArgumentError("`constraints` must contain UniqueConstraint objects, got $(typeof(c))"))
+    push!(out, c)
+  end
+  return out
+end
+
+# Validate declared UniqueConstraints against the built model and stash them in the
+# general-purpose `cache` (the same mechanism the ManyToManyField auto-index uses, so
+# `deepcopy`/`strip_many_to_many_fields` carry them for free — no new struct field, no
+# `deepcopy` positional-enumeration edit). Each referenced field must exist on the model
+# and be a concrete column (not a ManyToManyField, which has no column of its own).
+function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
+  list = _as_constraint_vector(constraints)
+  isempty(list) && return model
+  seen_names = Set{String}()
+  for c in list
+    for fname in c.fields
+      haskey(model.fields, fname) || throw(ArgumentError(
+        "UniqueConstraint references unknown field '$(fname)' on model '$(model.name)'. " *
+        "Declared fields: $(sort(collect(keys(model.fields))))"))
+      is_many_to_many_field(model.fields[fname]) && throw(ArgumentError(
+        "UniqueConstraint field '$(fname)' on model '$(model.name)' is a ManyToManyField; " *
+        "composite uniqueness must reference concrete columns"))
+    end
+    # Two constraints sharing an explicit name collide into one index (the plan keys on the name);
+    # reject it here for a clear, early error instead of a silent drop at planning time.
+    if c.name !== nothing
+      c.name in seen_names && throw(ArgumentError(
+        "Duplicate UniqueConstraint name '$(c.name)' on model '$(model.name)'; " *
+        "constraint names must be unique within a model"))
+      push!(seen_names, c.name)
+    end
+  end
+  model.cache["unique_constraints"] = Dict{String, Any}("constraints" => list)
+  return model
+end
+
+#═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
@@ -549,9 +636,12 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   # println(fields_dict)
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
-function Model(name::AbstractString; fields...)
-  
-  return Model(name,  Tuple(pairs(fields)))
+function Model(name::AbstractString; constraints = nothing, fields...)
+  # Peel `constraints` off BEFORE the `fields...` slurp — otherwise it would flow into the
+  # `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19). Generated
+  # model files (Model_to_str) reload through this kwargs form, so this is the round-trip seam.
+  model = Model(name, Tuple(pairs(fields)))
+  return _apply_unique_constraints!(model, constraints)
 end
 function Model(name::AbstractString, dict::Dict{String, PormGField})
   field_names::Vector{String} = []
@@ -578,8 +668,12 @@ function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
   throw(ArgumentError(_emsg("You need to add fields to the model, example: $example_usage")))
 end
-function Model(; fields...)
-  return Model("", fields |> Tuple)
+function Model(; constraints = nothing, fields...)
+  # No-positional-name form (the idiomatic style — the table name is inferred from the binding
+  # via set_models). `constraints=` must work here too, so peel it before the `fields...` slurp
+  # exactly like the named form above.
+  model = Model("", Tuple(pairs(fields)))
+  return _apply_unique_constraints!(model, constraints)
 end
 
 """
@@ -676,6 +770,22 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; c
       (e isa InterruptException || e isa StackOverflowError) && rethrow()
       @warn "Model_to_str: field render failed — emitting marker comment" model=model.name field=db_field_name field_type=struct_name exception=e
       push!(render_failures, "# PormG: field '$(db_field_name)' ($(struct_name)) could not be rendered: $(replace(sprint(showerror, e), "\n" => " ")) — field omitted.")
+    end
+  end
+  # Composite uniqueness (#19): emit model-level UniqueConstraints so inspectdb/import output
+  # round-trips through the `constraints=` kwarg on Model(...). Only when ≥1 field rendered —
+  # an all-failed model (fields == "") stays commented-out below, constraints included.
+  if fields != "" && haskey(model.cache, "unique_constraints")
+    ucs = get(model.cache["unique_constraints"], "constraints", UniqueConstraint[])
+    if !isempty(ucs)
+      rendered = String[]
+      for c in ucs
+        cols = join(("\"$(f)\"" for f in c.fields), ", ")
+        namepart = c.name === nothing ? "" : ", name = \"$(c.name)\""
+        # Trailing comma keeps a single-field tuple valid Julia: ("a",)
+        push!(rendered, "Models.UniqueConstraint(fields = ($(cols),)$(namepart))")
+      end
+      fields *= ",\n  constraints = [$(join(rendered, ", "))]"
     end
   end
   model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase

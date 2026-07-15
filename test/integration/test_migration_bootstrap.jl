@@ -1615,6 +1615,46 @@ end
     @test !isfile(pending_path)                                # archive retry cleared the stale file
   end
 
+  # ── Phase 17: Composite unique constraint (#19) ──────────────────────
+  # A model-level UniqueConstraint must materialize a real composite unique index when the table
+  # is created, and the database must REJECT a duplicate (season, round) pair while allowing a
+  # different pair. Uses the idiomatic no-positional-name model form (table inferred from binding).
+  @testset "Phase 17: Composite unique constraint (#19)" begin
+    write_edge_models("""
+    Uniqtest = Models.Model(
+        id = Models.IDField(),
+        season = Models.IntegerField(),
+        round = Models.IntegerField(),
+        constraints = [Models.UniqueConstraint(fields=("season", "round"), name="uniqtest_season_round_uniq")]
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @test table_exists(pool, "uniqtest")
+    # The composite unique index exists on the freshly created table (both backends).
+    @test "uniqtest_season_round_uniq" in index_names(pool, "uniqtest")
+
+    # First (2021, 1) inserts; the duplicate must violate the composite unique index.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 1);""")
+    dup_rejected = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 1);""")
+      false
+    catch
+      true
+    end
+    @test dup_rejected
+
+    # A different pair is accepted — uniqueness is composite, not per-column.
+    accepted = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniqtest ("season", "round") VALUES (2021, 2);""")
+      true
+    catch
+      false
+    end
+    @test accepted
+  end
+
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

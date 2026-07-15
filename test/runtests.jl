@@ -33,6 +33,7 @@ end
     @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
+    @testset "Composite Uniqueness (unique_together #19)" include("unit/test_unique_constraints.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "custom_join Copy Isolation (#112)" include("unit/test_custom_join_copy.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")

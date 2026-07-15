@@ -196,13 +196,47 @@ function _add_many_to_many_auto_constraints(conn::Union{PormGPostgres, PormGSQLi
   return nothing
 end
 
+# User-declared composite uniqueness (#19). Emits one `CREATE UNIQUE INDEX` per
+# `UniqueConstraint` in `model.cache["unique_constraints"]`, generalizing the add-only
+# ManyToManyField auto-index pipeline above. Called ONLY from `_add_new_table` (like the M2M
+# sibling), so the index is materialized when its table is first created and never re-emitted —
+# no false "pending" churn. Adding/removing a constraint on an already-migrated table (which
+# needs composite-unique introspection PormG does not have yet) is out of scope for this pass.
+function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
+  haskey(model.cache, "unique_constraints") || return nothing
+  constraints = get(model.cache["unique_constraints"], "constraints", nothing)
+  constraints === nothing && return nothing
+  table = model.name |> lowercase
+  seen = Set{String}()
+  for c in constraints
+    # Resolve declared field names to physical columns (honors db_column #50; PormG adds no
+    # `_id` suffix for FKs — the field name IS the column).
+    cols = String[Models.model_column(model, f) for f in c.fields]
+    index_name = c.name === nothing ? "$(table)_$(join(cols, "_"))_uniq" : c.name
+    # The step label (and thus the plan slot) keys on index_name; a collision — same explicit
+    # name, or two constraints deriving the same name — would silently overwrite. Fail loudly.
+    index_name in seen && throw(ArgumentError(
+      "Duplicate unique-constraint index name '$(index_name)' on table '$(table)'; " *
+      "give each UniqueConstraint a distinct name"))
+    push!(seen, index_name)
+    _configure_order_dict_migration_plan(
+      migration_plan,
+      model_name,
+      "Create unique constraint: $(index_name)",
+      Dialect.create_unique_index(conn, "\"$index_name\"", "\"$table\"", ["\"$col\"" for col in cols])
+    )
+  end
+  return nothing
+end
+
 function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
   _configure_order_dict_migration_plan(migration_plan, model_name, "New model", Dialect.create_table(conn, model))
-  for (field_name, field) in model.fields       
-    name = _hash_field_name(model_name, field_name)      
-    _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)      
+  for (field_name, field) in model.fields
+    name = _hash_field_name(model_name, field_name)
+    _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
   end
   _add_many_to_many_auto_constraints(conn, migration_plan, model_name, model)
+  _add_unique_constraints(conn, migration_plan, model_name, model)
   return nothing
 end
 

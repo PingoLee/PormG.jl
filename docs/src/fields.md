@@ -998,7 +998,7 @@ All field types support these common parameters:
 ### Validation Options
 - `null::Bool = false`: Allow NULL values in database
 - `blank::Bool = false`: Allow empty values in forms  
-- `unique::Bool = false`: Enforce uniqueness constraint
+- `unique::Bool = false`: Enforce uniqueness constraint on this single column. For uniqueness spanning **two or more** columns, use a model-level `UniqueConstraint` — see [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)).
 - `default`: Set default value for new records
 
 ### Database Options

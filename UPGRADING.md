@@ -43,6 +43,55 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Composite uniqueness (`unique_together`) via `Models.UniqueConstraint`
+
+- **PormG ref**: issue #19 ; `src/Models.jl`, `src/migrations/planner.jl`, `src/migrations/importers.jl`
+- **Recorded**: 2026-07-14
+- **Severity**: new feature — **additive, non-breaking**. No existing API changed; no forced code edit.
+
+### What changed
+
+Models can now declare multi-column uniqueness (Django's `Meta.unique_together`) with a
+model-level `constraints=` list of named `Models.UniqueConstraint` objects:
+
+```julia
+Constructor_engine = Models.Model("constructor_engines",
+  id = Models.IDField(),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="CASCADE"),
+  year = Models.IntegerField(),
+  engine_manufacturer = Models.CharField(max_length=50),
+  constraints = [
+    Models.UniqueConstraint(fields=("constructorid", "year"), name="uniq_constructor_year"),
+  ],
+)
+```
+
+At migration time each constraint becomes a `CREATE UNIQUE INDEX` (identical on PostgreSQL and
+SQLite). The Django importer now maps `Meta.unique_together` to this form automatically (resolving
+the FK `_id` suffix). See [Composite Uniqueness](docs/src/models.md).
+
+**Limitation (this release):** a constraint is materialized when its table is first created (same
+lifecycle as the automatic many-to-many index). Adding/removing a constraint on an
+already-migrated table is not yet diffed by `makemigrations` — deferred to a follow-up.
+
+### How to find the calls to migrate
+
+Nothing to grep — no API changed. This is purely additive. **Optional adoption:** if an app has a
+natural composite key currently enforced only in application code (or a Django model with
+`unique_together` that was imported before this feature), declare it with `UniqueConstraint` and
+create the table (or add the unique index by hand on the existing table).
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | optional — review models for composite keys to enforce |
+| app-2 | ⏳ | optional |
+| app-3 | ⏳ | optional |
+| app-4 | ⏳ | optional |
+
+---
+
 ## Connection errors inside `run_in_transaction` now propagate (no silent statement retry)
 
 - **PormG ref**: issue #138 ; `src/ConnectionPool.jl`

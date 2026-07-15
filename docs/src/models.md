@@ -127,6 +127,50 @@ end
 - Each field uses a PormG field constructor (e.g., `IDField`, `CharField`, `DateField`).
 - You can use keyword arguments to customize field options (e.g., `max_length`, `unique`, `null`).
 
+## Composite Uniqueness (`unique_together`)
+
+A single-column uniqueness rule is a field option (`unique=true`). To require a combination
+of **two or more** columns to be unique together — Django's `Meta.unique_together` — declare a
+model-level `constraints=[...]` list of `Models.UniqueConstraint` objects (the same shape as
+Django 2.2+ / SQLAlchemy named constraints):
+
+```julia
+Constructor_engine = Models.Model("constructor_engines",
+  id = Models.IDField(),
+  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="CASCADE"),
+  year = Models.IntegerField(),
+  engine_manufacturer = Models.CharField(max_length=50),
+  constraints = [
+    Models.UniqueConstraint(fields=("constructorid", "year"), name="uniq_constructor_year"),
+  ],
+)
+```
+
+Each `UniqueConstraint` takes:
+
+- `fields` — a tuple (or vector) of **field names** on this model. Foreign-key fields are
+  referenced by the field name; PormG resolves each to its physical column (honoring
+  `db_column`).
+- `name` — the index name (optional). When omitted, PormG derives `<table>_<cols>_uniq`,
+  matching the auto-generated many-to-many index convention. On tables/columns with long names
+  the derived name can exceed PostgreSQL's 63-byte identifier limit (which Postgres silently
+  truncates) — pass an explicit `name` in that case to keep it stable and unique.
+
+A model may carry several constraints (each its own tuple). At migration time each becomes a
+`CREATE UNIQUE INDEX` — identical on PostgreSQL and SQLite:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_constructor_year"
+  ON "constructor_engines" ("constructorid", "year");
+```
+
+!!! note "Materialized when the table is created"
+    In this release a `UniqueConstraint` is emitted when its table is first created (the same
+    lifecycle as the automatic many-to-many join-table index). Adding or removing a constraint
+    on a table that **already exists** is not yet detected by `makemigrations` — it requires
+    composite-index introspection that is tracked as a follow-up. Declare composite uniqueness
+    when you create the model, or add the index by hand on an existing table.
+
 ## Naming Conventions and Considerations
 
 ### Model Naming Rules

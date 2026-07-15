@@ -799,7 +799,21 @@ Inserts multiple rows into the database in bulk from a DataFrame.
   - `df_o::DataFrames.DataFrame`: The DataFrame containing the data to be inserted.
   - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns from the DataFrame are used.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
-  - `show_query::Bool`: Optional. If true, prints the generated SQL query (default: false).
+  - `show_query::Symbol`: Optional. Return the generated SQL instead of executing it — `:sql`,
+    `:dict`, `:inspection`, or `:params` (see Query Inspection). Defaults to `:execute` (run it).
+  - `on_conflict`: Optional (#123). Attaches an `ON CONFLICT` clause so duplicate rows are
+    skipped or merged instead of erroring (PostgreSQL and SQLite share the syntax). Accepts:
+    - `nothing` (default): no clause — a duplicate key raises, as before.
+    - `:nothing`: `ON CONFLICT DO NOTHING` (untargeted — any unique violation skips the row).
+    - `(action = :nothing, target = ["field"])`: `ON CONFLICT (col) DO NOTHING`.
+    - `(action = :update, target = ["field"], set = ["field"])`:
+      `ON CONFLICT (col) DO UPDATE SET col = EXCLUDED.col, …` (upsert).
+    `target`/`set` take logical model field names (resolved through `db_column`). `set` fields
+    must participate in the INSERT column list. `target` is not required to be declared unique
+    in the model — the database is the source of truth for matching constraints. When
+    `on_conflict` is set, the duplicate-key → sequence-resync retry is skipped: a conflict is
+    expected there, not a sequence desync, so any duplicate-key error that still surfaces
+    (a different constraint than the target) propagates.
 
   The caller's DataFrame is never mutated (and never copied — the pipeline works on a
   zero-copy wrapper), so there is no `copy=` knob to think about.
@@ -827,7 +841,8 @@ Inserts multiple rows into the database in bulk from a DataFrame.
 function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     columns = nothing,
     chunk_size::Integer = 1000,
-    show_query::Symbol = :execute
+    show_query::Symbol = :execute,
+    on_conflict = nothing
   )
   model = objct.object.model
   ensure_model_transaction_scope(model)
@@ -853,6 +868,14 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Prepare columns and DataFrame using centralized helpers
   _columns = _normalize_bulk_columns(columns)
   mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert, settings)
+
+  # Normalize/validate on_conflict against the participating insert columns (#123), then render
+  # the clause once here — it is identical for every chunk, and its `nothing`-ness is the flag
+  # that gates the sequence-resync retry inside _bulk_insert. Purely local (no DB round-trip),
+  # so :sql/:dict/:params modes validate and render identically.
+  _on_conflict = _normalize_on_conflict(on_conflict, model, fields_df, connection)
+  on_conflict_sql = _on_conflict === nothing ? nothing :
+    Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection)
 
   # Cap the chunk so `effective_chunk × ncols` stays under the backend's bind-parameter limit
   # (#84). Each INSERT row binds one param per field and adds nothing else, so per_row = ncols
@@ -891,7 +914,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       count += 1
       if count == effective_chunk || index == total
         # @pormg_debug
-        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters)
+        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters; on_conflict_sql = on_conflict_sql)
         push!(results, res)
         count = 0
         rows = String[]
@@ -940,6 +963,9 @@ This is significantly faster than `bulk_insert` for large datasets.
 
 The caller's DataFrame is never mutated (and never copied — the pipeline works on a
 zero-copy wrapper).
+
+The COPY protocol cannot express `ON CONFLICT` — rows that violate a unique constraint make
+the whole COPY fail. To skip or merge duplicates, use `bulk_insert(...; on_conflict = ...)` (#123).
 
 # Example
 ```julia
@@ -1059,21 +1085,115 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
   end  
 end
 
-function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite}, 
-  fields::Vector{String}, rows::Vector{String}, 
-  pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn, 
-  django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam)
+# Normalize/validate `bulk_insert`'s `on_conflict` kwarg into the canonical
+# `(action, target, set)` NamedTuple consumed by `_bulk_insert` (#123), where `target`/`set`
+# are already-quoted physical column identifiers. Returns `nothing` when no clause is wanted.
+# `fields_df` is the participating insert column list from `_prepare_bulk_df!` — `set` must be
+# a subset of it, because `EXCLUDED.col` for a non-inserted column silently yields the column
+# default instead of a caller value.
+function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vector{String},
+    connection::Union{PormGPostgres, PormGSQLite})
+  on_conflict === nothing && return nothing
+
+  local action::Symbol
+  local target::Vector{String}
+  local set::Vector{String}
+
+  if on_conflict isa Symbol
+    on_conflict === :nothing ||
+      throw(_argerr("Error in bulk_insert, on_conflict Symbol form only accepts :nothing " *
+        "(got :$(on_conflict)); use (action = :update, target = [...], set = [...]) for upserts"))
+    action, target, set = :nothing, String[], String[]
+  elseif on_conflict isa NamedTuple
+    extra = setdiff(keys(on_conflict), (:action, :target, :set))
+    isempty(extra) ||
+      throw(_argerr("Error in bulk_insert, on_conflict has unknown key(s) $(join(extra, ", ")); " *
+        "accepted keys are action, target and set"))
+    haskey(on_conflict, :action) ||
+      throw(_argerr("Error in bulk_insert, on_conflict NamedTuple requires an action key " *
+        "(:nothing or :update)"))
+    action = on_conflict.action
+    action in (:nothing, :update) ||
+      throw(_argerr("Error in bulk_insert, on_conflict action must be :nothing or :update, " *
+        "got :$(action)"))
+    target = _on_conflict_column_list(on_conflict, :target)
+    set = _on_conflict_column_list(on_conflict, :set)
+  else
+    throw(_argerr("Error in bulk_insert, on_conflict must be nothing, :nothing or a NamedTuple " *
+      "like (action = :nothing, target = [\"field\"]), got $(typeof(on_conflict))"))
+  end
+
+  if action === :update
+    isempty(target) &&
+      throw(_argerr("Error in bulk_insert, on_conflict action :update requires a non-empty target " *
+        "column list (the conflicting unique/primary-key columns)"))
+    isempty(set) &&
+      throw(_argerr("Error in bulk_insert, on_conflict action :update requires a non-empty set " *
+        "column list (the columns to overwrite with EXCLUDED values)"))
+  elseif on_conflict isa NamedTuple && haskey(on_conflict, :set)
+    throw(_argerr("Error in bulk_insert, on_conflict set is only valid with action :update — " *
+      "DO NOTHING never writes columns"))
+  end
+
+  insert_cols = Set(fields_df)
+  for (kind, cols) in ((:target, target), (:set, set))
+    length(unique(cols)) == length(cols) ||
+      throw(_argerr("Error in bulk_insert, on_conflict $kind has duplicate column entries"))
+    for col in cols
+      haskey(model.fields, col) ||
+        throw(_argerr("Error in bulk_insert, on_conflict $kind column $(col) is not a field of " *
+          "model $(model.name)"))
+      kind === :set && !(col in insert_cols) &&
+        throw(_argerr("Error in bulk_insert, on_conflict set column $(col) does not participate " *
+          "in this INSERT (not in the DataFrame/columns selection), so EXCLUDED.$(col) would be " *
+          "the column default — include it in the insert or drop it from set"))
+    end
+  end
+  # `target` columns are deliberately NOT required to be declared unique/primary_key on the
+  # model: the database is the source of truth (partial indexes, constraints created outside
+  # PormG). A non-matching target surfaces as the backend's own clear error.
+
+  # Explicit `String[...]` comprehensions (not `map`) so the element type is Vector{String}
+  # even for an empty target/set, which the typed `on_conflict_clause` signature requires.
+  quoted(col) = quote_identifier(Models.model_column(model, col), connection)
+  return (action = action,
+          target = String[quoted(col) for col in target],
+          set = String[quoted(col) for col in set])
+end
+
+# Fetch `key` from the on_conflict NamedTuple as a Vector{String}, tolerating any
+# AbstractString/AbstractVector flavor; a missing key means "no columns".
+function _on_conflict_column_list(on_conflict::NamedTuple, key::Symbol)
+  haskey(on_conflict, key) || return String[]
+  value = on_conflict[key]
+  value isa AbstractVector && all(v -> v isa AbstractString, value) ||
+    throw(_argerr("Error in bulk_insert, on_conflict $key must be a vector of field-name strings, " *
+      "got $(typeof(value))"))
+  return String[string(v) for v in value]
+end
+
+function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite},
+  fields::Vector{String}, rows::Vector{String},
+  pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn,
+  django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam;
+  on_conflict_sql::Union{Nothing, String} = nothing)
 
   # Security: Quote table name and physical column names (db_column when set, #50).
   # VALUES rows are positional and built in `fields` order, so they still align.
   safe_table_name = safe_table_identifier(string(model.name), connection)
   quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields]
 
-  # Construct the bulk insert SQL.
+  # Construct the bulk insert SQL. The ON CONFLICT clause (#123) is rendered once by the caller
+  # and binds no parameters, so the chunk-size math and the VALUES placeholders are untouched;
+  # appending it before the show_query branch means every show mode carries the clause. A
+  # non-`nothing` clause also means "on_conflict active" and gates the sequence-resync retry below.
   sql = """
   INSERT INTO $(safe_table_name) ($(join(quoted_fields, ", ")))
   VALUES $(join(rows, ", "))
   """
+  if on_conflict_sql !== nothing
+    sql *= on_conflict_sql * "\n"
+  end
 
   # Execute the query or just show it
   if show_query !== :execute
@@ -1082,8 +1202,9 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
     # Execute the query for the given connection type.
     if connection isa PormGPostgres
       # Use a savepoint when inside an active transaction and the model has a PK field.
-      # This lets the sequence-sync retry stay on the same TX connection.
-      use_savepoint = !isempty(pk_field)
+      # This lets the sequence-sync retry stay on the same TX connection. With on_conflict
+      # active there is no retry (see below), so the savepoint is skipped too.
+      use_savepoint = !isempty(pk_field) && on_conflict_sql === nothing
       try
         if use_savepoint
           with_savepoint(settings, "pormg_bulk_insert_retry") do
@@ -1093,7 +1214,10 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
           fetch(settings, sql, parameters)
         end
       catch e
-        if occursin("duplicate key value violates unique constraint", e |> string)
+        # With ON CONFLICT active a surviving duplicate-key error means a DIFFERENT constraint
+        # than the clause target conflicted — the values came from the DataFrame, not a stale
+        # sequence, so the resync-and-retry below would fail identically. Propagate instead.
+        if on_conflict_sql === nothing && occursin("duplicate key value violates unique constraint", e |> string)
           if !isempty(pk_field)
             # with_savepoint already rolled back and released the savepoint; the outer
             # transaction is still usable. Fix the sequence and retry without a savepoint.

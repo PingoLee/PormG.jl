@@ -386,6 +386,15 @@ df = DataFrame([
 result = bulk_insert(M.Driver, df)
 ```
 
+Duplicates can be skipped or merged instead of erroring with the `on_conflict=` keyword (PostgreSQL and SQLite ≥ 3.24; see [Conflict Handling](write/bulk.md#conflict-handling-on-conflict)):
+
+```julia
+bulk_insert(M.Status, df, on_conflict = :nothing)                                  # ON CONFLICT DO NOTHING
+bulk_insert(M.Status, df, on_conflict = (action = :nothing, target = ["statusid"]))  # targeted skip
+bulk_insert(M.Status, df,                                                          # upsert
+    on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
+```
+
 ### `bulk_update`
 
 Updates multiple records in a single operation.

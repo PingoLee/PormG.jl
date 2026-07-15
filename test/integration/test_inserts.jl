@@ -800,3 +800,81 @@ end
         end
     end
 end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ON CONFLICT bulk_insert (#123)
+#
+# bulk_insert(...; on_conflict=...) attaches an ON CONFLICT clause so overlapping
+# batches skip (DO NOTHING) or merge (DO UPDATE) duplicates instead of erroring —
+# the idempotent re-seed pattern. PostgreSQL and SQLite share the syntax, so the
+# same assertions run on both backends. Uses M.Status (explicit pk statusid), the
+# same duplicate-key fixture as "Schema Evolution and Error Recovery" above.
+# The batches deliberately never repeat a statusid WITHIN one batch: PostgreSQL
+# rejects a same-batch double-conflict ("cannot affect row a second time") while
+# SQLite applies rows serially — cross-engine behavior diverges, so callers must
+# dedupe on the target first (documented in docs/src/write/bulk.md).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ON CONFLICT bulk_insert (#123)" begin
+    status_ids = [330001, 330002, 330003, 330004]
+    created_pk = Ref{Union{Nothing, Int}}(nothing)
+    q = M.Status.objects.filter("statusid__@in" => status_ids)
+    q.exists() && q.delete()
+
+    try
+        # Seed two of the four ids.
+        bulk_insert(M.Status.objects, DataFrame(
+            statusid = status_ids[1:2],
+            status   = ["Finished", "Collision"],
+        ))
+
+        # 1. Untargeted DO NOTHING: an overlapping re-insert must not throw, must
+        # leave the existing row untouched, and must add only the new row.
+        overlap_df = DataFrame(
+            statusid = [status_ids[1], status_ids[3]],   # 330001 duplicates the seed
+            status   = ["Overwritten?", "Engine"],
+        )
+        bulk_insert(M.Status.objects, overlap_df, on_conflict = :nothing)
+
+        @test M.Status.objects.filter("statusid__@in" => status_ids).count() == 3
+        row1 = M.Status.objects.filter("statusid" => status_ids[1]).values("status").list() |> first
+        @test row1[:status] == "Finished"    # DO NOTHING skipped the duplicate
+        @test M.Status.objects.filter("statusid" => status_ids[3], "status" => "Engine").count() == 1
+
+        # 2. Targeted DO NOTHING on the pk behaves identically (fully-overlapping batch).
+        bulk_insert(M.Status.objects, overlap_df,
+            on_conflict = (action = :nothing, target = ["statusid"]))
+        @test M.Status.objects.filter("statusid__@in" => status_ids).count() == 3
+        row1 = M.Status.objects.filter("statusid" => status_ids[1]).values("status").list() |> first
+        @test row1[:status] == "Finished"
+
+        # 3. DO UPDATE (upsert): conflicting rows take the batch's values, the new row
+        # inserts, and chunk_size=2 puts conflicts on both sides of a chunk boundary.
+        bulk_insert(M.Status.objects, DataFrame(
+                statusid = status_ids,
+                status   = ["+1 Lap", "Accident", "Gearbox", "Hydraulics"],
+            ),
+            chunk_size  = 2,
+            on_conflict = (action = :update, target = ["statusid"], set = ["status"]))
+
+        @test M.Status.objects.filter("statusid__@in" => status_ids).count() == 4
+        by_id = Dict(r[:statusid] => r[:status] for r in
+            M.Status.objects.filter("statusid__@in" => status_ids).values("statusid", "status").list())
+        @test by_id[status_ids[1]] == "+1 Lap"        # conflict in chunk 1 → updated
+        @test by_id[status_ids[2]] == "Accident"      # conflict in chunk 1 → updated
+        @test by_id[status_ids[3]] == "Gearbox"       # conflict in chunk 2 → updated
+        @test by_id[status_ids[4]] == "Hydraulics"    # no conflict → inserted
+
+        # 4. Sequence consistency survives on_conflict: the post-insert resync still
+        # ran, so a follow-up create() without an explicit pk must not collide with
+        # the explicit ids above (meaningful on PostgreSQL; harmless on SQLite).
+        next_row = M.Status.objects.create("status" => "Sequence Check (#123)")
+        created_pk[] = next_row[:statusid]
+        @test next_row[:statusid] isa Integer
+        @test !(next_row[:statusid] in status_ids)
+    finally
+        cleanup_ids = created_pk[] === nothing ? status_ids : vcat(status_ids, created_pk[])
+        q = M.Status.objects.filter("statusid__@in" => cleanup_ids)
+        q.exists() && q.delete()
+    end
+end

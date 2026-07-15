@@ -763,6 +763,132 @@ end
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "migrationtest" WHERE "id" = 950;""")
   end
 
+  # ── Phase 4g: Delete a UNIQUE (and, guarded, a PK) non-FK column (#151) ─
+  # #116 routed FK-column deletion through a table rebuild; a non-FK UNIQUE column still fell to plain
+  # `ALTER TABLE DROP COLUMN`, which SQLite refuses (its `sqlite_autoindex_…` can't be pre-dropped). #151
+  # widens the SQLite rebuild trigger to UNIQUE/PK columns too. Carries the prior phases' tables forward so
+  # adding the test tables is a pure table-ADD. Runs on BOTH backends for the UNIQUE case (PostgreSQL takes
+  # the plain DROP COLUMN path — it drops a unique column natively; SQLite takes the rebuild). The PK
+  # loud-fail case is SQLite-only (PostgreSQL drops a PK column natively, no guard needed).
+  @testset "Phase 4g: Delete Unique/PK Non-FK Column (#151)" begin
+    base5 = """
+    MigrationTest = Models.Model(
+        id = Models.IDField(),
+        name = Models.CharField()
+    )
+    SecondTable = Models.Model(
+        id = Models.IDField(),
+        test_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, db_constraint=false),
+        description = Models.CharField(null=true)
+    )
+    ChildFKTable = Models.Model(
+        id = Models.IDField(),
+        label = Models.CharField(null=false)
+    )
+    RenameFKChild = Models.Model(
+        id = Models.IDField(),
+        new_parent_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_index=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    RenameDelChild = Models.Model(
+        id = Models.IDField(),
+        link_ref_id = Models.ForeignKey("MigrationTest", on_delete=Models.CASCADE, null=true, db_constraint=false),
+        note = Models.CharField(null=true)
+    )
+    """
+
+    # ── Unique-column deletion (both backends) ──
+    # Setup: a table with a UNIQUE non-FK `code` column and a plain `keeper`.
+    write_edge_models(base5 * """
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        code = Models.CharField(unique=true, null=true),
+        keeper = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @assert "code" in column_names(pool, "uniquedelchild") "Phase 4g requires the unique column to exist"
+
+    # The UNIQUE constraint is live: seed one row, then a duplicate `code` INSERT must raise (behavioral
+    # verification, per the #82 technique — introspection can't confirm uniqueness on SQLite).
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquedelchild" ("id", "code", "keeper") VALUES (960, 'code-X', 'keep-960');""")
+    dup_err = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO "uniquedelchild" ("id", "code", "keeper") VALUES (961, 'code-X', 'dup');""")
+      nothing
+    catch e; e; end
+    @test dup_err !== nothing
+    @test any(tok -> occursin(tok, lowercase(string(dup_err))), ["unique", "constraint", "duplicate"])
+
+    # Desired: remove the UNIQUE `code` column.
+    write_edge_models(base5 * """
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        keeper = Models.CharField(null=true)
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    pending = read(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"), String)
+    @test !occursin("BEGIN TRANSACTION", pending)
+
+    # Must NOT raise. Pre-fix on SQLite, deleting `code` took the plain path — `DROP INDEX` on its
+    # `sqlite_autoindex` (or the `DROP COLUMN` itself) is refused. #151 routes it through the rebuild.
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    cols = column_names(pool, "uniquedelchild")
+    @test !("code" in cols)          # the unique column is gone
+    @test "keeper" in cols           # the plain column survives
+    # Data fidelity: the surviving row kept its non-unique value.
+    surviving = PormG.ConnectionPool.fetch(pool,
+      """SELECT "keeper" FROM "uniquedelchild" WHERE "id" = 960;""") |> DataFrame
+    @test nrow(surviving) == 1
+    @test isequal(surviving[1, :keeper], "keep-960")
+    # (The migrate above NOT raising is itself the #151 proof: pre-fix, deleting a UNIQUE column aborts on
+    # the `DROP INDEX` of its `sqlite_autoindex`. `code` being absent proves its UNIQUE index is gone too —
+    # SQLite can't keep an index on a dropped column. No separate auto-index count is asserted because the
+    # surviving `id` column keeps its own UNIQUE auto-index, so "no auto-index at all" would be wrong.)
+    PormG.ConnectionPool.fetch(pool, """DELETE FROM "uniquedelchild" WHERE "id" = 960;""")
+
+    # ── PK loud-fail (SQLite only) ──
+    # Deleting a PK column that would leave the table with NO primary key must fail loudly at
+    # makemigrations rather than emit a raw DROP COLUMN. (PormG permits PK-less models, so this is
+    # reachable.) PostgreSQL drops a PK column natively, so this guard is SQLite-specific.
+    if adapter_name == "SQLite"
+      uniquedelchild_now = """
+    UniqueDelChild = Models.Model(
+        id = Models.IDField(),
+        keeper = Models.CharField(null=true)
+    )
+    """
+      write_edge_models(base5 * uniquedelchild_now * """
+    PkGuardChild = Models.Model(
+        pk_code = Models.CharField(primary_key=true, null=false),
+        payload = Models.CharField(null=true)
+    )
+    """)
+      makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+      migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+      @assert "pk_code" in column_names(pool, "pkguardchild") "Phase 4g requires the PK column to exist"
+
+      # Desired: drop pk_code, leaving `payload` only → NO primary key. makemigrations must throw.
+      write_edge_models(base5 * uniquedelchild_now * """
+    PkGuardChild = Models.Model(
+        payload = Models.CharField(null=true)
+    )
+    """)
+      pk_err = try
+        makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+        nothing
+      catch e; e; end
+      @test pk_err !== nothing
+      # Assert the SPECIFIC guard message, so an unrelated error can't masquerade as a pass.
+      @test occursin("no primary key", lowercase(string(pk_err)))
+      # The live schema is untouched — the failed makemigrations wrote/applied nothing.
+      @test "pk_code" in column_names(pool, "pkguardchild")
+    end
+  end
+
   # ── Phase 5: Indexes and unique constraints ───────────────────────
   @testset "Phase 5: Indexes and Unique Constraints" begin
     write_edge_models("""

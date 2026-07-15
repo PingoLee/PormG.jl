@@ -23,7 +23,7 @@ using Test
 using PormG
 using DataFrames
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
-import PormG.Migrations: get_secondary_index_ddls
+import PormG.Migrations: get_secondary_index_ddls, _sqlite_column_is_unique
 
 @testset "get_secondary_index_ddls column filter (#116)" begin
   mktempdir() do dir
@@ -112,6 +112,39 @@ end
       # `!occursin("\"old_col\"")` checks fail. Drop the filter mapping and `kept` goes empty.
     finally
       # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #151: `_sqlite_column_is_unique` — the live-schema probe that decides whether deleting a non-FK column
+# needs a table rebuild.
+#
+# SQLite refuses `ALTER TABLE DROP COLUMN` for a UNIQUE column, and its backing `sqlite_autoindex_…` can't
+# be pre-dropped with `DROP INDEX` — so such a deletion must route through a rebuild. SQLite introspection
+# does NOT populate `field.unique`, so the deletion path can't trust the old field's attribute; it probes
+# the live schema instead. This probe must fire for a column-level `UNIQUE` (auto-index) but NOT for an
+# ordinary secondary index (whose column CAN take DROP COLUMN once the plain index is pre-dropped).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "_sqlite_column_is_unique (#151)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "uniqueprobe.sqlite"); pool_size = 1)
+    try
+      # `uc` has a column-level UNIQUE (→ sqlite_autoindex); `ic` has a plain CREATE INDEX; `plain` has none.
+      fetch(pool, "CREATE TABLE t (uc TEXT UNIQUE, ic INTEGER, plain TEXT);")
+      fetch(pool, "CREATE INDEX ix_ic ON t(ic);")
+
+      @test _sqlite_column_is_unique(pool, :t, "uc") == true      # UNIQUE column → rebuild required
+      @test _sqlite_column_is_unique(pool, :t, "ic") == false     # plain index → cheap DROP COLUMN is fine
+      @test _sqlite_column_is_unique(pool, :t, "plain") == false  # no index → cheap DROP COLUMN is fine
+      @test _sqlite_column_is_unique(pool, :t, "absent") == false # unknown column → false, never throws
+
+      # Also true for an explicit CREATE UNIQUE INDEX (still a UNIQUE index covering the column).
+      fetch(pool, "CREATE UNIQUE INDEX ux_plain ON t(plain);")
+      @test _sqlite_column_is_unique(pool, :t, "plain") == true
+      # Mutation gate: without the `row.unique == 1` filter, `ic` (plain index) would return true.
+    finally
       close_pool!(pool)
     end
   end

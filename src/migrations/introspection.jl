@@ -447,6 +447,22 @@ function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name
   return nothing
 end
 
+# #151: SQLite introspection does not populate `field.unique` (see convertSQLToModel(::PormGSQLite)), so the
+# deletion path can't trust the old field's attribute — probe the live schema for a UNIQUE index covering
+# `field_name`. That covers the column-level UNIQUE auto-index (`sqlite_autoindex_…`, which `DROP INDEX`
+# can't remove) as well as any `CREATE UNIQUE INDEX`. Such a column is refused by `ALTER TABLE DROP COLUMN`,
+# so its deletion must route through a table rebuild (same remedy #116 uses for FK columns).
+function _sqlite_column_is_unique(conn::PormGSQLite, table_name, field_name::String)::Bool
+  idx_list = fetch(conn, "PRAGMA index_list(\"$(string(table_name))\")") |> DataFrame
+  isempty(idx_list) && return false
+  for row in eachrow(idx_list)
+    row.unique == 1 || continue
+    idx_info = fetch(conn, "PRAGMA index_info(\"$(row.name)\")") |> DataFrame
+    (!isempty(idx_info) && field_name in idx_info.name) && return true
+  end
+  return false
+end
+
 """
     get_secondary_index_ddls(conn::PormGSQLite, table_name) -> Vector{String}
 

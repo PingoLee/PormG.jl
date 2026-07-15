@@ -480,6 +480,31 @@ function _resolve_table_fields(
     end      
     filter!(x -> x != field_name_sym, colect_addition)
   end
+  # #151: the PK loud-fail guard runs for ANY SQLite deletion on this table, and BEFORE the rename-rebuild
+  # skip below — otherwise a #150 rename-rebuild co-scheduled in the same migration would skip the deletion
+  # block and silently rebuild a PK-less rowid table from `current_model`. Deleting a primary-key column
+  # that would leave the desired table with NO primary key is not auto-migratable on SQLite; fail loudly
+  # rather than produce a rowid table (or a raw DROP COLUMN error). When the desired model still declares a
+  # PK (the primary key moved to another column), the rebuild handles it normally.
+  #
+  # INTENTIONAL PG/SQLite DIVERGENCE: PostgreSQL's `ALTER TABLE DROP COLUMN` drops a primary-key column and
+  # its constraint natively, so removing the sole PK succeeds there; SQLite has no such path, and this guard
+  # makes it fail loudly instead of silently degrading the table to rowid. Removing the only primary key is
+  # therefore rejected on SQLite but allowed on PostgreSQL — a deliberate, backend-capability-driven
+  # difference (see the #151 Phase 4g test, which gates this case to SQLite).
+  if conn isa PormGSQLite && !isempty(colect_deletion)
+    desired_has_pk = any(f -> hasfield(typeof(f), :primary_key) && f.primary_key, values(current_model.fields))
+    if !desired_has_pk
+      for fsym in colect_deletion
+        f = model.fields[model_fields_map[string(fsym)]]
+        if hasfield(typeof(f), :primary_key) && f.primary_key
+          error("Cannot auto-migrate on SQLite: deleting primary-key column \"$(fsym)\" from table " *
+                "\"$(model_name)\" would leave it with no primary key. Declare a replacement primary key, " *
+                "or make this change manually.")
+        end
+      end
+    end
+  end
   # #150: a rename-with-FK-change may already have scheduled a full SQLite rebuild for this model (keyed
   # "Alter table: $model_name"). That rebuild is generated from `current_model`, which omits EVERY deleted
   # field, so it already drops this table's remaining deletions. Running the per-column deletion handling
@@ -488,31 +513,36 @@ function _resolve_table_fields(
   sqlite_rename_rebuild = conn isa PormGSQLite && haskey(migration_plan, model_name) &&
     haskey(migration_plan[model_name], "Alter table: $model_name")
   if !isempty(colect_deletion) && !sqlite_rename_rebuild
-    # #116: On SQLite an FK column can't be removed with `ALTER TABLE DROP COLUMN` (SQLite forbids it and
-    # has no `ALTER TABLE DROP CONSTRAINT`), so deleting an FK field needs a full table rebuild. The rebuild
-    # is generated from `current_model`, which already omits EVERY deleted field, so ONE rebuild drops all of
-    # this table's deleted columns (and their FKs/indexes) at once. Therefore if ANY deleted field forces a
-    # rebuild, route the WHOLE table's deletions through it and skip the per-column DROP COLUMNs — emitting
-    # both would race: the rebuild removes the column, then a separate `DROP COLUMN "<other>"` for a
-    # sibling deletion fails "no such column" (order-dependent on the deletion set's iteration).
-    fk_delete_idx = nothing
+    # #116/#151: SQLite refuses `ALTER TABLE DROP COLUMN` for an FK-with-constraint, a UNIQUE, or a PRIMARY
+    # KEY column (and a UNIQUE column's `sqlite_autoindex_…` can't be pre-dropped), so deleting any of those
+    # needs a full table rebuild. The rebuild is generated from `current_model` (which omits EVERY deleted
+    # field), so ONE rebuild drops all of this table's deleted columns + their indexes at once — hence if ANY
+    # deleted field forces a rebuild, route the WHOLE table's deletions through it and skip the per-column
+    # DROP COLUMNs (emitting both would race: the rebuild removes the column, then a stray `DROP COLUMN` for a
+    # sibling deletion fails "no such column"). Ordinary indexed columns still take the cheap DROP COLUMN path
+    # below (their plain index is pre-dropped). `unique` is probed live — SQLite introspection doesn't set
+    # `old_field.unique` (see _sqlite_column_is_unique) — while `primary_key` IS populated by introspection.
+    rebuild_delete_idx = nothing
     if conn isa PormGSQLite
-      fk_delete_idx = findfirst(colect_deletion) do fsym
-        f = model.fields[model_fields_map[string(fsym)]]
-        hasfield(typeof(f), :to) && f.db_constraint
+      rebuild_delete_idx = findfirst(colect_deletion) do fsym
+        fname = string(fsym)
+        f = model.fields[model_fields_map[fname]]
+        (hasfield(typeof(f), :to) && f.db_constraint) ||
+          (hasfield(typeof(f), :primary_key) && f.primary_key) ||
+          _sqlite_column_is_unique(conn, model_name, fname)
       end
     end
-    if fk_delete_idx !== nothing
+    if rebuild_delete_idx !== nothing
       # `alter_field(::PormGSQLite, model, …)` rebuilds the table purely from `model.fields`; its
       # field_name/new_field/old_field/colect_not_equal arguments are unused for the SQLite recreation, so a
       # representative deleted field is passed only to satisfy the shared signature. `surviving_columns` keeps
       # the dropped columns' indexes off the preserved set (see _sqlite_rebuild_preserving_indexes). The
       # stable "Alter table:" key means a co-occurring alteration/add-default collapses into this one
       # idempotent recreation from the same desired model.
-      rebuild_field = model.fields[model_fields_map[string(colect_deletion[fk_delete_idx])]]
+      rebuild_field = model.fields[model_fields_map[string(colect_deletion[rebuild_delete_idx])]]
       _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
         _sqlite_rebuild_preserving_indexes(conn, current_model.name |> lowercase,
-          Dialect.alter_field(conn, current_model, string(colect_deletion[fk_delete_idx]), rebuild_field, rebuild_field, Symbol[]);
+          Dialect.alter_field(conn, current_model, string(colect_deletion[rebuild_delete_idx]), rebuild_field, rebuild_field, Symbol[]);
           surviving_columns = _model_physical_columns(current_model)))
     else
       # PostgreSQL, or SQLite with no FK-column deletions: plain DROP COLUMN works (the FK drop runs first on

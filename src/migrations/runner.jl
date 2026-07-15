@@ -441,6 +441,7 @@ function _order_statements(migration_plan)
   second_execution::Vector{String} = []
   third_execution::Vector{String} = []
   last_execution::Vector{String} = []
+  index_execution::Vector{String} = []   # #152: field CREATE INDEX runs AFTER same-table rebuilds
 
   for dict_instructs in migration_plan
     for (key, value) in dict_instructs
@@ -450,13 +451,22 @@ function _order_statements(migration_plan)
         push!(second_execution, value)
       elseif contains(key, "Rename field")
         push!(third_execution, value)
+      elseif startswith(key, "Create index")
+        # #152: a newly-added db_index field's CREATE INDEX must run AFTER any same-table rebuild. An
+        # SQLite "Alter table:" rebuild DROP TABLEs the table (dropping every secondary index) and only
+        # re-creates indexes snapshotted from the LIVE schema at planning time — which excludes an index
+        # queued in the SAME migration, so a fresh index would be dropped and never re-created. Deferring
+        # every field CREATE INDEX to the end lands it on the rebuilt table. Safe: a CREATE INDEX only
+        # needs its table to exist. Matches only "Create index on <field>"; "Remove index …" (different
+        # prefix) and the m2m "Create many-to-many unique index" (separate join table) are excluded.
+        push!(index_execution, value)
       else
         push!(last_execution, value)
       end
     end
   end
 
-  ordered = vcat(first_execution, second_execution, third_execution, last_execution)
+  ordered = vcat(first_execution, second_execution, third_execution, last_execution, index_execution)
   all_sql = join(ordered, "\n")
   return ordered, all_sql
 end

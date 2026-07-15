@@ -68,7 +68,7 @@ The exact on-disk file layout, checksum algorithm, and tracking-table columns ar
 ## Database-Specific Behavior
 
 ### SQLite: Table Recreation
-SQLite has limited `ALTER TABLE` support. It can rename tables/columns and add or drop plain columns, but it **cannot** change a column's type, modify nullability/`UNIQUE`/`CHECK` constraints in place, remove a foreign key (there is no `ALTER TABLE ... DROP CONSTRAINT`), or `DROP COLUMN` on a column that participates in a `FOREIGN KEY`.
+SQLite has limited `ALTER TABLE` support. It can rename tables/columns and add or drop plain columns, but it **cannot** change a column's type, modify nullability/`UNIQUE`/`CHECK` constraints in place, remove a foreign key (there is no `ALTER TABLE ... DROP CONSTRAINT`), or `DROP COLUMN` on a column that participates in a `FOREIGN KEY`, a `UNIQUE` constraint, or the `PRIMARY KEY`.
 
 To handle any of those changes, PormG automatically rebuilds the table from your model:
 - Creates a new table with the desired schema.
@@ -76,9 +76,12 @@ To handle any of those changes, PormG automatically rebuilds the table from your
 - Re-creates the surviving indexes and foreign keys — an index on a *dropped* column is **not** re-created.
 - Drops the old table, renames the new one, and runs `PRAGMA foreign_key_check` to catch orphaned rows.
 
-The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping a column that is not part of a foreign key — use `ALTER TABLE` directly, without a rebuild.
+The rebuild is emitted as plain DDL that composes with the migration's transaction, so no data is lost and the remaining indexes and constraints are preserved. This is what makes **removing a foreign-key field or constraint, a `UNIQUE` column, or a `PRIMARY KEY` column** work on SQLite even though `DROP COLUMN`/`DROP CONSTRAINT` alone cannot express it. Changes SQLite *can* do in place — adding a column, or dropping an *ordinary* column (not part of a `FOREIGN KEY`, `UNIQUE`, or `PRIMARY KEY`) — use `ALTER TABLE` directly, without a rebuild.
 
 This process is transparent to the user but may take longer on very large tables.
+
+!!! warning "Dropping a primary key: PostgreSQL vs SQLite"
+    Removing a column that is the table's **only** primary key diverges by backend. PostgreSQL's `DROP COLUMN` drops the column and its `PRIMARY KEY` constraint natively, leaving a table with no primary key. SQLite cannot express that without silently degrading the table to a rowid table, so PormG **fails `makemigrations` loudly** instead — declare a replacement primary key, or make the change manually. Dropping a primary-key column while the model still declares a primary key (the key moved to another column) rebuilds normally on both backends.
 
 !!! note "SQLite Limitation"
     Advisory locking is not available for SQLite. Migration safety is single-instance only.

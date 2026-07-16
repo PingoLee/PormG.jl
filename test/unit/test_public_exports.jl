@@ -25,7 +25,7 @@ const EXPECTED_TOPLEVEL = Set([
     # Async API
     :fetch_async, :await_result, :FetchTask,
     # Transactions
-    :run_in_transaction, :with_savepoint, :with_tx_context, :in_transaction_context,
+    :run_in_transaction, :atomic, :with_savepoint, :with_tx_context, :in_transaction_context,
     # Locking
     :with_advisory_lock,
     # Utilities & lifecycle

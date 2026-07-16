@@ -189,6 +189,18 @@ function distinct!(q::SQLObject, value)
   throw("Invalid argument: $(value) (::$(typeof(value))); please use a boolean value (true or false)")
 end
 
+# #26: mark the query for row-level locking. Renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]`
+# on PostgreSQL; a silent no-op on SQLite. `nowait` and `skip_locked` are mutually exclusive
+# (Django parity). Always builds a fresh ForUpdateClause (set-once semantics). (An `of=` target
+# is a deferred follow-up — it must name the query's generated FROM alias, not yet exposed.)
+function select_for_update!(q::SQLObject; nowait::Bool=false, skip_locked::Bool=false, no_key::Bool=false)
+  if nowait && skip_locked
+    throw(_argerr("select_for_update: `nowait` and `skip_locked` are mutually exclusive — pass at most one."))
+  end
+  q.for_update = ForUpdateClause(nowait, skip_locked, no_key)
+  return q
+end
+
 # function distinct!(q::SQLObject, value)
 #   throw("Invalid argument: $(value) (::$(typeof(value))); please use a boolean value (true or false)")
 # end
@@ -284,6 +296,10 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return ChainCaller(page!, q)
   elseif sym === :distinct
     return ChainCaller(distinct!, q)
+  elseif sym === :select_for_update
+    # Chainable: query.select_for_update(; nowait=false, skip_locked=false, no_key=false)
+    # Closure (not ChainCaller) so keyword arguments are forwarded correctly (#26).
+    return (; kwargs...) -> (select_for_update!(q.object; kwargs...); q)
   elseif sym === :with
     # Chainable: query.with("cte_name" => sub_query; join_field=..., join_type=...)
     # Uses closure (not ChainCaller) so keyword arguments are forwarded correctly.

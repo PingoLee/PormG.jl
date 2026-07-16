@@ -2093,4 +2093,39 @@ end
     end
 end
 
+@testset "SQLite: select_for_update is a silent no-op (#26)" begin
+    # SQLite has no `SELECT ... FOR UPDATE`. select_for_update() must render WITHOUT any FOR UPDATE
+    # clause and must NOT raise, so cross-backend code stays portable — the one intentional
+    # PostgreSQL/SQLite divergence for row locking (PostgreSQL rendering lives in test_inspect_query.jl).
+    q = M.Result.objects
+    q.filter("positionorder" => 1)
+    q.select_for_update()
+    insp = q |> inspect_query                     # must not throw
+    sql = insp[:sql_text]
+    @test !contains(sql, "FOR UPDATE")
+    @test !contains(sql, "SKIP LOCKED")
+
+    # Even with the full option set, SQLite renders nothing lock-related and never raises.
+    q2 = M.Result.objects
+    q2.select_for_update(skip_locked = true, no_key = true)
+    sql2 = (q2 |> inspect_query)[:sql_text]
+    @test !contains(sql2, "FOR UPDATE")
+    @test !contains(sql2, "SKIP LOCKED")
+    @test !contains(sql2, "NO KEY")
+
+    # DISTINCT + select_for_update is allowed on SQLite (the lock is a no-op) — it must NOT raise,
+    # unlike PostgreSQL where the combination is rejected. This is the portability guarantee.
+    q3 = M.Result.objects
+    q3.distinct(true)
+    q3.select_for_update()
+    @test contains((q3 |> inspect_query)[:sql_text], "DISTINCT")   # renders fine, no throw
+
+    # The mutual-exclusion validation is backend-independent (it happens at mutation time). Assert
+    # the specific cause so an unrelated ArgumentError can't masquerade as a pass.
+    excl_err = try
+      M.Result.objects.select_for_update(nowait = true, skip_locked = true); nothing
+    catch e; e end
+    @test excl_err isa ArgumentError && occursin("mutually exclusive", excl_err.msg)
+end
+
 

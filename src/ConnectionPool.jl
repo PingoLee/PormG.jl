@@ -12,7 +12,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
               backend_execute_async, backend_is_connection_error, backend_copy_in!
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
-export with_transaction, with_transaction_async, run_in_transaction, with_savepoint
+export with_transaction, with_transaction_async, run_in_transaction, atomic, with_savepoint
 export acquire_connection, release_connection, finalize_transaction_connection!
 export PoolTimeoutError
 # NOTE: close_pool! is intentionally NOT exported here. Configuration owns the public
@@ -21,7 +21,7 @@ export PoolTimeoutError
 # ambiguous and therefore undefined (#35). Callers in this package use `CP.close_pool!`.
 
 # Import transaction context helpers from Configuration
-import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool
+import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, transaction_connection_for, get_settings, ensure_before_connect!, connection_key_for_pool, in_transaction_context, current_transaction_depth
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 
@@ -965,17 +965,22 @@ with_transaction_async(pool::SQLConn, sql::String; conn = nothing, params::Union
 """
     with_savepoint(f::Function, settings::SQLConn, name::String) -> result
 
-Execute `f()` wrapped in a PostgreSQL savepoint named `name`. On success, releases the
-savepoint. On error, rolls back to the savepoint, releases it, and rethrows so the outer
-transaction remains usable.
+Execute `f()` wrapped in a savepoint named `name`. On success, releases the savepoint.
+On error, rolls back to the savepoint, releases it, and rethrows so the outer transaction
+remains usable.
 
-Transparently no-ops when called outside an active transaction context or on a
-non-PostgreSQL backend, so callers do not need to guard the call site.
+Works on **both** PostgreSQL and SQLite — the `SAVEPOINT` / `RELEASE SAVEPOINT` /
+`ROLLBACK TO SAVEPOINT` statements are identical on both backends (#26). Transparently
+no-ops when called outside an active transaction context on `settings`' pool, so callers
+do not need to guard the call site.
+
+`name` must be a fixed, non-user-controlled identifier (it is interpolated into the SQL,
+not parameterized — savepoint names are identifiers). Internal callers pass constants;
+the reentrant `atomic`/`run_in_transaction` path passes `_savepoint_name(depth)`.
 """
 function with_savepoint(f::Function, settings::SQLConn, name::String)
-  pool = settings.connections
-  if !(pool isa PormGPostgres) || transaction_connection_for(settings) === nothing
-    return f()
+  if transaction_connection_for(settings) === nothing
+    return f()   # not inside a transaction on this pool → nothing to savepoint
   end
 
   fetch(settings, "SAVEPOINT $(name);")
@@ -1068,12 +1073,46 @@ end
 ```
 """
 function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite})
+  # Reentrancy (#26): a nested run_in_transaction / atomic on the SAME pool becomes a
+  # SAVEPOINT on the already-pinned connection instead of a second independent BEGIN.
+  # A nested call targeting a DIFFERENT pool (e.g. a second database) still opens its own
+  # transaction — correct multi-DB behavior, already guarded by ensure_model_transaction_scope.
+  if in_transaction_context() && get_tx_pool() === pool
+    return _nested_savepoint(f, _settings_for_pool(pool))
+  end
   # Serialize SQLite writers around the whole BEGIN..COMMIT so concurrent write
   # transactions never race on `BEGIN IMMEDIATE` (see `with_sqlite_write_lock`).
   # Acquire the write lock BEFORE the pool connection so a waiting writer does not
   # hold a pooled connection idle while blocked. No-op on PostgreSQL.
   return with_sqlite_write_lock(pool) do
     _run_in_transaction_impl(f, pool)
+  end
+end
+
+# Deterministic, per-depth savepoint name. Fixed `pormg_sp_<int>` format → no
+# identifier-injection surface (the integer suffix is the only variable part). Pure and
+# unit-testable in isolation.
+_savepoint_name(depth::Integer) = "pormg_sp_$(depth)"
+
+# Resolve the registered SQLConn for a pool so the reentrant savepoint path (which needs
+# `settings` for `with_savepoint`/`fetch`) can route through the pinned connection.
+function _settings_for_pool(pool::Union{PormGPostgres, PormGSQLite})::SQLConn
+  key = connection_key_for_pool(pool)
+  key === nothing && throw(ArgumentError("Cannot resolve connection settings for the active transaction pool"))
+  return get_settings(key)
+end
+
+# Run `f()` as a nested SAVEPOINT inside the already-open transaction on `settings`' pool.
+# Enters a new tx context (bumping depth) so the savepoint name is unique per nesting level,
+# then delegates to `with_savepoint` for the SAVEPOINT/RELEASE/ROLLBACK-TO lifecycle. Reuses
+# the pinned connection: no new connection is acquired, no BEGIN is issued, the SQLite write
+# lock (already held reentrantly by the outermost block) is not re-taken, and the outermost
+# block still owns the single connection release.
+function _nested_savepoint(f::Function, settings::SQLConn)
+  pool = settings.connections
+  conn = transaction_connection_for(settings)
+  return with_tx_context(pool, conn) do
+    with_savepoint(f, settings, _savepoint_name(current_transaction_depth()))
   end
 end
 
@@ -1155,5 +1194,43 @@ function run_in_transaction(f::Function, db::String)
 end
 
 run_in_transaction(f::Function, settings::SQLConn) = run_in_transaction(f, settings.connections)
+
+"""
+    atomic(f::Function, db; durable::Bool=false) -> result
+
+Run `f()` in a database transaction — the friendly, Django-flavored alias for
+[`run_in_transaction`](@ref). `db` may be a pool, a db-key `String` (e.g. `"db_2"`), or an
+`SQLConn`.
+
+A **nested** `atomic`/`run_in_transaction` block on the *same* database automatically becomes
+a `SAVEPOINT`: if `f()` throws, only that inner block is rolled back to its savepoint and the
+error propagates, leaving the outer transaction intact (catch it outside the inner block to
+continue). Works identically on PostgreSQL and SQLite (#26).
+
+```julia
+atomic("db_2") do
+  driver = M.Driver.objects.create("forename" => "Alice", "surname" => "Lane", ...)
+  try
+    atomic("db_2") do                 # nested → SAVEPOINT
+      M.Result.objects.create(...)    # rolled back to the savepoint on error…
+      error("validation failed")
+    end
+  catch
+    # …outer transaction still usable here
+  end
+end
+```
+
+Pass `durable=true` to require this block be the outermost transaction — it throws if a
+transaction is already active (mirrors Django's `atomic(durable=True)`).
+"""
+function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::Bool=false)
+  if durable && in_transaction_context()
+    throw(ArgumentError("atomic(durable=true) must be the outermost transaction, but a transaction is already active"))
+  end
+  return run_in_transaction(f, pool)
+end
+atomic(f::Function, db::String; durable::Bool=false) = atomic(f, get_settings(db).connections; durable=durable)
+atomic(f::Function, settings::SQLConn; durable::Bool=false) = atomic(f, settings.connections; durable=durable)
 
 end # module

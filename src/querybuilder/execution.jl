@@ -280,6 +280,24 @@ function query(q::SQLObjectHandler;
 
   resposta = String(take!(io))
 
+  # #44: warn once per CTE that is CROSS JOINed (no join_field) yet is never constrained by a
+  # WHERE/HAVING predicate — that is an unintended Cartesian product. The correlation is expected
+  # to come from a `filter("main_col" => F("<cte>__col"))` (which renders in WHERE). No false
+  # positive on the intended usage, where the alias appears in the WHERE fragment.
+  if any(rj -> get(rj, "cross", nothing) !== nothing, instruction.row_join)
+    predicate_text = string(
+      isempty(instruction._where) ? "" : join(instruction._where, " AND "),
+      isempty(instruction.having) ? "" : join(instruction.having, " AND "),
+    )
+    for rj in instruction.row_join
+      get(rj, "cross", nothing) === nothing && continue
+      cte_alias = rj["alias_b"]::String
+      if !occursin("\"$(cte_alias)\"", predicate_text)
+        @warn _emsg("PormG: CTE \e[31m$(rj["b"])\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj["b"])__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
+      end
+    end
+  end
+
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
 

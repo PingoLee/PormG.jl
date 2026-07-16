@@ -162,6 +162,39 @@ end
         end
     end
 
+    @testset "F() reference without join_field: CROSS JOIN + WHERE correlation (#44)" begin
+        # #44: a CTE registered WITHOUT join_field, correlated to the main query by an F()
+        # filter. `.with("r91" => races_91).filter("raceid" => F("r91__raceid"), ...)` must emit
+        # a CROSS JOIN to the CTE and render the correlation in WHERE — returning exactly the
+        # 1991 race winners. Result-driven: cross-checked against the semantically equivalent
+        # join-filter query, so this fails if the CROSS JOIN correlation is wrong.
+        races_91_ids = Set(
+            (M.Race.objects.filter("year" => 1991).values("raceid") |> DataFrame).raceid
+        )
+
+        races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
+        q = M.Result.objects
+        q.with("r91" => races_91)                       # no join_field
+        q.filter("raceid" => F("r91__raceid"),          # correlation → CROSS JOIN + WHERE
+                 "positionorder" => 1)                  # race winners only
+        q.values("resultid", "raceid", "positionorder")
+
+        insp = q |> inspect_query
+        @test occursin("CROSS JOIN", insp[:sql_text])   # the #44 join shape is actually used
+
+        df = q |> DataFrame
+        @test nrow(df) > 0
+        # Every winner belongs to a 1991 race (the CTE constrained the main query) ...
+        @test all(rid -> rid in races_91_ids, df.raceid)
+        # ... exactly one winner per distinct race (no CROSS-join fan-out) ...
+        @test all(df.positionorder .== 1)
+        @test nrow(df) == length(unique(df.raceid))
+        # ... and the count matches the equivalent keyed join-filter query (independent path).
+        expected = M.Result.objects.filter("raceid__year" => 1991, "positionorder" => 1).count()
+        @test expected > 0              # fixture actually holds 1991 winners (guards vacuity)
+        @test nrow(df) == expected
+    end
+
     @testset "self-reference: CTE on same table (LEFT and INNER)" begin
         # CTE pre-filters Driver rows born before 1980, then joined back to Driver.
         # LEFT: Hamilton (1985) appears with missing CTE column.

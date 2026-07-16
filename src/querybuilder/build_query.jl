@@ -327,6 +327,15 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     set_context!(instruc, :join)
     b_quoted = safe_table_identifier(value["b"], instruc.connection)
     alias_b_quoted = quote_identifier(value["alias_b"], instruc.connection)
+
+    # #44: a CROSS-joined CTE (no join_field) carries sentinel empty key columns and has no ON —
+    # the correlation is supplied by the main query's F() filter(s) in WHERE. Emit it and move on
+    # before touching key_a/key_b (empty strings would fail identifier validation).
+    if get(value, "cross", nothing) !== nothing
+      push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
+      continue
+    end
+
     alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
     key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
     key_b_quoted = quote_identifier(value["key_b"], instruc.connection)

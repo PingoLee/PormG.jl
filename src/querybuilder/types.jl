@@ -71,6 +71,11 @@ end
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{String,PormGField} = sizehint!(Dict{String,PormGField}(), 12) # cache to be used in join query
+  # #27: records each resolved JSON-lookup path (e.g. "payload__driver") → (JSON base field,
+  # validated key segments). Set when the JSON-path gate renders an extraction; read by the
+  # filter-render branch to bind the RHS as plain text (not through the JSON formater) and to
+  # reject containment operators on a nested key path.
+  json_lookup_cache::Dict{String,Tuple{PormGField,Vector{String}}} = Dict{String,Tuple{PormGField,Vector{String}}}()
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{String,SQLTypeField} = sizehint!(Dict{String,SQLTypeField}(), 12)

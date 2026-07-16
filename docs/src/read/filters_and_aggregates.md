@@ -163,6 +163,78 @@ M.Driver.objects.filter(Qor(
 
 ---
 
+## JSON / JSONB Lookups and Operators
+
+For a [`JSONField`](../fields.md) column you can reach *inside* the stored document with a `__`
+path, and (on PostgreSQL) test containment and key existence.
+
+### Path lookups (`field__key`, `field__0__key`)
+
+Append the JSON keys to the field name with `__`. A numeric segment is a JSON **array index**.
+The value is extracted as **text** and compared to your filter value. Works on **both** backends
+(PostgreSQL `#>>`, SQLite `json_extract`).
+
+Assume `Constructor` has a `metadata` JSONField holding, e.g.,
+`{"principal": "Toto Wolff", "wins": 121, "drivers": [{"name": "Russell"}]}`:
+
+```julia
+# Equality on a nested key
+M.Constructor.objects.filter("metadata__principal" => "Toto Wolff")
+
+# Array index then key: drivers[0].name
+M.Constructor.objects.filter("metadata__drivers__0__name" => "Russell")
+
+# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively
+M.Constructor.objects.filter("metadata__wins__@gte" => 100)
+
+# Presence: a missing key extracts to NULL
+M.Constructor.objects.filter("metadata__sponsor__@isnull" => true)
+
+# Project an extracted value (the alias is the dotted path)
+M.Constructor.objects.values("name", "metadata__principal")
+```
+
+Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@lt`, `@lte`, and
+`@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
+
+> [!NOTE]
+> Keys must be simple (letters, digits, underscore) or an integer array index — a key with
+> spaces, dots, or quotes is not addressable via the `__` path and raises an `ArgumentError`.
+> Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
+> (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
+> (`"metadata__wins" => 121`) works on both backends.
+>
+> A numeric segment is always treated as an **array index**. An object key that is a number
+> (e.g. `{"2024": …}`) is therefore not portably addressable: PostgreSQL's `#>>` may still resolve
+> it as an object key, but SQLite treats `[2024]` as an array subscript and returns nothing —
+> avoid numeric object keys in a `__` path.
+
+### Containment and key-existence operators (PostgreSQL only)
+
+These map to the PostgreSQL JSONB operators and apply to a JSON **column** (not a nested path).
+On SQLite they raise an `ArgumentError`:
+
+| Lookup | JSONB operator | Meaning | Example |
+| :--- | :--- | :--- | :--- |
+| `@jcontains` | `@>` | Column contains the given document | `"metadata__@jcontains" => Dict("wins" => 121)` |
+| `@has_key` | `?` | Top-level key exists | `"metadata__@has_key" => "principal"` |
+| `@has_any_keys` | `?\|` | Any of the given keys exists | `"metadata__@has_any_keys" => ["principal", "ceo"]` |
+| `@has_keys` | `?&` | All of the given keys exist | `"metadata__@has_keys" => ["principal", "wins"]` |
+
+```julia
+# Rows whose metadata contains this sub-document (deep match)
+M.Constructor.objects.filter("metadata__@jcontains" => Dict("drivers" => [Dict("name" => "Russell")]))
+
+# Rows that have BOTH keys
+M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
+```
+
+`@jcontains` accepts a `Dict`, `Vector`, `NamedTuple`, or a raw JSON string (validated at build
+time). `@has_any_keys` / `@has_keys` take a vector of keys. All values are sent as bound
+parameters.
+
+---
+
 ## IN and NOT IN
 
 ### Value In Set

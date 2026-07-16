@@ -235,17 +235,36 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod}
-  if x.first[end] in ["in", "nin"]
+  suffix = x.first[end]
+  if suffix in ["in", "nin"]
     @pormg_debug false
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
-  elseif x.first[end] == "range"
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  elseif suffix == "range"
     if length(x.second) != 2
       throw(_argerr("Error in filter, 'range' operator requires exactly 2 values, got $(length(x.second))"))
     end
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  elseif suffix in ("has_any_keys", "has_keys")
+    # #27: JSONB overlap operators (?| / ?&) take an array of keys; the render branch binds the
+    # vector as a single text[] parameter.
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  elseif suffix == "jcontains"
+    # #27: JSONB array containment (@>) with a vector RHS — serialize to a JSON document string at
+    # parse time so OperObject.values stays a String (no downstream type-union change).
+    return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    _raise_invalid_filter_operator(x.first, "vector", ["in", "nin", "range"])
+    _raise_invalid_filter_operator(x.first, "vector", ["in", "nin", "range", "has_any_keys", "has_keys", "jcontains"])
   end
+end
+# #27: JSONB document containment (@>) with a Dict / NamedTuple RHS — serialize at parse time so
+# OperObject.values stays a String.
+function _get_pair_to_oper(x::Pair{Vector{String},<:AbstractDict})
+  x.first[end] == "jcontains" || _raise_invalid_filter_operator(x.first, "dict", ["jcontains"])
+  return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+end
+function _get_pair_to_oper(x::Pair{Vector{String},<:NamedTuple})
+  x.first[end] == "jcontains" || _raise_invalid_filter_operator(x.first, "namedtuple", ["jcontains"])
+  return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
   if x.first[end] == "range"
@@ -942,9 +961,96 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
     return v_copy.field
   end
 end
+# Coerce a JSON numeric-comparison RHS to an actual Julia number, so BOTH dialects compare
+# numerically (PostgreSQL casts the extracted text `::numeric`; SQLite's json_extract returns a
+# native number). Binding a string here would make SQLite compare number-vs-text and silently
+# invert every comparison.
+function _json_numeric_rhs(value)
+  value isa Bool && return Int(value)
+  value isa Integer && return value
+  value isa AbstractFloat && return value
+  s = strip(string(value))
+  n = tryparse(Int, s); n !== nothing && return n
+  f = tryparse(Float64, s); (f !== nothing && isfinite(f)) && return f
+  throw(_argerr("A numeric JSON comparison requires a number; got \e[31m$(value)\e[0m."))
+end
+
+# #27: render a comparison against a JSON path lookup (e.g. `payload__driver`). The RHS binds
+# dialect-aware — NOT through the JSON field's formater (which would reject a plain string like
+# "hamilton"):
+#   - PostgreSQL `#>>` always yields TEXT, so equality binds text and `<`/`>` cast the LHS
+#     `::numeric`.
+#   - SQLite `json_extract` returns the value's NATIVE type, so equality binds the raw Julia value
+#     (a JSON number stays a number → `5 = 5`, not `5 = '5'`) and comparisons need no cast.
+function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
+  op = v.operator
+  is_pg = instruc.connection isa PormGPostgres
+  if op == "ISNULL"
+    # Render IS NULL directly — the shared ISNULL() rejects any column containing "(", which a
+    # legitimate SQLite json_extract(...) expression trips.
+    return string(column, v.values == true ? " IS NULL" : " IS NOT NULL")
+  elseif op in ("=", "!=", "<>")
+    # PG: bind text (LHS is text). SQLite: bind the native value (LHS keeps its JSON type).
+    ph = add_parameter!(instruc, is_pg ? string(v.values) : v.values)
+    return string(column, " ", op, " ", ph)
+  elseif op in (">", ">=", "<", "<=")
+    lhs = is_pg ? "($(column))::numeric" : column
+    ph = add_parameter!(instruc, _json_numeric_rhs(v.values))
+    return string(lhs, " ", op, " ", ph)
+  else
+    throw(_argerr("The operator \e[31m$(op)\e[0m is not supported on a JSON path lookup. Use =, !=, <, <=, >, >=, or __@isnull."))
+  end
+end
+
+# #27: render a JSONB containment/overlap operator (@>, ?, ?|, ?&). The LHS must be a JSON COLUMN
+# (terminal), not a nested key path. Binds the RHS per operator (jsonb document / text key /
+# text[] key array) and dispatches to the per-dialect Dialect renderer (PG emits the operator;
+# SQLite throws PG-only).
+function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
+  col_as = isa(v.column, SQLTypeField) ? v.column._as : nothing
+  if col_as !== nothing && haskey(instruc.json_lookup_cache, col_as)
+    throw(_argerr("The \e[31m@$(v.operator)\e[0m operator applies to a JSON column, not a nested key path (\e[31m$(col_as)\e[0m); this is not supported in v1."))
+  end
+  base = _resolve_json_operator_field(v, instruc)
+  (base !== nothing && Models.is_json_field(base)) ||
+    throw(_argerr("The \e[31m@$(v.operator)\e[0m operator requires a JSONField column; \e[31m$(something(col_as, "the target"))\e[0m is not JSON."))
+  op = v.operator
+  ph = if op == "jcontains"
+    add_parameter!(instruc, Models.format_json_sql(v.values); sql_type="jsonb")
+  elseif op == "has_key"
+    add_parameter!(instruc, string(v.values))
+  else  # has_any_keys / has_keys
+    v.values isa AbstractVector ||
+      throw(_argerr("The \e[31m@$(op)\e[0m operator requires an array of keys, e.g. filter(\"col__@$(op)\" => [\"a\", \"b\"]); got a single value."))
+    add_parameter!(instruc, String.(v.values); sql_type="text[]")
+  end
+  return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
+end
+
+# Resolve the base PormGField a JSON operator targets: a bare column name lives on the model;
+# an FK-reached terminal JSON column was cached in tab_field_cache when `column` resolved.
+function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
+  isa(v.column, SQLTypeField) || return nothing
+  fld = v.column.field
+  if fld isa String && !contains(fld, "__")
+    return get(instruc.object.model.fields, fld, nothing)
+  end
+  return v.column._as === nothing ? nothing : get(instruc.tab_field_cache, v.column._as, nothing)
+end
+
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   column = _get_filter_query(v.column, instruc)
+  # #27: JSONB containment/overlap operators (@>, ?, ?|, ?&) — dedicated binding + PG-only render.
+  if v.operator in JSON_CONTAINMENT_OPERATORS
+    return _render_json_operator(v, column, instruc)
+  end
+  # #27: comparison against a JSON path lookup (payload__key). Resolving `column` above populated
+  # json_lookup_cache; the dedicated branch binds the RHS as plain text (the generic path would run
+  # the JSON formater on the RHS and throw on plain strings) and applies the PG numeric cast for </>.
+  if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, v.column._as)
+    return _render_json_lookup_comparison(v, column, instruc)
+  end
   if isa(v.values, SQLTypeF)
     @pormg_debug false
     # F expressions are safe since they reference model fields    

@@ -52,6 +52,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end
+    @testset "JSON/JSONB Lookups (#27)"      begin include("test_json_fields.jl")         end
     @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")    end
     @testset "Importer / Introspection"     begin include("test_importers_introspection.jl") end
     # ── Phase 4: Internals & Security ────────────────────────────────

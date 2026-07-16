@@ -43,6 +43,49 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Idle-connection reaping + max-lifetime (opt-in)
+
+- **PormG ref**: issue #125 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`
+- **Recorded**: 2026-07-16
+- **Severity**: new feature — **additive, opt-in**. **No action needed**; zero behavior change unless
+  `idle_timeout`/`max_lifetime` are set.
+
+### What changed
+
+The pool grows lazily under load (#37) but previously **never shrank** and reused connections
+indefinitely. You can now opt a connection into reaping via `connection.yml` (seconds; `0`/absent = off):
+
+```yaml
+dev:
+  adapter: PostgreSQL
+  database: 'formula1'
+  pool_size: 10
+  idle_timeout: 60      # close overflow conns idle > 60s, back toward pool_size
+  max_lifetime: 1800    # retire conns older than 30 min
+```
+
+A single background sweeper closes **overflow** connections (never the base `pool_size`, never an
+in-use one) that sat idle past `idle_timeout` or exceeded `max_lifetime`; over-age overflow conns are
+also retired on return. Reaping closes + clears the slot in place (append-only — #124's handoff and
+#37's ceiling reasoning are unaffected). `Configuration.register_connection` accepts the same
+`idle_timeout`/`max_lifetime` kwargs. See [Advanced Configuration](docs/src/configuration/advanced.md).
+
+### How to find the calls to migrate
+
+Nothing to grep — purely additive, off by default. **Optional adoption:** for long-lived services or
+DBs/proxies that drop idle connections, set `idle_timeout`/`max_lifetime` in `connection.yml`.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | — | optional — set idle_timeout/max_lifetime for long-lived services |
+| app-2 | — | — |
+| app-3 | — | — |
+| app-4 | — | — |
+
+---
+
 ## Connection-pool wait is now direct-handoff (event-driven), not a busy-poll
 
 - **PormG ref**: issue #124 (follow-up to #37) ; `src/ConnectionPool.jl`

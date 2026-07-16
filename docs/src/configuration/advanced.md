@@ -15,6 +15,18 @@ dev:
   # ...
   pool_size: 10   # base 10 → grows to 100 under burst
 ```
+- **Idle reaping & max-lifetime (opt-in):** By default the pool never shrinks after a burst and reuses connections indefinitely (a dropped connection is caught reactively by the liveness check on the next checkout). For long-lived services — or databases/proxies that drop idle connections — you can enable a background reaper via `connection.yml` (both in **seconds**, `0`/absent = off):
+
+  ```yaml
+  dev:
+    adapter: PostgreSQL
+    database: 'formula1'
+    pool_size: 10
+    idle_timeout: 60      # close *overflow* connections idle > 60s, trimming back toward pool_size
+    max_lifetime: 1800    # retire connections older than 30 min (on return, and by the sweeper)
+  ```
+
+  Reaping is **overflow-only** and never drops below the base `pool_size` (those stay warm), and never closes an in-use connection. It closes the connection and clears its slot in place — the pool's slot layout is unchanged, so a reaped slot simply opens a fresh connection on next use. Disabled by default: unset means zero behavior change. Programmatic pools accept the same `idle_timeout` / `max_lifetime` kwargs via `Configuration.register_connection`.
 - **Thread Safety:** PormG uses `ReentrantLock` for pool management.
 - **Failed-rollback self-healing:** If a transaction's `ROLLBACK` itself fails (e.g. the connection died mid-transaction), the pool never returns that connection as-is. It is renewed in its slot (PostgreSQL: `LibPQ.reset!`; SQLite: a fresh handle, with the old one closed so it releases the database file write-lock) or — if renewal also fails — closed and its slot cleared so the next borrower opens a fresh connection.
 

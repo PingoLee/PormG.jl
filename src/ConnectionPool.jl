@@ -243,6 +243,156 @@ function _pool_wait_timeout!(pool, w::PoolWaiter)
   return nothing
 end
 
+# ── Idle reaping + max-lifetime (#125) ───────────────────────────────────────
+# Opt-in (connection.yml `idle_timeout`/`max_lifetime`, seconds; 0 = off). A global background sweeper
+# closes OVERFLOW connections (slot index > pool_size) that sat idle-available beyond `idle_timeout` or
+# are older than `max_lifetime`, trimming the pool back toward its base `pool_size`. Reaping closes +
+# nils the slot IN PLACE (keeps available[i]=true, NEVER deleteat!), so #124's slot-index handoff and
+# #37's append-only `== ceiling` reasoning stay valid; it never touches a leased or a base slot.
+# When no pool has opted in (the default), every hook below is a single Atomic read — zero cost.
+
+mutable struct ReapConfig
+  idle_timeout::Float64   # seconds; 0 = off
+  max_lifetime::Float64   # seconds; 0 = off
+end
+
+# Per-pool reaping state, index-aligned (append-only) with pool.connections. Lives OUTSIDE the pool
+# structs (in `_POOL_REAP`) so mock pools without these fields are unaffected — same rationale as
+# #124's `_POOL_WAITERS`. Mutated only inside the pool's own lock (keeps it aligned with connections).
+mutable struct ReapState
+  config::ReapConfig
+  created_at::Vector{Float64}   # when the connection now in slot i was opened
+  last_used::Vector{Float64}    # when slot i was last checked out / returned
+end
+
+const _POOL_REAP = WeakKeyDict{Any, ReapState}()   # populated ONLY by enable_reaping!
+const _POOL_REAP_LOCK = ReentrantLock()
+# Fast path: false (default — no pool opted in) → every touch hook returns immediately. Monotonic:
+# set true by the first `enable_reaping!`, never cleared. Lock order: pool.lock → _POOL_REAP_LOCK.
+const _REAP_ANY = Threads.Atomic{Bool}(false)
+const _REAP_INTERVAL = 15.0   # seconds between background sweeps (fixed)
+
+# The pool's ReapState, or nothing when reaping is globally off / this pool never opted in.
+function _reap_state(pool)::Union{ReapState, Nothing}
+  _REAP_ANY[] || return nothing
+  Base.lock(() -> get(_POOL_REAP, pool, nothing), _POOL_REAP_LOCK)
+end
+
+# Record that slot i just received a freshly-opened connection: grow the vectors in lockstep with a
+# path-C push!, or reset timestamps for a reused/materialized slot. Call UNDER pool.lock.
+function _reap_note_create!(pool, i::Int)
+  st = _reap_state(pool); st === nothing && return
+  t = time()
+  # Grow in lockstep (normally by exactly one). Gap entries are filled `fresh` (t), never 0.0, so an
+  # accidental gap can never read as "ancient" and trigger a spurious max-lifetime retire.
+  while length(st.last_used) < i
+    push!(st.last_used, t); push!(st.created_at, t)
+  end
+  st.created_at[i] = t; st.last_used[i] = t
+  return nothing
+end
+
+# Record that slot i was just checked out or returned. Call UNDER pool.lock.
+function _reap_note_touch!(pool, i::Int)
+  st = _reap_state(pool); st === nothing && return
+  i <= length(st.last_used) && (st.last_used[i] = time())
+  return nothing
+end
+
+# Should the connection being RETURNED to slot i be retired now (max-lifetime, overflow only)?
+# Call UNDER pool.lock.
+function _reap_should_retire(pool, i::Int)::Bool
+  st = _reap_state(pool); st === nothing && return false
+  st.config.max_lifetime > 0 && i > pool.pool_size && i <= length(st.created_at) &&
+    (time() - st.created_at[i]) > st.config.max_lifetime
+end
+
+"""
+    enable_reaping!(pool; idle_timeout=0, max_lifetime=0) -> pool
+
+Opt a pool into idle-connection reaping / max-lifetime (#125). `idle_timeout`/`max_lifetime` are in
+seconds; `0` (the default) leaves that dimension off, and if both are off this is a no-op. Registers
+the pool's `ReapState` and starts the shared background sweeper. Called by `Configuration` after a
+pool is built from `connection.yml`.
+"""
+function enable_reaping!(pool::Union{PormGPostgres, PormGSQLite}; idle_timeout::Real = 0, max_lifetime::Real = 0)
+  (idle_timeout <= 0 && max_lifetime <= 0) && return pool
+  n = Base.lock(() -> length(pool.connections), pool.lock)
+  t = time()
+  st = ReapState(ReapConfig(Float64(idle_timeout), Float64(max_lifetime)), fill(t, n), fill(t, n))
+  Base.lock(() -> (_POOL_REAP[pool] = st), _POOL_REAP_LOCK)
+  _REAP_ANY[] = true
+  _ensure_reaper!()
+  return pool
+end
+
+const _reaper_lock = ReentrantLock()
+const _reaper_started = Ref(false)
+
+# Start the single global sweeper task (spawn-once, mirroring `_ensure_sqlite_async_worker!`).
+function _ensure_reaper!()
+  _reaper_started[] && return
+  Base.lock(_reaper_lock) do
+    _reaper_started[] && return
+    Threads.@spawn begin
+      while true
+        sleep(_REAP_INTERVAL)
+        try
+          _reap_all_pools!()
+        catch e
+          @debug "Connection-pool reaper sweep failed" exception=e
+        end
+      end
+    end
+    _reaper_started[] = true
+  end
+  return nothing
+end
+
+# Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool.
+function _reap_all_pools!()
+  pools = Base.lock(() -> collect(keys(_POOL_REAP)), _POOL_REAP_LOCK)
+  for pool in pools                       # a GC'd pool is absent from the WeakKeyDict → _reap_state nothing
+    try
+      _reap_pool!(pool)
+    catch e
+      @debug "Connection-pool reap failed" exception=e
+    end
+  end
+  return nothing
+end
+
+# Close idle/over-lifetime OVERFLOW connections of one pool. Directly callable so tests drive it
+# deterministically (no waiting on the Timer). Never touches a leased slot or a base slot.
+function _reap_pool!(pool)
+  st = _reap_state(pool); st === nothing && return
+  (st.config.idle_timeout <= 0 && st.config.max_lifetime <= 0) && return
+  now = time()
+  to_close = Any[]
+  Base.lock(pool.lock) do
+    for i in (pool.pool_size + 1):length(pool.connections)   # OVERFLOW ONLY — base 1..pool_size kept warm
+      pool.available[i] || continue                          # never reap a LEASED (in-use) slot
+      conn = pool.connections[i]
+      conn === nothing && continue
+      idle = st.config.idle_timeout > 0 && i <= length(st.last_used)  && (now - st.last_used[i])  > st.config.idle_timeout
+      life = st.config.max_lifetime > 0 && i <= length(st.created_at) && (now - st.created_at[i]) > st.config.max_lifetime
+      if idle || life
+        pool.connections[i] = nothing      # available[i] STAYS true; no _handoff_or_free! (an available
+        push!(to_close, conn)              # idle slot has no compatible waiter — see #125 notes)
+      end
+    end
+  end
+  # Close OUTSIDE the pool lock (a driver close can block on I/O), like `_discard_connection!`.
+  for conn in to_close
+    try
+      Base.invokelatest(close, conn)
+    catch e
+      @debug "Error closing reaped connection" exception=e
+    end
+  end
+  return nothing
+end
+
 function close_pool!(pool::PostgresConnectionPool)
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
@@ -311,6 +461,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
         i = owned
         conn = pool.connections[i]
         if conn !== nothing && backend_is_alive(pool, conn)
+          _reap_note_touch!(pool, i)                   # checkout timestamp (#125)
           return (:got, conn)                          # live handle handed over — reuse as-is
         end
         # Empty/dead slot (e.g. handed off by _discard_connection!): open a fresh connection.
@@ -318,6 +469,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
         try
           new_conn = backend_connect(pool)
           pool.connections[i] = new_conn
+          _reap_note_create!(pool, i)                  # fresh connection timestamp (#125)
           return (:got, new_conn)
         catch e
           @error "Failed to materialize handed-off PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
@@ -331,6 +483,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
         if pool.available[i]
           if pool.connections[i] !== nothing && backend_is_alive(pool, pool.connections[i])
             pool.available[i] = false
+            _reap_note_touch!(pool, i)                  # checkout timestamp (#125)
             return (:got, pool.connections[i])
           end
           # Slot is empty or dead: defer creation so the before_connect hook runs off the lock.
@@ -339,6 +492,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
             new_conn = backend_connect(pool)
             pool.connections[i] = new_conn
             pool.available[i] = false
+            _reap_note_create!(pool, i)                 # fresh connection timestamp (#125)
             return (:got, new_conn)
           catch e
             @error "Failed to create PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
@@ -356,6 +510,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Int = 30, max_
           new_conn = backend_connect(pool)
           push!(pool.connections, new_conn)
           push!(pool.available, false)
+          _reap_note_create!(pool, length(pool.connections))   # grow reap vectors in lockstep (#125)
           new_size = length(pool.connections)
           if new_size == ceiling
             @warn "PG pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
@@ -435,6 +590,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
         i = owned
         conn = pool.connections[i]
         if conn !== nothing && backend_is_alive(pool, conn)
+          _reap_note_touch!(pool, i)                   # checkout timestamp (#125)
           return (:got, conn)
         end
         before_connect_done || return (:hook, nothing)
@@ -442,6 +598,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
           is_reader_slot = pool.split_read_write && i != pool.writer_slot
           new_conn = backend_connect(pool; read_only = is_reader_slot)
           pool.connections[i] = new_conn
+          _reap_note_create!(pool, i)                  # fresh connection timestamp (#125)
           return (:got, new_conn)
         catch e
           @error "Failed to materialize handed-off SQLite connection $i: $e" connection_string=pool.connection_string
@@ -455,6 +612,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
         if pool.available[i]
           if pool.connections[i] !== nothing && backend_is_alive(pool, pool.connections[i])
             pool.available[i] = false
+            _reap_note_touch!(pool, i)                  # checkout timestamp (#125)
             return (:got, pool.connections[i])
           end
           before_connect_done || return (:hook, nothing)
@@ -463,6 +621,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
             new_conn = backend_connect(pool; read_only = is_reader_slot)
             pool.connections[i] = new_conn
             pool.available[i] = false
+            _reap_note_create!(pool, i)                 # fresh connection timestamp (#125)
             return (:got, new_conn)
           catch e
             @error "Failed to create SQLite connection $i: $e" connection_string=pool.connection_string
@@ -481,6 +640,7 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
           new_conn = backend_connect(pool)
           push!(pool.connections, new_conn)
           push!(pool.available, false)
+          _reap_note_create!(pool, length(pool.connections))   # grow reap vectors in lockstep (#125)
           new_size = length(pool.connections)
           if new_size == ceiling
             @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=pool.connection_string
@@ -536,13 +696,23 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Int = 30, max_re
 end
 
 function release_connection(pool::PormGPostgres, conn)
+  retired = nothing
   released = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
-        _handoff_or_free!(pool, i)   # hand the slot to a waiter (leased) or mark it available (#124)
+        if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
+          retired = pool.connections[i]
+          pool.connections[i] = nothing
+        else
+          _reap_note_touch!(pool, i)       # last_used = now (#125)
+        end
+        _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
         return true
       end
     end
+  end
+  if retired !== nothing
+    try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired PG connection" exception=e; end
   end
   released !== nothing && return released
   @warn "PG Connection not found in the pool - connection may have been replaced due to failure"
@@ -550,13 +720,23 @@ function release_connection(pool::PormGPostgres, conn)
 end
 
 function release_connection(pool::PormGSQLite, conn)
+  retired = nothing
   released = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
-        _handoff_or_free!(pool, i)   # hand the slot to a waiter (leased) or mark it available (#124)
+        if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
+          retired = pool.connections[i]
+          pool.connections[i] = nothing
+        else
+          _reap_note_touch!(pool, i)       # last_used = now (#125)
+        end
+        _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
         return true
       end
     end
+  end
+  if retired !== nothing
+    try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
   end
   released !== nothing && return released
   @warn "SQLite Connection not found in the pool"

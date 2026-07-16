@@ -228,3 +228,63 @@ end
         PormG.Configuration._BEFORE_CONNECT_HOOK[] = previous_hook
     end
 end
+
+# Config-wiring for idle-reaping / max-lifetime (#125): pins that the two user entry points —
+# `connection.yml` top-level keys and `register_connection` kwargs — actually reach
+# `ConnectionPool.enable_reaping!` and register the pool. DB-free: pools construct lazily (no
+# connection is opened here), so we assert on the registry, never on live reaping.
+@testset "reaping config wiring reaches enable_reaping! (#125)" begin
+    _reap = PormG.ConnectionPool._POOL_REAP
+
+    # (1) connection.yml path via _build_connection_pool!: top-level idle_timeout/max_lifetime keys.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        open(joinpath(db_dir, "connection.yml"), "w") do f
+            write(f,
+                "test:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \":memory:\"\n" *
+                "  idle_timeout: 45\n" *
+                "  max_lifetime: 900\n" *
+                "  config:\n" *
+                "    change_db: true\n" *
+                "    change_data: true\n")
+        end
+
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        st = get(_reap, pool, nothing)
+        @test st !== nothing                       # yaml keys opted the pool in
+        @test st.config.idle_timeout == 45.0
+        @test st.config.max_lifetime == 900.0
+        @test PormG.ConnectionPool._REAP_ANY[]     # global flag flipped on
+
+        delete!(_reap, pool)
+        _cleanup_configuration_test_keys([db_dir])
+    end
+
+    # (2) register_connection kwargs opt the dynamic pool in.
+    key_on = "reap_on_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_on, ":memory:";
+            adapter="SQLite", idle_timeout=60, max_lifetime=1800)
+        pool = PormG.config[key_on].connections
+        st = get(_reap, pool, nothing)
+        @test st !== nothing
+        @test st.config.idle_timeout == 60.0 && st.config.max_lifetime == 1800.0
+        delete!(_reap, pool)
+    finally
+        _cleanup_configuration_test_keys([key_on])
+    end
+
+    # (3) no reaping kwargs / keys → the pool is NOT registered (default off).
+    key_off = "reap_off_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_off, ":memory:"; adapter="SQLite")
+        pool = PormG.config[key_off].connections
+        @test !haskey(_reap, pool)                 # absent = zero behavior change
+    finally
+        _cleanup_configuration_test_keys([key_off])
+    end
+end

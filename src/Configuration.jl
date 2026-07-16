@@ -231,6 +231,15 @@ function _build_connection_pool!(settings::SQLConn, path::String)
   pool_size = haskey(settings.db_config_settings, "pool_size") ?
               parse(Int, string(settings.db_config_settings["pool_size"])) : 3
 
+  # Optional idle-connection reaping / max-lifetime (#125), in seconds; absent or 0 = off.
+  _reap_secs(key) = begin
+    haskey(settings.db_config_settings, key) || return 0.0
+    v = settings.db_config_settings[key]
+    v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), 0.0)
+  end
+  idle_timeout = _reap_secs("idle_timeout")
+  max_lifetime = _reap_secs("max_lifetime")
+
   sqlite_split_read_write = false
   if haskey(settings.db_config_settings, "sqlite_split_read_write")
     raw_value = settings.db_config_settings["sqlite_split_read_write"]
@@ -294,6 +303,12 @@ function _build_connection_pool!(settings::SQLConn, path::String)
   else
     adapter = settings.db_config_settings["adapter"]
     throw(ArgumentError("Unsupported adapter: $(adapter)"))
+  end
+
+  # Opt the pool into idle-reaping / max-lifetime if configured (#125). No-op when both are 0.
+  if idle_timeout > 0 || max_lifetime > 0
+    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
   end
 
   return settings
@@ -581,7 +596,7 @@ end
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -607,11 +622,13 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     "adapter" => adapter,
     "url" => url,
     "pool_size" => pool_size,
-    "sqlite_split_read_write" => sqlite_split_read_write
+    "sqlite_split_read_write" => sqlite_split_read_write,
+    "idle_timeout" => idle_timeout,
+    "max_lifetime" => max_lifetime
   )
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-  
+
   if adapter == "PostgreSQL"
     settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size)
   elseif adapter == "SQLite"
@@ -619,6 +636,10 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   else
     throw(ArgumentError("Unsupported adapter: $adapter"))
   end
+
+  # Opt into idle-reaping / max-lifetime if configured (#125). No-op when both are 0.
+  (idle_timeout > 0 || max_lifetime > 0) &&
+    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
 
   config[key] = settings
   return key

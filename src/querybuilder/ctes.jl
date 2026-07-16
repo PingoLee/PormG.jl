@@ -437,6 +437,59 @@ function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing
 end
 cjoin(q::SQLObjectHandler; kwargs...) = cjoin(q, nothing; kwargs...)
 
+# #45 — anchor-less, full-control custom join.
+#
+# Unlike `cjoin` (which always emits `main.field = target.pk` and AND-appends joined-model-only
+# filters), `cjoin_on` takes a target model, an explicit SQL alias for the joined copy, and an
+# `on` list of arbitrary expressions that become the ENTIRE ON clause — no equi-anchor. This is
+# what makes self-joins and cross-side predicates expressible without raw SQL.
+#
+# Reference convention inside `on`:
+#   * bare `F("col")`        → the BASE/main table (b1)
+#   * `F("<alias>.col")`     → the joined copy declared here (b2)
+# A self-join is `cjoin_on(q, "<BaseModelName>"; alias="b2", on=[...])`.
+function cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
+  isempty(strip(target_model)) && throw(_argerr("cjoin_on requires a target model name."))
+  # Fail-closed identifier check on the user alias (it is interpolated into SQL as a quoted alias).
+  _validate_identifier(alias)
+  if !isdefined(q.model._module, Symbol(target_model))
+    throw(_argerr("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
+  end
+  if haskey(q.custom_join, alias)
+    throw(_argerr("cjoin_on alias '$(alias)' already exists as a join path. Choose a distinct alias."))
+  end
+
+  # Collect + validate element types. Crucially we DO NOT run `_prefix_join_filter` here: that helper
+  # forces every reference onto the single joined model and rejects base-side references — the exact
+  # opposite of what cjoin_on needs (it must reference both sides). `_check_filter` still converts a
+  # Pair into an OperObject; the alias-qualified resolution happens at render time.
+  parsed = Vector{FilterType}()
+  for f in on
+    if isa(f, Pair)
+      push!(parsed, _check_filter(f))
+    elseif isa(f, FilterType)
+      push!(parsed, f)
+    else
+      throw(_argerr("Invalid cjoin_on `on` element: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
+    end
+  end
+  isempty(parsed) && throw(_argerr("cjoin_on requires at least one `on` predicate."))
+
+  q.custom_join[alias] = Dict{String,Any}(
+    "filters" => parsed,
+    "target_model" => target_model,
+    "user_alias" => alias,
+    "join_type" => join_type === nothing ? "INNER" : _normalize_join_type(join_type),
+    "no_anchor" => true,
+  )
+  return q
+end
+
+function cjoin_on(q::SQLObjectHandler, target_model::String; alias::String, on::AbstractVector, join_type::Union{String,Nothing}="INNER")
+  cjoin_on(q.object, target_model, on; alias=alias, join_type=join_type)
+  return q
+end
+
 
 """
 Build CTE (WITH clause) SQL string from the CTEs defined in the query object.

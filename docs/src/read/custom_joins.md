@@ -266,6 +266,76 @@ query = M.New_join_position.objects.
 #  LEFT JOIN "status" AS "Tb_2" ON "Tb_1"."statusid" = "Tb_2"."statusid"
 ```
 
+## Full-Control ON Clauses with `.cjoin_on()` (#45)
+
+`.cjoin()` and `.on()` always emit a base equi-anchor (`main.field = target.pk`) and AND-append
+filters that must target the **single joined model**. When you need the *entire* ON clause to be
+your own — an arbitrary boolean (top-level `OR`), field-to-field comparisons across **both** sides
+(a self-join), or SQL functions in the ON — use **`.cjoin_on()`**.
+
+```julia
+query.cjoin_on("Model"; alias="b2", on=[ ... ], join_type="INNER")
+```
+
+- **`"Model"`** — the model to join (may be the query's **own** model, for a self-join).
+- **`alias`** — the SQL alias for the joined copy. Reference its columns as `F("alias.column")`.
+- **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added.
+- **`join_type`** — defaults to `"INNER"`.
+
+### Reference convention
+
+Inside `on`, the two sides of the join are named by how you write `F(...)`:
+
+| You write | Resolves to |
+|-----------|-------------|
+| `F("col")` (bare) | the **base/main** table (the query's own alias) |
+| `F("b2.col")` | the **joined copy** declared by this `cjoin_on` (its `alias`) |
+
+This is unambiguous even in a self-join, where both sides share every column name.
+
+### Self-join example
+
+Find, for each lap, other laps in the same race — or the same driver+lap — or the same calendar
+year of the timestamp:
+
+```julia
+query = M.Lap.objects
+query.cjoin_on("Lap"; alias="b2", join_type="INNER", on=[
+  Qor(
+    F("b2.raceid") == F("raceid"),
+    Q(F("b2.driverid") == F("driverid"), F("b2.lap") == F("lap")),
+    F("b2.dt__@year") == F("dt__@year"),          # year() on both sides — dialect-aware
+  ),
+])
+query.values("id")
+```
+
+**Generated SQL (SQLite** — PostgreSQL renders `$n` placeholders and `EXTRACT(YEAR FROM …)`**):**
+
+```sql
+SELECT "Tb"."id" as "id"
+FROM "laps" as "Tb"
+ INNER JOIN "laps" AS "b2" ON (
+       ("b2"."raceid" = "Tb"."raceid")
+    OR (("b2"."driverid" = "Tb"."driverid") AND ("b2"."lap" = "Tb"."lap"))
+    OR (CAST(strftime('%Y', "b2"."dt") AS INTEGER) = CAST(strftime('%Y', "Tb"."dt") AS INTEGER))
+ )
+```
+
+No `main.field = target.pk` anchor is emitted — the `on` expression **is** the ON clause. Bound
+parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
+
+!!! note "Cross-side references use `F()`"
+    Reference the joined copy with `F("alias.col")`. Alias-qualified **operator pairs**
+    (`"b2.col__@gte" => 3`) are not supported yet — express a joined-side comparison-to-literal by
+    restructuring, or filter the base side with a bare pair (`"col__@gte" => 3`). Referencing a
+    *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now.
+    `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
+    subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
+    table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74
+    aggregate fan-out guard — if the join is to-many, aggregate the base table with `distinct=true`
+    (or over the joined table's own column) to avoid silent row multiplication.
+
 ## Use Cases
 
 ### 1. Legacy Databases Without Foreign Keys

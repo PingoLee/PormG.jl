@@ -43,6 +43,48 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Full-control custom joins via `cjoin_on` (#45)
+
+- **PormG ref**: issue #45 ; `src/querybuilder/` (`ctes.jl`, `build_joins.jl`, `build_query.jl`, `build_helpers.jl`, `object_manager.jl`)
+- **Recorded**: 2026-07-16
+- **Severity**: new feature — **additive, non-breaking**. `cjoin`/`on` are unchanged.
+
+### What changed
+
+A new fluent method `cjoin_on` expresses a JOIN whose ON clause is entirely user-defined — arbitrary
+boolean (top-level `OR`), field-to-field comparisons across **both** sides (self-joins), and SQL
+functions in the ON — without raw SQL. `cjoin`/`on` still emit the equi-anchor and only allow
+joined-model-side filters; `cjoin_on` emits **no** anchor.
+
+```julia
+query.cjoin_on("Lap"; alias="b2", join_type="INNER", on=[
+  Qor(
+    F("b2.raceid") == F("raceid"),                # F("b2.col") = joined copy; bare F = base
+    Q(F("b2.driverid") == F("driverid"), F("b2.lap") == F("lap")),
+    F("b2.dt__@year") == F("dt__@year"),          # year() in ON, dialect-aware
+  ),
+])
+```
+
+Renders `INNER JOIN "laps" AS "b2" ON ( … OR … OR … )` with no `main = joined` anchor. See
+[Custom Joins](docs/src/read/custom_joins.md).
+
+### How to find the calls to migrate
+
+Nothing to grep — additive. **Optional adoption:** anywhere you previously reached for raw SQL to
+express a self-join or a multi-condition ON, replace it with `cjoin_on`.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | optional — replace raw-SQL self-joins with `cjoin_on` |
+| app-2 | ⏳ | optional |
+| app-3 | ⏳ | optional |
+| app-4 | ⏳ | optional |
+
+---
+
 ## Row-level `update_or_create` (Django-style upsert)
 
 - **PormG ref**: issue #30 ; `src/querybuilder/execution.jl`, `src/querybuilder/object_manager.jl`

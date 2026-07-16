@@ -294,6 +294,10 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :on
     # Chainable: query.on("join_path", "field" => value; join_type="INNER")
     return (args...; kwargs...) -> (on(q, args...; kwargs...); q)
+  elseif sym === :cjoin_on
+    # Chainable: query.cjoin_on("Model"; alias="b2", on=[Qor(...)], join_type="INNER")
+    # Anchor-less full-control join (#45): the `on` expressions are the ENTIRE ON clause.
+    return (args...; kwargs...) -> (cjoin_on(q, args...; kwargs...); q)
   elseif sym === :copy
     return () -> deepcopy(q)
 

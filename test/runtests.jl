@@ -70,6 +70,7 @@ end
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")
     @testset "No Lost-Connection Retry Inside Transactions (#138)" include("unit/test_fetch_retry_transaction.jl")
     @testset "Failed COMMIT Holds Conn Until Rollback (#139)" include("unit/test_commit_failure_release.jl")
+    @testset "Direct-Handoff Pool Wait (#124)" include("unit/test_connection_pool_handoff.jl")
     @testset "Savepoint Naming (#26)" include("unit/test_savepoint_naming.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")

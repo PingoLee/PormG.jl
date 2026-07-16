@@ -48,6 +48,7 @@ end
     @testset "Field-name Case Preservation (#57)" include("unit/test_field_name_case.jl")
     @testset "db_column Authoritative (#50)" include("unit/test_db_column.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
+    @testset "CTE Ergonomics F() Reference (#44)" include("unit/test_cte_ergonomics.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")

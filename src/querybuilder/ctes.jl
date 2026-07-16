@@ -6,14 +6,11 @@ function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
   join_field::Union{Pair{String,String},Nothing}=nothing,
   join_type::String="LEFT")
 
-  if join_field === nothing
-    # If no join fields provided, assume primary key of the model
-    if haskey(query.object.model.fields, "id")
-      join_field = Pair("id", "id")
-    else
-      throw(ArgumentError("CTE query model must have a primary key field 'id' or specify join_field"))
-    end
-  end
+  # `join_field === nothing` is intentional and supported (#44): the CTE is emitted but not
+  # keyed to the main table via a fixed ON. When the main query then references a CTE column
+  # with `F("<cte>__col")`, the CTE is CROSS JOINed and the F() filter supplies the correlation
+  # in WHERE (see the CTE branch of `_build_row_join`). No `id=>id` default — that was a latent
+  # trap that only worked when the model happened to carry an `id` column.
   table = CTEDict(
     "join_type" => join_type,
     "query" => deepcopy(query),

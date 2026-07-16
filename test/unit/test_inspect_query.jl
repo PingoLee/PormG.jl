@@ -800,4 +800,63 @@ PormG.config["default"] = MockSettings
     @test_throws ErrorException q.inspect_query
   end
 
+  # ===== Section: Row-level locking — select_for_update (#26) =====
+  # Render-only assertions on the PostgreSQL mock: the FOR UPDATE clause and every option map
+  # to the right SQL, land after ORDER BY / LIMIT, and invalid combinations fail fast. Execution
+  # (and the "must be inside a transaction" guard) is covered by the integration suite.
+  @testset "select_for_update renders FOR UPDATE (#26)" begin
+    # Plain lock → bare FOR UPDATE, no OF / NOWAIT / SKIP LOCKED / NO KEY.
+    q = DriverModel.objects
+    q.select_for_update()
+    sql = inspect_query(q)[:sql_text]
+    @test contains(sql, "FOR UPDATE")
+    @test !contains(sql, "NO KEY")
+    @test !contains(sql, "NOWAIT")
+    @test !contains(sql, "SKIP LOCKED")
+
+    # skip_locked → FOR UPDATE SKIP LOCKED (the "claim next available row" queue pattern).
+    q = DriverModel.objects
+    q.select_for_update(skip_locked = true)
+    sql = inspect_query(q)[:sql_text]
+    @test contains(sql, "FOR UPDATE") && contains(sql, "SKIP LOCKED")
+
+    # nowait → FOR UPDATE NOWAIT (raise instead of block on a locked row).
+    q = DriverModel.objects
+    q.select_for_update(nowait = true)
+    sql = inspect_query(q)[:sql_text]
+    @test contains(sql, "FOR UPDATE") && contains(sql, "NOWAIT")
+
+    # no_key → the weaker FOR NO KEY UPDATE (PostgreSQL).
+    q = DriverModel.objects
+    q.select_for_update(no_key = true)
+    @test contains(inspect_query(q)[:sql_text], "FOR NO KEY UPDATE")
+
+    # Clause ORDER: FOR UPDATE must come AFTER ORDER BY / LIMIT (invalid SQL otherwise).
+    q = DriverModel.objects
+    q.order_by("surname")
+    q.limit(5)
+    q.select_for_update()
+    sql = inspect_query(q)[:sql_text]
+    @test first(findfirst("FOR UPDATE", sql)) > first(findfirst("LIMIT", sql))
+    @test first(findfirst("LIMIT", sql)) > first(findfirst("ORDER BY", sql))
+
+    # Chainable terminal returns the handler, so it composes with other builder calls.
+    q = DriverModel.objects
+    @test q.select_for_update() === q
+
+    # nowait and skip_locked are mutually exclusive → fail at mutation time (Django parity).
+    # Assert the SPECIFIC cause (not just "an ArgumentError") so an unrelated error can't pass.
+    excl_err = try
+      DriverModel.objects.select_for_update(nowait = true, skip_locked = true); nothing
+    catch e; e end
+    @test excl_err isa ArgumentError && occursin("mutually exclusive", excl_err.msg)
+
+    # FOR UPDATE + DISTINCT is invalid on PostgreSQL → friendly error at render time.
+    q = DriverModel.objects
+    q.distinct(true)
+    q.select_for_update()
+    dist_err = try inspect_query(q); nothing catch e; e end
+    @test dist_err isa ArgumentError && occursin("distinct", dist_err.msg)
+  end
+
 end

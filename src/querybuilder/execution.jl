@@ -263,15 +263,54 @@ function query(q::SQLObjectHandler;
   if q.object.offset !== 0
     print(io, "OFFSET ", q.object.offset, " \n")
   end
-  
+
+  # #26: row-level locking clause (FOR UPDATE …) must follow ORDER BY / LIMIT / OFFSET. No-op on
+  # SQLite (Dialect.for_update_clause renders "" there). PostgreSQL rejects FOR UPDATE with
+  # DISTINCT, so fail early with a friendly message rather than a raw DB error.
+  let fu = q.object.for_update
+    if fu !== nothing
+      # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
+      # exempt — there the lock renders "" (pure no-op), so select_for_update never raises (#26).
+      if q.object.distinct && instruction.connection isa PormGPostgres
+        throw(_argerr("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
+      end
+      print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, instruction.connection))
+    end
+  end
+
   resposta = String(take!(io))
-  
+
+  # #44: warn once per CTE that is CROSS JOINed (no join_field) yet is never constrained by a
+  # WHERE/HAVING predicate — that is an unintended Cartesian product. The correlation is expected
+  # to come from a `filter("main_col" => F("<cte>__col"))` (which renders in WHERE). No false
+  # positive on the intended usage, where the alias appears in the WHERE fragment.
+  if any(rj -> get(rj, "cross", nothing) !== nothing, instruction.row_join)
+    predicate_text = string(
+      isempty(instruction._where) ? "" : join(instruction._where, " AND "),
+      isempty(instruction.having) ? "" : join(instruction.having, " AND "),
+    )
+    for rj in instruction.row_join
+      get(rj, "cross", nothing) === nothing && continue
+      cte_alias = rj["alias_b"]::String
+      if !occursin("\"$(cte_alias)\"", predicate_text)
+        @warn _emsg("PormG: CTE \e[31m$(rj["b"])\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj["b"])__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
+      end
+    end
+  end
+
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
-  
+
   if show_query !== :execute
-    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select; 
+    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
                             parameters=instruction.parameters)
+  end
+  # #26: a locked read executed OUTSIDE a transaction on PostgreSQL is a footgun — the lock is
+  # taken then immediately released at autocommit. Fail loudly (Django's TransactionManagementError
+  # analog). Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE
+  # without a live transaction. SQLite never locks (clause rendered ""), so it is exempt.
+  if q.object.for_update !== nothing && instruction.connection isa PormGPostgres && !in_transaction_context()
+    throw(_argerr("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
   end
   return resposta
 end
@@ -533,11 +572,14 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
                             parameters=parameters)
   end
 
-  # Execute safely
+  # Execute safely. create()/insert() return a PormGRow (#166) — the same object get()/first()/
+  # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
+  # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. RETURNING */SELECT *
+  # include every column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
   if connection isa PormGPostgres
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model)
+    return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model), model)
   elseif connection isa PormGSQLite
     # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
     # indefinitely inside SQLite/libsqlite3 for some table shapes (observed: an
@@ -547,8 +589,14 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # first INSERT had already written the row. Instead: run a plain INSERT, then
     # read the full inserted row back with a SELECT on the SAME connection
     # (last_insert_rowid() is per-connection session state). Reading the whole row
-    # keeps the returned Dict consistent with the Postgres `RETURNING *` path —
+    # keeps the returned row consistent with the Postgres `RETURNING *` path —
     # all columns present, including nullable ones the caller did not set.
+    #
+    # The empty-rows fallback (read-back returned nothing, which should not happen after a
+    # successful INSERT) builds the dict from real_obj.insert only, so it may omit an unreserved
+    # AUTOINCREMENT pk. The wrapped PormGRow is still returned; if that degenerate row is later
+    # mutated and .save()d, save() throws a clear "required key" error — no regression over the
+    # previous incomplete-Dict return.
     do_insert = () -> begin
       fetch(settings, sql, parameters)
       rows = fetch(settings,
@@ -565,7 +613,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
       do_insert() : run_in_transaction(do_insert, settings)
 
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return result_dict
+    return PormGRow(result_dict, model)
   else
     throw("Unsupported connection type")
   end

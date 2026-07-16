@@ -58,14 +58,14 @@ These methods finalize the query and execute it against the database:
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching record or `nothing`. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
-| `.create(key => value, ...)` | `Dict` | Inserts a single record and returns it. |
+| `.create(key => value, ...)` | `PormGRow` | Inserts a single record and returns it as a row (dot-access + `.save()`). |
 | `.update(key => value, ...)` | — | Updates all matching records. |
 | `.update_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Row-level upsert: inserts on a fresh lookup or updates `defaults` on conflict; returns `(row, created)`. See [Update or Create](write/create.md#update-or-create). |
 | `.delete()` | — | Deletes all matching records. |
 
 ### `PormGRow` Instance Methods
 
-Rows returned by `.list()`, `.first()`, and `.get()` expose model-aware property access and instance-level persistence:
+Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_create()` expose model-aware property access and instance-level persistence:
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
@@ -458,6 +458,48 @@ end
 
 See [Transactions](write/transaction.md) for the full reference including savepoints and multithreaded patterns.
 
+### `atomic`
+
+Friendly, Django-flavored alias for `run_in_transaction`. A **nested** `atomic` on the same database
+automatically becomes a `SAVEPOINT`, so a failing inner block rolls back only to its savepoint while the
+outer transaction survives (works identically on PostgreSQL and SQLite):
+
+```julia
+atomic("db") do
+    M.Result.objects.create("raceid" => 1, "driverid" => 1, "points" => 25)
+    try
+        atomic("db") do                 # nested → SAVEPOINT
+            M.Result.objects.create("raceid" => 1, "driverid" => 1, "points" => 18)
+            error("validation failed")  # rolls back to the savepoint only
+        end
+    catch
+        # outer transaction still usable here
+    end
+end
+```
+
+Pass `durable = true` to require the block be the outermost transaction (raises if one is already active).
+
+### `select_for_update`
+
+Query-builder method that adds a `FOR UPDATE` clause to lock the selected rows until the surrounding
+transaction commits — the guard for a safe read-modify-write. Keyword options `nowait`, `skip_locked`,
+and `no_key` map to `FOR UPDATE NOWAIT` / `FOR UPDATE SKIP LOCKED` / `FOR NO KEY UPDATE` (`nowait` and
+`skip_locked` are mutually exclusive). On PostgreSQL it must run inside a transaction; **on SQLite it is
+a silent no-op** (no row-level locking). See [Row-Level Locking](write/transaction.md#Row-Level-Locking).
+
+```julia
+atomic("db") do
+    row = M.Constructor_standings.objects.
+        filter("constructorstandingsid" => 1).
+        select_for_update().
+        list() |> first
+    M.Constructor_standings.objects.
+        filter("constructorstandingsid" => row[:constructorstandingsid]).
+        update("points" => row[:points] + 25)
+end
+```
+
 ---
 
 ## Async Execution
@@ -596,7 +638,7 @@ scope — the SQL function constructors are *not* among them (see
 `fetch_async`, `await_result`, `FetchTask`
 
 ### Transactions
-`run_in_transaction`, `with_savepoint`, `with_tx_context`, `in_transaction_context`
+`run_in_transaction`, `atomic`, `with_savepoint`, `with_tx_context`, `in_transaction_context`
 
 ### Locking
 `with_advisory_lock`

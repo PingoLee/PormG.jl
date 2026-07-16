@@ -143,6 +143,48 @@ The `.with()` method:
 
 ---
 
+## Correlating a CTE with `F()` (no `join_field`)
+
+When you omit `join_field`, the CTE is emitted but not keyed to the main table. Referencing one
+of its columns with `F("<cte>__col")` then **`CROSS JOIN`s** the CTE, and the `F()` filter you
+write supplies the correlation verbatim in `WHERE` — the natural, Django-flavored way to express
+a correlated CTE:
+
+```julia
+# Races from the 1991 season
+races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
+
+# Winners of those races — correlate Result.raceid with the CTE's raceid via F()
+q = M.Result.objects
+q.with("r91" => races_91)                       # no join_field
+q.filter("raceid" => F("r91__raceid"),          # ← the correlation
+         "positionorder" => 1)
+q.values("resultid", "raceid")
+df = q |> DataFrame
+```
+
+renders (SQLite shown; PostgreSQL uses `$N` placeholders):
+
+```sql
+WITH "r91" AS (SELECT "raceid" FROM "race" WHERE "year" = ?)
+SELECT "R1"."resultid", "R1"."raceid"
+FROM "result" AS "R1"
+CROSS JOIN "r91" AS "R1_1"
+WHERE "R1"."raceid" = "R1_1"."raceid" AND "R1"."positionorder" = ?
+```
+
+Notes:
+- **`CROSS JOIN + WHERE` is inner by nature** — only rows the correlation matches are returned.
+  To keep unmatched main-table rows (a *nullable* left join against a CTE), use an explicit
+  `join_field` (+ `join_type="LEFT"`) as shown above instead.
+- The correlation is ordinary `F()`, so multiple correlations and inequality/range predicates
+  work too, e.g. `filter("date__@gte" => F("r91__start"), "date__@lte" => F("r91__end"))`.
+- **Cartesian-product guard.** Referencing a CTE column with *no* constraining filter is a
+  Cartesian product; PormG emits a `@warn` naming the CTE. Add a correlating `filter(...)`, or
+  pass `join_field`.
+
+---
+
 ## CTE with Multiple Aggregated Fields
 
 ```julia

@@ -229,42 +229,70 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     length(vector) == 1 && throw("Error, CTE reference '$(cte_name)' must include a field name. Example: '$(cte_name)__field_name'")
 
     # Get the join field configuration from the CTE
-    join_field_pair = cte_dict["join_field"]::Pair{String, String}
-    main_table_key = join_field_pair.first    # e.g., "driverid" from main table
-    cte_table_key = join_field_pair.second    # e.g., "driverid" from CTE
-    @pormg_debug false
-    
-    if !haskey(cte_model.fields, cte_table_key)
-      available = join(collect(keys(cte_model.fields)), ", ")
-      throw(ArgumentError("CTE join_field column '$(cte_table_key)' not found in $(cte_name); available fields: $(available)"))
-    end
-    
+    jf = cte_dict["join_field"]
 
-    if (main_table_key in instruct.object.model.field_names)
+    if jf === nothing
+      # #44: no join_field → the CTE is CROSS JOINed and the correlation is supplied by the
+      # main query's `F("<cte>__col")` filter(s), which render verbatim in WHERE. `join_type`
+      # does not apply to a CROSS JOIN (INNER-like by nature).
+      if !haskey(cte_model.fields, vector[2])
+        available = join(collect(keys(cte_model.fields)), ", ")
+        throw(ArgumentError("CTE field '$(vector[2])' not found in '$(cte_name)'; available fields: $(available)"))
+      end
+      row_join["a"] = instruct.object.model.name
       row_join["alias_a"] = instruct.alias
-      # #64: resolve the main-model join field to its physical column (db_column).
-      row_join["key_a"] = Models.model_column(instruct.object.model, main_table_key)
-    elseif haskey(instruct.cache, main_table_key) || _cache_join(main_table_key, instruct)
-      cache_item = instruct.cache[main_table_key]
-      v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
-      row_join["alias_a"] = v_split[1] |> string
-      row_join["key_a"] = v_split[2] |> string
+      row_join["b"] = cte_name  # CTE name becomes the table name
+      row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
+      # "how" is never emitted for a CROSS entry (build_row_join_sql_text short-circuits on the
+      # "cross" marker), but the deep-path loop below reads `row_join["how"]` as `prev_how`; set
+      # it so an over-long path like `F("r91__col__more")` fails with the same "not a foreign key"
+      # message as the keyed path instead of a cryptic KeyError.
+      row_join["how"] = "CROSS"
+      # Sentinel key columns: `_insert_join`'s dedup reads key_a/key_b directly (KeyError
+      # otherwise), and the CROSS branch of `build_row_join_sql_text` skips them. Equal empty
+      # strings also dedup repeat references to the same CTE (e.g. r91__raceid, r91__round)
+      # onto a single CROSS JOIN.
+      row_join["key_a"] = ""
+      row_join["key_b"] = ""
+      row_join["cross"] = "1"
     else
-      throw(ArgumentError("Main table join_field column '$(main_table_key)' not found in $(instruct.object.model.name); available fields: $(join(instruct.object.model.field_names, ", "))"))
-    end
-    
-    # Set up the join with the CTE
-    row_join["a"] = instruct.object.model.name
-    
-    row_join["b"] = cte_name  # CTE name becomes the table name
-    row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
-    row_join["how"] = cte_dict["join_type"]::String
+      join_field_pair = jf::Pair{String, String}
+      main_table_key = join_field_pair.first    # e.g., "driverid" from main table
+      cte_table_key = join_field_pair.second    # e.g., "driverid" from CTE
+      @pormg_debug false
 
-    # #64: the CTE side stays the FIELD NAME — a CTE is a derived table whose columns are
-    # the values() projection ALIASES (`"pk_code" AS "code"`), so the join references the
-    # alias "code", not the physical column. Only the main-table side (key_a above) is a
-    # real physical column and is db_column-resolved.
-    row_join["key_b"] = cte_table_key
+      if !haskey(cte_model.fields, cte_table_key)
+        available = join(collect(keys(cte_model.fields)), ", ")
+        throw(ArgumentError("CTE join_field column '$(cte_table_key)' not found in $(cte_name); available fields: $(available)"))
+      end
+
+
+      if (main_table_key in instruct.object.model.field_names)
+        row_join["alias_a"] = instruct.alias
+        # #64: resolve the main-model join field to its physical column (db_column).
+        row_join["key_a"] = Models.model_column(instruct.object.model, main_table_key)
+      elseif haskey(instruct.cache, main_table_key) || _cache_join(main_table_key, instruct)
+        cache_item = instruct.cache[main_table_key]
+        v_split = split(cache_item.field |> x -> replace(x,  '"' => ""), ".")
+        row_join["alias_a"] = v_split[1] |> string
+        row_join["key_a"] = v_split[2] |> string
+      else
+        throw(ArgumentError("Main table join_field column '$(main_table_key)' not found in $(instruct.object.model.name); available fields: $(join(instruct.object.model.field_names, ", "))"))
+      end
+
+      # Set up the join with the CTE
+      row_join["a"] = instruct.object.model.name
+
+      row_join["b"] = cte_name  # CTE name becomes the table name
+      row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
+      row_join["how"] = cte_dict["join_type"]::String
+
+      # #64: the CTE side stays the FIELD NAME — a CTE is a derived table whose columns are
+      # the values() projection ALIASES (`"pk_code" AS "code"`), so the join references the
+      # alias "code", not the physical column. Only the main-table side (key_a above) is a
+      # real physical column and is db_column-resolved.
+      row_join["key_b"] = cte_table_key
+    end
 
     @pormg_debug false
 

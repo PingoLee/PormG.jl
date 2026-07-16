@@ -28,10 +28,7 @@
 > **Remaining gating work** — the `pre-publish` label is the source of truth, so this list is exactly
 > [`gh issue list --label pre-publish`](https://github.com/PingoLee/PormG.jl/issues?q=is%3Aopen+label%3Apre-publish):
 
-- [#166](https://github.com/PingoLee/PormG.jl/issues/166) — write-path return-type consistency:
-  `create()`/`insert()` return `Dict` while `get()`/`first()`/`save()`/`update_or_create()` return
-  `PormGRow`. Decide the contract (likely `create()`/`insert()` → `PormGRow`) before publish, since
-  it is a breaking return-type change. Surfaced by `update_or_create` (#30).
+*(none — the gating list is empty; new `pre-publish`-labeled issues appear here as they open)*
 
 ---
 

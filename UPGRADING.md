@@ -85,6 +85,64 @@ express a self-join or a multi-condition ON, replace it with `cjoin_on`.
 
 ---
 
+## `create()` / `insert()` return a `PormGRow` (was `Dict`)
+
+- **PormG ref**: issue #166 ; `src/querybuilder/execution.jl`
+- **Recorded**: 2026-07-16
+- **Severity**: **breaking (return type)** / behavior improvement — the row surface is now uniform.
+
+### What changed
+
+`create()` / `insert()` now return a **`PormGRow`** on the execute path — the same row object
+`get()`, `first()`, `list()`, and `update_or_create()` already return — instead of a bare
+`Dict{Symbol,Any}`. This makes the row surface consistent and lets a created row be mutated and
+`.save()`d:
+
+```julia
+row = M.Driver.objects.create("forename" => "Ayrton", "surname" => "Senna")
+row[:driverid]        # unchanged — PormGRow delegates indexing/haskey/keys/get/pairs/iterate
+row.surname           # now also works (dot-access)
+row.surname = "SENNA"; row.save()   # and it round-trips
+```
+
+`show_query=:sql/:dict/:params` still return their inspection shapes (String/Dict/Vector) — only the
+`:execute` return changed. `list(:dict)` and `values()` still return plain dicts. `update()` still
+returns a matched-row count.
+
+### How to find the calls to migrate
+
+Because `PormGRow` delegates `getindex`/`haskey`/`get`/`keys`/`values`/`pairs`/`iterate`, the common
+patterns (`row[:id]`, `haskey(row, :x)`, iterating pairs) keep working unchanged. Only these break:
+
+```
+# 1. Type checks that assumed a Dict:
+grep -rn "create(" src/ | grep -i "isa Dict"
+grep -rn "= .*\.create(" src/            # then check for `isa Dict`, `merge(`, `delete!(`
+
+# 2. Dict-only MUTATION of a create() result (PormGRow has no setindex!):
+grep -rn "\.create(" src/ | ...          # then look for `result[:x] = ...` on that result
+```
+
+### Migrate your app
+
+- `@assert result isa Dict` → `@assert result isa PormG.QueryBuilder.PormGRow` (or drop the type
+  check — field access is unchanged).
+- Adding/overwriting a key on the result: `result[:x] = v` → `result.x = v` (dot-assign), and
+  `result.save()` if you want it persisted. (Read access `result[:x]` is unchanged.)
+- Passing the result somewhere typed `::Dict`, or `merge(result, …)` / `collect(result)` /
+  `length(result)` / `result == Dict(…)`: convert first with `Dict(pairs(result))`.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | check for `isa Dict` / Dict-mutation on `create()` results; field access unaffected |
+| app-2 | ⏳ | as above |
+| app-3 | ⏳ | as above |
+| app-4 | ⏳ | as above |
+
+---
+
 ## Row-level `update_or_create` (Django-style upsert)
 
 - **PormG ref**: issue #30 ; `src/querybuilder/execution.jl`, `src/querybuilder/object_manager.jl`
@@ -126,9 +184,8 @@ grep -rn "exists()" src/ | grep -iE "create|update"
 | app-3 | ⏳ | optional |
 | app-4 | ⏳ | optional |
 
-> **Note (pre-publish):** `create()`/`insert()` still return a `Dict` while `update_or_create()` (and
-> `get()`/`first()`/`save()`) return a `PormGRow`. That inconsistency is tracked for a decision before
-> publish in [#166](https://github.com/PingoLee/PormG.jl/issues/166).
+> **Resolved:** the `create()`/`insert()` → `Dict` vs `PormGRow` inconsistency this note tracked is
+> settled by the entry above (#166) — both now return `PormGRow`.
 
 ---
 

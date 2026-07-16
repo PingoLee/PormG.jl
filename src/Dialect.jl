@@ -783,6 +783,27 @@ function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{
   return "ON CONFLICT$(target_sql) DO UPDATE SET $(assignments)"
 end
 
+"""
+    for_update_clause(nowait, skip_locked, no_key, conn) -> String
+
+Render a row-level locking clause for a SELECT (#26), appended after ORDER BY / LIMIT / OFFSET.
+
+- **PostgreSQL** → `FOR [NO KEY] UPDATE [NOWAIT | SKIP LOCKED]`.
+- **SQLite** → `""`. SQLite has no row-level locking, so the clause is a silent no-op — the one
+  intentional PostgreSQL/SQLite divergence for this feature (keeps `select_for_update` portable;
+  see `docs/src/write/transaction.md`).
+
+An `OF <table>` target is a deferred follow-up (it must name the query's generated FROM alias).
+"""
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, conn::PormGPostgres)::String
+  lock_sql = no_key ? "FOR NO KEY UPDATE" : "FOR UPDATE"
+  wait_sql = nowait ? " NOWAIT" : (skip_locked ? " SKIP LOCKED" : "")
+  return "$(lock_sql)$(wait_sql) \n"
+end
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, conn::PormGSQLite)::String
+  return ""  # SQLite: no row-level locking — silent no-op (documented divergence, #26)
+end
+
 function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol,String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String; on_delete::Union{String,Nothing}=nothing)
   on_delete_clause = on_delete !== nothing ? " ON DELETE $on_delete" : ""
   return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause DEFERRABLE INITIALLY DEFERRED;"""

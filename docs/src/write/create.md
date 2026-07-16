@@ -4,7 +4,7 @@ PormG provides methods for inserting data into your database, from single rows t
 
 ## Single Record Creation
 
-Use the `.create()` method to insert individual records. It returns a `Dict` containing the newly created record, including any database-generated fields (like auto-increment primary keys).
+Use the `.create()` method to insert individual records. It returns a [`PormGRow`](../read/index.md) — the same row object `get()`, `first()`, and `list()` return — containing the newly created record, including any database-generated fields (like auto-increment primary keys). Because it's a `PormGRow`, you can read fields by dot-access or key, and mutate it and call `.save()` to persist further changes.
 
 ```julia
 # Load your models (preferred: hot-reload-friendly, self-registering)
@@ -25,14 +25,21 @@ RETURNING *
 
 ### Return Value
 
-The return value is a `Dict{Symbol, Any}` with all fields of the inserted record:
+The return value is a `PormGRow` carrying all fields of the inserted record. Read them by dot-access
+(`row.name`) or by key (`row[:name]`), exactly like a row from `get()`/`first()`:
 
 ```julia
-Dict{Symbol, Any} with 4 entries:
-  :id           => 172              # Auto-generated primary key
-  :name         => "test"
-  :test_result  => 1
-  :test_result2 => missing          # Null/unset fields show as missing
+new_record.id            # 172        (auto-generated primary key)
+new_record[:name]        # "test"
+new_record.test_result   # 1
+new_record[:test_result2] # missing   (null/unset fields show as missing)
+```
+
+Because it is a live row, you can also mutate it and persist the change:
+
+```julia
+new_record.test_result = 2
+new_record.save()        # UPDATE ... WHERE id = 172
 ```
 
 You can access returned values immediately:
@@ -128,7 +135,7 @@ record = M.Driver.objects.create(
     "dob" => Date(1997, 4, 1)
 )
 
-# The returned dict includes the generated ID
+# The returned row includes the generated ID
 generated_id = record[:driverid]
 ```
 

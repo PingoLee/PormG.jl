@@ -1096,6 +1096,16 @@ function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{F
 end
 
 function _get_join_condition_list(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection)
+  # #45: this correlated UPDATE-FROM / DELETE-USING path only builds equi-anchors and ignores
+  # on_conditions, so an anchor-less cjoin_on join would be emitted WITHOUT its ON (silently wrong).
+  # The common update/delete path scopes rows via a subquery that DOES render cjoin_on correctly;
+  # only this correlated path is unsupported — fail loudly rather than drop the join condition.
+  for join_dict in row_join
+    if get(join_dict, "no_anchor", "") == "1"
+      throw(_argerr("cjoin_on is not supported in a correlated UPDATE-FROM/DELETE-USING (setting a " *
+                    "column from a joined table); scope the mutation with a filter/subquery instead."))
+    end
+  end
   conditions = String[]
   for join_dict in row_join
     try

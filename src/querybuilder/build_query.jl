@@ -273,9 +273,14 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       original_alias = instruc.alias
       extras = String[]
 
+      no_anchor = get(value, "no_anchor", "") == "1"
       for condition in on_conditions
         condition_sql = _get_filter_query(condition, instruc)
-        condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
+        # #45: anchor-less cjoin_on conditions already carry explicit aliases (bare F = base alias,
+        # F("b2.col") = the joined copy), so skip the single-side base-alias remap the FK path needs.
+        if !no_anchor
+          condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
+        end
         push!(extras, condition_sql)
       end
 
@@ -336,17 +341,24 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       continue
     end
 
-    alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
-    key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
-    key_b_quoted = quote_identifier(value["key_b"], instruc.connection)
+    if get(value, "no_anchor", "") == "1"
+      # #45: anchor-less join — the ON clause is entirely the user's resolved extras (no equi-anchor).
+      extras = get(on_clause_extras, idx, String[])
+      isempty(extras) && throw(_argerr("cjoin_on produced no ON conditions for alias '$(value["alias_b"])'."))
+      on_clause = join(extras, " AND ")
+    else
+      alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
+      key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
+      key_b_quoted = quote_identifier(value["key_b"], instruc.connection)
 
-    # Build base ON clause
-    on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
+      # Build base ON clause
+      on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
 
-    # Append pre-resolved ON condition fragments
-    if haskey(on_clause_extras, idx)
-      for extra in on_clause_extras[idx]
-        on_clause *= " AND $extra"
+      # Append pre-resolved ON condition fragments
+      if haskey(on_clause_extras, idx)
+        for extra in on_clause_extras[idx]
+          on_clause *= " AND $extra"
+        end
       end
     end
 
@@ -395,6 +407,15 @@ function build(object::SQLObject;
       array = split(c_j |> Base.first, "__")
       push!(array, config["field"].pk_field)
       _build_row_join(array, instruct)
+    end
+  end
+
+  # #45: materialize anchor-less cjoin_on entries. They carry no FK "field", so the loop above skips
+  # them; build their row_join directly (no equi-anchor, explicit alias, user-supplied ON).
+  for c_j in object.custom_join
+    config = c_j |> Base.last
+    if (c_j |> Base.first) ∉ instruct.row_path && config isa Dict{String,Any} && get(config, "no_anchor", false) == true
+      _build_cjoin_on_row_join(config, c_j |> Base.first, instruct)
     end
   end
 

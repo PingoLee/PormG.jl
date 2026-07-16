@@ -1064,6 +1064,70 @@ end
 
 _like_escape_clause() = " ESCAPE '\\'"
 
+# ---
+# #27: JSON/JSONB support
+# ---
+
+# JSON path extraction as TEXT. `segments` are pre-validated (safe identifier charset or a
+# non-negative integer index) by `_validate_json_key_segments`, so interpolating them into the
+# path literal is injection-safe. A numeric segment is a JSON array index.
+function _json_extract_expr(::PormGPostgres, column::String, segments::Vector{String})::String
+  # `#>>` takes a text[] path and returns text; a numeric element indexes an array. Non-numeric
+  # keys are double-quoted so a key literally named `null`/`true`/`false` is a normal path element
+  # rather than an array-literal keyword (segments are pre-validated, so no escaping is needed).
+  parts = map(s -> tryparse(Int, s) === nothing ? "\"$s\"" : s, segments)
+  return string(column, " #>> '{", join(parts, ","), "}'")
+end
+function _json_extract_expr(::PormGSQLite, column::String, segments::Vector{String})::String
+  # SQLite JSONPath: numeric segment => [n] (array index); key => .key.
+  path = "\$" * join(map(s -> tryparse(Int, s) === nothing ? ".$s" : "[$s]", segments))
+  return string("json_extract(", column, ", '", path, "')")
+end
+
+# PostgreSQL JSONB containment/overlap operators (PG-only; SQLite + abstract throw a friendly
+# error, mirroring iunaccent_*). LibPQ binds `$N` placeholders, so a literal `?`/`?|`/`?&` here is
+# the jsonb operator, never a bind marker. The RHS placeholder already carries any needed cast
+# (`::jsonb` for @>, `::text[]` for ?|/?&) from add_parameter!.
+function jcontains(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) @> $(value)"                    # jsonb contains the given document
+end
+function jcontains(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+end
+function jcontains(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+end
+
+function has_key(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) ? $(value)"                     # top-level key exists
+end
+function has_key(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+end
+function has_key(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+end
+
+function has_any_keys(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) ?| $(value)"                    # any of the given keys exists
+end
+function has_any_keys(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+end
+function has_any_keys(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+end
+
+function has_keys(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) ?& $(value)"                    # all of the given keys exist
+end
+function has_keys(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+end
+function has_keys(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+end
+
 function contains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end

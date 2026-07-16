@@ -192,4 +192,43 @@ end
         @test_throws ArgumentError q.cjoin("driverid" => "Constructor", warn=false)
     end
 
+    @testset "cjoin_on self-join executes and correlates correctly (#45)" begin
+        # End-to-end proof that an anchor-less cjoin_on self-join actually FILTERS/correlates rows
+        # on a live database — not just that it renders. Self-join Result within one race to find
+        # teammates (same race + same constructor, different driver). The expected pair set is
+        # derived from the base data, so the assertion validates ON semantics without hard-coding.
+        raceid = 841
+        base = M.Result.objects.filter("raceid" => raceid).values("driverid", "constructorid") |> DataFrame
+
+        by_constructor = Dict{Any,Vector{Any}}()
+        for r in eachrow(base)
+            push!(get!(by_constructor, r.constructorid, Any[]), r.driverid)
+        end
+        expected_pairs = 0
+        drivers_with_teammate = Set{Any}()
+        for (_, drivers) in by_constructor
+            u = unique(drivers)
+            length(u) >= 2 || continue
+            expected_pairs += length(u) * (length(u) - 1)   # ordered (driver, teammate) pairs
+            union!(drivers_with_teammate, u)
+        end
+
+        q = M.Result.objects
+        q.cjoin_on("Result", alias = "b2", join_type = "INNER", on = [
+            Q(F("b2.raceid") == F("raceid"),
+              F("b2.constructorid") == F("constructorid"),
+              F("b2.driverid") != F("driverid")),
+        ])
+        q.filter("raceid" => raceid)
+        q.values("driverid")
+        got = q |> DataFrame
+
+        # There ARE teammates in this race (guards against a vacuously-true 0 == 0).
+        @test expected_pairs > 0
+        # INNER self-join yields exactly one row per (driver, teammate) ordered pair.
+        @test nrow(got) == expected_pairs
+        # Every base driver that appears is one that genuinely has a teammate in the race.
+        @test Set(got.driverid) == drivers_with_teammate
+    end
+
 end

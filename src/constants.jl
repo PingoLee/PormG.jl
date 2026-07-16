@@ -47,7 +47,18 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "startswith" => "startswith",
   "endswith" => "endswith",
   "range" => "BETWEEN",
+  # #27: PostgreSQL JSONB containment/overlap operators. Each maps to a Dialect renderer of the
+  # same name (PG emits the operator; SQLite/abstract throw a friendly PG-only error). Distinct
+  # from the LIKE `contains` above — a JSON `@>` and a string LIKE are different operations.
+  "jcontains" => "jcontains",         # @>  (jsonb contains the given document)
+  "has_key" => "has_key",             # ?   (top-level key exists)
+  "has_any_keys" => "has_any_keys",   # ?|  (any of the given keys exists)
+  "has_keys" => "has_keys",           # ?&  (all of the given keys exist)
 )
+
+# #27: the JSON containment/overlap operators, routed to a dedicated render branch in
+# _get_filter_query(::SQLTypeOper) and gated PostgreSQL-only.
+const JSON_CONTAINMENT_OPERATORS = ("jcontains", "has_key", "has_any_keys", "has_keys")
 
 const PormGtransform = Dict{String,Union{Int64, String}}(
   "date" => "DATE",

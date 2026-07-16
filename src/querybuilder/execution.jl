@@ -572,11 +572,14 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
                             parameters=parameters)
   end
 
-  # Execute safely
+  # Execute safely. create()/insert() return a PormGRow (#166) — the same object get()/first()/
+  # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
+  # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. RETURNING */SELECT *
+  # include every column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
   if connection isa PormGPostgres
     result = fetch(settings, sql * " RETURNING *;", parameters)
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model)
+    return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model), model)
   elseif connection isa PormGSQLite
     # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
     # indefinitely inside SQLite/libsqlite3 for some table shapes (observed: an
@@ -586,8 +589,14 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # first INSERT had already written the row. Instead: run a plain INSERT, then
     # read the full inserted row back with a SELECT on the SAME connection
     # (last_insert_rowid() is per-connection session state). Reading the whole row
-    # keeps the returned Dict consistent with the Postgres `RETURNING *` path —
+    # keeps the returned row consistent with the Postgres `RETURNING *` path —
     # all columns present, including nullable ones the caller did not set.
+    #
+    # The empty-rows fallback (read-back returned nothing, which should not happen after a
+    # successful INSERT) builds the dict from real_obj.insert only, so it may omit an unreserved
+    # AUTOINCREMENT pk. The wrapped PormGRow is still returned; if that degenerate row is later
+    # mutated and .save()d, save() throws a clear "required key" error — no regression over the
+    # previous incomplete-Dict return.
     do_insert = () -> begin
       fetch(settings, sql, parameters)
       rows = fetch(settings,
@@ -604,7 +613,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
       do_insert() : run_in_transaction(do_insert, settings)
 
     pk_exist && _update_sequence(model, connection, pk_field, settings)
-    return result_dict
+    return PormGRow(result_dict, model)
   else
     throw("Unsupported connection type")
   end

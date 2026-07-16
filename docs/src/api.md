@@ -58,14 +58,14 @@ These methods finalize the query and execute it against the database:
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching record or `nothing`. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
-| `.create(key => value, ...)` | `Dict` | Inserts a single record and returns it. |
+| `.create(key => value, ...)` | `PormGRow` | Inserts a single record and returns it as a row (dot-access + `.save()`). |
 | `.update(key => value, ...)` | — | Updates all matching records. |
 | `.update_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Row-level upsert: inserts on a fresh lookup or updates `defaults` on conflict; returns `(row, created)`. See [Update or Create](write/create.md#update-or-create). |
 | `.delete()` | — | Deletes all matching records. |
 
 ### `PormGRow` Instance Methods
 
-Rows returned by `.list()`, `.first()`, and `.get()` expose model-aware property access and instance-level persistence:
+Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_create()` expose model-aware property access and instance-level persistence:
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |

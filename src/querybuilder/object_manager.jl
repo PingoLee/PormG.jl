@@ -314,9 +314,9 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return () -> deepcopy(q)
 
   # === CATEGORY 2: Terminal methods (return result) ===
-  # End the chain. E.g.: query.create(...) returns a Dict.
+  # End the chain. E.g.: query.create(...) returns a PormGRow.
   elseif sym === :create
-    # `args...` is intentionally untyped: the execute path returns a Dict, while
+    # `args...` is intentionally untyped: the execute path returns a PormGRow (#166), while
     # show_query=:sql/:dict/:params/:none return String/Dict/Vector/nothing. A typed
     # signature would force the inspect contract to fork, so the return stays `Any`.
     return (args...; kwargs...) -> up_create!(q.object, args; kwargs...)

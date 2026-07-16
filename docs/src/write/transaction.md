@@ -12,6 +12,8 @@ Because every operation runs through the async core, even synchronous-looking co
 - [Bulk Operations in Transactions](#Bulk-Operations-in-Transactions)
 - [Multithreaded Work](#Multithreaded-Work)
 - [Error Handling and Rollback](#Error-Handling-and-Rollback)
+- [Nested Transactions and Savepoints](#Nested-Transactions-and-Savepoints)
+- [Row-Level Locking](#Row-Level-Locking)
 - [Lower-Level Helpers](#Lower-Level-Helpers)
 
 ---
@@ -434,6 +436,112 @@ end
 
 ---
 
+## Nested Transactions and Savepoints
+
+`run_in_transaction` and its friendly alias **`atomic`** are **reentrant**. Calling `atomic` again
+*inside* an already-open transaction on the **same** database does not open a second, independent
+transaction — it creates a **savepoint** on the same connection. If the nested block throws, only its
+savepoint is rolled back; the outer transaction stays alive and usable (catch the error *outside* the
+nested block to keep going). This mirrors Django's `atomic()`. `atomic(db)` and `run_in_transaction(db)`
+are interchangeable — `atomic` just reads better when you nest.
+
+```julia
+# Import a batch of race results; one malformed result must not abort the whole import.
+atomic("db_2") do
+  for row in incoming_results
+    try
+      atomic("db_2") do                          # nested → SAVEPOINT
+        M.Result.objects.create(
+          "raceid"        => row.raceid,
+          "driverid"      => row.driverid,
+          "positionorder" => row.position,
+          "points"        => row.points,
+        )
+      end
+    catch e
+      # Only this result rolled back to its savepoint; the outer import transaction continues.
+      @warn "Skipping malformed result" raceid = row.raceid exception = e
+    end
+  end
+end   # every result that didn't roll back commits together
+```
+
+Semantics:
+
+- The **outermost** `atomic` opens the real transaction (`BEGIN`); each **nested** `atomic` on the same
+  database opens a savepoint (`SAVEPOINT pormg_sp_<depth>`).
+- A nested block that returns normally **releases** its savepoint — its work stays part of the outer
+  transaction and is undone only if the **outer** transaction later rolls back.
+- A nested block that throws **rolls back to** its savepoint and re-raises, leaving the outer
+  transaction unaffected until the exception reaches it.
+- A nested `atomic` targeting a **different** database opens its own independent transaction.
+
+Savepoints behave **identically on PostgreSQL and SQLite** — both support `SAVEPOINT` /
+`RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` natively.
+
+Pass `durable = true` to assert a block is the outermost transaction; it raises if one is already active:
+
+```julia
+atomic("db_2"; durable = true) do
+  # guaranteed to be a real, top-level transaction — never a nested savepoint
+end
+```
+
+---
+
+## Row-Level Locking
+
+`select_for_update()` appends a `FOR UPDATE` clause so a read **locks** the selected rows until the
+surrounding transaction commits or rolls back — the standard guard for a safe read-modify-write.
+
+```julia
+# Read-modify-write a constructor's running points total without a lost update.
+atomic("db_2") do
+  standing = M.Constructor_standings.objects.
+    filter("constructorid" => 131, "raceid" => 1120).
+    select_for_update().                       # locks the matched rows until COMMIT
+    list() |> first
+
+  M.Constructor_standings.objects.
+    filter("constructorstandingsid" => standing[:constructorstandingsid]).
+    update("points" => standing[:points] + 25)
+end
+```
+
+Options (PostgreSQL):
+
+| Call | SQL | Meaning |
+|------|-----|---------|
+| `select_for_update()` | `FOR UPDATE` | Wait for conflicting locks to clear, then lock. |
+| `select_for_update(skip_locked = true)` | `FOR UPDATE SKIP LOCKED` | Skip rows another transaction already holds (claim-next-available pattern). |
+| `select_for_update(nowait = true)` | `FOR UPDATE NOWAIT` | Raise immediately if a matched row is already locked. |
+| `select_for_update(no_key = true)` | `FOR NO KEY UPDATE` | Weaker lock that still allows FK-referencing inserts. |
+
+`nowait` and `skip_locked` are mutually exclusive. On PostgreSQL a locked read **must run inside a
+transaction** — calling it under autocommit raises, because the lock would be released immediately.
+
+```julia
+# Process pit stops for a race, one worker at a time, skipping rows another worker already holds.
+atomic("db_2") do
+  next_stop = M.Pit_stops.objects.
+    filter("raceid" => 1120).
+    order_by("stop").
+    select_for_update(skip_locked = true).
+    list() |> first
+  # … process next_stop …
+end
+```
+
+!!! warning "Row locking on SQLite"
+    SQLite has no `SELECT ... FOR UPDATE`. On SQLite, `select_for_update()` is a **silent no-op** — no
+    lock clause is emitted and no error is raised, so identical query code runs on both backends (this
+    matches Django, SQLAlchemy, and Rails). SQLite already serializes writers per database file via
+    `BEGIN IMMEDIATE` (see [Multithreaded Work](#Multithreaded-Work)); if you need explicit
+    write-serialization there, rely on the transaction itself rather than a row lock. An `OF <table>`
+    target is not yet supported on either backend (a planned follow-up).
+
+---
+
 ## Lower-Level Helpers
 
 If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), PormG exposes:
@@ -444,6 +552,11 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
 - **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
 
 ### Example: Manual Savepoint
+
+!!! tip "Prefer nested `atomic` for savepoints"
+    For savepoints, reach for nested [`atomic`](#Nested-Transactions-and-Savepoints) — it manages the
+    `SAVEPOINT` / `RELEASE` / `ROLLBACK TO` lifecycle and naming for you, on both backends. The
+    hand-rolled version below is shown only to illustrate the underlying mechanics.
 
 ```julia
 import PormG.Configuration: with_tx_context, get_tx_connection
@@ -499,10 +612,12 @@ end
 
 | Pattern | Use Case |
 |---------|----------|
-| `run_in_transaction(settings) do ... end` | Most common; automatic commit/rollback |
+| `run_in_transaction(settings) do ... end` / `atomic(settings) do ... end` | Most common; automatic commit/rollback |
+| Nested `atomic` on the same database | Automatic savepoint; roll back part of the work without aborting the whole transaction |
+| `select_for_update()` | Lock rows for a safe read-modify-write (PostgreSQL; no-op on SQLite) |
 | Async tasks inside transaction | Spawn concurrent workers that share the connection |
 | Bulk operations inside transaction | Ensure all-or-nothing for large batch inserts/updates |
-| Manual `with_tx_context` + `with_transaction` | Fine-grained control; savepoints; multi-statement workflows |
+| Manual `with_tx_context` + `with_transaction` | Fine-grained control; hand-rolled multi-statement workflows |
 
-Start with `run_in_transaction` for all your database work. Drop to the lower-level helpers only when you need explicit savepoints or multi-database coordination.
+Start with `run_in_transaction`/`atomic` for all your database work. Nest `atomic` for savepoints. Drop to the lower-level helpers only for hand-rolled multi-statement workflows or multi-database coordination.
 

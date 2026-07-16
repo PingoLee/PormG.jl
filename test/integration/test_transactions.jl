@@ -525,4 +525,97 @@ settings = PormG.config[PORMG_DB_FOLDER]
     end
   end
 
+  # ============================================================================
+  # #26: Nested atomic → savepoints, and select_for_update row locking.
+  # Runs on BOTH backends (savepoints now work on SQLite too).
+  # ============================================================================
+
+  @testset "Nested atomic: inner rollback keeps the outer transaction (#26)" begin
+    # A failing inner atomic must roll back ONLY to its savepoint; caught outside the inner block,
+    # the outer transaction stays usable and its work (before AND after the failed savepoint)
+    # commits. Guards the SAVEPOINT / ROLLBACK-TO / RELEASE mechanics on both backends.
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    PormG.atomic(PORMG_DB_FOLDER) do
+      q = M.Just_a_test_deletion.objects
+      q.create("name" => "outer", "test_result" => nothing)      # outer work — must survive
+      try
+        PormG.atomic(PORMG_DB_FOLDER) do                          # nested → SAVEPOINT
+          M.Just_a_test_deletion.objects.create("name" => "inner", "test_result" => nothing)
+          error("force inner rollback")                           # → ROLLBACK TO SAVEPOINT
+        end
+      catch
+        # swallowed outside the inner block → outer transaction continues
+      end
+      q.create("name" => "after", "test_result" => nothing)       # outer keeps writing post-savepoint
+    end
+    # Outer committed: "outer" + "after" persisted; "inner" was undone by the savepoint rollback.
+    names = sort((M.Just_a_test_deletion.objects |> DataFrame).name)
+    @test names == ["after", "outer"]
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+  end
+
+  @testset "Nested atomic is part of the outer transaction (#26)" begin
+    # The discriminating test: a nested atomic that SUCCEEDS (releases its savepoint) is still part
+    # of the OUTER transaction. When the outer then rolls back, the inner row is undone too. If the
+    # nested block had (wrongly) opened an INDEPENDENT transaction, "inner" would have committed on
+    # its own connection and survived — the pre-#26 footgun this guards against.
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    got_error = false
+    try
+      PormG.atomic(PORMG_DB_FOLDER) do
+        M.Just_a_test_deletion.objects.create("name" => "outer", "test_result" => nothing)
+        PormG.atomic(PORMG_DB_FOLDER) do                          # nested savepoint that SUCCEEDS
+          M.Just_a_test_deletion.objects.create("name" => "inner", "test_result" => nothing)
+        end
+        error("force OUTER rollback after the inner savepoint released")
+      end
+    catch
+      got_error = true
+    end
+    @test got_error
+    # Both rows gone: the released inner savepoint was part of the outer tx, so the outer ROLLBACK
+    # undid it too. (Independent-transaction behavior would leave count == 1.)
+    @test M.Just_a_test_deletion.objects.count() == 0
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+  end
+
+  @testset "select_for_update row locking (#26)" begin
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    M.Just_a_test_deletion.objects.create("name" => "lockme", "test_result" => nothing)
+
+    if adapter_name == "PostgreSQL"
+      # A locked read inside a transaction renders FOR UPDATE and returns the row.
+      rows = PormG.atomic(PORMG_DB_FOLDER) do
+        q = M.Just_a_test_deletion.objects.filter("name" => "lockme")
+        q.select_for_update()
+        @test contains(q.list(show_query = :sql), "FOR UPDATE")
+        q.list()
+      end
+      @test length(rows) == 1
+
+      # skip_locked executes cleanly too (the "claim next available row" queue pattern).
+      claimed = PormG.atomic(PORMG_DB_FOLDER) do
+        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update(skip_locked = true).list()
+      end
+      @test length(claimed) == 1
+
+      # Guard: a locked read OUTSIDE a transaction fails loudly (autocommit-release footgun).
+      autocommit_err = try
+        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list(); nothing
+      catch e; e end
+      @test autocommit_err isa ArgumentError && occursin("transaction", autocommit_err.msg)
+    else
+      # SQLite: select_for_update is a pure no-op — returns rows normally and never raises,
+      # both inside and outside a transaction (the documented PG/SQLite divergence).
+      outside = M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list()
+      @test length(outside) == 1
+      inside = PormG.atomic(PORMG_DB_FOLDER) do
+        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update(skip_locked = true).list()
+      end
+      @test length(inside) == 1
+    end
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+  end
+
 end

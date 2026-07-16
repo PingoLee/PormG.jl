@@ -263,15 +263,36 @@ function query(q::SQLObjectHandler;
   if q.object.offset !== 0
     print(io, "OFFSET ", q.object.offset, " \n")
   end
-  
+
+  # #26: row-level locking clause (FOR UPDATE …) must follow ORDER BY / LIMIT / OFFSET. No-op on
+  # SQLite (Dialect.for_update_clause renders "" there). PostgreSQL rejects FOR UPDATE with
+  # DISTINCT, so fail early with a friendly message rather than a raw DB error.
+  let fu = q.object.for_update
+    if fu !== nothing
+      # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
+      # exempt — there the lock renders "" (pure no-op), so select_for_update never raises (#26).
+      if q.object.distinct && instruction.connection isa PormGPostgres
+        throw(_argerr("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
+      end
+      print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, instruction.connection))
+    end
+  end
+
   resposta = String(take!(io))
-  
+
   # Store the final parameters object with all CTEs + main query parameters
   q.object.parameters = instruction.parameters
-  
+
   if show_query !== :execute
-    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select; 
+    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
                             parameters=instruction.parameters)
+  end
+  # #26: a locked read executed OUTSIDE a transaction on PostgreSQL is a footgun — the lock is
+  # taken then immediately released at autocommit. Fail loudly (Django's TransactionManagementError
+  # analog). Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE
+  # without a live transaction. SQLite never locks (clause rendered ""), so it is exempt.
+  if q.object.for_update !== nothing && instruction.connection isa PormGPostgres && !in_transaction_context()
+    throw(_argerr("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
   end
   return resposta
 end

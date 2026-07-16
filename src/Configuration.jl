@@ -11,7 +11,7 @@ import PormG: backend_num_rows, backend_is_alive
 using Base.ScopedValues: ScopedValue, with
 
 export env, Settings, connection, close_pool!, get_settings
-export with_tx_context, in_transaction_context, register_connection, unregister_connection, set_connection_resolver
+export with_tx_context, in_transaction_context, current_transaction_depth, register_connection, unregister_connection, set_connection_resolver
 export set_before_connect_hook, ensure_before_connect!
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
@@ -119,6 +119,17 @@ Check if we're currently inside a transaction context.
 """
 function in_transaction_context()
   return _tx_context[].depth > 0
+end
+
+"""
+    current_transaction_depth() -> Int
+
+Return the current transaction nesting depth (`0` when not inside any transaction).
+The outermost `run_in_transaction`/`atomic` block is depth `1`; each nested savepoint
+block increments it. Used to derive deterministic, per-level savepoint names (#26).
+"""
+function current_transaction_depth()::Int
+  return _tx_context[].depth
 end
 
 function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn)

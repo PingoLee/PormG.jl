@@ -149,6 +149,18 @@ Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as
 # SQLObject Objects (main object to build a query)
 #
 
+# #26: row-level locking clause carried on a SELECT. `nothing` on the query means no lock;
+# a `ForUpdateClause` renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]` on PostgreSQL and is a
+# silent no-op on SQLite (which has no row-level locking). Immutable/set-once — the
+# `select_for_update!` mutator always builds a fresh clause, so it is shared by reference on copy.
+# (An `OF <table>` target is a deferred follow-up: it must name the query's generated FROM alias,
+# which is not yet exposed — see the row-locking follow-up issue.)
+struct ForUpdateClause
+  nowait::Bool
+  skip_locked::Bool
+  no_key::Bool                 # PostgreSQL: FOR NO KEY UPDATE (weaker lock, allows FK-referencing inserts)
+end
+
 mutable struct SQLObjectQuery <: SQLObject
   model::PormGModel
   connect_key::OptionalString # Override for multi-tenant scenarios
@@ -163,13 +175,14 @@ mutable struct SQLObjectQuery <: SQLObject
   list_joins::Vector{String} # is ther a better way to do this?
   row_join::Vector{Dict{String,Any}}
   distinct::Bool # Add distinct field
+  for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
   ctes::Dict{String,CTEDict}
   custom_join::Dict{String,Any}
   parameters::Union{Nothing,AbstractPormGParam}
 
   SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
-    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, ctes=Dict{String,CTEDict}(), custom_join=Dict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
-    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, ctes, custom_join, parameters) # Add ctes and custom_join to new
+    order=[], group=[], having=[], list_joins=[], row_join=[], distinct=false, for_update=nothing, ctes=Dict{String,CTEDict}(), custom_join=Dict{String,Any}(), parameters=nothing) = # Add ctes and custom_join to constructor
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, row_join, distinct, for_update, ctes, custom_join, parameters) # Add ctes and custom_join to new
 end
 
 function Base.deepcopy(obj::SQLObjectHandler)
@@ -239,6 +252,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
       list_joins=deepcopy(obj.list_joins),
       row_join=deepcopy(obj.row_join),
       distinct=obj.distinct,
+      for_update=obj.for_update,  # #26: immutable/set-once lock clause — share by reference (like distinct)
       ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (deep sub-query, drop transient "model")
       custom_join=_copy_custom_join(obj.custom_join)  # #112: fresh per-join dicts; "field" shared by ref (Module — deepcopy can't traverse)
     )

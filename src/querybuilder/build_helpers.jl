@@ -885,6 +885,13 @@ end
 function _get_filter_query(v::String, instruc::SQLInstruction)
   # V does not have be suffix
   contains(v, "@") && return _get_filter_query(split(v, "__@"), instruc)
+  # #45: alias-qualified reference "alias.column" for a cjoin_on joined copy. Only attempted when a
+  # dot is present and there is no join-path "__"; returns nothing (falls through) when the prefix is
+  # not a registered anchor-less alias, so ordinary field/path resolution is unaffected.
+  if occursin('.', v) && !occursin("__", v)
+    resolved = _resolve_cjoin_on_alias_column(v, instruc)
+    resolved !== nothing && return resolved
+  end
   parts = split(v, "__")
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
@@ -892,6 +899,22 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
     quoted_alias = quote_identifier(instruc.alias, instruc.connection)
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
   end
+end
+
+# #45: resolve "alias.column" against a `cjoin_on` (no_anchor) join declared on the query. Returns
+# the quoted "alias"."db_column" or nothing when `alias` is not a registered anchor-less alias.
+# Reads the target model from the custom_join config (row_join is String-typed and can't hold it).
+function _resolve_cjoin_on_alias_column(v::String, instruc::SQLInstruction)
+  parts = split(v, '.')
+  length(parts) == 2 || return nothing
+  alias, col = String(parts[1]), String(parts[2])
+  config = get(instruc.object.custom_join, alias, nothing)
+  (config isa Dict{String,Any} && get(config, "no_anchor", false) == true) || return nothing
+  target_model = getfield(instruc.object.model._module, Symbol(config["target_model"]::String))::PormGModel
+  (col in target_model.field_names) || throw(_argerr(
+    "cjoin_on: column '$(col)' not found on aliased model '$(target_model.name)' (alias '$(alias)')."))
+  return string(quote_identifier(alias, instruc.connection), ".",
+                quote_identifier(Models.field_db_column(target_model.fields[col], col), instruc.connection))
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc) # Does this have any coletaral efect?

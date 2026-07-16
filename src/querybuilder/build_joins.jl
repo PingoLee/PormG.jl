@@ -44,6 +44,33 @@ function _cache_join(field::String, instruct::SQLInstruction)
   return false
 end
 
+# #45 — materialize a `cjoin_on` entry into a row_join WITHOUT the FK-driven anchor path. The ON
+# clause is entirely user-provided (config["filters"]); no `main.key_a = joined.key_b` equi-anchor
+# is emitted (build_row_join_sql_text skips it when "no_anchor" == "1"). key_a/key_b are never
+# rendered for an anchor-less entry, but `_insert_join`'s dedup keys on (a, b, key_a, key_b, alias_a)
+# and NOT alias_b — so we set key_a to the unique user alias, otherwise two cjoin_on joins to the
+# same target model would collide and one would be silently dropped.
+function _build_cjoin_on_row_join(config::Dict{String,Any}, join_path::String, instruct::SQLInstruction)::Nothing
+  target_model = getfield(instruct.object.model._module, Symbol(config["target_model"]::String))::PormGModel
+  user_alias = config["user_alias"]::String
+  row_join = Dict{String,Union{String,Vector{FilterType}}}(
+    "a"         => instruct.object.model.name,
+    "alias_a"   => instruct.alias,
+    "b"         => target_model.name,
+    "alias_b"   => user_alias,
+    "key_a"     => user_alias,   # dedup discriminator (never rendered for no_anchor)
+    "key_b"     => "",
+    "how"       => (get(config, "join_type", "INNER"))::String,
+    "no_anchor" => "1",
+  )
+  filters = get(config, "filters", nothing)
+  if filters isa Vector{FilterType} && !isempty(filters)
+    row_join["on_conditions"] = filters
+  end
+  _insert_join(instruct.row_join, row_join, instruct.row_path, join_path)
+  return nothing
+end
+
 function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruction; as::Bool=true)
   # convert the field to a vector of string
   vector = String.(field)

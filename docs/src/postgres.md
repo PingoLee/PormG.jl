@@ -46,11 +46,43 @@ end
 
 Waiting strategies (`:poll` vs `:block`), timeouts, and async safety: **[Advisory Locks](advisory_lock.md)**.
 
+## PostgreSQL-native storage types
+
+These field types work on both backends, but PostgreSQL gives them a **native, indexable representation** that SQLite (which stores them as text) cannot match — worth choosing PostgreSQL for when the workload leans on them.
+
+### `JSONField` — `JSONB` vs `TEXT`
+
+```julia
+Race_config = Models.Model("race_configs",
+  id = Models.IDField(),
+  settings = Models.JSONField(),
+  metadata = Models.JSONField(null=true, blank=true),
+)
+```
+
+- **PostgreSQL** stores it as `JSONB` — binary, queryable, and **indexable** (GIN indexes, containment operators, key extraction).
+- **SQLite** stores it as a `TEXT` JSON string — fine for round-tripping a blob, but without server-side JSON indexing/querying.
+
+### `UUIDField` — native `UUID` vs `TEXT`
+
+```julia
+Api_token = Models.Model("api_tokens",
+  id = Models.IDField(),
+  token = Models.UUIDField(unique=true, auto_add=true),  # auto_add ⇒ uuid4() on create
+)
+```
+
+- **PostgreSQL** uses the native `UUID` type (compact 16-byte storage, type-checked).
+- **SQLite** stores the canonical 8-4-4-4-12 string as `TEXT`.
+- `auto_add=true` generates a `uuid4()` application-side on insert, so identity is the same on both backends.
+
+Full parameter reference and validation rules: **[Fields → JSON](fields.md) / [UUID](fields.md#UUID-Fields)**.
+
 ## Advanced SQL (both backends, PostgreSQL-first)
 
 These run on SQLite too, but they are where PostgreSQL shines for analytical work. Reach for them before dropping to raw SQL:
 
-- **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)` frames.
+- **[Window Functions](read/window_functions.md)** — `Rank`, `Lag`, `Lead`, `LastValue`, … over `WindowOver(partition_by=…, order_by=…)`. The default frame works on both backends; **explicit frame clauses** (`frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"`, which change `LastValue`/`NthValue` semantics) are **PostgreSQL-only** — SQLite supports only the default frame.
 - **[Subqueries and CTEs](read/subqueries_and_ctes.md)** — `.with(...)`, correlated subqueries, `Exists`/`OuterRef`, and CTE joins.
 - **[Filters and Aggregates](read/filters_and_aggregates.md)** and **[Functions and Dates](read/functions_and_dates.md)** — the `Sum`/`Count`/`Max`, date-bucket, and SQL-function surface.
 - **[Field Expressions](read/field_expressions.md)** — `F("...")` database-side arithmetic and field-to-field comparisons.
@@ -67,12 +99,16 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **PK allocation** | real sequences (`nextval`) | emulated via `sqlite_sequence` high-water mark |
 | **Drop a constraint (migrations)** | `ALTER TABLE … DROP CONSTRAINT` | full table rebuild (SQLite has no `DROP CONSTRAINT`) |
 | **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax |
+| **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
+| **`UUIDField` storage** | native `UUID` | `TEXT` |
+| **Window frames** | explicit `frame=` clauses | default frame only |
 
 Notes:
 
 - **Placeholders.** The generated SQL uses `$1`/`$2` on PostgreSQL and `?` on SQLite. Doc SQL blocks conventionally show the PostgreSQL form; the shape is otherwise identical. You never write placeholders yourself — parameters are always bound, never interpolated.
 - **DateTime is canonicalized to UTC.** `DateTimeField` values are stored as a single UTC ISO-8601 string on both backends (see the `#79` entry in `UPGRADING.md`); prefer `ZonedDateTime` when the source has a real civil timezone.
 - **Primary-key allocation** (`allocate_primary_keys`) presents one API over both backends; PostgreSQL reserves ids via the column sequence, SQLite emulates the same reservation. See [Bulk Insert, Copy, and Update](write/bulk.md).
+- **Sequence resync.** After inserting rows with *explicit* primary keys, PostgreSQL's sequence can fall behind, so a later auto-id insert collides. PormG resynchronizes the sequence for you on the write path (and retries a duplicate-key insert once by resyncing) — a class of "duplicate key" surprise that doesn't exist on SQLite's `AUTOINCREMENT`.
 
 ## Production notes
 

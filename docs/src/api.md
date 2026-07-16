@@ -60,6 +60,7 @@ These methods finalize the query and execute it against the database:
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
 | `.create(key => value, ...)` | `Dict` | Inserts a single record and returns it. |
 | `.update(key => value, ...)` | — | Updates all matching records. |
+| `.update_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Row-level upsert: inserts on a fresh lookup or updates `defaults` on conflict; returns `(row, created)`. See [Update or Create](write/create.md#update-or-create). |
 | `.delete()` | — | Deletes all matching records. |
 
 ### `PormGRow` Instance Methods

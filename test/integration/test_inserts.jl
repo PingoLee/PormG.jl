@@ -878,3 +878,60 @@ end
         q.exists() && q.delete()
     end
 end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# update_or_create (#30)
+#
+# Row-level Django-style upsert: match on the lookup pair(s) (the ON CONFLICT target),
+# INSERT on a fresh key, DO UPDATE the `defaults` on a conflict. Returns (PormGRow, created).
+# PostgreSQL derives `created` from RETURNING (xmax = 0); SQLite from a pre-check inside its
+# serialized write lock. Same assertions run on both backends. Uses M.Status (pk statusid).
+#
+# NOTE: a composite (multi-column) conflict target is covered at the unit level (SQL rendering in
+# test/unit/test_update_or_create.jl). An end-to-end multi-column case needs a model with a real
+# composite UNIQUE/PK (a `Models.UniqueConstraint` / unique_together), which the integration
+# fixtures don't yet declare — deferred as a prerequisite follow-up rather than silently skipped.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "update_or_create (#30)" begin
+    status_id = 340001
+    created_pk = Ref{Union{Nothing, Int}}(nothing)
+    q = M.Status.objects.filter("statusid" => status_id)
+    q.exists() && q.delete()
+
+    try
+        # 1. Fresh key → INSERT, created == true, PormGRow returned with the inserted value.
+        row, created = M.Status.objects.update_or_create(
+            "statusid" => status_id; defaults = ["status" => "Created"])
+        @test created === true
+        @test row isa PormG.QueryBuilder.PormGRow
+        @test row.statusid == status_id                 # dot-access (PormGRow, like get())
+        @test row.status == "Created"
+        @test M.Status.objects.filter("statusid" => status_id).count() == 1
+
+        # 2. Same key, new defaults → DO UPDATE, created == false, value merged, count unchanged.
+        row2, created2 = M.Status.objects.update_or_create(
+            "statusid" => status_id; defaults = ["status" => "Updated"])
+        @test created2 === false
+        @test row2.status == "Updated"
+        @test M.Status.objects.filter("statusid" => status_id).count() == 1
+        persisted = M.Status.objects.filter("statusid" => status_id).values("status").list() |> first
+        @test persisted[:status] == "Updated"
+
+        # 3. The returned PormGRow round-trips through .save() (further edits persist).
+        row2.status = "Collision"
+        row2.save()
+        reread = M.Status.objects.filter("statusid" => status_id).values("status").list() |> first
+        @test reread[:status] == "Collision"
+
+        # 4. Sequence consistency: after the explicit-pk upsert, a pk-less create() must not collide.
+        next_row = M.Status.objects.create("status" => "Seq Check (#30)")
+        created_pk[] = next_row[:statusid]
+        @test next_row[:statusid] isa Integer
+        @test next_row[:statusid] != status_id
+    finally
+        cleanup_ids = created_pk[] === nothing ? [status_id] : [status_id, created_pk[]]
+        q = M.Status.objects.filter("statusid__@in" => cleanup_ids)
+        q.exists() && q.delete()
+    end
+end

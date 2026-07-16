@@ -1299,6 +1299,12 @@ include("models/fields.jl")
 is_many_to_many_field(::PormGField)::Bool = false
 is_many_to_many_field(::sManyToManyField)::Bool = true
 
+# #27: type predicate for JSON/JSONB columns, mirroring is_many_to_many_field. Used by the
+# querybuilder to (a) treat a non-terminal JSON field path as a value extraction (data__key)
+# rather than a join hop, and (b) gate the JSON containment operators (@>, ?, ?|, ?&).
+is_json_field(::PormGField)::Bool = false
+is_json_field(::sJSONField)::Bool = true
+
 function _model_reference_name(model_ref::Union{String, PormGModel})::String
   return model_ref isa PormGModel ? model_ref.name : String(model_ref)
 end

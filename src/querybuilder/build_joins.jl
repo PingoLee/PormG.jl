@@ -176,8 +176,37 @@ function _apply_many_to_many_branch(
   return (tb_alias, row_join, foreign_model, last_field)
 end
 
+# #27: validate JSON path key segments fail-closed. A segment is either a non-negative integer
+# (JSON array index) or a safe identifier (SAFE_IDENTIFIER_PATTERN — the same contract as SQL
+# identifiers). Anything else (spaces, dots, quotes, braces, empty) is rejected, so the validated
+# segments are safe to interpolate into the path literal. Returns the segments unchanged.
+function _validate_json_key_segments(segments::Vector{String})::Vector{String}
+  for seg in segments
+    if occursin(r"^\d+$", seg) || occursin(SAFE_IDENTIFIER_PATTERN, seg)
+      continue
+    end
+    throw(_argerr("Invalid JSON key segment \e[31m$(seg)\e[0m in a JSON path lookup. Segments must be a non-negative integer (array index) or a simple key (letters, digits, underscore). Keys with spaces, dots, or quotes are not addressable via the `__` path syntax."))
+  end
+  return segments
+end
+
+# #27: render a JSON path lookup (e.g. `payload__driver`, `payload__0__name`) as a TEXT extraction
+# on the resolved column. The base field is a non-terminal JSONField, so the trailing segments are
+# a value path, not join hops. Records the resolved path in json_lookup_cache (so the filter-render
+# branch binds the RHS as plain text) and tab_field_cache (so downstream sees the base field type).
+function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field::PormGField,
+    field_name::String, key_segments::Vector{String}, full_field::Vector{String})::String
+  segs = _validate_json_key_segments(key_segments)
+  col = string(quote_identifier(alias, instruct.connection), ".",
+               quote_identifier(Models.field_db_column(json_field, field_name), instruct.connection))
+  path = join(full_field, "__")
+  instruct.json_lookup_cache[path] = (json_field, segs)
+  instruct.tab_field_cache[path] = json_field
+  return Dialect._json_extract_expr(instruct.connection, col, segs)
+end
+
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
-  vector = copy(field) 
+  vector = copy(field)
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
   row_join = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
@@ -188,6 +217,17 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   last_field::Union{Nothing, PormGField} = nothing
   join_path = field[1]
   m2m_inserted = false
+
+  # #27: a non-terminal JSON base field is a value extraction (`payload__key`, `payload__0__name`),
+  # not a join hop. Fire before the CTE/FK cascade — otherwise `payload` enters the forward-FK
+  # branch and crashes in `_determine_join_type` (a JSONField has no `.how`). A TERMINAL JSON field
+  # (length == 1) is left to resolve as a plain jsonb column (the target of the containment operators).
+  if haskey(instruct.object.model.fields, first_column) &&
+     Models.is_json_field(instruct.object.model.fields[first_column]) &&
+     length(vector) > 1
+    return _render_json_lookup(instruct, instruct.alias,
+      instruct.object.model.fields[first_column], first_column, String.(vector[2:end]), field)
+  end
 
   # Check if first_column references a CTE table
   if haskey(instruct.object.ctes, vector[1])
@@ -368,6 +408,13 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     join_path = join(field[1:length(field)-length(vector) + 1], "__")
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
     first_column = _resolve_django_join_field(new_object, vector[1], instruct)
+
+    # #27: a non-terminal JSON field reached through FK joins (e.g. `fk__payload__key`) is a value
+    # extraction on the joined table's alias, not a further hop. size(vector) > 1 here, so the
+    # trailing segments are a JSON path.
+    if haskey(new_object.fields, first_column) && Models.is_json_field(new_object.fields[first_column])
+      return _render_json_lookup(instruct, tb_alias, new_object.fields[first_column], first_column, String.(vector[2:end]), field)
+    end
 
     # Create a new Dict for this join to avoid mutating previously inserted joins
     prev_how = row_join["how"]

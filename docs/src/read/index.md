@@ -62,7 +62,7 @@ n = query.count()      # => 42
 has_any = query.exists()  # => true
 ```
 
-Rows returned by `.list()`, `.first()`, and `.get()` are `PormGRow` values. They support property access, indexed access, many-to-many relationship accessors, and dirty tracking for `row.save()`:
+Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_create()` are `PormGRow` values. They support property access, indexed access, many-to-many relationship accessors, and dirty tracking for `row.save()`:
 
 ```julia
 driver = M.Driver.objects.get("driverref" => "hamilton")

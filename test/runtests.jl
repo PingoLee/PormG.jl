@@ -57,6 +57,7 @@ end
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
     @testset "bulk_insert ON CONFLICT (#123)" include("unit/test_bulk_on_conflict.jl")
     @testset "update_or_create (#30)" include("unit/test_update_or_create.jl")
+    @testset "create() returns PormGRow (#166)" include("unit/test_create_returns_pormgrow.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")
     @testset "PG Migration Fixture Isolated + Credential-free (#36)" include("unit/test_migration_pg_fixture.jl")

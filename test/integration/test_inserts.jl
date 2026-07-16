@@ -209,15 +209,17 @@ end
 @testset "Insertion Result Semantics" begin
     label = "insert-return-semantics-9901"
 
-    # Clean any residual row from a prior run.
-    M.Django_contract_scratch.objects.filter("label" => label).exists() &&
-        M.Django_contract_scratch.objects.filter("label" => label).delete()
+    # Clean any residual row from a prior run — both the base label and the "-saved" form the
+    # .save() step below produces (label is unique, so a leaked "-saved" row would break save()).
+    residual = M.Django_contract_scratch.objects.filter("label__@in" => [label, label * "-saved"])
+    residual.exists() && residual.delete()
 
     try
         result = M.Django_contract_scratch.objects.create("label" => label)
 
-        # create() must return a Dict, not nothing or an integer row-count.
-        @test result isa Dict
+        # create() must return a PormGRow (#166) — the same object get()/first()/list() return,
+        # not nothing or an integer row-count. Field access still works via delegation.
+        @test result isa PormG.QueryBuilder.PormGRow
 
         # The server-generated primary key must be present and positive.
         # IDField maps to SERIAL (PostgreSQL) / AUTOINCREMENT (SQLite), so the
@@ -226,7 +228,7 @@ end
         @test result[:id] isa Integer
         @test result[:id] > 0
 
-        # auto_now_add (DateTimeField) must be populated in the returned dict.
+        # auto_now_add (DateTimeField) must be populated in the returned row.
         # Returning nothing here would break ETL code that reads created_at
         # from the create() result instead of fetching it again.
         @test haskey(result, :created_at)
@@ -236,9 +238,10 @@ end
         @test haskey(result, :updated_at)
         @test result[:updated_at] !== nothing && !ismissing(result[:updated_at])
 
-        # The value we explicitly passed must be echoed back correctly.
+        # The value we explicitly passed must be echoed back correctly (dot-access too).
         @test haskey(result, :label)
         @test result[:label] == label
+        @test result.label == label     # PormGRow dot-access
 
         # Cross-verify: re-read the row and confirm the returned id matches the DB id.
             row = M.Django_contract_scratch.objects.filter(
@@ -248,9 +251,16 @@ end
             ).list() |> first
         @test row[:id] == result[:id]
 
+        # #166: the created PormGRow round-trips through .save() — mutate then persist.
+        result.label = label * "-saved"
+        result.save()
+        reread = M.Django_contract_scratch.objects.filter("id" => result[:id]).values("label").list() |> first
+        @test reread[:label] == label * "-saved"
+
     finally
-        M.Django_contract_scratch.objects.filter("label" => label).exists() &&
-            M.Django_contract_scratch.objects.filter("label" => label).delete()
+        # The .save() above renamed the label, so clean up both the original and the "-saved" form.
+        cleanup = M.Django_contract_scratch.objects.filter("label__@in" => [label, label * "-saved"])
+        cleanup.exists() && cleanup.delete()
     end
 end
 
@@ -282,8 +292,8 @@ end
             "slug"          => slug
         )
 
-        # The return value must be a Dict, not nothing.
-        @test result isa Dict
+        # The return value must be a PormGRow (#166), not nothing.
+        @test result isa PormG.QueryBuilder.PormGRow
 
         # The auto-incremented id must be present and positive.
         @test haskey(result, :id)

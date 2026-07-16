@@ -952,8 +952,8 @@ df = query |> DataFrame
 active_users = query.count()
 
 # 3) Inserting a single row
-new = M.Status.objects.create("statusid" => 42, "status" => "Foo")  
-# returns a Dict of the inserted row
+new = M.Status.objects.create("statusid" => 42, "status" => "Foo")
+# returns a PormGRow of the inserted row (dot-access + .save())
 
 # 4) Updating a single row
 M.Status.objects.filter("statusid" => 42).update("status" => "Bar")

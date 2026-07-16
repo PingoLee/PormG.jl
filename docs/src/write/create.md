@@ -140,6 +140,49 @@ RETURNING *
 -- Parameters: ["Max", "Verstappen", "Dutch", "max_verstappen", '1997-04-01']
 ```
 
+## Update or Create
+
+`update_or_create` is a Django-style row-level upsert: it inserts a row when the lookup doesn't exist yet, or updates it when it does — in a single atomic `INSERT ... ON CONFLICT ... DO UPDATE` statement (PostgreSQL and SQLite ≥ 3.24). It returns a `(row, created)` tuple, where `row` is a [`PormGRow`](../read/index.md) (dot-access + `.save()`, just like `get()`/`first()`) and `created` is `true` when a new row was inserted, `false` when an existing one was updated.
+
+```julia
+# Idempotently seed a status: insert it the first time, refresh its label on re-runs.
+row, created = M.Status.objects.update_or_create(
+    "statusid" => 3;                       # lookup — becomes the ON CONFLICT target
+    defaults = ["status" => "Accident"],   # SET on a conflict, and merged into the INSERT
+)
+
+if created
+    @info "inserted" row.status
+else
+    @info "updated existing" row.status
+end
+
+# The returned PormGRow can be edited and re-saved (further round-trip):
+row.status = "Collision"
+row.save()
+```
+
+**Generated SQL (PostgreSQL):**
+```sql
+INSERT INTO "status" ("statusid", "status")
+VALUES ($1, $2)
+ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
+RETURNING *, (xmax = 0) AS "__pormg_created"
+-- Parameters: [3, "Accident"]
+```
+
+`(xmax = 0)` is how PostgreSQL reports whether the row was freshly inserted (`created = true`) or updated (`false`); PormG strips that sentinel column from the returned row.
+
+**On SQLite** the statement is the same `INSERT ... ON CONFLICT ... DO UPDATE` **without** `RETURNING` (which PormG avoids on SQLite — see the note in the single-record section). `created` is derived from a pre-check + read-back run inside SQLite's serialized write transaction (`BEGIN IMMEDIATE` + the writer lock), so it is exact under the writer serialization that always guards writes.
+
+### Rules and behavior
+
+- **Lookup → conflict target.** The lookup pair(s) identify the row and become the `ON CONFLICT (...)` columns. A composite key is fully supported — pass several lookup pairs: `update_or_create("year" => 2024, "round" => 8; defaults = [...])`. The target must be backed by a real UNIQUE/PRIMARY KEY constraint in the database (PormG does not require it to be declared on the model — the database is the source of truth; a missing constraint surfaces as the backend's own error).
+- **`defaults` is required** and is the DO UPDATE `SET`. Fields in `defaults` are also merged into the INSERT. `update_or_create` always updates on conflict; a no-update *get-or-create* is a planned follow-up.
+- **Lookup and `defaults` must not overlap** — each field is either a match key or an updated value, never both.
+- **`auto_now` fields refresh on the update arm.** Any field with `auto_now = true` is appended to the SET so a conflict updates its timestamp (matching `.save()`/`.update()`); `auto_now_add` fields are create-only and are not refreshed.
+- **Field names are logical.** `db_column` mappings are resolved to the physical column names in the rendered SQL.
+
 ## Creating with Relationships
 
 To create a record with a `ForeignKey` relationship, you need the ID of the related record. You can either:

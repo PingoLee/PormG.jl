@@ -43,6 +43,53 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Row-level `update_or_create` (Django-style upsert)
+
+- **PormG ref**: issue #30 ; `src/querybuilder/execution.jl`, `src/querybuilder/object_manager.jl`
+- **Recorded**: 2026-07-15
+- **Severity**: new feature — **additive, non-breaking**. No existing API changed; no forced code edit.
+
+### What changed
+
+`M.Model.objects.update_or_create(lookup...; defaults=[...])` performs a single-row upsert built on
+the `ON CONFLICT` renderer from #123. The lookup pair(s) are the conflict target; `defaults` are set
+on conflict and merged into the insert. It returns `(row, created::Bool)`, where `row` is a `PormGRow`
+(dot-access + `.save()`, like `get()`) and `created` distinguishes insert from update (PostgreSQL via
+`RETURNING (xmax = 0)`; SQLite via a pre-check in its serialized write lock).
+
+```julia
+row, created = M.Status.objects.update_or_create(
+    "statusid" => 3; defaults = ["status" => "Accident"])
+```
+
+Requires the lookup columns to be backed by a UNIQUE/PRIMARY KEY constraint in the database.
+`auto_now` fields refresh on the update arm. See [Update or Create](docs/src/write/create.md#update-or-create).
+
+### How to find the calls to migrate
+
+Nothing breaks — purely additive. **Optional adoption:** replace hand-rolled get-then-create/update
+blocks (a `filter(...).exists()` followed by `create()` or `update()`) with a single
+`update_or_create`, which is atomic and race-free.
+
+```
+grep -rn "exists()" src/ | grep -iE "create|update"
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | optional — replace get-then-create/update blocks with `update_or_create` |
+| app-2 | ⏳ | optional |
+| app-3 | ⏳ | optional |
+| app-4 | ⏳ | optional |
+
+> **Note (pre-publish):** `create()`/`insert()` still return a `Dict` while `update_or_create()` (and
+> `get()`/`first()`/`save()`) return a `PormGRow`. That inconsistency is tracked for a decision before
+> publish in [#166](https://github.com/PingoLee/PormG.jl/issues/166).
+
+---
+
 ## `bulk_insert` conflict handling via `on_conflict=` (ON CONFLICT)
 
 - **PormG ref**: issue #123 ; `src/querybuilder/execution_bulk.jl`, `src/Dialect.jl`

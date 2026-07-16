@@ -429,27 +429,16 @@ function _row_to_field_keyed_dict(row, model::PormGModel)::Dict{Symbol,Any}
   return Dict{Symbol,Any}(get(rev, string(k), Symbol(k)) => v for (k, v) in pairs(row))
 end
 
-function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
-real_obj = objct isa SQLObjectHandler ? objct.object : objct
-  model = real_obj.model
-  ensure_model_transaction_scope(model)
-  
-  # Resolve settings
-  settings, connection, conn_key = get_settings(objct, connection=connection)
-  
-  # colect name of the fields
+# Shared row-level INSERT marshalling, extracted from insert() (#30) so insert() and
+# _update_or_create() build the identical VALUES body from one place. Fills each missing field
+# (default → auto_now/auto_now_add → UUID → skip-if-null-or-pk → else error), reserves a SQLite id
+# when the transaction pre-allocated one, then validates every field and collects the quoted physical
+# columns and bound params. MUTATES `real_obj.insert` (fills) and `parameters` (binds). Returns
+# (quoted_field_columns, param_values, pk_exist, pk_field). The change_data guard stays with the
+# caller so it fires before any fill.
+function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection, parameters)
   fields = model.field_names
 
-  # Collect column names and parameter values
-  quoted_field_columns = []
-  param_values = []
-  parameters = get_parameter(connection)
-  # For INSERT, all params go into :select bucket (VALUES clause is the only positioned section)
-  set_context!(parameters, :select)
-  
-  # check if is allowed to insert
-  !settings.change_data && throw(_argerr("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
-  
   # check if the fields are in objct.insert
   for field in fields
     if !haskey(real_obj.insert, field)
@@ -484,6 +473,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     end
   end
 
+  quoted_field_columns = []
+  param_values = []
   pk_exist::Bool = false
   pk_field::Vector{String} = []
   for field in keys(real_obj.insert)
@@ -501,8 +492,31 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formater))
 
   end
- 
-  # TODO: insert a function to handle with the different types of connection and modulate the code
+
+  return quoted_field_columns, param_values, pk_exist, pk_field
+end
+
+function insert(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
+real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
+  ensure_model_transaction_scope(model)
+  
+  # Resolve settings
+  settings, connection, conn_key = get_settings(objct, connection=connection)
+  
+  # Collect column names and parameter values
+  parameters = get_parameter(connection)
+  # For INSERT, all params go into :select bucket (VALUES clause is the only positioned section)
+  set_context!(parameters, :select)
+
+  # check if is allowed to insert
+  !settings.change_data && throw(_argerr("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+
+  # Fill defaults/auto_now/auto_now_add/UUID, reserve SQLite ids, validate, and collect the quoted
+  # physical columns + bound VALUES params. Shared with _update_or_create (#30) so both build the
+  # identical INSERT body from one place.
+  quoted_field_columns, param_values, pk_exist, pk_field =
+    _prepare_row_insert!(real_obj, model, settings, connection, parameters)
 
   # construct the SQL statement
   safe_table_name = safe_table_identifier(string(model.name), connection)
@@ -556,6 +570,111 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     throw("Unsupported connection type")
   end
 
+end
+
+# Row-level upsert (#30) behind `objects.update_or_create`. Builds the same INSERT body as insert()
+# via _prepare_row_insert!, appends `ON CONFLICT (target) DO UPDATE SET set…` (reusing #123's
+# Dialect.on_conflict_clause), and returns `(PormGRow, created::Bool)`.
+#
+# `target_fields` (the lookup keys) and `set_fields` (defaults + auto_now) are LOGICAL field names,
+# resolved to quoted physical columns here (like bulk_insert). Caller (up_update_or_create!) has
+# already merged lookup+defaults into real_obj.insert and validated the fields.
+#
+# created detection per backend:
+#   PostgreSQL — single atomic `... RETURNING *, (xmax = 0) AS "__pormg_created"`; xmax = 0 ⇒ inserted.
+#   SQLite     — RETURNING is avoided (see insert()) and last_insert_rowid() is unreliable on DO
+#                UPDATE, so: pre-check existence by the target, run the upsert, read the row back by
+#                the target — all on one pinned connection under BEGIN IMMEDIATE + the writer lock,
+#                which serializes writers so `existed` is race-free.
+function _update_or_create(objct::SQLObject; target_fields::Vector{String},
+    set_fields::Vector{String}, show_query::Symbol = :execute)
+  real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
+  ensure_model_transaction_scope(model)
+
+  settings, connection, conn_key = get_settings(objct)
+
+  parameters = get_parameter(connection)
+  set_context!(parameters, :select)
+
+  !settings.change_data && throw(_argerr("Error in update_or_create, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+
+  quoted_field_columns, param_values, pk_exist, pk_field =
+    _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+
+  safe_table_name = safe_table_identifier(string(model.name), connection)
+
+  # Logical → quoted physical (db_column-aware), exactly as bulk_insert renders its clause.
+  qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
+  qset    = String[quote_identifier(Models.model_column(model, f), connection) for f in set_fields]
+  clause  = Dialect.on_conflict_clause(:update, qtarget, qset, connection)
+
+  sql = """
+  INSERT INTO $(safe_table_name) (
+    $(join(quoted_field_columns, ", "))
+  ) VALUES (
+    $(join(param_values, ", "))
+  )
+  $(clause)
+  """
+
+  if connection isa PormGPostgres
+    # Atomic upsert; `(xmax = 0)` distinguishes the inserted vs updated tuple version.
+    exec_sql = sql * " RETURNING *, (xmax = 0) AS \"__pormg_created\";"
+    if show_query !== :execute
+      return _show_query_result(show_query, exec_sql, connection, model.name, :insert; parameters=parameters)
+    end
+    result = fetch(settings, exec_sql, parameters)
+    dict = _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model)
+    # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
+    created_raw = pop!(dict, Symbol("__pormg_created"), false)
+    created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
+    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    return (PormGRow(dict, model), created)
+
+  elseif connection isa PormGSQLite
+    if show_query !== :execute
+      # Honest to what executes: INSERT + ON CONFLICT, no RETURNING (created detection is out-of-band).
+      return _show_query_result(show_query, sql, connection, model.name, :insert; parameters=parameters)
+    end
+
+    # Conflict-target WHERE on the physical target columns. The placeholder is a positional `?`
+    # (this branch is SQLite-only), so the WHERE text is stable and is built once; the pre-check and
+    # read-back each bind a FRESH parameter object (no cross-fetch reuse). The bound values are the
+    # formatted lookup values — matching exactly what the INSERT bound.
+    target_where = join(
+      ["$(quote_identifier(Models.model_column(model, f), connection)) = ?" for f in target_fields],
+      " AND ")
+    precheck_sql = "SELECT 1 FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
+    readback_sql = "SELECT * FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
+    make_target_params = () -> begin
+      tp = get_parameter(connection)
+      set_context!(tp, :where)
+      for f in target_fields
+        add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formater)
+      end
+      tp
+    end
+
+    do_upsert = () -> begin
+      existed = !isempty(fetch(settings, precheck_sql, make_target_params()) |> Tables.rowtable)
+      fetch(settings, sql, parameters)
+      rows = fetch(settings, readback_sql, make_target_params()) |> Tables.rowtable
+      dict = isempty(rows) ?
+        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
+        _row_to_field_keyed_dict(rows[1], model)
+      (dict, !existed)
+    end
+
+    # Pre-check + upsert + read-back must share one connection under one BEGIN IMMEDIATE.
+    dict, created = transaction_connection_for(settings) !== nothing ?
+      do_upsert() : run_in_transaction(do_upsert, settings)
+
+    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    return (PormGRow(dict, model), created)
+  else
+    throw("Unsupported connection type")
+  end
 end
 
 function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)

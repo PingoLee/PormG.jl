@@ -86,6 +86,69 @@ function up_update!(q::SQLObject, values; kwargs...)
   return update(q, show_query=show_query)
 end
 
+# Coerce a lookup/defaults argument into a Vector{Pair}, tolerating a tuple (positional args),
+# a vector, or a single bare Pair; reject any non-Pair element with an actionable error.
+function _normalize_uoc_pairs(x, what::AbstractString)
+  items = x isa Pair ? (x,) : x
+  out = Pair[]
+  for item in items
+    item isa Pair ||
+      throw(_argerr("Error in update_or_create, each $what entry must be a `field => value` pair, got $(typeof(item))"))
+    push!(out, item)
+  end
+  return out
+end
+
+# Django-style row-level upsert (#30). `lookup` pairs identify the row — their fields become the
+# ON CONFLICT target and their values the INSERT match values; `defaults` are the columns SET on a
+# conflict (via EXCLUDED) and are merged into the INSERT. Returns `(PormGRow, created::Bool)`.
+# All validation fires here, before any DB work, so `show_query=:dict` surfaces it.
+function up_update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query::Symbol = :execute)
+  model = q.model
+  lookup_pairs  = _normalize_uoc_pairs(lookup, "lookup")
+  default_pairs = _normalize_uoc_pairs(defaults, "defaults")
+
+  isempty(lookup_pairs) &&
+    throw(_argerr("Error in update_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
+  isempty(default_pairs) &&
+    throw(_argerr("Error in update_or_create, `defaults` must be non-empty — ON CONFLICT DO UPDATE needs a SET; a no-update get_or_create is a planned follow-up (#30)"))
+
+  lookup_keys  = String[string(k) for (k, _) in lookup_pairs]
+  default_keys = String[string(k) for (k, _) in default_pairs]
+
+  for k in lookup_keys
+    haskey(model.fields, k) ||
+      throw(_argerr("Error in update_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+  end
+  for k in default_keys
+    haskey(model.fields, k) ||
+      throw(_argerr("Error in update_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+  end
+  length(unique(lookup_keys)) == length(lookup_keys) ||
+    throw(_argerr("Error in update_or_create, duplicate lookup field(s)"))
+  length(unique(default_keys)) == length(default_keys) ||
+    throw(_argerr("Error in update_or_create, duplicate defaults field(s)"))
+  overlap = intersect(Set(lookup_keys), Set(default_keys))
+  isempty(overlap) ||
+    throw(_argerr("Error in update_or_create, field(s) $(join(sort(collect(overlap)), ", ")) appear in both lookup and defaults; put each in one (lookup = match key, defaults = updated on conflict)"))
+
+  # Merge into the insert map (lookup then defaults; order preserved for deterministic SQL, #97).
+  q.insert = OrderedCollections.OrderedDict{String,Any}()
+  for (k, v) in lookup_pairs;  q.insert[string(k)] = v; end
+  for (k, v) in default_pairs; q.insert[string(k)] = v; end
+
+  # target = lookup keys; SET = defaults, plus every auto_now field (refresh on conflict, matching
+  # update()) that isn't already a default and isn't a lookup key. auto_now_add is create-only and
+  # deliberately excluded; a lookup key is the conflict target and must never be in the SET.
+  target_fields = lookup_keys
+  auto_now_fields = String[f for f in model.field_names
+    if hasproperty(model.fields[f], :auto_now) && model.fields[f].auto_now === true &&
+       !(f in default_keys) && !(f in lookup_keys)]
+  set_fields = vcat(default_keys, auto_now_fields)
+
+  return _update_or_create(q; target_fields = target_fields, set_fields = set_fields, show_query = show_query)
+end
+
 """
   up_filter!(q::SQLObject, filter)
   Add filters to the SQLObject query.
@@ -244,6 +307,11 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :update
     # Same dual execute/inspect return contract as :create — see the note above.
     return (args...; kwargs...) -> up_update!(q.object, args; kwargs...)
+  elseif sym === :update_or_create
+    # Row-level upsert (#30). Execute path returns (row::PormGRow, created::Bool);
+    # show_query=:sql/:dict/:params return the inspection shape (String/Dict/Vector), same dual
+    # contract as :create/:update. `args` = lookup pairs; `defaults=`/`show_query=` via kwargs.
+    return (args...; kwargs...) -> up_update_or_create!(q.object, args; kwargs...)
   elseif sym === :count
     # count()                         -> COUNT(*)              (total rows)
     # count(distinct=true)            -> distinct rows         (subquery COUNT(*) over SELECT DISTINCT *)

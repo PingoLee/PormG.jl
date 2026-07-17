@@ -53,7 +53,7 @@ ones idempotently with `gh label create <name> --color <hex> --description "…"
 | Kind | Labels |
 |------|--------|
 | Type | `enhancement`, `bug`, `documentation`, `tech-debt` |
-| Subsystem | `postgres`, `sqlite`, `migrations`, `cjoin`, `performance`, `infrastructure` |
+| Subsystem | `postgres`, `sqlite`, `migrations`, `cjoin`, `performance`, `infrastructure`, `connection-pool` |
 | Release gating | `pre-publish` (must be settled before the first General-registry publish) |
 
 ## Safety: issues are public and outward-facing

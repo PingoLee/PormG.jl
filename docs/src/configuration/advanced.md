@@ -15,6 +15,17 @@ dev:
   # ...
   pool_size: 10   # base 10 → grows to 100 under burst
 ```
+- **Acquire timeout (`pool_timeout`):** How long `acquire_connection` waits for a free connection before raising `PoolTimeoutError` — default **30 s**. Set `pool_timeout:` in `connection.yml` (seconds; fractional allowed) to *fail fast* instead of blocking a request while the pool is saturated:
+
+  ```yaml
+  dev:
+    adapter: PostgreSQL
+    database: 'formula1'
+    pool_size: 10
+    pool_timeout: 5   # give up after 5s waiting for a connection, then raise PoolTimeoutError
+  ```
+
+  An explicit per-call `acquire_connection(pool; timeout_seconds=…)` still overrides it, and `Configuration.register_connection` accepts the same `pool_timeout` kwarg. A value `≤ 0` falls back to the 30 s default (a "never wait" setting is ambiguous and a footgun). Absent means the historical 30 s — zero behavior change.
 - **Idle reaping & max-lifetime (opt-in):** By default the pool never shrinks after a burst and reuses connections indefinitely (a dropped connection is caught reactively by the liveness check on the next checkout). For long-lived services — or databases/proxies that drop idle connections — you can enable a background reaper via `connection.yml` (both in **seconds**, `0`/absent = off):
 
   ```yaml

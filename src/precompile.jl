@@ -9,6 +9,7 @@ import Logging
     Bool[],
     "dummy_connection_string",
     0,
+    30.0,   # pool_timeout (#126)
     ReentrantLock()
   )
 

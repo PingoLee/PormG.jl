@@ -288,3 +288,56 @@ end
         _cleanup_configuration_test_keys([key_off])
     end
 end
+
+# Config-wiring for the acquire timeout (#126): both user entry points — `connection.yml pool_timeout`
+# and `register_connection(...; pool_timeout=…)` — set the pool's `pool_timeout` field (the default that
+# `acquire_connection` reads). DB-free: pools construct lazily, so assert the field directly.
+@testset "pool_timeout config wiring sets the pool default (#126)" begin
+    # (1) connection.yml path via _build_connection_pool!.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        open(joinpath(db_dir, "connection.yml"), "w") do f
+            write(f,
+                "test:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \":memory:\"\n" *
+                "  pool_timeout: 7\n" *
+                "  config:\n" *
+                "    change_db: true\n" *
+                "    change_data: true\n")
+        end
+
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        @test pool.pool_timeout == 7.0             # yaml key set the pool default
+        _cleanup_configuration_test_keys([db_dir])
+    end
+
+    # (2) register_connection kwarg sets the dynamic pool's default.
+    key_set = "ptimeout_set_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_set, ":memory:"; adapter="SQLite", pool_timeout=8)
+        @test PormG.config[key_set].connections.pool_timeout == 8.0
+    finally
+        _cleanup_configuration_test_keys([key_set])
+    end
+
+    # (3) absent key → the historical 30 s default (back-compat).
+    key_def = "ptimeout_def_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_def, ":memory:"; adapter="SQLite")
+        @test PormG.config[key_def].connections.pool_timeout == 30.0
+    finally
+        _cleanup_configuration_test_keys([key_def])
+    end
+
+    # (4) a <= 0 value falls back to the 30 s default (footgun guard).
+    key_neg = "ptimeout_neg_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_neg, ":memory:"; adapter="SQLite", pool_timeout=-1)
+        @test PormG.config[key_neg].connections.pool_timeout == 30.0
+    finally
+        _cleanup_configuration_test_keys([key_neg])
+    end
+end

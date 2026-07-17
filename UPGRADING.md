@@ -43,6 +43,47 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Configurable pool acquire timeout (`pool_timeout`)
+
+- **PormG ref**: issue #126 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`
+- **Recorded**: 2026-07-16
+- **Severity**: new feature — **additive, opt-in**. **No action needed**; zero behavior change unless
+  `pool_timeout` is set.
+
+### What changed
+
+The connection-pool acquire timeout was only reachable as a per-call kwarg
+(`acquire_connection(pool; timeout_seconds=…)`), which normal ORM users never touch. You can now set a
+default per pool in `connection.yml` (seconds; fractional allowed; absent = the historical 30 s):
+
+```yaml
+dev:
+  adapter: PostgreSQL
+  database: 'formula1'
+  pool_size: 10
+  pool_timeout: 5      # give up after 5s waiting for a connection → PoolTimeoutError
+```
+
+Stored on the pool struct and used as the default in `acquire_connection`; an explicit per-call
+`timeout_seconds` still wins. `Configuration.register_connection` accepts the same `pool_timeout` kwarg.
+A value `≤ 0` falls back to the 30 s default. See [Advanced Configuration](docs/src/configuration/advanced.md).
+
+### How to find the calls to migrate
+
+Nothing to grep — purely additive, off by default. **Optional adoption:** set `pool_timeout` in
+`connection.yml` for services that should fail fast rather than block a request when the pool is saturated.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | — | optional — set pool_timeout to fail fast under saturation |
+| app-2 | — | — |
+| app-3 | — | — |
+| app-4 | — | — |
+
+---
+
 ## Idle-connection reaping + max-lifetime (opt-in)
 
 - **PormG ref**: issue #125 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`

@@ -7,7 +7,7 @@ const CP = PormG.ConnectionPool   # match the sibling pool tests' idiom
 #
 # DB-free: mock pools (own struct, no reaping fields → exercises the module-level registry).
 # `_reap_pool!` is driven DIRECTLY (deterministic, no waiting on the background Timer), and
-# timestamps in CP._POOL_REAP[pool] are backdated to force expiry without sleeping. Covers:
+# timestamps in CP._POOL_MONITOR[pool] are backdated to force expiry without sleeping. Covers:
 # idle overflow reaped to base (append-only, base kept, conns closed), leased never reaped,
 # max-lifetime (sweeper + retire-on-return), reaping OFF default (no-op), SQLite split no-op.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ function _expand_and_idle(p, total)
 end
 # Backdate every slot's last_used AND created_at by `secs` so it looks idle/old.
 function _backdate!(p, secs)
-  st = CP._POOL_REAP[p]
+  st = CP._POOL_MONITOR[p]
   for i in 1:length(st.last_used); st.last_used[i] -= secs; st.created_at[i] -= secs; end
 end
 _open_count(p) = count(c -> c !== nothing, p.connections)
@@ -65,8 +65,8 @@ _open_count(p) = count(c -> c !== nothing, p.connections)
 @testset "reaping OFF by default → no-op, pool unregistered" begin
   p = MockPGReap(2)
   held = _expand_and_idle(p, 5)          # 5 open (2 base + 3 overflow)
-  @test !haskey(CP._POOL_REAP, p)        # never opted in
-  @test CP._reap_state(p) === nothing
+  @test !haskey(CP._POOL_MONITOR, p)        # never opted in
+  @test CP._monitor_state(p) === nothing
   CP._reap_pool!(p)                       # must do nothing
   @test _open_count(p) == 5
   @test length(p.connections) == 5
@@ -119,7 +119,7 @@ end
   CP.enable_reaping!(p; max_lifetime = 1.0)
   # Lease an OVERFLOW slot, backdate its created_at, then release → retired on return.
   conns = [CP.acquire_connection(p) for _ in 1:5]     # slots 1..5 leased
-  st = CP._POOL_REAP[p]
+  st = CP._POOL_MONITOR[p]
   st.created_at[5] -= 100.0                            # overflow slot 5 is now over-age
   overflow_conn = conns[5]
   CP.release_connection(p, overflow_conn)

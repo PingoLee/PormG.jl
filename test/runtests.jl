@@ -72,6 +72,8 @@ end
     @testset "Failed COMMIT Holds Conn Until Rollback (#139)" include("unit/test_commit_failure_release.jl")
     @testset "Direct-Handoff Pool Wait (#124)" include("unit/test_connection_pool_handoff.jl")
     @testset "Idle-Reaping + Max-Lifetime Pool (#125)" include("unit/test_connection_pool_reaping.jl")
+    @testset "Pool Stats Snapshot (#127)" include("unit/test_connection_pool_stats.jl")
+    @testset "Connection-Leak Detection (#127)" include("unit/test_connection_pool_leak.jl")
     @testset "Savepoint Naming (#26)" include("unit/test_savepoint_naming.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")

@@ -43,6 +43,51 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Pool metrics (`pool_stats`) + leak detection (`leak_detection_threshold`)
+
+- **PormG ref**: issue #127 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`, `src/PormG.jl`
+- **Recorded**: 2026-07-16
+- **Severity**: new feature — **additive, opt-in**. **No action needed**; `pool_stats` is a new exported
+  name, and leak detection is off unless configured.
+
+### What changed
+
+Two observability additions to the connection pool:
+
+- **`pool_stats`** (newly exported) — a health snapshot `(; pool_size, size, in_use, available, ceiling, waiting)`.
+  Call it with a pool object or a connection key: `pool_stats("db")`.
+- **`leak_detection_threshold`** in `connection.yml` (seconds; `0`/absent = off) — warns once when a
+  connection is held past the threshold without release (a likely un-awaited `fetch_async`):
+
+  ```yaml
+  dev:
+    adapter: PostgreSQL
+    database: 'formula1'
+    pool_size: 10
+    leak_detection_threshold: 30
+  ```
+
+  `Configuration.register_connection` accepts the same `leak_detection_threshold` kwarg. Internally, #125's
+  reaping state was generalized into a shared `PoolMonitorState` (leak detection reuses the existing
+  per-slot checkout timestamps) — no behavior change to reaping.
+
+### How to find the calls to migrate
+
+Nothing to grep — purely additive. `pool_stats` is a *new* name; it can only collide if a downstream app
+already defined its own top-level `pool_stats` (unlikely). **Optional adoption:** set
+`leak_detection_threshold` in long-lived services to catch un-released connections early.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | — | optional — set leak_detection_threshold; use pool_stats when debugging saturation |
+| app-2 | — | — |
+| app-3 | — | — |
+| app-4 | — | — |
+
+---
+
 ## Configurable pool acquire timeout (`pool_timeout`)
 
 - **PormG ref**: issue #126 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`

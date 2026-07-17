@@ -250,6 +250,8 @@ function _build_connection_pool!(settings::SQLConn, path::String)
   end
   idle_timeout = _reap_secs("idle_timeout")
   max_lifetime = _reap_secs("max_lifetime")
+  # Optional connection-leak detection (#127), in seconds; absent or 0 = off.
+  leak_detection_threshold = _reap_secs("leak_detection_threshold")
 
   sqlite_split_read_write = false
   if haskey(settings.db_config_settings, "sqlite_split_read_write")
@@ -316,10 +318,15 @@ function _build_connection_pool!(settings::SQLConn, path::String)
     throw(ArgumentError("Unsupported adapter: $(adapter)"))
   end
 
-  # Opt the pool into idle-reaping / max-lifetime if configured (#125). No-op when both are 0.
-  if idle_timeout > 0 || max_lifetime > 0
+  # Opt the pool into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured.
+  # No-op when the respective keys are 0/absent. Both merge into one PoolMonitorState.
+  reap_on = idle_timeout > 0 || max_lifetime > 0
+  if reap_on || leak_detection_threshold > 0
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+    reap_on &&
+      CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+    leak_detection_threshold > 0 &&
+      CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
   end
 
   return settings
@@ -607,7 +614,7 @@ end
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = 30)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = 30, leak_detection_threshold::Real = 0)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -640,7 +647,8 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     "sqlite_split_read_write" => sqlite_split_read_write,
     "idle_timeout" => idle_timeout,
     "max_lifetime" => max_lifetime,
-    "pool_timeout" => pool_timeout
+    "pool_timeout" => pool_timeout,
+    "leak_detection_threshold" => leak_detection_threshold
   )
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
@@ -653,9 +661,11 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     throw(ArgumentError("Unsupported adapter: $adapter"))
   end
 
-  # Opt into idle-reaping / max-lifetime if configured (#125). No-op when both are 0.
+  # Opt into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured. No-ops when 0.
   (idle_timeout > 0 || max_lifetime > 0) &&
     CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+  leak_detection_threshold > 0 &&
+    CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
 
   config[key] = settings
   return key

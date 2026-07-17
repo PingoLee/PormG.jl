@@ -96,6 +96,20 @@ include("tools.jl")
 include("ConnectionPool.jl")
 using .ConnectionPool
 
+# Convenience overload: `pool_stats` by connection key/path (#127). The pool-struct method lives in
+# ConnectionPool; extend the SAME function here, where both it and `Configuration.get_settings` are in
+# scope. `import` (not just the `using` above) is required to add a method rather than shadow the name.
+import .ConnectionPool: pool_stats
+function pool_stats(key::AbstractString)
+  # String(key): get_settings is ::String-only, so a SubString/other AbstractString key would
+  # otherwise die with a raw MethodError instead of resolving. Throwing (rather than the silent
+  # no-op close_pool!(::String) uses for teardown) is deliberate for a stats query: a zeroed
+  # snapshot for a never-built pool would read as a healthy empty pool.
+  pool = Configuration.get_settings(String(key)).connections
+  pool === nothing && throw(ArgumentError("Connection '$(key)' has no pool yet (not built / not connected)."))
+  return pool_stats(pool)
+end
+
 include("Models.jl")
 using .Models
 
@@ -153,6 +167,7 @@ export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, 
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)
+export pool_stats  # connection-pool health snapshot (#127)
 export with_tx_context, in_transaction_context  # Transaction context helpers
 export setup, install_ai_skills
 

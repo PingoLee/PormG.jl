@@ -38,6 +38,25 @@ dev:
   ```
 
   Reaping is **overflow-only** and never drops below the base `pool_size` (those stay warm), and never closes an in-use connection. It closes the connection and clears its slot in place — the pool's slot layout is unchanged, so a reaped slot simply opens a fresh connection on next use. Disabled by default: unset means zero behavior change. Programmatic pools accept the same `idle_timeout` / `max_lifetime` kwargs via `Configuration.register_connection`.
+- **Health snapshot (`pool_stats`):** `pool_stats` (exported) returns a `NamedTuple` for debugging saturation — pass a pool object or a connection key/path:
+
+  ```julia
+  using PormG
+  pool_stats("db")   # => (; pool_size, size, in_use, available, ceiling, waiting)
+  ```
+
+  `pool_size` is the configured floor, `size` the slots allocated so far (`== in_use + available`), `ceiling` the maximum (`pool_size × 10`), and `waiting` the callers currently parked for a connection — a non-zero `waiting` with `in_use == ceiling` is the signature of saturation (see `PoolTimeoutError`). Counts are read under the pool lock for a coherent snapshot.
+- **Leak detection (`leak_detection_threshold`, opt-in):** A connection acquired but never released (e.g. a `fetch_async` that's never awaited) is silently lost until the pool starves. Set `leak_detection_threshold` (**seconds**, `0`/absent = off) to have `acquire_connection` emit a single `@warn` — naming the slot and hold time — when a connection has been held past the threshold:
+
+  ```yaml
+  dev:
+    adapter: PostgreSQL
+    database: 'formula1'
+    pool_size: 10
+    leak_detection_threshold: 30   # warn when a connection is held > 30s without release
+  ```
+
+  The scan runs on the next `acquire_connection` (no background task), so a leak is flagged as the pool comes under pressure — pointing at the offending slot just before a `PoolTimeoutError`. Off by default; `register_connection` accepts the same `leak_detection_threshold` kwarg.
 - **Thread Safety:** PormG uses `ReentrantLock` for pool management.
 - **Failed-rollback self-healing:** If a transaction's `ROLLBACK` itself fails (e.g. the connection died mid-transaction), the pool never returns that connection as-is. It is renewed in its slot (PostgreSQL: `LibPQ.reset!`; SQLite: a fresh handle, with the old one closed so it releases the database file write-lock) or — if renewal also fails — closed and its slot cleared so the next borrower opens a fresh connection.
 

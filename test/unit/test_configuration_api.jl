@@ -234,7 +234,7 @@ end
 # `ConnectionPool.enable_reaping!` and register the pool. DB-free: pools construct lazily (no
 # connection is opened here), so we assert on the registry, never on live reaping.
 @testset "reaping config wiring reaches enable_reaping! (#125)" begin
-    _reap = PormG.ConnectionPool._POOL_REAP
+    _reap = PormG.ConnectionPool._POOL_MONITOR
 
     # (1) connection.yml path via _build_connection_pool!: top-level idle_timeout/max_lifetime keys.
     mktempdir() do temp_root
@@ -258,7 +258,7 @@ end
         @test st !== nothing                       # yaml keys opted the pool in
         @test st.config.idle_timeout == 45.0
         @test st.config.max_lifetime == 900.0
-        @test PormG.ConnectionPool._REAP_ANY[]     # global flag flipped on
+        @test PormG.ConnectionPool._MONITOR_ANY[]     # global flag flipped on
 
         delete!(_reap, pool)
         _cleanup_configuration_test_keys([db_dir])
@@ -339,5 +339,56 @@ end
         @test PormG.config[key_neg].connections.pool_timeout == 30.0
     finally
         _cleanup_configuration_test_keys([key_neg])
+    end
+end
+
+# Config-wiring for leak detection (#127): both entry points reach `enable_leak_detection!`, which
+# registers a PoolMonitorState carrying the leak_threshold. DB-free: assert on the shared registry.
+@testset "leak_detection_threshold config wiring (#127)" begin
+    _mon = PormG.ConnectionPool._POOL_MONITOR
+
+    # (1) connection.yml path via _build_connection_pool!.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        open(joinpath(db_dir, "connection.yml"), "w") do f
+            write(f,
+                "test:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \":memory:\"\n" *
+                "  leak_detection_threshold: 12\n" *
+                "  config:\n" *
+                "    change_db: true\n" *
+                "    change_data: true\n")
+        end
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        st = get(_mon, pool, nothing)
+        @test st !== nothing
+        @test st.leak_threshold == 12.0
+        @test PormG.ConnectionPool._MONITOR_ANY[]
+        delete!(_mon, pool)
+        _cleanup_configuration_test_keys([db_dir])
+    end
+
+    # (2) register_connection kwarg opts the dynamic pool in.
+    key_on = "leak_on_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_on, ":memory:"; adapter="SQLite", leak_detection_threshold=20)
+        pool = PormG.config[key_on].connections
+        st = get(_mon, pool, nothing)
+        @test st !== nothing && st.leak_threshold == 20.0
+        delete!(_mon, pool)
+    finally
+        _cleanup_configuration_test_keys([key_on])
+    end
+
+    # (3) absent / 0 → not registered (default off).
+    key_off = "leak_off_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_off, ":memory:"; adapter="SQLite")
+        @test !haskey(_mon, PormG.config[key_off].connections)
+    finally
+        _cleanup_configuration_test_keys([key_off])
     end
 end

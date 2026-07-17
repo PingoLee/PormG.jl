@@ -231,6 +231,17 @@ function _build_connection_pool!(settings::SQLConn, path::String)
   pool_size = haskey(settings.db_config_settings, "pool_size") ?
               parse(Int, string(settings.db_config_settings["pool_size"])) : 3
 
+  # Default acquire timeout (#126), seconds; absent = 30. Values <= 0 fall back to 30 (a "never wait"
+  # setting is ambiguous across frameworks and a footgun), warned once at build.
+  pool_timeout = haskey(settings.db_config_settings, "pool_timeout") ?
+    (let v = settings.db_config_settings["pool_timeout"]
+       v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), 30.0)
+     end) : 30.0
+  if pool_timeout <= 0
+    @warn "pool_timeout must be > 0; using the default 30s" got=pool_timeout
+    pool_timeout = 30.0
+  end
+
   # Optional idle-connection reaping / max-lifetime (#125), in seconds; absent or 0 = off.
   _reap_secs(key) = begin
     haskey(settings.db_config_settings, key) || return 0.0
@@ -272,7 +283,7 @@ function _build_connection_pool!(settings::SQLConn, path::String)
 
     @pormg_debug false
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write)
+    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout)
 
   elseif settings.db_config_settings["adapter"] == "PostgreSQL"
     dns = String[]
@@ -298,7 +309,7 @@ function _build_connection_pool!(settings::SQLConn, path::String)
 
     # Use parent module reference to avoid circular dependency during module loading
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size)
+    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout)
 
   else
     adapter = settings.db_config_settings["adapter"]
@@ -596,11 +607,15 @@ end
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = 30)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
   end
+
+  # Default acquire timeout (#126); <= 0 falls back to 30 (see _build_connection_pool!).
+  pool_timeout = pool_timeout > 0 ? Float64(pool_timeout) :
+    (@warn "pool_timeout must be > 0; using the default 30s" got=pool_timeout; 30.0)
 
   if haskey(config, key)
     existing = config[key]
@@ -624,15 +639,16 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     "pool_size" => pool_size,
     "sqlite_split_read_write" => sqlite_split_read_write,
     "idle_timeout" => idle_timeout,
-    "max_lifetime" => max_lifetime
+    "max_lifetime" => max_lifetime,
+    "pool_timeout" => pool_timeout
   )
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
   if adapter == "PostgreSQL"
-    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size)
+    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout)
   elseif adapter == "SQLite"
-    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write)
+    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout)
   else
     throw(ArgumentError("Unsupported adapter: $adapter"))
   end

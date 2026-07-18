@@ -9,12 +9,13 @@ import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLi
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
-              backend_execute_async, backend_is_connection_error, backend_copy_in!
+              backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
+              backend_copy_in!
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, atomic, with_savepoint
 export acquire_connection, release_connection, finalize_transaction_connection!
-export PoolTimeoutError
+export PoolTimeoutError, PoolConnectError
 export pool_stats
 # NOTE: close_pool! is intentionally NOT exported here. Configuration owns the public
 # `close_pool!` (it dispatches on a pool OR a db-name String and delegates the pool case to
@@ -51,6 +52,29 @@ Base.showerror(io::IO, e::PoolTimeoutError) = print(io,
   "PoolTimeoutError: no available ", e.adapter, " connection after ", e.attempts, " attempts / ",
   round(e.elapsed_seconds, digits=1), "s (pool_size=", e.pool_size, ", max=", e.max_size,
   "). Raise pool_size (connection.yml `pool_size:`) to add capacity.")
+
+"""
+    PoolConnectError <: Exception
+
+Thrown by `acquire_connection` when it could not *open* a physical connection — a permanently-bad
+connection string (wrong password, missing role/database, an unopenable SQLite path). Distinct from
+`PoolTimeoutError` (a healthy pool that is merely saturated): the remedy here is to fix credentials /
+host / database, not to raise `pool_size` (#72). Carries the underlying driver exception (`cause`) and a
+redacted connection string; catchable so apps can translate it distinctly (e.g. a 500, not a 503-retry).
+"""
+struct PoolConnectError <: Exception
+  adapter::String        # "PostgreSQL" | "SQLite"
+  cause                  # underlying driver exception (untyped: a driver may throw a non-Exception)
+  connection::String     # redacted connection string
+  attempts::Int
+  elapsed_seconds::Float64
+end
+
+Base.showerror(io::IO, e::PoolConnectError) = print(io,
+  "PoolConnectError: could not open a ", e.adapter, " connection after ", e.attempts, " attempt(s) / ",
+  round(e.elapsed_seconds, digits=1), "s: ",
+  (e.cause isa Exception ? sprint(showerror, e.cause) : string(e.cause)),
+  " (connection=", e.connection, "). Check credentials, host, and database name in connection.yml.")
 
 function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
   if !ensure_before_connect!(pool)
@@ -99,6 +123,7 @@ mutable struct PostgresConnectionPool <: PormGPostgres
   connection_string::String
   pool_size::Int
   pool_timeout::Float64   # default acquire_connection timeout, seconds (#126; connection.yml `pool_timeout`)
+  fail_fast_on_connect::Bool  # fast-fail permanent connect errors instead of waiting pool_timeout (#72)
   lock::ReentrantLock  # For thread safety
 end
 
@@ -108,6 +133,7 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   connection_string::String
   pool_size::Int
   pool_timeout::Float64   # default acquire_connection timeout, seconds (#126; connection.yml `pool_timeout`)
+  fail_fast_on_connect::Bool  # fast-fail permanent connect errors instead of waiting pool_timeout (#72)
   split_read_write::Bool
   writer_slot::Int
   reader_cursor::Int
@@ -121,14 +147,14 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   write_lock::ReentrantLock
 end
 
-function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT)
+function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
   lock = ReentrantLock()
-  PostgresConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), lock)
+  PostgresConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, lock)
 end
 
-function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT)
+function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
   lock = ReentrantLock()
@@ -136,7 +162,7 @@ function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, spl
   if split_read_write && !effective_split
     @warn "SQLite split read/write mode requires pool_size > 1; falling back to shared pool" pool_size=pool_size
   end
-  SQLiteConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), effective_split, 1, 0, lock, ReentrantLock())
+  SQLiteConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, effective_split, 1, 0, lock, ReentrantLock())
 end
 
 # Default acquire timeout (seconds) for a pool. Dispatch + generic fallback so the pool-shaped mock
@@ -144,6 +170,32 @@ end
 _pool_timeout(pool::PostgresConnectionPool) = pool.pool_timeout
 _pool_timeout(pool::SQLiteConnectionPool)   = pool.pool_timeout
 _pool_timeout(pool) = DEFAULT_POOL_TIMEOUT
+
+# Whether to fast-fail a permanently-bad connection instead of waiting the full pool_timeout (#72).
+# Dispatch + generic fallback so pool-shaped mocks (which don't carry the field) default to `true`.
+_fail_fast_on_connect(pool::PostgresConnectionPool) = pool.fail_fast_on_connect
+_fail_fast_on_connect(pool::SQLiteConnectionPool)   = pool.fail_fast_on_connect
+_fail_fast_on_connect(pool) = true
+
+# Record a failed `backend_connect` and decide whether to fast-fail. Returns true only when the error is
+# classified permanent (auth / cantopen — see `backend_is_permanent_connect_error`) AND fast-fail is
+# enabled for the pool. `last_ref` persists the cause across acquire passes so the terminal branch can
+# raise a truthful `PoolConnectError`. Shared by both acquire twins so the PG/SQLite policy can't drift (#72).
+function _on_connect_failure!(pool, e, last_ref::Base.RefValue{Any})
+  last_ref[] = e
+  return _fail_fast_on_connect(pool) && backend_is_permanent_connect_error(pool, e)
+end
+
+# Choose the terminal acquire error. If any `backend_connect` failed during this call, the pool could not
+# be (fully) opened → raise a truthful `PoolConnectError` carrying the driver cause (its remedy is
+# credentials/host, not `pool_size`). Otherwise the pool is healthy but saturated → `PoolTimeoutError`.
+# Shared by both twins' `:timeout` / `:wait`-timeout branches (#72).
+function _acquire_terminal_error(pool, adapter::String, last_connect_error, pool_size::Int,
+                                 ceiling::Int, attempts::Int, elapsed::Float64)
+  last_connect_error === nothing &&
+    return PoolTimeoutError(adapter, pool_size, ceiling, attempts, elapsed)
+  return PoolConnectError(adapter, last_connect_error, redact_secret(pool.connection_string), attempts, elapsed)
+end
 
 function _sqlite_is_read_query(sql::String)::Bool
   cleaned = strip(sql)
@@ -582,6 +634,9 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
   # validated/materialized. `nothing` when we are doing a normal scan.
   owned::Union{Nothing, Int} = nothing
   ceiling = _pool_ceiling(pool)
+  # Most recent `backend_connect` failure this call. When set, the terminal branch raises a truthful
+  # PoolConnectError (the pool couldn't be opened) instead of the saturation PoolTimeoutError (#72).
+  last_connect_error = Ref{Any}(nothing)
 
   while true
     attempts += 1
@@ -603,8 +658,12 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           _monitor_note_create!(pool, i)                  # fresh connection timestamp (#125)
           return (:got, new_conn)
         catch e
-          @error "Failed to materialize handed-off PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
-          _handoff_or_free!(pool, i)                    # pass the slot on / free it, then rescan
+          # Free/hand-off the leased slot BEFORE we return either way — on a fast-fail bail too, so the
+          # slot handed to us (#124) is never leaked (#72).
+          fast_fail = _on_connect_failure!(pool, e, last_connect_error)
+          _handoff_or_free!(pool, i)                    # pass the slot on / free it
+          fast_fail && return (:connect_failed, e)
+          @debug "Failed to materialize handed-off PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
           return (:retry, nothing)
         end
       end
@@ -626,7 +685,8 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
             _monitor_note_create!(pool, i)                 # fresh connection timestamp (#125)
             return (:got, new_conn)
           catch e
-            @error "Failed to create PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
+            _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
+            @debug "Failed to create PG connection $i: $e" connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
             continue
           end
@@ -650,7 +710,8 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           end
           return (:got, new_conn)
         catch e
-          @error "Failed to expand PG pool: $e"
+          _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
+          @debug "Failed to expand PG pool: $e" connection_string=redact_secret(pool.connection_string)
         end
       end
 
@@ -675,13 +736,20 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
     elseif kind === :retry
       owned = nothing
       continue
+    elseif kind === :connect_failed
+      # Permanent connect failure (bad password / missing role|db) with fast-fail on: don't wait the
+      # full timeout — raise the truthful cause now (#72).
+      throw(PoolConnectError("PostgreSQL", outcome[2], redact_secret(pool.connection_string), attempts, time() - start_time))
     elseif kind === :timeout
-      if attempts >= max_retries
-        @warn "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-      else
-        @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+      err = _acquire_terminal_error(pool, "PostgreSQL", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
+      if err isa PoolTimeoutError
+        if attempts >= max_retries
+          @warn "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+        else
+          @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+        end
       end
-      throw(PoolTimeoutError("PostgreSQL", pool.pool_size, ceiling, attempts, time() - start_time))
+      throw(err)
     else # :wait — park until a connection is handed to us or the deadline elapses.
       w = outcome[2]
       timer = Timer(_ -> _pool_wait_timeout!(pool, w), max(deadline - time(), 0.0))
@@ -691,8 +759,10 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
         close(timer)
       end
       if handed === _POOL_WAIT_TIMEOUT
-        @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
-        throw(PoolTimeoutError("PostgreSQL", pool.pool_size, ceiling, attempts, time() - start_time))
+        err = _acquire_terminal_error(pool, "PostgreSQL", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
+        err isa PoolTimeoutError &&
+          @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+        throw(err)
       end
       owned = handed::Int                                # loop back to materialize the handed slot
       continue
@@ -715,6 +785,8 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   before_connect_done = false
   owned::Union{Nothing, Int} = nothing
   ceiling = _pool_ceiling(pool)
+  # See the PormGPostgres twin: most recent connect failure this call → truthful PoolConnectError (#72).
+  last_connect_error = Ref{Any}(nothing)
 
   while true
     attempts += 1
@@ -736,8 +808,11 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           _monitor_note_create!(pool, i)                  # fresh connection timestamp (#125)
           return (:got, new_conn)
         catch e
-          @error "Failed to materialize handed-off SQLite connection $i: $e" connection_string=pool.connection_string
+          # Free/hand-off the leased slot BEFORE we return either way, fast-fail included (#72/#124).
+          fast_fail = _on_connect_failure!(pool, e, last_connect_error)
           _handoff_or_free!(pool, i)
+          fast_fail && return (:connect_failed, e)
+          @debug "Failed to materialize handed-off SQLite connection $i: $e" connection_string=redact_secret(pool.connection_string)
           return (:retry, nothing)
         end
       end
@@ -759,7 +834,8 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
             _monitor_note_create!(pool, i)                 # fresh connection timestamp (#125)
             return (:got, new_conn)
           catch e
-            @error "Failed to create SQLite connection $i: $e" connection_string=pool.connection_string
+            _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
+            @debug "Failed to create SQLite connection $i: $e" connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
             continue
           end
@@ -778,13 +854,14 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
           _monitor_note_create!(pool, length(pool.connections))   # grow monitor vectors in lockstep (#125)
           new_size = length(pool.connections)
           if new_size == ceiling
-            @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=pool.connection_string
+            @warn "SQLite pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
           else
             @debug "SQLite pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
           end
           return (:got, new_conn)
         catch e
-          @error "Failed to expand SQLite pool: $e"
+          _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
+          @debug "Failed to expand SQLite pool: $e" connection_string=redact_secret(pool.connection_string)
         end
       end
 
@@ -807,11 +884,16 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
     elseif kind === :retry
       owned = nothing
       continue
+    elseif kind === :connect_failed
+      # Permanent connect failure (unopenable path) with fast-fail on: raise the truthful cause now (#72).
+      throw(PoolConnectError("SQLite", outcome[2], redact_secret(pool.connection_string), attempts, time() - start_time))
     elseif kind === :timeout
-      @warn (attempts >= max_retries ?
-        "Exceeded maximum retry attempts ($max_retries) to acquire SQLite connection" :
-        "Timeout after $(to) seconds waiting for available SQLite connection") pool_size=pool.pool_size connection_string=pool.connection_string
-      throw(PoolTimeoutError("SQLite", pool.pool_size, ceiling, attempts, time() - start_time))
+      err = _acquire_terminal_error(pool, "SQLite", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
+      err isa PoolTimeoutError &&
+        @warn (attempts >= max_retries ?
+          "Exceeded maximum retry attempts ($max_retries) to acquire SQLite connection" :
+          "Timeout after $(to) seconds waiting for available SQLite connection") pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+      throw(err)
     else # :wait
       w = outcome[2]
       timer = Timer(_ -> _pool_wait_timeout!(pool, w), max(deadline - time(), 0.0))
@@ -821,8 +903,10 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
         close(timer)
       end
       if handed === _POOL_WAIT_TIMEOUT
-        @warn "Timeout after $(to) seconds waiting for available SQLite connection" pool_size=pool.pool_size connection_string=pool.connection_string
-        throw(PoolTimeoutError("SQLite", pool.pool_size, ceiling, attempts, time() - start_time))
+        err = _acquire_terminal_error(pool, "SQLite", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
+        err isa PoolTimeoutError &&
+          @warn "Timeout after $(to) seconds waiting for available SQLite connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+        throw(err)
       end
       owned = handed::Int
       continue

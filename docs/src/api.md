@@ -644,7 +644,7 @@ scope — the SQL function constructors are *not* among them (see
 `with_advisory_lock`
 
 ### Connection pool
-`pool_stats`, `PoolTimeoutError`
+`pool_stats`, `PoolTimeoutError`, `PoolConnectError`
 
 ### Utilities & lifecycle
 `setup`, `install_ai_skills`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`

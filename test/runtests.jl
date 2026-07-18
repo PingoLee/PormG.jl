@@ -66,6 +66,7 @@ end
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")
     @testset "PG Migration Fixture Isolated + Credential-free (#36)" include("unit/test_migration_pg_fixture.jl")
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
+    @testset "Connect-Failure Fast-Fail Typed Error (#72)" include("unit/test_connection_pool_connect_error.jl")
     @testset "close_pool! Skips Non-pool Mocks (#147)" include("unit/test_close_pool_mock_skip.jl")
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")
     @testset "No Lost-Connection Retry Inside Transactions (#138)" include("unit/test_fetch_retry_transaction.jl")

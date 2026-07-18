@@ -57,6 +57,19 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
          occursin("connection not open", msg)
 end
 
+# Is `e` a *permanent* connect failure (won't succeed on retry) rather than transient? Scoped to
+# high-confidence config/auth classes only — bad password, missing role/database, no pg_hba.conf entry.
+# Host/DNS/network failures are deliberately NOT matched: they can be a transient blip during a deploy,
+# so they degrade to the normal wait-to-deadline path. LibPQ raises the same `PQConnectionError` (message
+# only, no SQLSTATE) for auth and host failures alike, so this is message-substring based (#72).
+function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, e)
+  msg = lowercase(string(e))
+  return occursin("password authentication failed", msg) ||
+         occursin("no pg_hba.conf entry", msg) ||
+         (occursin("role ", msg) && occursin("does not exist", msg)) ||
+         (occursin("database ", msg) && occursin("does not exist", msg))
+end
+
 PormG.backend_num_affected_rows(pool::PormGPostgres, result) = LibPQ.num_affected_rows(result)
 PormG.backend_num_rows(pool::PormGPostgres, result) = LibPQ.num_rows(result)
 

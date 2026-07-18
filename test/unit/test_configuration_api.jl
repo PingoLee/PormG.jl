@@ -345,6 +345,50 @@ end
     end
 end
 
+# Config-wiring for connect fast-fail (#72): both user entry points — `connection.yml fail_fast_on_connect`
+# and `register_connection(...; fail_fast_on_connect=…)` — set the pool's `fail_fast_on_connect` field
+# (read by `acquire_connection` to decide whether to fast-fail a permanent connect error). DB-free.
+@testset "fail_fast_on_connect config wiring sets the pool default (#72)" begin
+    # (1) connection.yml false overrides the on-by-default.
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        open(joinpath(db_dir, "connection.yml"), "w") do f
+            write(f,
+                "test:\n" *
+                "  adapter: SQLite\n" *
+                "  database: \":memory:\"\n" *
+                "  fail_fast_on_connect: false\n" *
+                "  config:\n" *
+                "    change_db: true\n" *
+                "    change_data: true\n")
+        end
+
+        PormG.Configuration.load(db_dir; env="test")
+        pool = PormG.Configuration.get_settings(db_dir).connections
+        @test pool.fail_fast_on_connect == false      # yaml key flipped the default off
+        _cleanup_configuration_test_keys([db_dir])
+    end
+
+    # (2) register_connection kwarg sets the dynamic pool's flag.
+    key_off = "ffc_off_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_off, ":memory:"; adapter="SQLite", fail_fast_on_connect=false)
+        @test PormG.config[key_off].connections.fail_fast_on_connect == false
+    finally
+        _cleanup_configuration_test_keys([key_off])
+    end
+
+    # (3) absent key → on by default (the new, better behavior; zero-config).
+    key_def = "ffc_def_$(getpid())"
+    try
+        PormG.Configuration.register_connection(key_def, ":memory:"; adapter="SQLite")
+        @test PormG.config[key_def].connections.fail_fast_on_connect == true
+    finally
+        _cleanup_configuration_test_keys([key_def])
+    end
+end
+
 # Config-wiring for leak detection (#127): both entry points reach `enable_leak_detection!`, which
 # registers a PoolMonitorState carrying the leak_threshold. DB-free: assert on the shared registry.
 @testset "leak_detection_threshold config wiring (#127)" begin

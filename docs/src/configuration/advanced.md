@@ -26,6 +26,17 @@ dev:
   ```
 
   An explicit per-call `acquire_connection(pool; timeout_seconds=…)` still overrides it, and `Configuration.register_connection` accepts the same `pool_timeout` kwarg. A value `≤ 0` falls back to the 30 s default (a "never wait" setting is ambiguous and a footgun). Absent means the historical 30 s — zero behavior change.
+- **Connect failures (`PoolConnectError`, `fail_fast_on_connect`):** `pool_timeout` covers a *saturated healthy* pool. A pool that can never open a connection — a wrong password, a missing role/database, an unopenable SQLite path — is a different failure: waiting `pool_timeout` for it to "free up" is pointless, and blaming `pool_size` is misleading. `acquire_connection` therefore classifies the driver error: a **permanent** one (PostgreSQL auth / missing role or database; SQLite `unable to open database file`) **fails fast** with a catchable `PoolConnectError` (exported) that carries the underlying driver cause and a **redacted** connection string — remedy: fix credentials/host/database, not `pool_size`. Ambiguous errors (host/DNS/network — possibly a transient blip) are *not* fast-failed; they wait to the deadline as before and then also surface `PoolConnectError` (with the cause) rather than `PoolTimeoutError`. Set `fail_fast_on_connect: false` to opt out of the fast-fail and keep waiting the full `pool_timeout`:
+
+  ```yaml
+  dev:
+    adapter: PostgreSQL
+    database: 'formula1'
+    pool_size: 10
+    fail_fast_on_connect: false   # default true; false = wait pool_timeout even on a bad password
+  ```
+
+  Default is `true` (zero-config: a misconfigured deploy fails immediately instead of hanging every request for 30 s). `register_connection` accepts the same `fail_fast_on_connect` kwarg. Transient recovery is *not* retried inside the pool — retry the whole operation at the application layer (the same rule as lost connections inside a transaction).
 - **Idle reaping & max-lifetime (opt-in):** By default the pool never shrinks after a burst and reuses connections indefinitely (a dropped connection is caught reactively by the liveness check on the next checkout). For long-lived services — or databases/proxies that drop idle connections — you can enable a background reaper via `connection.yml` (both in **seconds**, `0`/absent = off):
 
   ```yaml

@@ -10,6 +10,7 @@ import Logging
     "dummy_connection_string",
     0,
     DEFAULT_POOL_TIMEOUT,   # pool_timeout (#126, #179)
+    true,                   # fail_fast_on_connect (#72)
     ReentrantLock()
   )
 

@@ -167,6 +167,7 @@ export object, get, PormGRow, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, 
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)
+export PoolConnectError  # thrown by acquire_connection when a connection can't be opened (#72)
 export pool_stats  # connection-pool health snapshot (#127)
 export with_tx_context, in_transaction_context  # Transaction context helpers
 export setup, install_ai_skills

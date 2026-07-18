@@ -33,12 +33,14 @@ const _SQLITE_DRIVER_HINT = "PormG: the SQLite backend requires SQLite. Run `usi
 #   backend_execute(pool, conn, sql, params)           -> SYNC execute (SQLite worker; PG parity)
 #   backend_execute_async(pool, conn, sql, params)     -> async handle (PG: LibPQ.AsyncResult)
 #   backend_is_connection_error(pool, e)               -> Bool: is `e` a dropped-connection error
+#   backend_is_permanent_connect_error(pool, e)        -> Bool: is `e` a permanent connect failure (auth/cantopen) vs transient
 #   backend_num_affected_rows(pool, result)            -> Int matched-row count (PG)
 #   backend_num_rows(pool, result)                     -> Int row count (PG)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> PostgreSQL COPY FROM STDIN
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
            :backend_execute, :backend_execute_async, :backend_is_connection_error,
+           :backend_is_permanent_connect_error,
            :backend_num_affected_rows, :backend_num_rows, :backend_copy_in!,
            :backend_sqlite_version)
   @eval begin

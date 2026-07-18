@@ -236,6 +236,16 @@ function _config_secs(settings::SQLConn, key::String, default::Float64 = 0.0)::F
   return v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), default)
 end
 
+# Parse a boolean pool setting from connection.yml. Returns `default` when the key is absent; otherwise
+# accepts a native Bool or the usual truthy/falsey strings. Consolidates the truthy idiom already used
+# for `sqlite_split_read_write` so new bool keys (e.g. `fail_fast_on_connect`, #72) don't re-duplicate it.
+function _config_bool(settings::SQLConn, key::String, default::Bool)::Bool
+  haskey(settings.db_config_settings, key) || return default
+  v = settings.db_config_settings[key]
+  v isa Bool && return v
+  return lowercase(strip(string(v))) in ("1", "true", "yes", "on")
+end
+
 # Enforce the pool_timeout policy: `<= 0` ("never wait") is a cross-framework footgun, so fall back to
 # DEFAULT_POOL_TIMEOUT and warn once. Shared by both entry points — `_build_connection_pool!` (YAML) and
 # `register_connection` (kwarg) — so the guard and its message live in one place (#126, #179).
@@ -259,6 +269,10 @@ function _build_connection_pool!(settings::SQLConn, path::String)
   idle_timeout             = _config_secs(settings, "idle_timeout")
   max_lifetime             = _config_secs(settings, "max_lifetime")
   leak_detection_threshold = _config_secs(settings, "leak_detection_threshold")
+
+  # Fast-fail permanent connect errors (bad password / unopenable path) instead of waiting the full
+  # pool_timeout, then raise a truthful PoolConnectError (#72). Default on; set `false` to keep waiting.
+  fail_fast_on_connect = _config_bool(settings, "fail_fast_on_connect", true)
 
   sqlite_split_read_write = false
   if haskey(settings.db_config_settings, "sqlite_split_read_write")
@@ -292,7 +306,7 @@ function _build_connection_pool!(settings::SQLConn, path::String)
 
     @pormg_debug false
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout)
+    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
 
   elseif settings.db_config_settings["adapter"] == "PostgreSQL"
     dns = String[]
@@ -318,7 +332,7 @@ function _build_connection_pool!(settings::SQLConn, path::String)
 
     # Use parent module reference to avoid circular dependency during module loading
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout)
+    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
 
   else
     adapter = settings.db_config_settings["adapter"]
@@ -621,7 +635,7 @@ end
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -654,15 +668,16 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     "idle_timeout" => idle_timeout,
     "max_lifetime" => max_lifetime,
     "pool_timeout" => pool_timeout,
-    "leak_detection_threshold" => leak_detection_threshold
+    "leak_detection_threshold" => leak_detection_threshold,
+    "fail_fast_on_connect" => fail_fast_on_connect
   )
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
   if adapter == "PostgreSQL"
-    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout)
+    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
   elseif adapter == "SQLite"
-    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout)
+    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
   else
     throw(ArgumentError("Unsupported adapter: $adapter"))
   end

@@ -132,6 +132,16 @@ function PormG.backend_is_connection_error(pool::PormGSQLite, e)
          occursin("disk i/o error", msg)
 end
 
+# Is `e` a *permanent* connect failure (won't succeed on retry) rather than transient? SQLite has no
+# auth; the realistic permanent case is an unopenable path (missing parent dir / permissions →
+# SQLITE_CANTOPEN, "unable to open database file"). Everything else stays ambiguous (return false),
+# degrading to the normal wait-to-deadline path. Message-substring based — SQLite.jl exposes one
+# `SQLiteException` type for every open failure, so type-matching can't separate causes (#72).
+function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, e)
+  msg = lowercase(string(e))
+  return occursin("unable to open database file", msg)
+end
+
 # Window-function support probe used by src/Dialect.jl.
 PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversion_number())
 

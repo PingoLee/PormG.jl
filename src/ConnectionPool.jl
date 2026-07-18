@@ -5,7 +5,7 @@ import Logging
 # caller to qualify it and conflicts with Base.fetch on `using` (#35). PormG owns the
 # first-argument types (PormGPostgres/PormGSQLite/SQLConn), so this is not type piracy.
 import Base: fetch
-import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel
+import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
@@ -121,14 +121,14 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   write_lock::ReentrantLock
 end
 
-function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = 30)
+function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT)
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
   lock = ReentrantLock()
   PostgresConnectionPool(connections, available, connection_string, pool_size, Float64(pool_timeout), lock)
 end
 
-function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = 30)
+function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT)
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
   lock = ReentrantLock()
@@ -140,10 +140,10 @@ function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, spl
 end
 
 # Default acquire timeout (seconds) for a pool. Dispatch + generic fallback so the pool-shaped mock
-# structs (which don't carry `pool_timeout`) resolve to the historical 30 s default with zero changes.
+# structs (which don't carry `pool_timeout`) resolve to DEFAULT_POOL_TIMEOUT with zero changes.
 _pool_timeout(pool::PostgresConnectionPool) = pool.pool_timeout
 _pool_timeout(pool::SQLiteConnectionPool)   = pool.pool_timeout
-_pool_timeout(pool) = 30.0
+_pool_timeout(pool) = DEFAULT_POOL_TIMEOUT
 
 function _sqlite_is_read_query(sql::String)::Bool
   cleaned = strip(sql)

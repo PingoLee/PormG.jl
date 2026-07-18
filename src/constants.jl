@@ -13,6 +13,12 @@ const DBDF_PATH       = joinpath(DB_PATH, DBDF_FOLDER_NAME)
 
 const PORMG_DB_CONFIG_FILE_NAME = "connection.yml"
 
+# Default acquire-connection timeout (seconds) when neither connection.yml nor register_connection
+# specify `pool_timeout` (#126). Single source of truth shared by Configuration, ConnectionPool, and
+# precompile.jl (#179) — matches the cross-framework norm (HikariCP `CONNECTION_TIMEOUT`, SQLAlchemy
+# `pool_timeout`, both 30s).
+const DEFAULT_POOL_TIMEOUT = 30.0
+
 const TEST_FILE_IDENTIFIER = "_test.jl"
 
 const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"

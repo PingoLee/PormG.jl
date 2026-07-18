@@ -2,7 +2,7 @@ module Configuration
 
 import YAML, Logging
 import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
-import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE
+import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: Generator
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in the weakdep extensions (no direct LibPQ/SQLite here).
@@ -226,32 +226,39 @@ function _resolve_loaded_key(path_or_key::String)::Union{Nothing, String}
   return nothing
 end
 
+# Parse a seconds-valued pool setting from connection.yml. Returns `default` when the key is absent OR
+# the value can't be parsed to a Float64. Pure parser — no `> 0` policy; callers pick the default and
+# any enforcement. Consolidates the tryparse idiom for pool_timeout / idle_timeout / max_lifetime /
+# leak_detection_threshold (#179).
+function _config_secs(settings::SQLConn, key::String, default::Float64 = 0.0)::Float64
+  haskey(settings.db_config_settings, key) || return default
+  v = settings.db_config_settings[key]
+  return v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), default)
+end
+
+# Enforce the pool_timeout policy: `<= 0` ("never wait") is a cross-framework footgun, so fall back to
+# DEFAULT_POOL_TIMEOUT and warn once. Shared by both entry points — `_build_connection_pool!` (YAML) and
+# `register_connection` (kwarg) — so the guard and its message live in one place (#126, #179).
+function _normalize_pool_timeout(v::Real)::Float64
+  v > 0 && return Float64(v)
+  @warn "pool_timeout must be > 0; using the default $(DEFAULT_POOL_TIMEOUT)s" got=v
+  return DEFAULT_POOL_TIMEOUT
+end
+
 function _build_connection_pool!(settings::SQLConn, path::String)
   # Extract pool size from config (defaults to 3)
   pool_size = haskey(settings.db_config_settings, "pool_size") ?
               parse(Int, string(settings.db_config_settings["pool_size"])) : 3
 
-  # Default acquire timeout (#126), seconds; absent = 30. Values <= 0 fall back to 30 (a "never wait"
-  # setting is ambiguous across frameworks and a footgun), warned once at build.
-  pool_timeout = haskey(settings.db_config_settings, "pool_timeout") ?
-    (let v = settings.db_config_settings["pool_timeout"]
-       v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), 30.0)
-     end) : 30.0
-  if pool_timeout <= 0
-    @warn "pool_timeout must be > 0; using the default 30s" got=pool_timeout
-    pool_timeout = 30.0
-  end
+  # Default acquire timeout (#126), seconds; absent = DEFAULT_POOL_TIMEOUT. Values <= 0 fall back (a
+  # "never wait" setting is ambiguous across frameworks and a footgun), warned once at build.
+  pool_timeout = _normalize_pool_timeout(_config_secs(settings, "pool_timeout", DEFAULT_POOL_TIMEOUT))
 
-  # Optional idle-connection reaping / max-lifetime (#125), in seconds; absent or 0 = off.
-  _reap_secs(key) = begin
-    haskey(settings.db_config_settings, key) || return 0.0
-    v = settings.db_config_settings[key]
-    v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), 0.0)
-  end
-  idle_timeout = _reap_secs("idle_timeout")
-  max_lifetime = _reap_secs("max_lifetime")
-  # Optional connection-leak detection (#127), in seconds; absent or 0 = off.
-  leak_detection_threshold = _reap_secs("leak_detection_threshold")
+  # Optional idle-connection reaping / max-lifetime (#125) and leak detection (#127), in seconds;
+  # absent or 0 = off (gated by the `> 0` checks in the enable-wiring below).
+  idle_timeout             = _config_secs(settings, "idle_timeout")
+  max_lifetime             = _config_secs(settings, "max_lifetime")
+  leak_detection_threshold = _config_secs(settings, "leak_detection_threshold")
 
   sqlite_split_read_write = false
   if haskey(settings.db_config_settings, "sqlite_split_read_write")
@@ -614,15 +621,14 @@ end
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = 30, leak_detection_threshold::Real = 0)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
   end
 
-  # Default acquire timeout (#126); <= 0 falls back to 30 (see _build_connection_pool!).
-  pool_timeout = pool_timeout > 0 ? Float64(pool_timeout) :
-    (@warn "pool_timeout must be > 0; using the default 30s" got=pool_timeout; 30.0)
+  # Default acquire timeout (#126); <= 0 falls back to DEFAULT_POOL_TIMEOUT (shared with _build_connection_pool!).
+  pool_timeout = _normalize_pool_timeout(pool_timeout)
 
   if haskey(config, key)
     existing = config[key]

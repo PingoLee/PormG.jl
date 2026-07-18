@@ -293,6 +293,9 @@ end
 # and `register_connection(...; pool_timeout=…)` — set the pool's `pool_timeout` field (the default that
 # `acquire_connection` reads). DB-free: pools construct lazily, so assert the field directly.
 @testset "pool_timeout config wiring sets the pool default (#126)" begin
+    # Anchor the centralized default (#179): any future change to the const is a deliberate, visible edit.
+    @test PormG.DEFAULT_POOL_TIMEOUT == 30.0
+
     # (1) connection.yml path via _build_connection_pool!.
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")
@@ -327,7 +330,7 @@ end
     key_def = "ptimeout_def_$(getpid())"
     try
         PormG.Configuration.register_connection(key_def, ":memory:"; adapter="SQLite")
-        @test PormG.config[key_def].connections.pool_timeout == 30.0
+        @test PormG.config[key_def].connections.pool_timeout == PormG.DEFAULT_POOL_TIMEOUT
     finally
         _cleanup_configuration_test_keys([key_def])
     end
@@ -336,7 +339,7 @@ end
     key_neg = "ptimeout_neg_$(getpid())"
     try
         PormG.Configuration.register_connection(key_neg, ":memory:"; adapter="SQLite", pool_timeout=-1)
-        @test PormG.config[key_neg].connections.pool_timeout == 30.0
+        @test PormG.config[key_neg].connections.pool_timeout == PormG.DEFAULT_POOL_TIMEOUT
     finally
         _cleanup_configuration_test_keys([key_neg])
     end

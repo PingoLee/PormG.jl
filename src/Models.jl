@@ -11,7 +11,6 @@ import PormG: SQLConn, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 # import PormG: make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS
 using Printf
-import Base.deepcopy
 using Decimals
 
 
@@ -52,29 +51,22 @@ end
   owner_model_resolved::Union{PormGModel, Nothing} = nothing
   related_model_resolved::Union{PormGModel, Nothing} = nothing
 end
-function deepcopy(model::Model_Type)
-  try
-    return Model_Type(
-      model.name,
-      model.verbose_name,
-      deepcopy(model.fields),
-      deepcopy(model.field_names),
-      deepcopy(model.related_objects),
-      model._module,
-      model.connect_key,
-      deepcopy(model.cache)
-    )
-  catch e
-    @error("Failed to deepcopy Model_Type: $(e)")
-    rethrow(e)
-  end
-end
+# A Model_Type is resolved schema state — its `fields`, `_module`, and `related_objects` are built once
+# by `set_models` and treated as an immutable, SHARED reference everywhere (the query builder copies query
+# state but shares the model verbatim: `SQLObjectQuery` deepcopy sets `model=obj.model`). Deep-copying a
+# model is never wanted and, worse, throws: the moment recursion reaches a relation field's resolved
+# `.to` (another Model_Type) it descends into `_module::Module` → "deepcopy of Modules not supported".
+# Override the recursion hook to SHARE — return the same model, registered in `stackdict` so its identity
+# is stable across the surrounding copy. So `deepcopy(model) === model`, and any container/field that
+# holds a model shares it rather than cloning the schema graph. Mirrors the `ManyToManyRelation` override
+# below (#65) and resolves the module-traversal throw (#157).
+Base.deepcopy_internal(m::Model_Type, stackdict::IdDict) = get!(stackdict, m, m)
 
 # #65: a ManyToManyRelation now carries resolved model objects (owner/related). Those are shared,
 # derived state — `set_models` repopulates them — so deep-copying them would needlessly clone the
-# whole related-model graph (a Model_Type's `related_objects` holds these relations, and
-# `deepcopy(model)` above recurses into it). Copy the value-type String/Bool fields; SHARE the two
-# resolved-model references. Mirrors the targeted override for SQLiteParameterizedQuery.
+# whole related-model graph (a Model_Type's `related_objects` holds these relations). Copy the
+# value-type String/Bool fields; SHARE the two resolved-model references — consistent with the
+# `Model_Type` share hook above (#157) and the targeted override for SQLiteParameterizedQuery.
 function Base.deepcopy_internal(r::ManyToManyRelation, stackdict::IdDict)
   haskey(stackdict, r) && return stackdict[r]
   new = ManyToManyRelation(

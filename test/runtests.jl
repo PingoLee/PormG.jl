@@ -36,6 +36,7 @@ end
     @testset "Composite Uniqueness (unique_together #19)" include("unit/test_unique_constraints.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "custom_join Copy Isolation (#112)" include("unit/test_custom_join_copy.jl")
+    @testset "Model_Type deepcopy Shares (#157)" include("unit/test_model_deepcopy.jl")
     @testset "cjoin_on Anchor-less Joins (#45)" include("unit/test_cjoin_on.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")

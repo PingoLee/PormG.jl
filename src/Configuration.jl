@@ -1,7 +1,7 @@
 module Configuration
 
 import YAML, Logging
-import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
+import PormG: SQLConn, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: Generator
 import PormG: @pormg_debug
@@ -872,7 +872,9 @@ end
 # Add this to your module cleanup if needed
 function __cleanup__()
   for (path, settings) in config
-    if settings.connections isa SQLConn
+    # `settings.connections` is a pool (PormGBackend) or nothing. It used to be checked with
+    # `isa SQLConn` back when pools were <: SQLConn (#186 moved them under PormGBackend).
+    if settings.connections isa PormGBackend
       close_pool!(settings.connections)
     end
   end

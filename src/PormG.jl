@@ -38,8 +38,12 @@ import DataFrames, OrderedCollections, Dates, Logging, Millboard, YAML
 
 abstract type PormGAbstractType end
 abstract type SQLConn <: PormGAbstractType end
-abstract type PormGPostgres <: SQLConn end
-abstract type PormGSQLite <: SQLConn end
+# Backend/dialect markers: the dispatch key for SQL rendering and driver selection. NOT <: SQLConn —
+# SQLConn is the Settings/config type, and a pool carries none of its fields (#186). Concrete pools are
+# PostgresConnectionPool <: PormGPostgres and SQLiteConnectionPool <: PormGSQLite.
+abstract type PormGBackend <: PormGAbstractType end
+abstract type PormGPostgres <: PormGBackend end
+abstract type PormGSQLite <: PormGBackend end
 abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
 abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
 abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
@@ -60,9 +64,10 @@ abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
 abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
 
 
-abstract type AbstractModel <: PormGAbstractType end
 abstract type PormGModel <: PormGAbstractType end
-abstract type PormGField <: PormGModel end # define the type of the column from the model
+# A field is a COMPONENT of a model, not a kind of model — a sibling, not a subtype, so it does not
+# satisfy ::PormGModel signatures (which all read model-only attributes) (#186).
+abstract type PormGField <: PormGAbstractType end # define the type of the column from the model
 
 abstract type Migration <: PormGAbstractType end
 

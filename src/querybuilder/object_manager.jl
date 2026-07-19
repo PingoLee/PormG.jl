@@ -358,7 +358,11 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   end
 end
 
-function Base.getproperty(m::PormGModel, sym::Symbol)
+# Dispatches on the concrete Model_Type (the sole concrete PormGModel). It was on `::PormGModel` and
+# carried a `hasfield(…, :cache)` guard only because fields used to be `<: PormGModel` and would recurse
+# into their absent `.cache` (a StackOverflowError, #108). Fields are no longer `<: PormGModel` (#186),
+# so that guard is gone and field property access uses Julia's default getproperty.
+function Base.getproperty(m::Models.Model_Type, sym::Symbol)
   if sym === :objects
     # Self-healing: Ensure models are initialized before returning objects
     Models.ensure_model_initialized(m)
@@ -370,13 +374,7 @@ function Base.getproperty(m::PormGModel, sym::Symbol)
     # M2M accessor names are validated through format_fild_name which rejects reserved
     # names, so a user-defined M2M field cannot shadow a Model_Type struct field.
     return getfield(m, sym)
-  elseif hasfield(typeof(m), :cache) && hasfield(typeof(m), :related_objects) &&
-         Models.has_many_to_many_accessor(m, String(sym))
-    # Guard the M2M branch on the `cache`/`related_objects` struct fields it reads. Only Model_Type
-    # has them; PormGField subtypes are also <: PormGModel but do NOT, so without this guard
-    # has_many_to_many_accessor would re-enter getproperty on a field's absent `.cache` and recurse
-    # forever — a StackOverflowError on ANY absent-property access to a field object (issue #108).
-    # Fields fall through to the plain getfield below, which raises a clean FieldError.
+  elseif Models.has_many_to_many_accessor(m, String(sym))
     Models.ensure_model_initialized(m)
     return ManyToManyDescriptor(m, String(sym), Models.get_many_to_many_relation(m, String(sym)))
   else

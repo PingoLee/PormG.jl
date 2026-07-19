@@ -178,13 +178,14 @@ end
 # ── Drive the REAL PormG.Migrations._execute_migration_lifecycle (not a reproduction) against the
 #    mock, so a future revert of the caller's `release_conn` is caught by CI. The mock returns empty
 #    result tables (so the migration reads the DB as empty → no idempotency skip), no-ops the DDL and
-#    the history INSERTs, and throws on COMMIT. `SQLConn` is abstract and the mocks are subtypes, so
-#    the same pool doubles as `connection` and `settings`; `settings` is only touched by archiving,
-#    which the COMMIT-failure rethrow never reaches. Returns the caught error (or nothing). ──
+#    the history INSERTs, and throws on COMMIT. The 2nd arg is `settings::SQLConn`; since #186 a pool is
+#    no longer <: SQLConn, we pass a MockSettings139 (a Settings-like SQLConn wrapping the pool) — it is
+#    only touched by archiving, which the COMMIT-failure rethrow never reaches. Returns the error/nothing. ──
 function run_real_migration_lifecycle_139(pool)
+  settings = MockSettings139(pool)
   try
     PormG.Migrations._execute_migration_lifecycle(
-      pool, pool,
+      pool, settings,
       String["CREATE TABLE _pormg_t139 (id integer);"],
       "CREATE TABLE _pormg_t139 (id integer);",
       "v139", "commit_fail_mig", "chk139", false)
@@ -245,6 +246,13 @@ end
   pool = MockPGPool139()
   conn = CP.acquire_connection(pool)
   settings = MockSettings139(pool)
+
+  # #186: a pool and a Settings are now DISTINCT type families — a pool is NOT a SQLConn (it's a
+  # PormGBackend); only the Settings wrapper is a SQLConn. That separation is exactly what makes the
+  # two finalize_transaction_connection! overloads (pool vs SQLConn) dispatch to the right one.
+  @test !(pool isa PormG.SQLConn)
+  @test pool isa PormG.PormGBackend
+  @test settings isa PormG.SQLConn
 
   @test CP.finalize_transaction_connection!(settings, conn) === nothing   # <: SQLConn, not a pool
   @test pool.connections[1] === conn                    # delegated to pool.connections and released

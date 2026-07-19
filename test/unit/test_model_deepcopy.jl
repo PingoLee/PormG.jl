@@ -75,8 +75,8 @@ const MDC = ModelDeepcopyModels
   # "deepcopy of Modules not supported" on the FK's `.to._module`. It must now succeed and SHARE the
   # nested target model rather than clone the schema graph. (Revert the share hook → this throws.)
   fields_copy = deepcopy(results.fields)
-  # FIELDS are still deep-copied (a PormGField is itself <: PormGModel, but the hook dispatches on the
-  # concrete Model_Type, NOT PormGModel — so fields stay cloneable and copy-isolation, #43/#112, holds)…
+  # FIELDS are still deep-copied — the share hook dispatches on the concrete Model_Type only, so a field
+  # (a sibling of PormGModel since #186) stays cloneable and copy-isolation, #43/#112, holds…
   @test fields_copy["driverid"] !== results.fields["driverid"]
   # …while the resolved target model reached through the cloned field is SHARED (Module never traversed).
   @test fields_copy["driverid"].to === driver

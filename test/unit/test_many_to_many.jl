@@ -219,19 +219,25 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Regression (#108): the getproperty override dispatches M2M accessors by calling
-# has_many_to_many_accessor(m, …), which reads m.cache / m.related_objects. Those are
-# Model_Type struct fields — but PormGField subtypes are ALSO <: PormGModel and do NOT
-# have them, so for a FIELD object the M2M branch used to re-enter getproperty on the
-# absent `.cache` and recurse forever: a StackOverflowError on ANY absent-property access
-# to a field object. The fix guards the M2M branch on `hasfield(…, :cache/:related_objects)`,
-# so field objects fall through to a clean getfield/FieldError.
+# Regression (#108, now guaranteed by #186): the Model_Type getproperty override dispatches M2M
+# accessors via has_many_to_many_accessor(m, …), which reads m.cache / m.related_objects. When fields
+# were `<: PormGModel`, a FIELD object hit that method and re-entered getproperty on its absent `.cache`,
+# recursing forever (a StackOverflowError on ANY absent-property access to a field). #108 papered over it
+# with a `hasfield(…, :cache/:related_objects)` guard; #186 removed the root cause — a field is no longer
+# a PormGModel, so it never reaches this method and uses Julia's default getproperty (clean getfield/
+# FieldError). This testset pins that the StackOverflow stays impossible.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PormGModel.getproperty: absent property on a field object doesn't recurse (#108)" begin
-  # A field object (PormGField <: PormGModel) that lacks cache/related_objects.
+  # A field object. Since #186, PormGField is a SIBLING of PormGModel (not a subtype), so a field no
+  # longer satisfies ::PormGModel and never reaches PormGModel/Model_Type getproperty at all.
   cf = Models.CharField(max_length = 5)
 
-  # Real attribute access still works — the guard must not disturb normal field reads.
+  # #186 regression: a field is NOT a model. This is now what makes the #108 StackOverflow impossible —
+  # field property access uses Julia's default getproperty, not the Model_Type M2M-accessor path.
+  @test !(cf isa PormG.PormGModel)
+  @test cf isa PormG.PormGField
+
+  # Real attribute access still works.
   @test cf.max_length == 5
 
   # Absent property on a FIELD object must raise a clean FieldError. Pre-fix this recursed

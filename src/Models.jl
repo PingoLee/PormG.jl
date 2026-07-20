@@ -7,7 +7,7 @@ import JSON
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
 import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
-import PormG: SQLConn, config, Configuration
+import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 # import PormG: make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS
 using Printf
@@ -150,7 +150,7 @@ function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
   end
 end
 
-function get_model_name(model::PormGModel, settings::SQLConn, symbol::Bool=true)::Union{String, Symbol}
+function get_model_name(model::PormGModel, settings::PormGSettings, symbol::Bool=true)::Union{String, Symbol}
   value::Union{String, Symbol, Nothing} = nothing
   if settings.django_prefix !== nothing
     django_prefix = """$(settings.django_prefix)_"""
@@ -203,7 +203,7 @@ function set_models(_module::Module, path::String)::Nothing
     connect_key = path
   end
   
-  settings::SQLConn = Configuration.get_settings(connect_key)
+  settings::PormGSettings = Configuration.get_settings(connect_key)
 
   # set the original module in models and clear related objects for idempotency
   for model in models
@@ -710,9 +710,9 @@ end
 Converts a model object to a string representation to create the model.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; contants_julia::Vector{String}=reserved_words)::String
+    Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words)::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
-- `settings::SQLConn`: Connection settings; supplies `django_prefix` and the target output folder.
+- `settings::PormGSettings`: Connection settings; supplies `django_prefix` and the target output folder.
 - `contants_julia::Vector{String}=reserved_words`: A vector of reserved words in Julia.
 
 # Returns
@@ -733,7 +733,7 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}, settings::SQLConn; contants_julia::Vector{String}=reserved_words)::String
+function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words)::String
   fields::String = ""
   render_failures::Vector{String} = String[]
   django_prefix::Bool = settings.django_prefix === nothing ? false : true
@@ -1344,7 +1344,7 @@ function _resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, 
   throw(ArgumentError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
 end
 
-function _many_to_many_table_name(source_model::PormGModel, field_name::String, field::sManyToManyField, settings::SQLConn)::String
+function _many_to_many_table_name(source_model::PormGModel, field_name::String, field::sManyToManyField, settings::PormGSettings)::String
   field.db_table !== nothing && return field.db_table
   source_name = get_model_name(source_model, settings, false)
   return format_model_name("$(source_name)_$(field_name)")
@@ -1374,7 +1374,7 @@ function _relation_from_many_to_many(
   field::sManyToManyField,
   related_model::PormGModel,
   related_binding::String,
-  settings::SQLConn;
+  settings::PormGSettings;
   _module::Union{Module, Nothing}=nothing,
   model_map::Union{Nothing, Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}}=nothing,
 )
@@ -1456,7 +1456,7 @@ function _cache_many_to_many_relation!(model::PormGModel, accessor::String, rela
   return relation
 end
 
-function _register_many_to_many_relation!(_module::Module, settings::SQLConn, model::PormGModel, field_name::String, field::sManyToManyField)::Nothing
+function _register_many_to_many_relation!(_module::Module, settings::PormGSettings, model::PormGModel, field_name::String, field::sManyToManyField)::Nothing
   related_model = _resolve_model_reference(_module, field.to)
   relation = _relation_from_many_to_many(
     model,
@@ -1513,7 +1513,7 @@ function strip_many_to_many_fields(model::PormGModel)::PormGModel
   )
 end
 
-function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn)
+function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings)
   expanded = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}()
 
   for (model_name, model_info) in current_schema

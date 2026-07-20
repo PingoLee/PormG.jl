@@ -37,9 +37,9 @@ import DataFrames, OrderedCollections, Dates, Logging, Millboard, YAML
 # and load on `using LibPQ` / `using SQLite`.
 
 abstract type PormGAbstractType end
-abstract type SQLConn <: PormGAbstractType end
-# Backend/dialect markers: the dispatch key for SQL rendering and driver selection. NOT <: SQLConn —
-# SQLConn is the Settings/config type, and a pool carries none of its fields (#186). Concrete pools are
+abstract type PormGSettings <: PormGAbstractType end
+# Backend/dialect markers: the dispatch key for SQL rendering and driver selection. NOT <: PormGSettings —
+# PormGSettings is the Settings/config type, and a pool carries none of its fields (#186). Concrete pools are
 # PostgresConnectionPool <: PormGPostgres and SQLiteConnectionPool <: PormGSQLite.
 abstract type PormGBackend <: PormGAbstractType end
 abstract type PormGPostgres <: PormGBackend end
@@ -71,7 +71,7 @@ abstract type PormGField <: PormGAbstractType end # define the type of the colum
 
 abstract type Migration <: PormGAbstractType end
 
-const config::Dict{String,SQLConn} = Dict()
+const config::Dict{String,PormGSettings} = Dict()
 
 if !haskey(ENV, "PORMG_ENV")
   ENV["PORMG_ENV"] = "dev"

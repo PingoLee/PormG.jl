@@ -270,7 +270,7 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
   _add_new_field(conn, migration_plan, model_name, model, field_name |> string, temporary_default_value=temporary_default_value)
 end
 
-function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::SQLConn; interactive::Bool = true)::Nothing
+function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true)::Nothing
   # @pormg_debug model_name == :new_join_position
   if Models.are_model_fields_equal(current_schema[model_name][:model], model)
     # println("Model $model_name are equal")
@@ -406,7 +406,7 @@ function _resolve_table_fields(
                                 colect_deletion::Vector{Symbol}, 
                                 colect_addition::Vector{Symbol}, 
                                 migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
-                                settings::SQLConn,
+                                settings::PormGSettings,
                                 model_fields_map::Dict{String, String},
                                 current_fields_map::Dict{String, String};
                                 interactive::Bool = true
@@ -574,7 +574,7 @@ function _colect_numbered_fields(colect::Vector{Symbol})
   end
   return colect_numbered, join([string(index, " - ", colect_numbered[index]) for index in sort(collect(keys(colect_numbered)))], ", ")
 end
-function _get_temporary_default_value(field::PormGField, settings::SQLConn)
+function _get_temporary_default_value(field::PormGField, settings::PormGSettings)
   if field |> typeof == Models.sDateTimeField
     return field.formater(now(), settings.time_zone) |> field.formater
   elseif field |> typeof == Models.sDateField
@@ -590,7 +590,7 @@ end
 # ---
 
 # Compare model definitions to the current database schema
-function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::SQLConn; interactive::Bool = true)
+function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
 # models is olds models
 
 migration_plan = OrderedDict{Symbol, OrderedDict{String, String}}()
@@ -697,7 +697,7 @@ return migration_plan
 end
 
 # Main function to simulate makemigrations
-function makemigrations(connection::PormGPostgres, settings::SQLConn; path::String = "db/models.jl", interactive::Bool = true)
+function makemigrations(connection::PormGPostgres, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
 if !settings.change_db
   @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
   return
@@ -741,7 +741,7 @@ end
 
 end
 
-function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String = "db/models.jl", interactive::Bool = true)
+function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
   if !settings.change_db
     @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")
     return
@@ -774,7 +774,7 @@ function makemigrations(connection::PormGSQLite, settings::SQLConn; path::String
   end
 end
 
-function makemigrations(db::String; config::Dict{String,SQLConn} = config, interactive::Bool = true)
+function makemigrations(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true)
 settings = Configuration.get_settings(db)
 path = joinpath(db, settings.model_file)
 isfile(path) || error("The file $(path) does not exists")

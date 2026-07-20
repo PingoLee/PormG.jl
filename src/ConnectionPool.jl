@@ -3,9 +3,9 @@ module ConnectionPool
 import Logging
 # Extend Base.fetch rather than define a fresh `fetch` — a shadowing `fetch` forces every
 # caller to qualify it and conflicts with Base.fetch on `using` (#35). PormG owns the
-# first-argument types (PormGPostgres/PormGSQLite/SQLConn), so this is not type piracy.
+# first-argument types (PormGPostgres/PormGSQLite/PormGSettings), so this is not type piracy.
 import Base: fetch
-import PormG: SQLConn, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
+import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: @pormg_debug
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
@@ -1119,8 +1119,8 @@ function finalize_transaction_connection!(pool::Union{PormGPostgres, PormGSQLite
   end
   return nothing
 end
-# SQLConn overload — delegates to the underlying pool, mirroring with_transaction(::SQLConn).
-finalize_transaction_connection!(pool::SQLConn, conn; rollback_error = nothing) =
+# PormGSettings overload — delegates to the underlying pool, mirroring with_transaction(::PormGSettings).
+finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = nothing) =
   finalize_transaction_connection!(pool.connections, conn; rollback_error = rollback_error)
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
@@ -1344,8 +1344,8 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     end
   end
 end
-fetch_async(settings::SQLConn, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::SQLConn, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::PormGSettings, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch_async(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
@@ -1387,8 +1387,8 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     throw(root)
   end
 end
-fetch(settings::SQLConn, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::SQLConn, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGSettings, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
@@ -1416,7 +1416,7 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
     end
   end
 end
-fetch_copy(settings::SQLConn, sql::String, data_itr) = fetch_copy(settings.connections, sql, data_itr)
+fetch_copy(settings::PormGSettings, sql::String, data_itr) = fetch_copy(settings.connections, sql, data_itr)
 
 """
     with_transaction_async(pool::PormGPostgres, sql::String; ...) -> (task, conn)
@@ -1495,11 +1495,11 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     end
   end
 end
-with_transaction(pool::SQLConn, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
-with_transaction_async(pool::SQLConn, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
+with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
+with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
 
 """
-    with_savepoint(f::Function, settings::SQLConn, name::String) -> result
+    with_savepoint(f::Function, settings::PormGSettings, name::String) -> result
 
 Execute `f()` wrapped in a savepoint named `name`. On success, releases the savepoint.
 On error, rolls back to the savepoint, releases it, and rethrows so the outer transaction
@@ -1514,7 +1514,7 @@ do not need to guard the call site.
 not parameterized — savepoint names are identifiers). Internal callers pass constants;
 the reentrant `atomic`/`run_in_transaction` path passes `_savepoint_name(depth)`.
 """
-function with_savepoint(f::Function, settings::SQLConn, name::String)
+function with_savepoint(f::Function, settings::PormGSettings, name::String)
   if transaction_connection_for(settings) === nothing
     return f()   # not inside a transaction on this pool → nothing to savepoint
   end
@@ -1566,7 +1566,7 @@ write transaction) may re-enter without self-deadlock.
 """
 with_sqlite_write_lock(f::Function, pool::PormGSQLite) = Base.lock(f, pool.write_lock)
 with_sqlite_write_lock(f::Function, pool::PormGPostgres) = f()
-with_sqlite_write_lock(f::Function, settings::SQLConn) = with_sqlite_write_lock(f, settings.connections)
+with_sqlite_write_lock(f::Function, settings::PormGSettings) = with_sqlite_write_lock(f, settings.connections)
 
 """
     run_in_transaction(f::Function, pool::PormGPostgres) -> result
@@ -1630,9 +1630,9 @@ end
 # unit-testable in isolation.
 _savepoint_name(depth::Integer) = "pormg_sp_$(depth)"
 
-# Resolve the registered SQLConn for a pool so the reentrant savepoint path (which needs
+# Resolve the registered PormGSettings for a pool so the reentrant savepoint path (which needs
 # `settings` for `with_savepoint`/`fetch`) can route through the pinned connection.
-function _settings_for_pool(pool::Union{PormGPostgres, PormGSQLite})::SQLConn
+function _settings_for_pool(pool::Union{PormGPostgres, PormGSQLite})::PormGSettings
   key = connection_key_for_pool(pool)
   key === nothing && throw(ArgumentError("Cannot resolve connection settings for the active transaction pool"))
   return get_settings(key)
@@ -1644,7 +1644,7 @@ end
 # the pinned connection: no new connection is acquired, no BEGIN is issued, the SQLite write
 # lock (already held reentrantly by the outermost block) is not re-taken, and the outermost
 # block still owns the single connection release.
-function _nested_savepoint(f::Function, settings::SQLConn)
+function _nested_savepoint(f::Function, settings::PormGSettings)
   pool = settings.connections
   conn = transaction_connection_for(settings)
   return with_tx_context(pool, conn) do
@@ -1725,18 +1725,18 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
 end
 
 function run_in_transaction(f::Function, db::String)
-  settings::SQLConn = get_settings(db)
+  settings::PormGSettings = get_settings(db)
   return run_in_transaction(f, settings.connections)
 end
 
-run_in_transaction(f::Function, settings::SQLConn) = run_in_transaction(f, settings.connections)
+run_in_transaction(f::Function, settings::PormGSettings) = run_in_transaction(f, settings.connections)
 
 """
     atomic(f::Function, db; durable::Bool=false) -> result
 
 Run `f()` in a database transaction — the friendly, Django-flavored alias for
-[`run_in_transaction`](@ref). `db` may be a pool, a db-key `String` (e.g. `"db_2"`), or an
-`SQLConn`.
+[`run_in_transaction`](@ref). `db` may be a pool, a db-key `String` (e.g. `"db_2"`), or a
+`PormGSettings`.
 
 A **nested** `atomic`/`run_in_transaction` block on the *same* database automatically becomes
 a `SAVEPOINT`: if `f()` throws, only that inner block is rolled back to its savepoint and the
@@ -1767,6 +1767,6 @@ function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::B
   return run_in_transaction(f, pool)
 end
 atomic(f::Function, db::String; durable::Bool=false) = atomic(f, get_settings(db).connections; durable=durable)
-atomic(f::Function, settings::SQLConn; durable::Bool=false) = atomic(f, settings.connections; durable=durable)
+atomic(f::Function, settings::PormGSettings; durable::Bool=false) = atomic(f, settings.connections; durable=durable)
 
 end # module

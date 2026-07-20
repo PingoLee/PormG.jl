@@ -154,11 +154,11 @@ function _ensure_format_version_column(connection::Union{PormGPostgres, PormGSQL
   nothing
 end
 
-function init_migrations(settings::SQLConn)
+function init_migrations(settings::PormGSettings)
   init_migrations(settings.connections)
 end
 
-function init_migrations(db::String; config::Dict{String,SQLConn} = config)
+function init_migrations(db::String; config::Dict{String,PormGSettings} = config)
   settings = config[db]
   init_migrations(settings)
 end
@@ -344,7 +344,7 @@ Report migration status: applied, failed, pending, and drift signals.
 Includes basic drift detection by comparing live database tables against
 the history of applied migrations.
 """
-function status(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn)::MigrationStatus
+function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::MigrationStatus
   has_table = _migrations_table_exists(connection)
   
   applied = NamedTuple[]
@@ -398,11 +398,11 @@ function status(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn
   return MigrationStatus(applied, failed, has_pending, has_table, drift_signals)
 end
 
-function status(settings::SQLConn)::MigrationStatus
+function status(settings::PormGSettings)::MigrationStatus
   status(settings.connections, settings)
 end
 
-function status(db::String; config::Dict{String,SQLConn} = config)::MigrationStatus
+function status(db::String; config::Dict{String,PormGSettings} = config)::MigrationStatus
   settings = config[db]
   status(settings)
 end
@@ -416,7 +416,7 @@ end
 
 Load and return all OrderedDicts from the pending_migrations.jl file.
 """
-function _load_migration_plan(settings::SQLConn)
+function _load_migration_plan(settings::PormGSettings)
   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
   if !isfile(pending_path)
     error("No pending migrations found at: $pending_path")
@@ -523,7 +523,7 @@ Analyze pending migrations without applying them.
 Validates ordering, checksums, destructive actions, and SQL generation.
 Does NOT modify the database or move files.
 """
-function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn)::DryRunResult
+function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings)::DryRunResult
   migration_plan = _load_migration_plan(settings)
   ordered_statements, all_sql = _order_statements(migration_plan)
   
@@ -537,11 +537,11 @@ function dry_run(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLCon
   )
 end
 
-function dry_run(settings::SQLConn)::DryRunResult
+function dry_run(settings::PormGSettings)::DryRunResult
   dry_run(settings.connections, settings)
 end
 
-function dry_run(db::String; config::Dict{String,SQLConn} = config)::DryRunResult
+function dry_run(db::String; config::Dict{String,PormGSettings} = config)::DryRunResult
   settings = config[db]
   dry_run(settings)
 end
@@ -643,7 +643,7 @@ end
 
 Move pending_migrations.jl to applied_migrations/ and snapshot the models file.
 """
-function _archive_migration_files(settings::SQLConn, date_str::String)
+function _archive_migration_files(settings::PormGSettings, date_str::String)
   path_applied = joinpath(settings.db_def_folder, "migrations", "applied_migrations")
   if !ispath(path_applied)
     mkpath(path_applied)
@@ -689,7 +689,7 @@ Apply pending migrations to a PostgreSQL database.
 - `dry_run_only::Bool=false`: if `true`, only analyze without applying (returns DryRunResult)
 - `name::String="pending_migration"`: name for this migration in the history table
 """
-function migrate(connection::PormGPostgres, settings::SQLConn;
+function migrate(connection::PormGPostgres, settings::PormGSettings;
                  path::String = "db/models/models.jl",
                  interactive::Bool = true,
                  destructive::Bool = false,
@@ -772,7 +772,7 @@ Apply pending migrations to a SQLite database.
 SQLite migrations use BEGIN IMMEDIATE TRANSACTION for safety.
 Advisory locking is not available — single-instance migration safety only.
 """
-function migrate(connection::PormGSQLite, settings::SQLConn; 
+function migrate(connection::PormGSQLite, settings::PormGSettings; 
                  path::String = "db/models/models.jl",
                  interactive::Bool = true, 
                  destructive::Bool = false,
@@ -841,7 +841,7 @@ end
 # Shared execution lifecycle (called within lock for PostgreSQL)
 # ==============================================================================
 
-function _execute_migration_lifecycle(connection::PormGPostgres, settings::SQLConn,
+function _execute_migration_lifecycle(connection::PormGPostgres, settings::PormGSettings,
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
                                       has_destructive::Bool)
@@ -916,7 +916,7 @@ function _execute_migration_lifecycle(connection::PormGPostgres, settings::SQLCo
   end
 end
 
-function _execute_migration_lifecycle(connection::PormGSQLite, settings::SQLConn,
+function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSettings,
                                       ordered_statements::Vector{String}, all_sql::String,
                                       version::String, name::String, checksum::String,
                                       has_destructive::Bool)
@@ -998,7 +998,7 @@ end
 # String-based entry point
 # ==============================================================================
 
-function migrate(db::String; config::Dict{String,SQLConn} = config, interactive::Bool = true,
+function migrate(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true,
                  destructive::Bool = false, dry_run_only::Bool = false, name::String = "pending_migration")
   settings = config[db]
   migrate(settings.connections, settings, interactive=interactive, destructive=destructive, 
@@ -1016,7 +1016,7 @@ Apply pending migrations up to (and including) a specific version.
 Only meaningful when multiple migration files exist in the pending queue.
 For now, this validates the target version against the current history.
 """
-function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn, 
+function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings, 
                     target_version::String; interactive::Bool = true, destructive::Bool = false)
   init_migrations(connection)
   
@@ -1031,7 +1031,7 @@ function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::SQL
   throw(ArgumentError("migrate_to(version) is not implemented for the current single pending_migrations.jl workflow. Generate and apply the pending plan with migrate(), or implement ordered multi-file migration queues first."))
 end
 
-function migrate_to(db::String, target_version::String; config::Dict{String,SQLConn} = config, 
+function migrate_to(db::String, target_version::String; config::Dict{String,PormGSettings} = config, 
                     interactive::Bool = true, destructive::Bool = false)
   settings = config[db]
   migrate_to(settings.connections, settings, target_version; interactive=interactive, destructive=destructive)
@@ -1074,7 +1074,7 @@ verifiable — passing neither is refused rather than fabricated (issue #81). De
 classified from `sql_content` when provided instead of being hard-coded, so a manually-reconciled
 destructive migration is still flagged in history.
 """
-function mark_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn,
+function mark_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                       version::String, name::String;
                       checksum::String = "", sql_content::String = "")
   # Validate arguments before touching the DB so a bad call is a pure ArgumentError.
@@ -1086,7 +1086,7 @@ function mark_applied(connection::Union{PormGPostgres, PormGSQLite}, settings::S
   @info("Marked version $version as applied.")
 end
 
-function mark_applied(db::String, version::String, name::String; config::Dict{String,SQLConn} = config, kwargs...)
+function mark_applied(db::String, version::String, name::String; config::Dict{String,PormGSettings} = config, kwargs...)
   settings = config[db]
   mark_applied(settings.connections, settings, version, name; kwargs...)
 end
@@ -1097,14 +1097,14 @@ end
 Update an existing migration record to 'failed' status.
 Useful after manual investigation of a partially-applied migration.
 """
-function mark_failed(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn,
+function mark_failed(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                      version::String)
   init_migrations(connection)
   _update_migration_status(connection, version, "failed")
   @info("Marked version $version as failed.")
 end
 
-function mark_failed(db::String, version::String; config::Dict{String,SQLConn} = config)
+function mark_failed(db::String, version::String; config::Dict{String,PormGSettings} = config)
   settings = config[db]
   mark_failed(settings.connections, settings, version)
 end
@@ -1116,7 +1116,7 @@ Remove a migration record from the history table entirely.
 Use with caution — this erases history. Intended for cleanup after
 manual rollbacks or test scenarios.
 """
-function remove_migration_record(connection::Union{PormGPostgres, PormGSQLite}, settings::SQLConn,
+function remove_migration_record(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                                  version::String)
   init_migrations(connection)
   
@@ -1130,7 +1130,7 @@ function remove_migration_record(connection::Union{PormGPostgres, PormGSQLite}, 
   @info("Removed migration record for version $version.")
 end
 
-function remove_migration_record(db::String, version::String; config::Dict{String,SQLConn} = config)
+function remove_migration_record(db::String, version::String; config::Dict{String,PormGSettings} = config)
   settings = config[db]
   remove_migration_record(settings.connections, settings, version)
 end
@@ -1155,7 +1155,7 @@ Returns `(discarded=true, path, backup, tables, statements)` describing what was
 or `nothing` when there is no pending migration. Pairs with [`status`](@ref), which reports
 whether a pending file exists.
 """
-function discard_pending_migration(settings::SQLConn; backup::Bool = true)
+function discard_pending_migration(settings::PormGSettings; backup::Bool = true)
   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
   if !isfile(pending_path)
     @info(_emsg("\e[32mNo pending migration to discard.\e[0m"))
@@ -1187,7 +1187,7 @@ function discard_pending_migration(settings::SQLConn; backup::Bool = true)
   return (discarded = true, path = pending_path, backup = backup_path, tables = tables, statements = statements)
 end
 
-function discard_pending_migration(db::String; config::Dict{String,SQLConn} = config, backup::Bool = true)
+function discard_pending_migration(db::String; config::Dict{String,PormGSettings} = config, backup::Bool = true)
   settings = config[db]
   discard_pending_migration(settings; backup = backup)
 end

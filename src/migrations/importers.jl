@@ -118,7 +118,7 @@ function import_models_from_postgres(db::String;
   ignore_table::Vector{String} = postgres_ignore_table,
   include_table::Union{Vector{String}, Nothing} = nothing,
   file::String="automatic_models.jl",
-  config::Dict{String,SQLConn} = config)
+  config::Dict{String,PormGSettings} = config)
   
   settings = Configuration.get_settings(db)
   conn = settings.connections
@@ -155,7 +155,7 @@ function import_models_from_postgres(db::String;
 end
 
 function import_models_from_postgres(;db::PormGPostgres = connection(), 
-                                  settings::SQLConn,
+                                  settings::PormGSettings,
                                   force_replace::Bool=false, 
                                   ignore_table::Vector{String} = postgres_ignore_table,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
@@ -261,7 +261,7 @@ function import_models_from_django(
     parameters_ignore::Vector{String} = ["help_text"]
   )
 
-  settings::Union{Nothing, SQLConn} = nothing
+  settings::Union{Nothing, PormGSettings} = nothing
   try
     settings = Configuration.get_settings(db)
   catch e

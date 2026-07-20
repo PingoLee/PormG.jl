@@ -6,7 +6,7 @@
     get_settings(obj::Union{SQLObject, SQLObjectHandler}; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing)
 
 Resolves the database settings for a query. 
-Returns a tuple of `(settings::SQLConn, connection, conn_key::String)`.
+Returns a tuple of `(settings::PormGSettings, connection, conn_key::String)`.
 
 If a `connection` is provided, it is returned as is. 
 Otherwise, it returns the default connection from the resolved settings.

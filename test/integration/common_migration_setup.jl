@@ -17,7 +17,7 @@ Destructive reset of the selected integration database.
 After calling this, the database is completely empty — no user tables,
 no pormg_migrations history.
 """
-function reset_database!(settings::PormG.SQLConn)
+function reset_database!(settings::PormG.PormGSettings)
   conn_pool = settings.connections
   if conn_pool isa PormG.PormGSQLite
     _reset_sqlite!(conn_pool)
@@ -86,8 +86,8 @@ is rebuilt via `_build_connection_pool!`.
 `database` is preserved (non-blank in the committed fixture → the loop below skips it), which is
 exactly what keeps the edge DB isolated from the selected integration DB.
 """
-function hydrate_postgres_settings!(edge_settings::PormG.SQLConn,
-                                    source_settings::PormG.SQLConn, folder::String)
+function hydrate_postgres_settings!(edge_settings::PormG.PormGSettings,
+                                    source_settings::PormG.PormGSettings, folder::String)
   edge_cfg = edge_settings.db_config_settings
   source_cfg = source_settings.db_config_settings
 
@@ -123,7 +123,7 @@ _is_safe_pg_ident(name::AbstractString) = occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", 
 
 # Build an ad-hoc pool to the `postgres` maintenance DB using the (already-hydrated) host/port/
 # user/password from the edge settings, so we can CREATE/DROP the disposable DB from outside it.
-function _maintenance_pool(edge_settings::PormG.SQLConn)
+function _maintenance_pool(edge_settings::PormG.PormGSettings)
   cfg = copy(edge_settings.db_config_settings)
   cfg["database"] = "postgres"     # connect to the always-present maintenance DB
   delete!(cfg, "url")              # force param-based DNS so the `database` override takes effect
@@ -139,7 +139,7 @@ end
 Create the disposable `dbname` database if it does not already exist, connecting to the `postgres`
 maintenance DB with the hydrated edge credentials. No-op when the DB is already present.
 """
-function ensure_postgres_database!(edge_settings::PormG.SQLConn, dbname::String)
+function ensure_postgres_database!(edge_settings::PormG.PormGSettings, dbname::String)
   _is_safe_pg_ident(dbname) || error("Refusing unsafe database identifier: $(repr(dbname))")
   maint = _maintenance_pool(edge_settings)
   try
@@ -165,7 +165,7 @@ Best-effort drop of the disposable `dbname` database at teardown (`WITH (FORCE)`
 straggler connections; requires PostgreSQL 13+). Failure only warns — the next run re-creates it.
 Close the edge pool for `dbname` before calling this.
 """
-function drop_postgres_database!(edge_settings::PormG.SQLConn, dbname::String)
+function drop_postgres_database!(edge_settings::PormG.PormGSettings, dbname::String)
   _is_safe_pg_ident(dbname) || return nothing
   maint = _maintenance_pool(edge_settings)
   try

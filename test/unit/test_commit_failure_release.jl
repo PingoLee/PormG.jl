@@ -129,10 +129,10 @@ function PormG.backend_execute(pool::MockSQLitePool139, conn, sql::String, param
   return NamedTuple[]
 end
 
-# ── Minimal concrete SQLConn wrapper (like Configuration.Settings): <: SQLConn but NOT a
-#    PormGPostgres/PormGSQLite, so finalize_transaction_connection!(::SQLConn, ...) dispatches to
+# ── Minimal concrete PormGSettings wrapper (like Configuration.Settings): <: PormGSettings but NOT a
+#    PormGPostgres/PormGSQLite, so finalize_transaction_connection!(::PormGSettings, ...) dispatches to
 #    the delegating overload that delete() relies on (settings is a Settings, not a raw pool). ──
-mutable struct MockSettings139 <: PormG.SQLConn
+mutable struct MockSettings139 <: PormG.PormGSettings
   connections::Any
 end
 
@@ -178,8 +178,8 @@ end
 # ── Drive the REAL PormG.Migrations._execute_migration_lifecycle (not a reproduction) against the
 #    mock, so a future revert of the caller's `release_conn` is caught by CI. The mock returns empty
 #    result tables (so the migration reads the DB as empty → no idempotency skip), no-ops the DDL and
-#    the history INSERTs, and throws on COMMIT. The 2nd arg is `settings::SQLConn`; since #186 a pool is
-#    no longer <: SQLConn, we pass a MockSettings139 (a Settings-like SQLConn wrapping the pool) — it is
+#    the history INSERTs, and throws on COMMIT. The 2nd arg is `settings::PormGSettings`; since #186 a pool is
+#    no longer <: PormGSettings, we pass a MockSettings139 (a Settings-like PormGSettings wrapping the pool) — it is
 #    only touched by archiving, which the COMMIT-failure rethrow never reaches. Returns the error/nothing. ──
 function run_real_migration_lifecycle_139(pool)
   settings = MockSettings139(pool)
@@ -241,20 +241,20 @@ end
   @test pool.next_id == 1                               # no fresh handle created
 end
 
-@testset "finalize_transaction_connection! SQLConn overload delegates to the pool (#139)" begin
-  # delete() passes a Settings (a SQLConn wrapper), not a raw pool, so it dispatches here.
+@testset "finalize_transaction_connection! PormGSettings overload delegates to the pool (#139)" begin
+  # delete() passes a Settings (a PormGSettings wrapper), not a raw pool, so it dispatches here.
   pool = MockPGPool139()
   conn = CP.acquire_connection(pool)
   settings = MockSettings139(pool)
 
-  # #186: a pool and a Settings are now DISTINCT type families — a pool is NOT a SQLConn (it's a
-  # PormGBackend); only the Settings wrapper is a SQLConn. That separation is exactly what makes the
-  # two finalize_transaction_connection! overloads (pool vs SQLConn) dispatch to the right one.
-  @test !(pool isa PormG.SQLConn)
+  # #186: a pool and a Settings are now DISTINCT type families — a pool is NOT a PormGSettings (it's a
+  # PormGBackend); only the Settings wrapper is a PormGSettings. That separation is exactly what makes the
+  # two finalize_transaction_connection! overloads (pool vs PormGSettings) dispatch to the right one.
+  @test !(pool isa PormG.PormGSettings)
   @test pool isa PormG.PormGBackend
-  @test settings isa PormG.SQLConn
+  @test settings isa PormG.PormGSettings
 
-  @test CP.finalize_transaction_connection!(settings, conn) === nothing   # <: SQLConn, not a pool
+  @test CP.finalize_transaction_connection!(settings, conn) === nothing   # <: PormGSettings, not a pool
   @test pool.connections[1] === conn                    # delegated to pool.connections and released
   @test pool.available[1] === true
   # And the renew path still routes through the delegation.

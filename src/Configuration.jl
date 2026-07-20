@@ -1,7 +1,7 @@
 module Configuration
 
 import YAML, Logging
-import PormG: SQLConn, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
+import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: Generator
 import PormG: @pormg_debug
@@ -169,7 +169,7 @@ function ensure_model_transaction_scope(model::PormGModel)
   throw(ArgumentError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
 end
 
-function transaction_connection_for(settings::SQLConn)
+function transaction_connection_for(settings::PormGSettings)
   tx_pool = get_tx_pool()
   tx_conn = get_tx_connection()
   return tx_conn !== nothing && tx_pool === settings.connections ? tx_conn : nothing
@@ -230,7 +230,7 @@ end
 # the value can't be parsed to a Float64. Pure parser — no `> 0` policy; callers pick the default and
 # any enforcement. Consolidates the tryparse idiom for pool_timeout / idle_timeout / max_lifetime /
 # leak_detection_threshold (#179).
-function _config_secs(settings::SQLConn, key::String, default::Float64 = 0.0)::Float64
+function _config_secs(settings::PormGSettings, key::String, default::Float64 = 0.0)::Float64
   haskey(settings.db_config_settings, key) || return default
   v = settings.db_config_settings[key]
   return v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), default)
@@ -239,7 +239,7 @@ end
 # Parse a boolean pool setting from connection.yml. Returns `default` when the key is absent; otherwise
 # accepts a native Bool or the usual truthy/falsey strings. Consolidates the truthy idiom already used
 # for `sqlite_split_read_write` so new bool keys (e.g. `fail_fast_on_connect`, #72) don't re-duplicate it.
-function _config_bool(settings::SQLConn, key::String, default::Bool)::Bool
+function _config_bool(settings::PormGSettings, key::String, default::Bool)::Bool
   haskey(settings.db_config_settings, key) || return default
   v = settings.db_config_settings[key]
   v isa Bool && return v
@@ -255,7 +255,7 @@ function _normalize_pool_timeout(v::Real)::Float64
   return DEFAULT_POOL_TIMEOUT
 end
 
-function _build_connection_pool!(settings::SQLConn, path::String)
+function _build_connection_pool!(settings::PormGSettings, path::String)
   # Extract pool size from config (defaults to 3)
   pool_size = haskey(settings.db_config_settings, "pool_size") ?
               parse(Int, string(settings.db_config_settings["pool_size"])) : 3
@@ -372,7 +372,7 @@ Dict{Any,Any} with 6 entries:
   "adapter"  => "PostgreSQL"
 ```
 """
-function _configured_extensions(settings::SQLConn)::Vector{String}
+function _configured_extensions(settings::PormGSettings)::Vector{String}
   raw = get(settings.db_config_settings, "extensions", String[])
   (raw === nothing || raw === missing) && return String[]
 
@@ -398,7 +398,7 @@ end
 # handled by the migration runner (gated on change_db, deliberate operator step),
 # never on app boot. Here we only probe pg_extension and warn on misconfiguration
 # so a missing extension is visible before the first query fails.
-function _check_configured_extensions!(settings::SQLConn)::Nothing
+function _check_configured_extensions!(settings::PormGSettings)::Nothing
   extensions = _configured_extensions(settings)
   isempty(extensions) && return nothing
 
@@ -426,7 +426,7 @@ function _check_configured_extensions!(settings::SQLConn)::Nothing
   return nothing
 end
 
-function _install_configured_extensions!(settings::SQLConn)::Nothing
+function _install_configured_extensions!(settings::PormGSettings)::Nothing
   extensions = _configured_extensions(settings)
   isempty(extensions) && return nothing
 
@@ -448,7 +448,7 @@ function _install_configured_extensions!(settings::SQLConn)::Nothing
   return nothing
 end
 
-function _install_postgres_extension!(settings::SQLConn, extension::String)::Nothing
+function _install_postgres_extension!(settings::PormGSettings, extension::String)::Nothing
   safe_extensions = Set(["unaccent"])
   extension in safe_extensions || throw(ArgumentError("Unsupported PostgreSQL extension '$(extension)'"))
 
@@ -472,7 +472,7 @@ end
 # two-argument form with an explicit dictionary, which is safe to mark IMMUTABLE,
 # so iunaccent_contains can be backed by an expression index — e.g. a pg_trgm
 # GIN index on public.immutable_unaccent(column).
-function _install_immutable_unaccent!(settings::SQLConn)::Nothing
+function _install_immutable_unaccent!(settings::PormGSettings)::Nothing
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   sql = "CREATE OR REPLACE FUNCTION public.immutable_unaccent(text) " *
         "RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE " *
@@ -490,7 +490,7 @@ function _install_immutable_unaccent!(settings::SQLConn)::Nothing
   return nothing
 end
 
-function read_db_connection_data(path::String, settings::SQLConn) :: Dict{String,Any}
+function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME) 
 
   endswith(db_settings_file, ".yml") || throw("Unknow configuration file type - expecting .yml")
@@ -537,7 +537,7 @@ function read_db_connection_data(path::String, settings::SQLConn) :: Dict{String
 end
 
 
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, config::Dict{String,SQLConn} = config)
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
   selected_env = _effective_env(env)
@@ -564,7 +564,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   end
 
   config[path] = Settings(app_env = selected_env, db_def_folder=path)
-  settings::SQLConn = config[path]
+  settings::PormGSettings = config[path]
 
   settings.db_config_settings = read_db_connection_data(path, settings)
 
@@ -579,7 +579,7 @@ end
 Load several static configuration folders using the same environment override.
 Returns the list of connection keys that were loaded.
 """
-function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,SQLConn} = config)
+function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config)
   loaded_keys = String[]
   for path in paths
     key = String(path)
@@ -718,7 +718,7 @@ function close_pool!(pool::Union{PormGPostgres, PormGSQLite})
 end
 
 function close_pool!(db::String)
-  settings::SQLConn = get_settings(db)
+  settings::PormGSettings = get_settings(db)
   if settings.connections !== nothing
     close_pool!(settings.connections)
   end
@@ -735,7 +735,7 @@ function ping(path_or_key::String)::Bool
   key = _resolve_loaded_key(path_or_key)
   key === nothing && return false
 
-  settings::SQLConn = config[key]
+  settings::PormGSettings = config[key]
   pool = settings.connections
   pool === nothing && return false
 
@@ -783,7 +783,7 @@ function status(path_or_key::String)
     )
   end
 
-  settings::SQLConn = config[key]
+  settings::PormGSettings = config[key]
   return (
     key = key,
     loaded = true,
@@ -802,7 +802,7 @@ end
 # Settings struct
 #
 
-mutable struct Settings <: SQLConn
+mutable struct Settings <: PormGSettings
   app_env::String
   db_def_folder::String # same then key
   model_file::String
@@ -872,8 +872,7 @@ end
 # Add this to your module cleanup if needed
 function __cleanup__()
   for (path, settings) in config
-    # `settings.connections` is a pool (PormGBackend) or nothing. It used to be checked with
-    # `isa SQLConn` back when pools were <: SQLConn (#186 moved them under PormGBackend).
+    # Close the registered pool if there is one. `settings.connections` is a PormGBackend pool or nothing.
     if settings.connections isa PormGBackend
       close_pool!(settings.connections)
     end

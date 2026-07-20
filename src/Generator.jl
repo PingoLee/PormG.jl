@@ -1,7 +1,7 @@
 module Generator
 
 import PormG
-import PormG: MODEL_PATH, SQLConn, DB_PATH
+import PormG: MODEL_PATH, PormGSettings, DB_PATH
 import OrderedCollections: OrderedDict
 
 """
@@ -86,7 +86,7 @@ test:
     nothing
 end
 
-function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::SQLConn; path::String = MODEL_PATH) :: Nothing 
+function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::PormGSettings; path::String = MODEL_PATH) :: Nothing 
 
   open(joinpath(path, file), "w") do f
     write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n

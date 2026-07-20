@@ -3,7 +3,7 @@ module AdvisoryLock
 using Logging
 
 import PormG
-import PormG: SQLConn, PormGPostgres, PormGSQLite, backend_execute_async
+import PormG: PormGSettings, PormGPostgres, PormGSQLite, backend_execute_async
 import PormG.Configuration: get_settings
 import PormG.ConnectionPool: acquire_connection, release_connection
 
@@ -150,8 +150,8 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
   end
 end
 
-# Convenience wrappers for Settings/SQLConn objects
-with_advisory_lock(f::Function, settings::SQLConn, key::AbstractString; kwargs...) =
+# Convenience wrappers for Settings/PormGSettings objects
+with_advisory_lock(f::Function, settings::PormGSettings, key::AbstractString; kwargs...) =
   with_advisory_lock(f, settings.connections, key; kwargs...)
 
 # SQLite no-op (advisory locks not supported)

@@ -34,5 +34,5 @@ using PormG.Models: Model, IDField
   @test PormG.Models._infer_self_heal_key(other, [m], Dict("db" => s1)) === nothing
 
   # No connections configured → nothing (length != 1).
-  @test PormG.Models._infer_self_heal_key(m, [m], Dict{String,PormG.SQLConn}()) === nothing
+  @test PormG.Models._infer_self_heal_key(m, [m], Dict{String,PormG.PormGSettings}()) === nothing
 end

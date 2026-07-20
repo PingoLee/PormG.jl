@@ -9,7 +9,7 @@
 #
 # Dispatch is keyed on the pool MARKER type (`PormGPostgres` / `PormGSQLite`), which
 # is defined in core. A concrete pool (`PostgresConnectionPool <: PormGPostgres <:
-# SQLConn`) selects the extension method when the driver is loaded; otherwise the
+# PormGBackend`) selects the extension method when the driver is loaded; otherwise the
 # varargs fallback fires with a friendly "load the driver" error.
 #
 # Type discipline: core stores connections untyped (`Any`); each extension method

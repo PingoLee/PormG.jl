@@ -25,9 +25,9 @@ import PormG: _emsg  # shared TTY-aware error/log-message strip helper (tools.jl
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check
-import PormG: PormGModel, PormGField, SQLConn, PormGPostgres, PormGSQLite
+import PormG: PormGModel, PormGField, PormGSettings, PormGPostgres, PormGSQLite
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
-import PormG: MODEL_PATH, SQLConn, DB_PATH
+import PormG: MODEL_PATH, PormGSettings, DB_PATH
 import PormG.AdvisoryLock
 
 import PormG.Generator: generate_models_from_db, generate_migration_plan

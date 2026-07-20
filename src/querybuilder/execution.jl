@@ -740,7 +740,7 @@ function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, 
   return ismissing(sequence_name) || isnothing(sequence_name) ? nothing : sequence_name
 end
 
-function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::SQLConn; ignore_tx::Bool = false)
+function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::PormGSettings; ignore_tx::Bool = false)
   @pormg_debug true
 
   !(settings.change_db || settings.django_prefix !== nothing) && return nothing
@@ -802,7 +802,7 @@ end
 #     end
 #   end
 # end
-function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::SQLConn)
+function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
   for field in pk_field
     safe_field_name = quote_identifier(Models.model_column(model, field), connection)  # db_column (#50)
     safe_table_name = safe_table_identifier(string(model.name), connection)

@@ -1000,7 +1000,7 @@ end
 
 mutable struct DeletionCollector{T}
   model::PormGModel  # The main model being deleted from
-  settings::SQLConn  # Connection settings
+  settings::PormGSettings  # Connection settings
   connection::Union{PormGPostgres,PormGSQLite}  # Database connection
   objects::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Models and their objects to delete
   dependencies::Dict{PormGModel,Set{PormGModel}}  # Model dependencies

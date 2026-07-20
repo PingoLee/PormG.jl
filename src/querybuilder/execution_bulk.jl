@@ -343,7 +343,7 @@ end
 # one isn't already active (#88), and the create() path (execution.jl) reaches here only
 # when get_sqlite_reserved_primary_key_max returned non-nothing, which already implies an
 # open transaction (reservation overlay is a no-op at depth 0).
-function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::SQLConn)
+function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::PormGSettings)
   safe_table = string(model.name |> lowercase)
   safe_table_name = safe_table_identifier(safe_table, connection)
   safe_table_literal = replace(safe_table, "'" => "''")
@@ -1174,7 +1174,7 @@ end
 
 function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite},
   fields::Vector{String}, rows::Vector{String},
-  pk_exist::Bool, pk_field::Vector{String}, settings::SQLConn,
+  pk_exist::Bool, pk_field::Vector{String}, settings::PormGSettings,
   django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam;
   on_conflict_sql::Union{Nothing, String} = nothing)
 
@@ -1437,7 +1437,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
 end
 
 function _bulk_update(model::PormGModel,
-  settings::SQLConn,
+  settings::PormGSettings,
   connection::Union{PormGPostgres, PormGSQLite}, 
   fields::Vector{String}, 
   rows::Vector{String}, 

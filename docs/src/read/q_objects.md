@@ -175,7 +175,7 @@ query.filter(
 PormG supports arbitrary nesting depth:
 
 ```julia
-# (Constructor is Ferrari AND (wins > 5 OR podiums > 20))
+# (Constructor is Ferrari AND (points > 5 OR finished on the podium))
 # OR
 # (Constructor is Mercedes AND year >= 2014)
 query = M.Result.objects
@@ -183,7 +183,7 @@ query.filter(
     Qor(
         Q(
             "constructorid__name" => "Ferrari",
-            Qor("wins__@gt" => 5, "podiums__@gt" => 20)
+            Qor("points__@gt" => 5, "positionorder__@lte" => 3)
         ),
         Q(
             "constructorid__name" => "Mercedes",

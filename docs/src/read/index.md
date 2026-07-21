@@ -216,7 +216,7 @@ meta = query.list(show_query=:dict)
 
 # Dedicated inspection API with heuristic intent detection
 inspection = query.inspect()
-println(inspection[:sql])
+println(inspection[:sql_text])
 println(inspection[:operation])  # => :select
 ```
 

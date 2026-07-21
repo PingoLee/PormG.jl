@@ -172,22 +172,7 @@ Output:
 
 ## Mathematical Functions
 
-PormG supports math through both `__@` modifiers and explicit function calls:
-
-### Via `__@` Modifiers
-
-```julia
-query = M.Driver.objects
-query.values(
-    "driverid",
-    "rounded_id" => "driverid__@round",
-    "sqrt_val"   => "driverid__@sqrt"
-)
-query.filter("driverid" => 1)
-df = query |> DataFrame
-```
-
-### Via Explicit Function Calls
+PormG supports math through explicit function calls:
 
 | Function | Description | Example |
 | :--- | :--- | :--- |
@@ -275,8 +260,8 @@ using PormG.Functions: Extract
 
 query = M.Race.objects
 query.values(
-    "race_year" => Extract("year", "date"),
-    "race_dow"  => Extract("dow", "date")
+    "race_year" => Extract("date", "year"),
+    "race_dow"  => Extract("date", "dow")
 )
 ```
 

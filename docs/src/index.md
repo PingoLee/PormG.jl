@@ -16,7 +16,6 @@
 | **Migrations** | State-based schema reconciliation with `makemigrations` / `migrate`, destructive-operation guards, and a history table. |
 | **Transactions** | `run_in_transaction` with async context propagation, savepoint support, and automatic rollback on error. |
 | **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes. |
-| **Terminal Dashboard** | Optional Tachikoma-based TUI for reviewing migrations and inspecting queries. |
 
 ---
 

@@ -59,12 +59,6 @@ println(result)
 ```
 This shows the SQL statements that will be executed and detects any destructive operations.
 
-### Interactive Review
-If you prefer a terminal interface, use the [Tachikoma Dashboard](tachikoma.md):
-```julia
-using PormG, Tachikoma
-PormG.tui("db")
-```
 
 ### Discarding a Pending Migration
 

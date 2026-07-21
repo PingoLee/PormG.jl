@@ -1432,7 +1432,10 @@ end
     # dry_run must not consume the pending file
     @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
 
-    migrate(joinpath(@__DIR__, edge_db_name), interactive=false)
+    # Apply the plan so DryRunTable actually exists for Phase 12 to drop. This plan is destructive
+    # (it also drops leftover tables from earlier phases), so it needs the explicit destructive=true.
+    # (Pre-#87 this call silently skipped without the flag — a latent no-op the new gate surfaces.)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
   end
 
   # ── Phase 12: Destructive guard ───────────────────────────────────
@@ -1452,9 +1455,17 @@ end
     @test Migrations.is_destructive(result) == true
     @test !isempty(result.destructive_statements)
 
-    # migrate without destructive=true must refuse
-    ret = migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=false)
-    @test ret === nothing
+    # migrate without destructive=true must refuse. In a non-interactive context (#87) this is a
+    # hard error — it THROWS DestructiveMigrationError instead of silently returning nothing, so
+    # CI/automation fails loudly. The pending file must remain (the guard fires before execution).
+    @test_throws Migrations.DestructiveMigrationError migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=false)
+    @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
+
+    # Anti-hang guarantee (#87): even with interactive=true, a non-TTY process (stdin redirected to a
+    # non-terminal) must NOT block on readline() — it throws immediately rather than waiting on input.
+    redirect_stdin(devnull) do
+      @test_throws Migrations.DestructiveMigrationError migrate(joinpath(@__DIR__, edge_db_name), interactive=true, destructive=false)
+    end
     @test isfile(joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl"))
 
     # With destructive=true it should succeed

@@ -70,4 +70,4 @@ end
 - **Review Plans:** Use `dry_run()` before applying to catch any accidental drops.
 - **Version Control:** Commit your `applied_migrations/` folder.
 - **Backups:** Always back up production databases before running schema changes.
-- **Destructive Guard:** Never bypass the destructive guard in CI/CD without manual approval of the migration plan.
+- **Destructive Guard:** Never bypass the destructive guard in CI/CD without manual approval of the migration plan. In a non-interactive context a destructive plan throws `DestructiveMigrationError` unless you pass `destructive=true`; catch it (or set the flag) deliberately rather than blanket-suppressing it.

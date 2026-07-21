@@ -889,6 +889,10 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
 
   haskey(data, normalized) && return data[normalized]
 
+  # Virtual `.pk` alias → the model's primary-key value (a real column named `pk`, if one
+  # existed, would already have been returned by the `haskey` lookup above).
+  normalized === :pk && return pk(row)
+
   if Models.has_many_to_many_accessor(model, String(normalized))
     descriptor = ManyToManyDescriptor(model, String(normalized), Models.get_many_to_many_relation(model, String(normalized)))
     return descriptor(data)
@@ -929,6 +933,54 @@ function Base.setproperty!(row::PormGRow, sym::Symbol, value)
   push!(getfield(row, :_dirty), normalized)
   return value
 end
+
+"""
+    pk(row::PormGRow)
+    pk(row::PormGRow, default)
+
+Primary-key value of `row`, read through its model's declared pk column — so it works for any
+pk name, not only `id`. The 1-arg form throws if the model has no single-column primary key, or
+the pk column is absent from the row. The 2-arg form returns `default` in those cases instead of
+throwing (for best-effort callers). A composite (multi-column) primary key has no scalar `pk`;
+read the individual key columns instead.
+"""
+function pk(row::PormGRow)
+  model = getfield(row, :_model)
+  field = Models.get_model_pk_field(model)
+  field === nothing && throw(ArgumentError("$(model.name) row has no single-column primary key"))
+  data = getfield(row, :_data)
+  haskey(data, field) || throw(ArgumentError("$(model.name) row is missing its primary-key column '$(field)'"))
+  return data[field]
+end
+
+function pk(row::PormGRow, default)
+  model = getfield(row, :_model)
+  field = try
+    Models.get_model_pk_field(model)     # throws on a composite (multi-column) pk
+  catch
+    return default
+  end
+  field === nothing && return default
+  data = getfield(row, :_data)
+  return haskey(data, field) ? data[field] : default
+end
+
+# PormGRow overrides getproperty to expose its stored columns (plus the `save` closure) via
+# dot-access. Without these overrides Julia's defaults only saw the struct's real fields
+# (_data/_model/_dirty), so hasproperty(row, :id) was false even though row.id works. Report the
+# stored columns so introspection, REPL tab-completion, and hasproperty stay honest and
+# consistent with getproperty. (`:pk` is a synthesized alias, not listed; the real pk column is.)
+function Base.propertynames(row::PormGRow, private::Bool = false)
+  cols = collect(keys(getfield(row, :_data)))
+  push!(cols, :save)
+  private && append!(cols, (:_data, :_model, :_dirty))
+  return Tuple(cols)
+end
+
+# haskey(row, ::Symbol) applies the same leading-underscore normalization getproperty does, so
+# this matches getproperty's success set for stored columns exactly.
+Base.hasproperty(row::PormGRow, sym::Symbol) =
+  sym in (:save, :_data, :_model, :_dirty) || haskey(row, sym)
 
 Tables.isrowtable(::Type{Vector{PormGRow}}) = true
 Tables.columnnames(row::PormGRow) = collect(keys(getfield(row, :_data)))

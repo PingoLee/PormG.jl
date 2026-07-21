@@ -71,6 +71,8 @@ Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_c
 | :--- | :--- | :--- |
 | `row.field` | value | Reads a selected field using normalized Julia-style field names. |
 | `row[:field]` | value | Reads a selected field by `Symbol` or `String`. |
+| `row.pk` | value | The row's primary-key value, via the model's declared pk column (any name, not just `id`). Throws if the model has no single-column pk. |
+| `pk(row)` / `pk(row, default)` | value | Function form (exported by `using PormG`); the 2-arg variant returns `default` instead of throwing (best-effort). |
 | `row.relationship` | `ManyToManyManager` | Accesses a many-to-many relationship manager when the model defines one. |
 | `row.save()` | `PormGRow` | Persists fields assigned on the row and clears its dirty state. |
 | `row.save(show_query=:sql)` | `Vector` | Returns planned `UPDATE` inspection payloads without executing or clearing dirty state. |
@@ -610,7 +612,7 @@ scope — the SQL function constructors are *not* among them (see
 `object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Interval`, `show_query`, `inspect_query`
 
 ### Rows & exceptions
-`PormGRow`, `DoesNotExist`, `MultipleObjectsReturned`
+`PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`
 
 ### Bulk Operations
 `bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`

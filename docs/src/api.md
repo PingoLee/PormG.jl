@@ -135,7 +135,7 @@ Dedicated API for comprehensive query inspection without executing. Features a *
 query = M.Driver.objects.filter("nationality" => "Brazilian").order_by("surname")
 inspection = query |> inspect_query()
 
-println(inspection[:sql])        # The generated SQL
+println(inspection[:sql_text])   # The generated SQL
 println(inspection[:parameters]) # Bound parameters
 println(inspection[:operation])  # Automatically detects :select
 println(inspection[:dialect])    # :postgresql or :sqlite
@@ -176,9 +176,6 @@ PormG uses `__@` suffixes for lookup operators and field transforms:
 | `field__@day` | Extract day from date | `"dob__@day" => 21` |
 | `field__@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` |
 | `field__@date` | Extract date from datetime | `"created_at__@date" => Date(2025, 1, 1)` |
-| `field__@round` | Round numeric value | `"points__@round" => 0` |
-| `field__@floor` | Floor numeric value | `"points__@floor" => 0` |
-| `field__@ceil` | Ceiling numeric value | `"points__@ceil" => 0` |
 
 For the full list of operators and transforms, see [Filters and Aggregates](read/filters_and_aggregates.md).
 
@@ -310,7 +307,7 @@ df = M.Result.objects.values(
 | `Greatest(args...)` | Maximum of values | `Greatest("points", Value(0))` |
 | `Least(args...)` | Minimum of values | `Least("points", Value(100))` |
 | `Cast("field", type)` | Type casting | `Cast("points", "INTEGER")` |
-| `Extract("part", "field")` | Extract date/time part | `Extract("year", "dob")` |
+| `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
 | `To_char("field", fmt)` | Format to string | `To_char("dob", "YYYY-MM")` |
 
 ### Case Expressions
@@ -578,23 +575,6 @@ See [Advisory Locks](advisory_lock.md) for the full reference.
 
 ---
 
----
-
-## Terminal Dashboard
-
-### `tui(db_path; models_module=nothing, fps=30)`
-
-Launches an interactive terminal dashboard for migration review and query inspection. Requires `Tachikoma.jl`.
-
-```julia
-using Tachikoma
-PormG.tui("db"; models_module=M)
-```
-
-See [Migrations: Terminal Dashboard](migrations/tachikoma.md) for details.
-
----
-
 ## Abstract Types
 
 PormG's type hierarchy provides the foundation for the query builder and model system:
@@ -699,6 +679,15 @@ The terminal `list()` methods return a documented, stable shape:
 The following section contains auto-generated documentation from docstrings in the source code:
 
 ```@autodocs
-Modules = [PormG, PormG.Functions, PormG.QueryBuilder, PormG.Models]
-Order   = [:function, :type]
+Modules = [
+    PormG,
+    PormG.Functions,
+    PormG.QueryBuilder,
+    PormG.Models,
+    PormG.Migrations,
+    PormG.Configuration,
+    PormG.ConnectionPool,
+    PormG.Utils,
+]
+Order = [:module, :type, :function, :macro]
 ```

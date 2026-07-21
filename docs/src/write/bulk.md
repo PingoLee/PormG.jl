@@ -6,7 +6,7 @@ Bulk operations are designed for high-performance data manipulation of large dat
 - **`bulk_copy()`**: PostgreSQL native `COPY` protocol for ultra-fast insertion.
 - **`bulk_update()`**: Efficient multi-row updates from a DataFrame using `match_on=` keys.
 
-All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:inspection`, `show_query=:params`, or `show_query=:none` to inspect the generated SQL without executing it. See [Query Inspection](../read/index.md#query-inspection) for a full description of each mode.
+All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:inspection`, `show_query=:params`, or `show_query=:none` to inspect the generated SQL without executing it. See [Query Inspection](../read/index.md#Query-Inspection) for a full description of each mode.
 
 ### The Mapping Adaptor Strategy ⭐
 
@@ -304,7 +304,7 @@ new_driver = M.Driver.objects.create(
 
 ```julia
 using CSV, DataFrames
-import PormG.models as M
+import .models as M
 
 # Load initial reference data
 # The Ergast CSVs ship camelCase headers (circuitid, driverref, ...); bulk matching is
@@ -339,7 +339,7 @@ for col in [:position, :time, :milliseconds, :fastestlap, :rank, :fastestlaptime
     results_df[!, col] = map(x -> ismissing(x) || x == "\\N" ? missing : x, results_df[!, col])
 end
 M.Result.objects.exists() && M.Result.objects.delete(allow_delete_all=true)
-bulk_copy(M.Result.objects, results_df, chunk_size=10000)
+bulk_copy(M.Result.objects, results_df)
 
 # Verify all data loaded
 @info "Data loaded" \

@@ -9,7 +9,6 @@ import PormG: DATETIME_FORMAT
 import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
-# import PormG: make_password, check_password, password_needs_upgrade, DEFAULT_PBKDF2_ITERATIONS
 using Printf
 using Decimals
 

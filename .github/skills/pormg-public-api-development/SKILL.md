@@ -21,7 +21,7 @@ Centering on the migration subsystem, or on low-level query-builder/SQL renderin
 - Editing `src/Models.jl`, `src/models/fields.jl`, `ext/PormGReviseExt.jl`, or other public-facing model/loading code
 - Fixing ORM regressions discovered in integration tests
 - Writing or refactoring tests in `test/integration/`
-- Writing examples and docs in `README.MD`, `src/*.md`, and `docs/` that should mirror package usage
+- Writing examples and docs in `README.md`, `src/*.md`, and `docs/` that should mirror package usage
 - Deciding whether a regression belongs in unit tests, integration tests, or both
 
 ## Public API First
@@ -124,7 +124,7 @@ Use internal or function-style helpers only when the test is explicitly about in
 
 ### Verifying doc examples against the live database
 
-Every query example added or changed in `docs/`, `README.MD`, or `src/*.md` should be confirmed **two ways** before commit: the **generated SQL shape** (no DB needed) and the **actual result** against the preloaded F1 data. `test/integration/db_sl/f1.sqlite` ships with the full dataset, so this needs no setup.
+Every query example added or changed in `docs/`, `README.md`, or `src/*.md` should be confirmed **two ways** before commit: the **generated SQL shape** (no DB needed) and the **actual result** against the preloaded F1 data. `test/integration/db_sl/f1.sqlite` ships with the full dataset, so this needs no setup.
 
 Run a scratch script placed under `test/integration/` (so `@import_models` resolves) or use absolute paths:
 

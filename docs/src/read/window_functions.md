@@ -195,7 +195,7 @@ Result:
    8 │     8         92310    92447
 ```
 
-Row by row: `prev_ms` on each row holds the `milliseconds` value from the row *above* it. Lap 1 has no previous row, so `prev_ms` is `missing` (SQL `NULL`). From lap 2 onward, `prev_ms` is exactly the previous lap's time — useful for computing lap-over-lap deltas (see [Arithmetic on Window Results](#arithmetic-on-window-results)).
+Row by row: `prev_ms` on each row holds the `milliseconds` value from the row *above* it. Lap 1 has no previous row, so `prev_ms` is `missing` (SQL `NULL`). From lap 2 onward, `prev_ms` is exactly the previous lap's time — useful for computing lap-over-lap deltas (see [Arithmetic on Window Results](#Arithmetic-on-Window-Results)).
 
 Generated SQL (SQLite):
 
@@ -590,7 +590,7 @@ Three behaviours are visible at once:
 
 **`winner_pts` (`FirstValue`)** — `25.0` on every row. The first row in the partition (position 1) scored 25 points; `FirstValue` always picks that value and broadcasts it to every row in the partition, regardless of where the frame ends.
 
-**`last_pts` (`LastValue`)** — decreasing row by row: `25.0`, `18.0`, `15.0`, `12.0`, … This looks wrong but it is the SQL default. Without an explicit `frame=`, SQL uses `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the frame only reaches up to and including the *current* row. At each row, the "last" value the function can see is the current row's own `points`, so it just echoes that value. To get the true last finisher's points broadcast to every row, pass `frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"` — see [Frame Specifications](#frame-specifications-postgresql-only) for a side-by-side comparison.
+**`last_pts` (`LastValue`)** — decreasing row by row: `25.0`, `18.0`, `15.0`, `12.0`, … This looks wrong but it is the SQL default. Without an explicit `frame=`, SQL uses `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the frame only reaches up to and including the *current* row. At each row, the "last" value the function can see is the current row's own `points`, so it just echoes that value. To get the true last finisher's points broadcast to every row, pass `frame="ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"` — see [Frame Specifications](#Frame-Specifications-(PostgreSQL-only)) for a side-by-side comparison.
 
 **`second_pts` (`NthValue(2)`)** — `missing` on row 1, then `18.0` for all remaining rows. When processing row 1 the frame contains only one row (position 1), so there is no 2nd element — SQL returns `NULL`. Once row 2 enters the frame (position 2, driver 1, 18 points), `NthValue` finds that element and returns `18.0`. From row 3 onward the 2nd element never changes, so `second_pts` stays at `18.0` for every remaining row.
 

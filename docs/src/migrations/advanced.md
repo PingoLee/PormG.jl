@@ -52,11 +52,11 @@ using PormG, LibPQ   # load SQLite instead for a SQLite app
 
 PormG.run_in_transaction("db") do
     # Fetch data
-    drivers = M.Driver.objects.filter("code__isnull" => true).list()
+    drivers = M.Driver.objects.filter("code__@isnull" => true).list()
     
     # Process and Update
     for d in drivers
-        code = uppercase(substring(d[:surname], 1, 3))
+        code = uppercase(first(d[:surname], 3))
         M.Driver.objects.filter("driverid" => d[:driverid]).update("code" => code)
     end
 end

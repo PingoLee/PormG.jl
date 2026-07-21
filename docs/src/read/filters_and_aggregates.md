@@ -45,13 +45,6 @@ These work in both `filter()` and `values()`.
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` | `"date__@quadrimester"` |
 | `@date` | Extract date from datetime | `"created__@date" => Date(...)` | `"created__@date"` |
 | `@yyyy_mm` | Year-month string | `"date__@yyyy_mm" => "1991-10"` | `"date__@yyyy_mm"` |
-| `@round` | Round numeric value | — | `"points__@round"` |
-| `@floor` | Floor numeric value | — | `"points__@floor"` |
-| `@ceil` | Ceiling numeric value | — | `"points__@ceil"` |
-| `@sqrt` | Square root | — | `"driverid__@sqrt"` |
-| `@abs` | Absolute value | — | `"points__@abs"` |
-| `@power` | Power function | — | see `Power()` |
-| `@mod` | Modulo | — | see `Mod()` |
 
 ---
 
@@ -147,7 +140,7 @@ M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")
 M.Driver.objects.filter("surname__@iunaccent_exact" => "RAIKKONEN")
 ```
 
-They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#postgresql-extensions). On SQLite these lookups raise an `ArgumentError`.
+They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite these lookups raise an `ArgumentError`.
 
 There is no `@iunaccent_in`; OR the equality lookup with [`Qor`](q_objects.md) for accent-insensitive set membership:
 
@@ -159,7 +152,7 @@ M.Driver.objects.filter(Qor(
 ```
 
 > [!NOTE]
-> `immutable_unaccent(col)` is not sargable without a matching index. For large tables add a `pg_trgm` GIN index (for `@iunaccent_contains`) or a btree on `lower(immutable_unaccent(col))` (for `@iunaccent_exact`) — see [PostgreSQL Extensions](../configuration/connection_yml.md#postgresql-extensions).
+> `immutable_unaccent(col)` is not sargable without a matching index. For large tables add a `pg_trgm` GIN index (for `@iunaccent_contains`) or a btree on `lower(immutable_unaccent(col))` (for `@iunaccent_exact`) — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions).
 
 ---
 
@@ -554,7 +547,7 @@ M.Result.objects.filter("constructorid" => 1).count("driverid__nationality", dis
 ```
 
 > [!NOTE]
-> `count("col", distinct=true)` is the scalar, single-query equivalent of the `Count("col", distinct=true)` aggregate used inside [`values()`](#aggregations-and-grouping) — reach for the terminal form when you just want the number, and the aggregate form when you want it grouped alongside other columns.
+> `count("col", distinct=true)` is the scalar, single-query equivalent of the `Count("col", distinct=true)` aggregate used inside [`values()`](#Aggregations-and-Grouping) — reach for the terminal form when you just want the number, and the aggregate form when you want it grouped alongside other columns.
 
 ---
 
@@ -626,7 +619,7 @@ WHERE "Tb"."constructorid" = $1
 
 The `WHERE` filter still applies row-by-row *before* aggregation; it is the absence of plain (non-aggregate) **projection** columns that removes the `GROUP BY`. Add any plain column back into `values()` and PormG groups by it again, exactly as shown in the section above.
 
-These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid") - Min("resultid")`, or subtract a constant like `Max("resultid") - 1000`. See [Aggregate Arithmetic](field_expressions.md#aggregate-arithmetic).
+These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid") - Min("resultid")`, or subtract a constant like `Max("resultid") - 1000`. See [Aggregate Arithmetic](field_expressions.md#Aggregate-Arithmetic).
 
 ### Aggregating Across To-Many Relations (Fan-Out Guard)
 

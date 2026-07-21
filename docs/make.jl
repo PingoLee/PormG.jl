@@ -10,7 +10,16 @@ DocMeta.setdocmeta!(PormG, :DocTestSetup, :(using PormG, Dates, TimeZones), recu
 makedocs(
     sitename = "PormG.jl: Django-like ORM for Julia",
     
-    modules = [PormG, PormG.QueryBuilder, PormG.Models],
+    modules = [
+        PormG,
+        PormG.Functions,
+        PormG.QueryBuilder,
+        PormG.Models,
+        PormG.Migrations,
+        PormG.Configuration,
+        PormG.ConnectionPool,
+        PormG.Utils,
+    ],
     source = "src",
     build = "build",
     
@@ -33,7 +42,6 @@ makedocs(
             "Workflow" => "migrations/workflow.md",
             "Format Stability" => "migrations/stability.md",
             "Advanced" => "migrations/advanced.md",
-            # "Tachikoma Dashboard" => "migrations/tachikoma.md",
         ],
         "Writing" => [
             "Overview" => "write/index.md",
@@ -73,9 +81,9 @@ makedocs(
         canonical = "https://pingolee.github.io/PormG.jl",
         
         assets = String[],
-        size_threshold = 400 * 1024, # 400 KiB
+        size_threshold = 600 * 1024, # api.md is one comprehensive auto-generated page (~340 KiB); headroom for growth
     ),
-    checkdocs = :none,
+    checkdocs = :exports,
 )
 
 # Deploydocs: Sets up automatic upload to the gh-pages branch

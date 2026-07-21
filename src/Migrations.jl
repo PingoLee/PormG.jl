@@ -25,7 +25,7 @@ import PormG: _emsg  # shared TTY-aware error/log-message strip helper (tools.jl
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check
-import PormG: PormGModel, PormGField, PormGSettings, PormGPostgres, PormGSQLite
+import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES
 import PormG: MODEL_PATH, PormGSettings, DB_PATH
 import PormG.AdvisoryLock
@@ -51,5 +51,6 @@ export init_migrations, status, dry_run
 export migrate_to, mark_applied, mark_failed, remove_migration_record, discard_pending_migration
 export MigrationStatus, DryRunResult
 export compute_checksum, is_destructive, total_statements, detect_destructive_actions
+export DestructiveMigrationError
 
 end # module Migrations

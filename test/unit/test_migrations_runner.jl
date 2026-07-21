@@ -104,6 +104,72 @@ using Dates
     end
 
     # ==============================================================================
+    # SECTION 2b: Non-interactive confirmation gate (#87)
+    #
+    # `_confirm_migration` is the DB-free core of the migrate() safety gate. It must:
+    #   - NEVER block on readline() without a real terminal, even when interactive=true;
+    #   - THROW DestructiveMigrationError for a destructive plan in a non-interactive
+    #     context (so CI/deploy scripts fail loudly instead of hanging or silently
+    #     skipping) unless destructive=true is passed;
+    #   - return `true` (proceed) for a safe plan, or a destructive plan opted-in.
+    #
+    # Every call is wrapped in `redirect_stdin(devnull)` so `stdin isa Base.TTY` is
+    # deterministically `false` regardless of how the suite is launched (a dev running
+    # `Pkg.test` from a terminal would otherwise have a real TTY and hit the prompt).
+    # ==============================================================================
+
+    @testset "Non-interactive confirmation gate (#87)" begin
+        drop = ["""DROP TABLE "drivers" CASCADE;"""]
+
+        redirect_stdin(devnull) do
+            # A destructive plan with NO opt-in must throw — even with interactive=true,
+            # because there is no TTY to prompt on (this is the anti-hang guarantee).
+            @test_throws Migrations.DestructiveMigrationError Migrations._confirm_migration(
+                true, false, drop; interactive=true)
+
+            # Same with the explicit non-interactive flag.
+            @test_throws Migrations.DestructiveMigrationError Migrations._confirm_migration(
+                true, false, drop; interactive=false)
+
+            # Opting in with destructive=true proceeds (returns true), no prompt.
+            @test Migrations._confirm_migration(true, true, drop; interactive=true) == true
+
+            # A non-destructive plan proceeds directly in a non-interactive context —
+            # previously this path read EOF and silently no-op'd.
+            @test Migrations._confirm_migration(false, false, String[]; interactive=true) == true
+            @test Migrations._confirm_migration(false, false, String[]; interactive=false) == true
+        end
+
+        # The thrown error is actionable: it names the count, carries the offending
+        # statements, and renders them via showerror.
+        err = try
+            redirect_stdin(devnull) do
+                Migrations._confirm_migration(true, false, drop; interactive=false)
+            end
+        catch e
+            e
+        end
+        @test err isa Migrations.DestructiveMigrationError
+        @test occursin("destructive operation", err.msg)
+        @test occursin("destructive=true", err.msg)
+        @test err.statements == drop
+        buf = IOBuffer()
+        showerror(buf, err)
+        rendered = String(take!(buf))
+        @test occursin("DestructiveMigrationError", rendered)
+        @test occursin("DROP TABLE", rendered)
+
+        # showerror truncates a long statement safely, even across a multibyte UTF-8 boundary
+        # (regression guard: byte-slicing `s[1:120]` throws StringIndexError when byte 120 lands
+        # mid-character; `first(s, 120)` is character-safe).
+        long_unicode = "DROP TABLE " * ("π"^200) * ";"   # >120 chars, multibyte
+        long_err = Migrations.DestructiveMigrationError("boom", [long_unicode])
+        buf2 = IOBuffer()
+        showerror(buf2, long_err)                        # must not throw
+        @test occursin("...", String(take!(buf2)))       # and it truncated
+    end
+
+    # ==============================================================================
     # SECTION 3: Statement Ordering
     #
     # Migration statements are ordered for safety:

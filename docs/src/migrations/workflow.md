@@ -113,14 +113,31 @@ PormG blocks destructive SQL (DROP TABLE, DROP COLUMN) by default. To apply them
 PormG.Migrations.migrate("db", destructive=true)
 ```
 
+At an interactive terminal, a destructive plan without `destructive=true` prints a warning and aborts so you
+can re-run with the opt-in. In a **non-interactive** context (CI, `Pkg.test`, a deploy script, or piped
+stdin) the same plan throws a `DestructiveMigrationError` instead — automation fails loudly rather than
+hanging on a prompt or silently skipping the migration.
+
 ---
 
 ## Automation & CI/CD
-In non-interactive environments, use `interactive=false`:
+`migrate()` detects a non-interactive process automatically: when stdin is not a terminal it shows no
+confirmation prompt and never blocks on `readline()`. You do not need `interactive=false` for that (it is
+auto-detected), though passing it is still allowed and harmless.
 ```julia
-# Safe migrations only
-PormG.Migrations.migrate("my_db", interactive=false)
+# Non-destructive plans apply directly — no prompt, no hang:
+PormG.Migrations.migrate("my_db")
 
-# Destructive migrations allowed
-PormG.Migrations.migrate("my_db", interactive=false, destructive=true)
+# A destructive plan must opt in explicitly, or it throws DestructiveMigrationError:
+PormG.Migrations.migrate("my_db", destructive=true)
+```
+
+To tolerate "a destructive plan is present — skip it rather than fail", catch the error:
+```julia
+try
+    PormG.Migrations.migrate("my_db")
+catch e
+    e isa PormG.Migrations.DestructiveMigrationError || rethrow()
+    @warn "Destructive migration skipped; apply manually with destructive=true" exception=e
+end
 ```

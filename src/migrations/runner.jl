@@ -97,6 +97,78 @@ function detect_destructive_actions(statements::Vector{String})::Vector{String}
   return filter(is_destructive, statements)
 end
 
+# ==============================================================================
+# Migration confirmation gate (destructive guard + interactive prompt)
+# ==============================================================================
+
+"""
+    DestructiveMigrationError(msg, statements)
+
+Raised when a migration containing destructive operations (DROP TABLE, DROP COLUMN, …) is applied in a
+**non-interactive** context (no TTY, or `interactive=false`) without `destructive=true`. Failing loudly
+here means CI, `Pkg.test`, and deploy scripts break with an actionable message instead of hanging on
+`readline()` or silently skipping the migration.
+"""
+struct DestructiveMigrationError <: Exception
+  msg::String
+  statements::Vector{String}
+end
+
+function Base.showerror(io::IO, e::DestructiveMigrationError)
+  print(io, "DestructiveMigrationError: ", e.msg)
+  for s in e.statements
+    print(io, "\n  → ", length(s) > 120 ? first(s, 120) * "..." : s)
+  end
+end
+
+"""
+    _confirm_migration(has_destructive, destructive, destructive_stmts; interactive) -> Bool
+
+Resolve the destructive guard and interactive confirmation for `migrate`. A prompt is only possible on a
+real terminal, so `can_prompt = interactive && (stdin isa Base.TTY)` — this is what keeps `migrate()` from
+ever blocking on `readline()` in CI, `Pkg.test`, or a deploy script (even when `interactive=true`, the
+default).
+
+Returns `true` to proceed, `false` to abort quietly (the caller then `return nothing`). Throws
+[`DestructiveMigrationError`](@ref) when a destructive plan is refused in a non-interactive context, so
+automation fails loudly instead of hanging or silently skipping.
+"""
+function _confirm_migration(has_destructive::Bool, destructive::Bool,
+                            destructive_stmts::Vector{String}; interactive::Bool)::Bool
+  can_prompt = interactive && (stdin isa Base.TTY)
+
+  # Destructive guard: a destructive plan requires an explicit `destructive=true` opt-in.
+  if has_destructive && !destructive
+    msg = "Migration contains $(length(destructive_stmts)) destructive operation(s). " *
+          "Pass `destructive=true` to confirm."
+    # Non-interactive (CI / no TTY / interactive=false): fail loudly so automation cannot
+    # silently skip — and never reach the blocking readline() below.
+    can_prompt || throw(DestructiveMigrationError(msg, destructive_stmts))
+    @error(_emsg("\e[31m$msg\e[0m"))
+    for s in destructive_stmts
+      display_s = length(s) > 120 ? first(s, 120) * "..." : s
+      @error("  → $display_s")
+    end
+    return false
+  end
+
+  # Interactive confirmation — only when a human can actually answer (real TTY).
+  if can_prompt
+    if has_destructive
+      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m"))
+    end
+    @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
+    print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
+    response = strip(lowercase(readline()))
+    if !(response in ["yes", "y"])
+      @info("Migrations were not applied.")
+      return false
+    end
+  end
+
+  return true
+end
+
 # Frozen format-v1 primitive (see test/unit/test_migration_format_v1.jl). Retained for format
 # stability, but no longer auto-invoked: `mark_applied` used to call this to *fabricate* a checksum
 # when the caller supplied neither `sql_content` nor `checksum`. A fabricated digest can never be
@@ -672,24 +744,29 @@ end
 # ==============================================================================
 
 """
-    migrate(connection::PormGPostgres, settings; interactive, destructive, dry_run_only, name)
+    migrate(connection::PormGBackend, settings; interactive, destructive, dry_run_only, name)
 
-Apply pending migrations to a PostgreSQL database.
+Apply pending migrations to a database (PostgreSQL or SQLite). This is the shared pre-flight for every
+backend; the backend-specific execution step is dispatched to `_run_locked_lifecycle` (advisory lock on
+PostgreSQL, direct on SQLite).
 
 # Lifecycle
-1. Validate: check change_db, load plan, detect destructive ops
-2. Lock: acquire advisory lock to prevent concurrent migrations
-3. Execute: run SQL in a transaction
+1. Validate: check change_db, install configured extensions, load plan, detect destructive ops
+2. Confirm: destructive guard + interactive confirmation (TTY-aware — see `_confirm_migration`)
+3. Execute: run SQL in a transaction (under an advisory lock on PostgreSQL)
 4. Record: insert history into pormg_migrations
 5. Archive: move files to applied_migrations/
 
 # Keywords
-- `interactive::Bool=true`: prompt for confirmation before applying
-- `destructive::Bool=false`: must be `true` to allow DROP TABLE / DROP COLUMN operations
+- `interactive::Bool=true`: prompt for confirmation before applying — **only when stdin is a real
+  terminal**. In a non-interactive process (CI, `Pkg.test`, deploy script) no prompt is shown and
+  `migrate()` never blocks on `readline()`.
+- `destructive::Bool=false`: must be `true` to allow DROP TABLE / DROP COLUMN operations. A destructive
+  plan in a non-interactive context throws `DestructiveMigrationError` unless this is set.
 - `dry_run_only::Bool=false`: if `true`, only analyze without applying (returns DryRunResult)
 - `name::String="pending_migration"`: name for this migration in the history table
 """
-function migrate(connection::PormGPostgres, settings::PormGSettings;
+function migrate(connection::PormGBackend, settings::PormGSettings;
                  path::String = "db/models/models.jl",
                  interactive::Bool = true,
                  destructive::Bool = false,
@@ -729,110 +806,33 @@ function migrate(connection::PormGPostgres, settings::PormGSettings;
     return DryRunResult(checksum, ordered_statements, destructive_stmts)
   end
   
-  # Destructive guard
-  if has_destructive && !destructive
-    @error(_emsg("\e[31mMigration contains $(length(destructive_stmts)) destructive operation(s). " *
-           "Pass `destructive=true` to confirm.\e[0m"))
-    for s in destructive_stmts
-      display_s = length(s) > 120 ? s[1:120] * "..." : s
-      @error("  → $display_s")
-    end
-    return nothing
-  end
-  
-  # Interactive confirmation
-  if interactive
-    if has_destructive
-      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m"))
-    end
-    @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
-    print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
-    response = readline()
-    response = strip(lowercase(response))
-    if !(response in ["yes", "y"])
-      @info("Migrations were not applied.")
-      return nothing
-    end
-  end
-  
-  # --- Phase 2: Lock (PostgreSQL advisory lock) ---
+  # Destructive guard + interactive confirmation.
+  # TTY-aware: never blocks on readline() without a terminal, and throws in the non-interactive
+  # destructive case so automation fails loudly (see `_confirm_migration`).
+  _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive) || return nothing
+
+  # --- Phase 2: Execute (backend-specific: advisory lock on PostgreSQL, direct on SQLite) ---
+  _run_locked_lifecycle(connection, settings, ordered_statements, all_sql,
+                        version, name, checksum, has_destructive)
+end
+
+# ==============================================================================
+# Backend-specific execution wrapper. PostgreSQL serializes migrations with an advisory
+# lock; SQLite is single-instance only (no lock). `_execute_migration_lifecycle` is itself
+# already dialect-dispatched — this hook only decides whether to wrap it in a lock.
+# ==============================================================================
+
+function _run_locked_lifecycle(connection::PormGPostgres, settings::PormGSettings,
+                               ordered_statements, all_sql, version, name, checksum, has_destructive)
   lock_key = "pormg_migrations_$(settings.db_def_folder)"
-  
   AdvisoryLock.with_advisory_lock(connection, lock_key; wait=true, timeout_ms=30_000) do
     _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
                                  version, name, checksum, has_destructive)
   end
 end
 
-"""
-    migrate(connection::PormGSQLite, settings; interactive, destructive, dry_run_only, name)
-
-Apply pending migrations to a SQLite database.
-
-SQLite migrations use BEGIN IMMEDIATE TRANSACTION for safety.
-Advisory locking is not available — single-instance migration safety only.
-"""
-function migrate(connection::PormGSQLite, settings::PormGSettings; 
-                 path::String = "db/models/models.jl",
-                 interactive::Bool = true, 
-                 destructive::Bool = false,
-                 dry_run_only::Bool = false,
-                 name::String = "pending_migration")
-  # --- Phase 1: Validate ---
-  if !settings.change_db
-    @warn("The database is not set to change_db, so the migration plan will not be applied.")
-    return nothing
-  end
-  
-  # Bootstrap history table
-  init_migrations(connection)
-  
-  # Load and order the plan
-  migration_plan = _load_migration_plan(settings)
-  ordered_statements, all_sql = _order_statements(migration_plan)
-  
-  if isempty(ordered_statements)
-    @info(_emsg("\e[32mNo SQL statements to execute.\e[0m"))
-    return nothing
-  end
-  
-  version = generate_version()
-  checksum = compute_checksum(all_sql)
-  destructive_stmts = detect_destructive_actions(ordered_statements)
-  has_destructive = !isempty(destructive_stmts)
-  
-  # Dry run mode
-  if dry_run_only
-    return DryRunResult(checksum, ordered_statements, destructive_stmts)
-  end
-  
-  # Destructive guard
-  if has_destructive && !destructive
-    @error(_emsg("\e[31mMigration contains $(length(destructive_stmts)) destructive operation(s). " *
-           "Pass `destructive=true` to confirm.\e[0m"))
-    for s in destructive_stmts
-      display_s = length(s) > 120 ? s[1:120] * "..." : s
-      @error("  → $display_s")
-    end
-    return nothing
-  end
-  
-  # Interactive confirmation
-  if interactive
-    if has_destructive
-      @info(_emsg("\e[31m⚠ This migration contains DESTRUCTIVE operations (DROP TABLE, DROP COLUMN, etc.).\e[0m"))
-    end
-    @info(_emsg("\e[33mBefore applying the migrations, make sure to back up your database.\e[0m"))
-    print(_emsg("\e[31mAre you sure you want to apply the migrations? (yes/no): \e[0m"))
-    response = readline()
-    response = strip(lowercase(response))
-    if !(response in ["yes", "y"])
-      @info("Migrations were not applied.")
-      return nothing
-    end
-  end
-  
-  # --- Phase 2: No advisory lock for SQLite (single-instance only) ---
+function _run_locked_lifecycle(connection::PormGSQLite, settings::PormGSettings,
+                               ordered_statements, all_sql, version, name, checksum, has_destructive)
   _execute_migration_lifecycle(connection, settings, ordered_statements, all_sql,
                                version, name, checksum, has_destructive)
 end

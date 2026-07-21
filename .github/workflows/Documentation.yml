@@ -8,12 +8,12 @@ on:
     # Only runs if files in these folders/files change
     paths:
       - 'docs/**'
-      - 'README.MD'
+      - 'README.md'
   pull_request:
     # Same filter for Pull Requests
     paths:
       - 'docs/**'
-      - 'README.MD' 
+      - 'README.md'
 
 jobs:
   build:

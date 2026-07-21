@@ -2148,17 +2148,18 @@ mutable struct sPasswordField <: PormGField
   type::String
   formater::Function
   max_length::Int  # Length of stored hash (Django uses VARCHAR(128))
-  auto_hash::Bool  # Whether to automatically hash on insert/update
+  auto_hash::Bool  # Accepted for Django compat; PormG performs no hashing
 end
 
 """
     PasswordField(; kwargs...)
 
-A field for securely storing passwords using PBKDF2-SHA256 hashing (Django-compatible).
+A `VARCHAR(128)` field for storing a Django-format password hash.
 
-The `PasswordField` stores hashed passwords in a format compatible with Django's authentication system. 
-Passwords are never stored in plain text - they are automatically hashed using PBKDF2-SHA256 with a 
-randomly generated salt and configurable iterations.
+`PasswordField` is a storage type only: PormG does not hash or verify passwords. Produce the
+hash in your application and assign the resulting string to this field. The stored format
+matches Django's authentication system, so tables written this way stay compatible with
+Django's own auth code.
 
 # Keyword Arguments
 - `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
@@ -2166,7 +2167,7 @@ randomly generated salt and configurable iterations.
 - `null::Bool = false`: Whether the database column can store NULL values  
 - `editable::Bool = true`: Whether the field should be editable in forms
 - `max_length::Int = 128`: Maximum length for stored hash (Django default)
-- `auto_hash::Bool = true`: Whether to automatically hash passwords on insert/update
+- `auto_hash::Bool = true`: Accepted for Django compatibility; PormG performs no hashing
 
 # Database Mapping
 - **PostgreSQL Type**: VARCHAR(128)
@@ -2198,52 +2199,8 @@ User = Models.Model(
 )
 ```
 
-Creating a user with hashed password:
-```julia
-import PormG.Models: make_password, check_password
-
-# Hash the password before storing
-hashed = make_password("securePassword123!")
-
-query = M.User |> object
-query.bulk_insert(
-    username = "ayrton_senna",
-    email = "senna@mclaren.com",
-    password = hashed
-)
-```
-
-Verifying a password during login:
-```julia
-import PormG.Models: check_password
-
-# Fetch user from database
-user_query = M.User |> object
-user_query.filter("username" => "ayrton_senna")
-users = user_query.list(:dict)
-
-if !isempty(users)
-    user = users[1]
-    # Verify the password
-    if check_password("securePassword123!", user[:password])
-        println("Login successful!")
-    else
-        println("Invalid password")
-    end
-end
-```
-
-# Related Functions
-- `make_password(raw)`: Hash a plain text password
-- `check_password(raw, encoded)`: Verify a password against stored hash
-- `password_needs_upgrade(encoded)`: Check if hash needs re-hashing
-
-# Security Notes
-- **Never store plain text passwords** - always use `make_password()`
-- The default 720000 iterations provides strong security (Django 4.2+ default)
-- Salts are automatically generated per-password
-- Use `check_password()` for verification (includes timing attack protection)
-- Consider implementing password upgrade on login if using older hashes
+Hashing and verification live in your application, not in PormG — generate the Django-format
+hash there and assign the resulting string to the field.
 
 # Migration from Django
 If you're migrating from a Django application, password hashes are fully compatible.

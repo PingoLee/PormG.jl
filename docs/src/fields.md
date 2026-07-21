@@ -16,9 +16,9 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 - **Prefix reserved Julia keywords with underscore**: `_id`, `_type`, `_end`, `_function`
 
 ### Model Naming Rules
-- **Use snake_case with capitalized first letter**: `User`, `Product`, `Order_item`
-- **Use singular nouns**: `User` not `Users`, `Product` not `Products`
-- **Be descriptive and clear**: `User_profile`, `Product_category`, `Order_history`
+- **Use snake_case with capitalized first letter**: `Driver`, `Constructor`, `Pit_stop`
+- **Use singular nouns**: `Driver` not `Drivers`, `Circuit` not `Circuits`
+- **Be descriptive and clear**: `Driver_profile`, `Part_category`, `Race_result`
 
 ### Database Column Mapping
 - **By default, column names follow the field name verbatim, with case preserved**: a field declared
@@ -26,38 +26,38 @@ This comprehensive guide covers all field types available in PormG, inspired by 
 - **The house style is lowercase snake_case** — prefer it for new schemas; reserve mixed-case
   declarations for faithfully mapping existing columns you don't control.
 - **`db_column` maps a field to a differently-named column** and is authoritative across DDL,
-  queries, and migrations (#50) — e.g. `sku = CharField(db_column="product_sku")` keeps the field
-  `sku` but targets the column `"product_sku"`. Supported on all field types except `ManyToManyField`;
+  queries, and migrations (#50) — e.g. `chassis = CharField(db_column="chassis_code")` keeps the field
+  `chassis` but targets the column `"chassis_code"`. Supported on all field types except `ManyToManyField`;
   see [Schema Conventions](schema_conventions.md).
 
 ### Examples of Good Naming
 
 ```julia
 # ✅ Good field naming
-User = Models.Model(
-    _id = Models.IDField(),                    # Reserved word prefixed
+Team_member = Models.Model(
+    _id = Models.IDField(),                     # Reserved word prefixed
     username = Models.CharField(max_length=30), # Lowercase
     first_name = Models.CharField(max_length=50), # Snake_case
-    email_address = Models.EmailField(),       # Descriptive
-    is_active = Models.BooleanField(),         # Boolean prefix
-    created_at = Models.DateTimeField(),       # Timestamp suffix
-    birth_date = Models.DateField()            # Clear purpose
+    email_address = Models.EmailField(),        # Descriptive
+    is_active = Models.BooleanField(),          # Boolean prefix
+    created_at = Models.DateTimeField(),        # Timestamp suffix
+    birth_date = Models.DateField()             # Clear purpose
 )
 
 # ✅ Good model naming
-User_profile = Models.Model(...)    # snake_case with capital first letter
-Product_category = Models.Model(...)  # Clear relationship
-Order_item = Models.Model(...)      # Descriptive compound name
+Driver_profile = Models.Model(...)    # snake_case with capital first letter
+Part_category = Models.Model(...)     # Clear relationship
+Race_result = Models.Model(...)       # Descriptive compound name
 ```
 
 ### Examples to Avoid
 
 ```julia
 # ❌ Bad naming practices
-user = Models.Model(                    # Should be capitalized
+driver = Models.Model(                  # Should be capitalized
     ID = Models.IDField(),              # Should be _id (reserved word)
     firstName = Models.CharField(),     # Should be first_name
-    Email__Address = Models.EmailField(), # Never use __
+    Nationality__Code = Models.CharField(), # Never use __
     type = Models.CharField(),          # Reserved word without prefix
     end = Models.DateField()            # Reserved word without prefix
 )
@@ -80,15 +80,15 @@ user = Models.Model(                    # Should be capitalized
 
 ```julia
 # Basic usage (most common)
-User = Models.Model(
+Driver = Models.Model(
   _id = Models.IDField(),
-  username = Models.CharField(max_length=50)
+  surname = Models.CharField(max_length=50)
 )
 
 # With GENERATED ALWAYS (stricter identity)
-Order = Models.Model(
+Result = Models.Model(
   _id = Models.IDField(generated_always=true),
-  total = Models.DecimalField(max_digits=10, decimal_places=2)
+  points = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 ```
 
@@ -111,7 +111,7 @@ Order = Models.Model(
 
 ```julia
 # Basic usage
-Category = Models.Model(
+Part_category = Models.Model(
     _id = Models.AutoField(),
     name = Models.CharField(max_length=100)
 )
@@ -150,15 +150,15 @@ Status = Models.Model(
 
 ```julia
 # UUID as a primary key
-Session = Models.Model(
+Api_session = Models.Model(
   _id = Models.UUIDField(primary_key=true, auto_add=true),
-  user_id = Models.ForeignKey("User")
+  team_member_id = Models.ForeignKey("Team_member")
 )
 
 # UUID as a unique token
-Password_reset = Models.Model(
+Access_token = Models.Model(
   _id = Models.IDField(),
-  user = Models.ForeignKey("User"),
+  team_member = Models.ForeignKey("Team_member"),
   token = Models.UUIDField(unique=true, auto_add=true),
   created_at = Models.DateTimeField(auto_now_add=true)
 )
@@ -184,7 +184,7 @@ Password_reset = Models.Model(
 
 ```julia
 # Basic string fields
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30, unique=true),
     email = Models.CharField(max_length=100, unique=true),
@@ -193,7 +193,7 @@ User = Models.Model(
 )
 
 # Field with choices (enum-like behavior)
-Order = Models.Model(
+Store_order = Models.Model(
     _id = Models.IDField(),
     status = Models.CharField(
         max_length=20,
@@ -208,14 +208,14 @@ Order = Models.Model(
     )
 )
 
-# Field with a human-readable label (the column name follows the field name: "sku")
-Product = Models.Model(
+# Field with a human-readable label (the column name follows the field name: "part_number")
+Part = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
-    sku = Models.CharField(
+    part_number = Models.CharField(
         max_length=50, 
         unique=true, 
-        verbose_name="Product SKU"
+        verbose_name="Part Number"
     )
 )
 ```
@@ -235,7 +235,7 @@ Product = Models.Model(
 **Use Cases**: Articles, descriptions, comments, JSON data, large text content.
 
 ```julia
-Article = Models.Model(
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -250,10 +250,10 @@ Article = Models.Model(
 
 **Database Type**: `VARCHAR` with email validation
 
-**Use Cases**: User emails, contact information, notification addresses.
+**Use Cases**: Team-member and driver emails, contact information, notification addresses.
 
 ```julia
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.EmailField(unique=true),
@@ -261,7 +261,7 @@ User = Models.Model(
 )
 
 # For contact forms
-Contact = Models.Model(
+Team_contact = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     email = Models.EmailField(),
@@ -278,10 +278,10 @@ Contact = Models.Model(
 **Use Cases**: Profile links, social media URLs, external references.
 
 ```julia
-Profile = Models.Model(
+Driver_profile = Models.Model(
     _id = Models.IDField(),
     website = Models.URLField(max_length=500, null=true, blank=true),
-    github_profile = Models.URLField(unique=true)
+    instagram_profile = Models.URLField(unique=true)
 )
 ```
 
@@ -291,12 +291,12 @@ Profile = Models.Model(
 
 **Database Type**: `VARCHAR(max_length)`
 
-**Use Cases**: Article slugs, product identifiers in URLs.
+**Use Cases**: Race-report slugs, part identifiers in URLs.
 
 **Best Practice**: `SlugField` defaults to `db_index=true` as it is almost always used in `filter()` operations for routing.
 
 ```julia
-Post = Models.Model(
+Press_release = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     slug = Models.SlugField(unique=true)
@@ -305,22 +305,25 @@ Post = Models.Model(
 
 ### PasswordField()
 
-**Purpose**: Secure password storage with Django-compatible PBKDF2-SHA256 hashing.
+**Purpose**: Django-compatible storage for password hashes.
 
 **Database Type**: `VARCHAR(128)`
 
-**Use Cases**: User authentication, secure credential storage, Django migration compatibility.
+**Use Cases**: Persisting password hashes in tables that share a Django `auth`-style schema.
 
-The `PasswordField` stores hashed passwords in a format fully compatible with Django's authentication system. Passwords are **never stored in plain text** - they are automatically hashed using PBKDF2-SHA256 with a randomly generated salt and 720,000 iterations (Django 4.2+ default).
+`PasswordField` is a `VARCHAR(128)` column sized to hold a Django-format password hash. It is a **storage type only** — PormG does not hash, verify, or otherwise transform the value. Hash the password in your application, store the finished string here, and read it back to verify. This keeps hashing policy in your app while the column stays wire-compatible with Django's authentication tables.
 
-**Storage Format**:
+**Expected storage format** (Django PBKDF2-SHA256):
 ```
 pbkdf2_sha256$720000$randomsalt$base64encodedHash
 ```
 
+> [!WARNING]
+> Never assign a plain-text password to a `PasswordField` — the column stores whatever string it is given, verbatim. Hash the password in your application **before** saving.
+
 ```julia
-# User model with password authentication
-User = Models.Model(
+# Team member account with password authentication
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=150, unique=true),
     email = Models.EmailField(unique=true),
@@ -329,93 +332,17 @@ User = Models.Model(
 ```
 
 **Key Parameters**:
-- `max_length::Int = 128`: Maximum length for stored hash (Django default)
+- `max_length::Int = 128`: Column width for the stored hash (Django default)
 - `blank::Bool = false`: Whether the field can be left blank
 - `null::Bool = false`: Whether NULL values are allowed
-- `auto_hash::Bool = true`: Whether to automatically hash passwords
 
-#### Password Utility Functions
+#### Hashing lives in your application
 
-PormG provides Django-compatible utility functions for password management:
-
-**`make_password(raw_password)` - Hash a password**:
-```julia
-import PormG.Models: make_password
-
-# Hash a password before storing
-hashed = make_password("mySecurePassword123!")
-# => "pbkdf2_sha256$720000$abc123...$base64hash..."
-
-# Custom iterations (for testing - use default in production)
-hashed = make_password("password", iterations=100000)
-```
-
-**`check_password(raw, encoded)` - Verify a password**:
-```julia
-import PormG.Models: check_password
-
-# Verify during login
-if check_password("myPassword123", user[:password])
-    println("Login successful!")
-else
-    println("Invalid password")
-end
-```
-
-**`password_needs_upgrade(encoded)` - Check if re-hashing is needed**:
-```julia
-import PormG.Models: password_needs_upgrade
-
-# After successful login, upgrade old hashes
-if password_needs_upgrade(user[:password])
-    user[:password] = make_password(raw_password)
-    # Save user to database...
-end
-```
-
-#### Complete Authentication Example (F1 Context)
-
-```julia
-import PormG.models as M
-import PormG.Models: make_password, check_password
-
-# Create a team manager account
-hashed_password = make_password("McLaren1988!")
-
-M.Team_manager.objects.create(
-    "username" => "ron_dennis",
-    "email"    => "ron@mclaren.com",
-    "password" => hashed_password,
-    "team_id"  => 1  # McLaren
-)
-
-# Login verification
-function authenticate(username::String, raw_password::String)
-    query = M.Team_manager.objects
-    query.filter("username" => username)
-    users = query.list(:dict)
-    
-    isempty(users) && return nothing
-    user = users[1]
-    
-    # Verify password with timing-attack protection
-    check_password(raw_password, user[:password]) ? user : nothing
-end
-
-# Usage
-user = authenticate("ron_dennis", "McLaren1988!")
-if user !== nothing
-    println("Welcome, $(user[:username])!")
-end
-```
-
-#### Security Notes
-
-- **Never store plain text passwords** - always use `make_password()`
-- Default 720,000 iterations provides strong security (NIST-approved)
-- Salts are automatically generated per-password (22 characters)
-- `check_password()` uses constant-time comparison to prevent timing attacks
-- Consider implementing password upgrade on login if using older hashes
+PormG ships no password hashing or verification. Generate the Django-format hash in your
+application (or a dedicated auth package) and assign the resulting string to the
+`PasswordField`; verify by re-hashing the candidate and comparing. Because the stored format
+matches Django's (`pbkdf2_sha256$…`), a table written this way stays readable by Django's own
+authentication code and vice versa.
 
 #### Django Migration
 
@@ -435,7 +362,7 @@ If migrating from Django, password hashes are **fully compatible**. Users can co
 
 ```julia
 # Basic numeric data
-Product = Models.Model(
+Part = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     stock_quantity = Models.IntegerField(default=0),
@@ -443,15 +370,15 @@ Product = Models.Model(
 )
 
 # Rating systems
-Review = Models.Model(
+Fan_review = Models.Model(
     _id = Models.IDField(),
-    product = Models.ForeignKey("Product"),
+    race = Models.ForeignKey("Race"),
     rating = Models.IntegerField(),  # 1-5 stars
     helpful_votes = Models.IntegerField(default=0)
 )
 
 # Age and demographic data
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     age = Models.IntegerField(null=true, blank=true),
@@ -469,7 +396,7 @@ User = Models.Model(
 
 ```julia
 # Large counters and metrics
-Analytics = Models.Model(
+Season_analytics = Models.Model(
     _id = Models.IDField(),
     page_views = Models.BigIntegerField(default=0),
     unique_visitors = Models.BigIntegerField(default=0),
@@ -477,11 +404,11 @@ Analytics = Models.Model(
 )
 
 # Timestamp storage (Unix timestamp)
-Event = Models.Model(
+Timing_event = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     timestamp_ms = Models.BigIntegerField(),  # Milliseconds since epoch
-    user_id = Models.BigIntegerField()
+    driver_id = Models.BigIntegerField()
 )
 ```
 
@@ -492,8 +419,8 @@ Event = Models.Model(
 **Database Type**: `DOUBLE PRECISION`
 
 ```julia
-# Scientific measurements
-Sensor = Models.Model(
+# Telemetry measurements
+Car_sensor = Models.Model(
     _id = Models.IDField(),
     temperature = Models.FloatField(),  # Celsius
     humidity = Models.FloatField(),     # Percentage
@@ -501,7 +428,7 @@ Sensor = Models.Model(
 )
 
 # Geographic coordinates
-Location = Models.Model(
+Circuit = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     latitude = Models.FloatField(),
@@ -509,12 +436,12 @@ Location = Models.Model(
     elevation = Models.FloatField(null=true)  # Meters above sea level
 )
 
-# Financial calculations (use DecimalField for currency)
-Performance = Models.Model(
+# Derived performance metrics (use DecimalField for currency)
+Car_performance = Models.Model(
     _id = Models.IDField(),
-    growth_rate = Models.FloatField(),      # Percentage
-    volatility = Models.FloatField(),       # Standard deviation
-    beta = Models.FloatField(null=true)     # Market correlation
+    pace_delta = Models.FloatField(),       # Seconds vs pole
+    tyre_deg_rate = Models.FloatField(),    # Seconds lost per lap
+    fuel_effect = Models.FloatField(null=true)  # Seconds per 10 kg
 )
 ```
 
@@ -528,7 +455,7 @@ Performance = Models.Model(
 
 ```julia
 # Financial data
-Order = Models.Model(
+Sponsor_invoice = Models.Model(
     _id = Models.IDField(),
     subtotal = Models.DecimalField(max_digits=10, decimal_places=2),
     tax_amount = Models.DecimalField(max_digits=8, decimal_places=2),
@@ -536,8 +463,8 @@ Order = Models.Model(
     discount_rate = Models.DecimalField(max_digits=5, decimal_places=4)  # 0.1234 = 12.34%
 )
 
-# Product pricing
-Product = Models.Model(
+# Merchandise pricing
+Merchandise = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     unit_price = Models.DecimalField(max_digits=8, decimal_places=2),
@@ -570,7 +497,7 @@ Product = Models.Model(
 
 ```julia
 # Personal information
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     birth_date = Models.DateField(null=true),
@@ -578,7 +505,7 @@ User = Models.Model(
 )
 
 # Event scheduling
-Event = Models.Model(
+Grand_prix = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     event_date = Models.DateField(),
@@ -586,9 +513,9 @@ Event = Models.Model(
 )
 
 # Business records
-Invoice = Models.Model(
+Sponsor_contract = Models.Model(
     _id = Models.IDField(),
-    invoice_number = Models.CharField(max_length=50),
+    contract_number = Models.CharField(max_length=50),
     issue_date = Models.DateField(),
     due_date = Models.DateField(),
     paid_date = Models.DateField(null=true)
@@ -625,16 +552,16 @@ By default, `DateTimeField` uses `TIMESTAMPTZ`.
 
 ```julia
 # Audit and logging
-AuditLog = Models.Model(
+Race_audit_log = Models.Model(
     _id = Models.IDField(),
-    user = Models.ForeignKey("User"),
+    team_member = Models.ForeignKey("Team_member"),
     action = Models.CharField(max_length=100),
     timestamp = Models.DateTimeField(),
     ip_address = Models.CharField(max_length=45)
 )
 
 # Content management
-Article = Models.Model(
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -643,8 +570,8 @@ Article = Models.Model(
     published_at = Models.DateTimeField(null=true)
 )
 
-# E-commerce
-Order = Models.Model(
+# Team store
+Store_order = Models.Model(
     _id = Models.IDField(),
     created_at = Models.DateTimeField(),
     shipped_at = Models.DateTimeField(null=true),
@@ -661,8 +588,8 @@ Order = Models.Model(
 **Format**: HH:MM:SS
 
 ```julia
-# Business hours
-Store = Models.Model(
+# Facility hours
+Team_store = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     opening_time = Models.TimeField(),
@@ -670,12 +597,12 @@ Store = Models.Model(
 )
 
 # Scheduling
-Appointment = Models.Model(
+Garage_booking = Models.Model(
     _id = Models.IDField(),
     date = Models.DateField(),
     start_time = Models.TimeField(),
     end_time = Models.TimeField(),
-    patient = Models.ForeignKey("Patient")
+    driver = Models.ForeignKey("Driver")
 )
 
 # Sports and timing
@@ -697,7 +624,7 @@ Race = Models.Model(
 
 ```julia
 # Task tracking
-Task = Models.Model(
+Pit_task = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     estimated_duration = Models.DurationField(),
@@ -705,7 +632,7 @@ Task = Models.Model(
 )
 
 # Media content
-Video = Models.Model(
+Onboard_video = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     duration = Models.DurationField(),
@@ -724,8 +651,8 @@ Video = Models.Model(
 **Database Type**: `BOOLEAN`
 
 ```julia
-# User preferences and flags
-User = Models.Model(
+# Team member preferences and flags
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     is_active = Models.BooleanField(default=true),
@@ -736,7 +663,7 @@ User = Models.Model(
 )
 
 # Content moderation
-Article = Models.Model(
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -746,7 +673,7 @@ Article = Models.Model(
 )
 
 # System settings
-Configuration = Models.Model(
+System_setting = Models.Model(
     _id = Models.IDField(),
     maintenance_mode = Models.BooleanField(default=false),
     registration_enabled = Models.BooleanField(default=true),
@@ -764,19 +691,19 @@ Configuration = Models.Model(
 
 **Database Type**: `VARCHAR` (stores file path)
 
-**Use Cases**: Photo uploads, galleries, avatars, product images.
+**Use Cases**: Race photos, galleries, driver avatars, car images.
 
 ```julia
-# User profiles
-User_profile = Models.Model(
+# Driver profiles
+Driver_profile = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField("User"),
+    driver = Models.OneToOneField("Driver"),
     avatar = Models.ImageField(null=true, blank=true),
     cover_photo = Models.ImageField(null=true, blank=true)
 )
 
-# Product catalog
-Product = Models.Model(
+# Merchandise catalog
+Merchandise = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     main_image = Models.ImageField(),
@@ -784,7 +711,7 @@ Product = Models.Model(
 )
 
 # Gallery system
-Photo = Models.Model(
+Race_photo = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     image = Models.ImageField(),
@@ -803,7 +730,7 @@ Photo = Models.Model(
 
 ```julia
 # Document storage
-Document = Models.Model(
+Technical_document = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     file_data = Models.BinaryField(),
@@ -812,9 +739,9 @@ Document = Models.Model(
 )
 
 # Encryption and security
-SecureData = Models.Model(
+Encrypted_telemetry = Models.Model(
     _id = Models.IDField(),
-    user = Models.ForeignKey("User"),
+    team_member = Models.ForeignKey("Team_member"),
     encrypted_content = Models.BinaryField(),
     encryption_key_hash = Models.CharField(max_length=64)
 )
@@ -837,14 +764,14 @@ SecureData = Models.Model(
 **Handling**: In Julia, this field accepts and returns `Dict` or `Vector` types, automatically handling the serialization/deserialization.
 
 ```julia
-Config = Models.Model(
+Car_setup = Models.Model(
     _id = Models.IDField(),
     settings = Models.JSONField(),
     metadata = Models.JSONField(null=true, blank=true)
 )
 
 # Example usage:
-Config.objects.create("settings" => Dict("theme"=>"dark", "notifications"=>true))
+Car_setup.objects.create("settings" => Dict("front_wing"=>5, "tyre_pressure"=>21.5))
 ```
 
 ---
@@ -864,36 +791,36 @@ Config.objects.create("settings" => Dict("theme"=>"dark", "notifications"=>true)
 - Use `nothing` or `missing` to write SQL `NULL` on nullable FK columns.
 
 ```julia
-# Blog system
-Article = Models.Model(
+# Press room
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
-    author = Models.ForeignKey("User", on_delete="CASCADE"),
-    category = Models.ForeignKey("Category", on_delete="PROTECT"),
+    author = Models.ForeignKey("Team_member", on_delete="CASCADE"),
+    category = Models.ForeignKey("Report_category", on_delete="PROTECT"),
     content = Models.TextField()
 )
 
-# E-commerce
-Order = Models.Model(
+# Team store
+Store_order = Models.Model(
     _id = Models.IDField(),
-    customer = Models.ForeignKey("User", on_delete="PROTECT"),
-    shipping_address = Models.ForeignKey("Address", on_delete="SET_NULL", null=true),
+    customer = Models.ForeignKey("Fan", on_delete="PROTECT"),
+    shipping_address = Models.ForeignKey("Shipping_address", on_delete="SET_NULL", null=true),
     total_amount = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 
-Order_item = Models.Model(
+Order_line = Models.Model(
     _id = Models.IDField(),
-    order = Models.ForeignKey("Order", on_delete="CASCADE"),
-    product = Models.ForeignKey("Product", on_delete="PROTECT"),
+    order = Models.ForeignKey("Store_order", on_delete="CASCADE"),
+    product = Models.ForeignKey("Merchandise", on_delete="PROTECT"),
     quantity = Models.IntegerField(),
     unit_price = Models.DecimalField(max_digits=8, decimal_places=2)
 )
 
 # Multiple ForeignKeys to same model (requires related_name)
-Message = Models.Model(
+Team_radio = Models.Model(
     _id = Models.IDField(),
-    sender = Models.ForeignKey("User", on_delete="CASCADE", related_name="sent_messages"),
-    recipient = Models.ForeignKey("User", on_delete="CASCADE", related_name="received_messages"),
+    sender = Models.ForeignKey("Team_member", on_delete="CASCADE", related_name="sent_messages"),
+    recipient = Models.ForeignKey("Team_member", on_delete="CASCADE", related_name="received_messages"),
     content = Models.TextField(),
     sent_at = Models.DateTimeField()
 )
@@ -913,33 +840,33 @@ Message = Models.Model(
 
 **Database Type**: `BIGINT` with unique foreign key constraint
 
-**Use Cases**: User profiles, settings, model extensions.
+**Use Cases**: Driver profiles, settings, model extensions.
 
 ```julia
-# User profile extension
-User_profile = Models.Model(
+# Driver profile extension
+Driver_profile = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField("User", on_delete="CASCADE"),
+    driver = Models.OneToOneField("Driver", on_delete="CASCADE"),
     bio = Models.TextField(blank=true),
     birth_date = Models.DateField(null=true),
     website = Models.CharField(max_length=200, blank=true),
     location = Models.CharField(max_length=100, blank=true)
 )
 
-# Employee details
-Employee_profile = Models.Model(
+# Staff details
+Staff_profile = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField("User", on_delete="CASCADE"),
-    employee_id = Models.CharField(max_length=20, unique=true),
-    department = Models.ForeignKey("Department"),
+    team_member = Models.OneToOneField("Team_member", on_delete="CASCADE"),
+    staff_id = Models.CharField(max_length=20, unique=true),
+    department = Models.ForeignKey("Constructor"),
     hire_date = Models.DateField(),
     salary = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 
 # Settings and preferences
-User_settings = Models.Model(
+Team_member_settings = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField("User", on_delete="CASCADE"),
+    team_member = Models.OneToOneField("Team_member", on_delete="CASCADE"),
     theme = Models.CharField(max_length=20, default="light"),
     language = Models.CharField(max_length=10, default="en"),
     notifications_enabled = Models.BooleanField(default=true)
@@ -1008,7 +935,7 @@ All field types support these common parameters:
 
 ### Example with All Common Options
 ```julia
-Product = Models.Model(
+Merchandise = Models.Model(
     _id = Models.IDField(),
     
     # CharField with full options
@@ -1026,7 +953,7 @@ Product = Models.Model(
     
     # Nullable relationship
     category = Models.ForeignKey(
-        "Category",
+        "Merchandise_category",
         on_delete="SET_NULL",
         null=true,
         blank=true
@@ -1074,10 +1001,10 @@ optional_field = Models.CharField(max_length=100, null=true)  # Can be NULL
 ### Relationship Validation
 ```julia
 # Foreign key validation
-author = Models.ForeignKey("User", on_delete="CASCADE")  # Must reference valid User
+author = Models.ForeignKey("Team_member", on_delete="CASCADE")  # Must reference valid Team_member
 
 # One-to-one validation
-profile = Models.OneToOneField("User_profile")  # Must be unique relationship
+profile = Models.OneToOneField("Driver_profile")  # Must be unique relationship
 ```
 
 ---
@@ -1102,14 +1029,14 @@ These changes require data validation:
 ### Example Migration-Safe Model Evolution
 ```julia
 # Version 1: Initial model
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.CharField(max_length=100)
 )
 
 # Version 2: Safe additions
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.CharField(max_length=150, unique=true),  # Increased length, added unique

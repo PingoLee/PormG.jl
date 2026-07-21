@@ -111,15 +111,7 @@ import Logging
           end
         end
 
-        # 5. Precompile Password Utilities
-        try
-          p = "precompile_secret"
-          h = make_password(p)
-          check_password(p, h)
-        catch
-        end
-
-        # 6. Precompile Dict{Symbol,String} display path + F() expression types
+        # 5. Precompile Dict{Symbol,String} display path + F() expression types
         # SnoopCompile: show(Dict{Symbol,String}) hit 0.29s on cold start.
         # F() and F()*Float64 are exported and quick to trigger here.
         show(devnull, Dict{Symbol, String}(:name => "precompile"))

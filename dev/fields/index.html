@@ -1,37 +1,37 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Fields · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Fields · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Fields · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Fields · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/fields/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/fields/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/fields/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../models/">Models</a></li><li class="is-active"><a class="tocitem" href>Fields</a><ul class="internal"><li><a class="tocitem" href="#Naming-Conventions-and-Considerations"><span>Naming Conventions and Considerations</span></a></li><li><a class="tocitem" href="#Primary-Key-Fields"><span>Primary Key Fields</span></a></li><li><a class="tocitem" href="#UUID-Fields"><span>UUID Fields</span></a></li><li><a class="tocitem" href="#Text-Fields"><span>Text Fields</span></a></li><li><a class="tocitem" href="#Numeric-Fields"><span>Numeric Fields</span></a></li><li><a class="tocitem" href="#Date-and-Time-Fields"><span>Date and Time Fields</span></a></li><li><a class="tocitem" href="#Boolean-Fields"><span>Boolean Fields</span></a></li><li><a class="tocitem" href="#Binary-and-File-Fields"><span>Binary and File Fields</span></a></li><li><a class="tocitem" href="#Structured-Data-Fields"><span>Structured Data Fields</span></a></li><li><a class="tocitem" href="#Relationship-Fields"><span>Relationship Fields</span></a></li><li><a class="tocitem" href="#Common-Field-Options"><span>Common Field Options</span></a></li><li><a class="tocitem" href="#Field-Validation"><span>Field Validation</span></a></li><li><a class="tocitem" href="#Migration-Considerations"><span>Migration Considerations</span></a></li><li><a class="tocitem" href="#Best-Practices"><span>Best Practices</span></a></li></ul></li><li><a class="tocitem" href="../schema_conventions/">Schema Conventions</a></li><li><a class="tocitem" href="../many_to_many/">Many-to-Many</a></li><li><span class="tocitem">Configuration</span><ul><li><a class="tocitem" href="../configuration/">Overview</a></li><li><a class="tocitem" href="../configuration/setup/">Setup</a></li><li><a class="tocitem" href="../configuration/connection_yml/">Connection YML</a></li><li><a class="tocitem" href="../configuration/server/">Server Patterns</a></li><li><a class="tocitem" href="../configuration/dynamic/">Dynamic &amp; Multi-Tenancy</a></li><li><a class="tocitem" href="../configuration/advanced/">Advanced</a></li></ul></li><li><span class="tocitem">Migrations</span><ul><li><a class="tocitem" href="../migrations/">Overview</a></li><li><a class="tocitem" href="../migrations/workflow/">Workflow</a></li><li><a class="tocitem" href="../migrations/stability/">Format Stability</a></li><li><a class="tocitem" href="../migrations/advanced/">Advanced</a></li></ul></li><li><span class="tocitem">Writing</span><ul><li><a class="tocitem" href="../write/">Overview</a></li><li><a class="tocitem" href="../write/create/">Creating Records</a></li><li><a class="tocitem" href="../write/update/">Updating Records</a></li><li><a class="tocitem" href="../write/delete/">Deleting Records</a></li><li><a class="tocitem" href="../write/bulk/">Bulk Insert, Copy, and Update</a></li><li><a class="tocitem" href="../write/transaction/">Transactions</a></li></ul></li><li><span class="tocitem">Reading</span><ul><li><a class="tocitem" href="../read/">Overview</a></li><li><a class="tocitem" href="../read/values_and_joins/">Values and Joins</a></li><li><a class="tocitem" href="../read/custom_joins/">Custom Joins</a></li><li><a class="tocitem" href="../read/filters_and_aggregates/">Filters and Aggregates</a></li><li><a class="tocitem" href="../read/functions_and_dates/">Functions and Dates</a></li><li><a class="tocitem" href="../read/subqueries_and_ctes/">Subqueries and CTEs</a></li><li><a class="tocitem" href="../read/field_expressions/">Field Expressions</a></li><li><a class="tocitem" href="../read/window_functions/">Window Functions</a></li><li><a class="tocitem" href="../read/q_objects/">Q Objects</a></li></ul></li><li><a class="tocitem" href="../import_django/">Import from Django</a></li><li><a class="tocitem" href="../postgres/">PostgreSQL Guide</a></li><li><a class="tocitem" href="../architecture/">Architecture</a></li><li><a class="tocitem" href="../advisory_lock/">Advisory Locks</a></li><li><a class="tocitem" href="../extending/">Extending PormG</a></li><li><a class="tocitem" href="../contributing/">Contributing</a></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Fields</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Fields</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/fields.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="PormG-Field-Types-Reference"><a class="docs-heading-anchor" href="#PormG-Field-Types-Reference">PormG Field Types Reference</a><a id="PormG-Field-Types-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#PormG-Field-Types-Reference" title="Permalink"></a></h1><p>This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia. Each field type maps to appropriate data types in PostgreSQL or SQLite and provides validation, constraints, and formatting capabilities.</p><h2 id="Naming-Conventions-and-Considerations"><a class="docs-heading-anchor" href="#Naming-Conventions-and-Considerations">Naming Conventions and Considerations</a><a id="Naming-Conventions-and-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Naming-Conventions-and-Considerations" title="Permalink"></a></h2><h3 id="Field-Naming-Rules"><a class="docs-heading-anchor" href="#Field-Naming-Rules">Field Naming Rules</a><a id="Field-Naming-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Naming-Rules" title="Permalink"></a></h3><ul><li><strong>Recommended house style: lowercase snake_case</strong> — <code>username</code>, <code>email</code>, <code>created_at</code>, <code>first_name</code>. PormG&#39;s own models and examples follow this, and it is the convention to prefer for new schemas.</li><li><strong>Field-name case is preserved, not folded.</strong> Whatever case you declare is the field&#39;s identity <em>and</em> its database column. A field declared <code>driverId</code> registers as <code>driverId</code> and maps to the column <code>&quot;driverId&quot;</code>. This is what lets PormG faithfully target mixed-case / uppercase columns in existing (e.g. legacy Django) schemas. Field lookups are <strong>case-sensitive</strong> — query a field by the exact case you declared it.</li><li><strong>Never use double underscores (<code>__</code>)</strong> in field names or table names (reserved for internal use)</li><li><strong>Prefix reserved Julia keywords with underscore</strong>: <code>_id</code>, <code>_type</code>, <code>_end</code>, <code>_function</code></li></ul><h3 id="Model-Naming-Rules"><a class="docs-heading-anchor" href="#Model-Naming-Rules">Model Naming Rules</a><a id="Model-Naming-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Naming-Rules" title="Permalink"></a></h3><ul><li><strong>Use snake_case with capitalized first letter</strong>: <code>User</code>, <code>Product</code>, <code>Order_item</code></li><li><strong>Use singular nouns</strong>: <code>User</code> not <code>Users</code>, <code>Product</code> not <code>Products</code></li><li><strong>Be descriptive and clear</strong>: <code>User_profile</code>, <code>Product_category</code>, <code>Order_history</code></li></ul><h3 id="Database-Column-Mapping"><a class="docs-heading-anchor" href="#Database-Column-Mapping">Database Column Mapping</a><a id="Database-Column-Mapping-1"></a><a class="docs-heading-anchor-permalink" href="#Database-Column-Mapping" title="Permalink"></a></h3><ul><li><strong>By default, column names follow the field name verbatim, with case preserved</strong>: a field declared <code>firstName</code> becomes the column <code>&quot;firstName&quot;</code>; declare <code>first_name</code> to get <code>first_name</code>.</li><li><strong>The house style is lowercase snake_case</strong> — prefer it for new schemas; reserve mixed-case declarations for faithfully mapping existing columns you don&#39;t control.</li><li><strong><code>db_column</code> maps a field to a differently-named column</strong> and is authoritative across DDL, queries, and migrations (#50) — e.g. <code>sku = CharField(db_column=&quot;product_sku&quot;)</code> keeps the field <code>sku</code> but targets the column <code>&quot;product_sku&quot;</code>. Supported on all field types except <code>ManyToManyField</code>; see <a href="../schema_conventions/">Schema Conventions</a>.</li></ul><h3 id="Examples-of-Good-Naming"><a class="docs-heading-anchor" href="#Examples-of-Good-Naming">Examples of Good Naming</a><a id="Examples-of-Good-Naming-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-of-Good-Naming" title="Permalink"></a></h3><pre><code class="language-julia hljs"># ✅ Good field naming
-User = Models.Model(
-    _id = Models.IDField(),                    # Reserved word prefixed
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Fields · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Fields · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Fields · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Fields · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/fields/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/fields/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/fields/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../models/">Models</a></li><li class="is-active"><a class="tocitem" href>Fields</a><ul class="internal"><li><a class="tocitem" href="#Naming-Conventions-and-Considerations"><span>Naming Conventions and Considerations</span></a></li><li><a class="tocitem" href="#Primary-Key-Fields"><span>Primary Key Fields</span></a></li><li><a class="tocitem" href="#UUID-Fields"><span>UUID Fields</span></a></li><li><a class="tocitem" href="#Text-Fields"><span>Text Fields</span></a></li><li><a class="tocitem" href="#Numeric-Fields"><span>Numeric Fields</span></a></li><li><a class="tocitem" href="#Date-and-Time-Fields"><span>Date and Time Fields</span></a></li><li><a class="tocitem" href="#Boolean-Fields"><span>Boolean Fields</span></a></li><li><a class="tocitem" href="#Binary-and-File-Fields"><span>Binary and File Fields</span></a></li><li><a class="tocitem" href="#Structured-Data-Fields"><span>Structured Data Fields</span></a></li><li><a class="tocitem" href="#Relationship-Fields"><span>Relationship Fields</span></a></li><li><a class="tocitem" href="#Common-Field-Options"><span>Common Field Options</span></a></li><li><a class="tocitem" href="#Field-Validation"><span>Field Validation</span></a></li><li><a class="tocitem" href="#Migration-Considerations"><span>Migration Considerations</span></a></li><li><a class="tocitem" href="#Best-Practices"><span>Best Practices</span></a></li></ul></li><li><a class="tocitem" href="../schema_conventions/">Schema Conventions</a></li><li><a class="tocitem" href="../many_to_many/">Many-to-Many</a></li><li><span class="tocitem">Configuration</span><ul><li><a class="tocitem" href="../configuration/">Overview</a></li><li><a class="tocitem" href="../configuration/setup/">Setup</a></li><li><a class="tocitem" href="../configuration/connection_yml/">Connection YML</a></li><li><a class="tocitem" href="../configuration/server/">Server Patterns</a></li><li><a class="tocitem" href="../configuration/dynamic/">Dynamic &amp; Multi-Tenancy</a></li><li><a class="tocitem" href="../configuration/advanced/">Advanced</a></li></ul></li><li><span class="tocitem">Migrations</span><ul><li><a class="tocitem" href="../migrations/">Overview</a></li><li><a class="tocitem" href="../migrations/workflow/">Workflow</a></li><li><a class="tocitem" href="../migrations/stability/">Format Stability</a></li><li><a class="tocitem" href="../migrations/advanced/">Advanced</a></li></ul></li><li><span class="tocitem">Writing</span><ul><li><a class="tocitem" href="../write/">Overview</a></li><li><a class="tocitem" href="../write/create/">Creating Records</a></li><li><a class="tocitem" href="../write/update/">Updating Records</a></li><li><a class="tocitem" href="../write/delete/">Deleting Records</a></li><li><a class="tocitem" href="../write/bulk/">Bulk Insert, Copy, and Update</a></li><li><a class="tocitem" href="../write/transaction/">Transactions</a></li></ul></li><li><span class="tocitem">Reading</span><ul><li><a class="tocitem" href="../read/">Overview</a></li><li><a class="tocitem" href="../read/values_and_joins/">Values and Joins</a></li><li><a class="tocitem" href="../read/custom_joins/">Custom Joins</a></li><li><a class="tocitem" href="../read/filters_and_aggregates/">Filters and Aggregates</a></li><li><a class="tocitem" href="../read/functions_and_dates/">Functions and Dates</a></li><li><a class="tocitem" href="../read/subqueries_and_ctes/">Subqueries and CTEs</a></li><li><a class="tocitem" href="../read/field_expressions/">Field Expressions</a></li><li><a class="tocitem" href="../read/window_functions/">Window Functions</a></li><li><a class="tocitem" href="../read/q_objects/">Q Objects</a></li></ul></li><li><a class="tocitem" href="../import_django/">Import from Django</a></li><li><a class="tocitem" href="../postgres/">PostgreSQL Guide</a></li><li><a class="tocitem" href="../architecture/">Architecture</a></li><li><a class="tocitem" href="../advisory_lock/">Advisory Locks</a></li><li><a class="tocitem" href="../extending/">Extending PormG</a></li><li><a class="tocitem" href="../contributing/">Contributing</a></li><li><a class="tocitem" href="../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Fields</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Fields</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/fields.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="PormG-Field-Types-Reference"><a class="docs-heading-anchor" href="#PormG-Field-Types-Reference">PormG Field Types Reference</a><a id="PormG-Field-Types-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#PormG-Field-Types-Reference" title="Permalink"></a></h1><p>This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia. Each field type maps to appropriate data types in PostgreSQL or SQLite and provides validation, constraints, and formatting capabilities.</p><h2 id="Naming-Conventions-and-Considerations"><a class="docs-heading-anchor" href="#Naming-Conventions-and-Considerations">Naming Conventions and Considerations</a><a id="Naming-Conventions-and-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Naming-Conventions-and-Considerations" title="Permalink"></a></h2><h3 id="Field-Naming-Rules"><a class="docs-heading-anchor" href="#Field-Naming-Rules">Field Naming Rules</a><a id="Field-Naming-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Naming-Rules" title="Permalink"></a></h3><ul><li><strong>Recommended house style: lowercase snake_case</strong> — <code>username</code>, <code>email</code>, <code>created_at</code>, <code>first_name</code>. PormG&#39;s own models and examples follow this, and it is the convention to prefer for new schemas.</li><li><strong>Field-name case is preserved, not folded.</strong> Whatever case you declare is the field&#39;s identity <em>and</em> its database column. A field declared <code>driverId</code> registers as <code>driverId</code> and maps to the column <code>&quot;driverId&quot;</code>. This is what lets PormG faithfully target mixed-case / uppercase columns in existing (e.g. legacy Django) schemas. Field lookups are <strong>case-sensitive</strong> — query a field by the exact case you declared it.</li><li><strong>Never use double underscores (<code>__</code>)</strong> in field names or table names (reserved for internal use)</li><li><strong>Prefix reserved Julia keywords with underscore</strong>: <code>_id</code>, <code>_type</code>, <code>_end</code>, <code>_function</code></li></ul><h3 id="Model-Naming-Rules"><a class="docs-heading-anchor" href="#Model-Naming-Rules">Model Naming Rules</a><a id="Model-Naming-Rules-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Naming-Rules" title="Permalink"></a></h3><ul><li><strong>Use snake_case with capitalized first letter</strong>: <code>Driver</code>, <code>Constructor</code>, <code>Pit_stop</code></li><li><strong>Use singular nouns</strong>: <code>Driver</code> not <code>Drivers</code>, <code>Circuit</code> not <code>Circuits</code></li><li><strong>Be descriptive and clear</strong>: <code>Driver_profile</code>, <code>Part_category</code>, <code>Race_result</code></li></ul><h3 id="Database-Column-Mapping"><a class="docs-heading-anchor" href="#Database-Column-Mapping">Database Column Mapping</a><a id="Database-Column-Mapping-1"></a><a class="docs-heading-anchor-permalink" href="#Database-Column-Mapping" title="Permalink"></a></h3><ul><li><strong>By default, column names follow the field name verbatim, with case preserved</strong>: a field declared <code>firstName</code> becomes the column <code>&quot;firstName&quot;</code>; declare <code>first_name</code> to get <code>first_name</code>.</li><li><strong>The house style is lowercase snake_case</strong> — prefer it for new schemas; reserve mixed-case declarations for faithfully mapping existing columns you don&#39;t control.</li><li><strong><code>db_column</code> maps a field to a differently-named column</strong> and is authoritative across DDL, queries, and migrations (#50) — e.g. <code>chassis = CharField(db_column=&quot;chassis_code&quot;)</code> keeps the field <code>chassis</code> but targets the column <code>&quot;chassis_code&quot;</code>. Supported on all field types except <code>ManyToManyField</code>; see <a href="../schema_conventions/">Schema Conventions</a>.</li></ul><h3 id="Examples-of-Good-Naming"><a class="docs-heading-anchor" href="#Examples-of-Good-Naming">Examples of Good Naming</a><a id="Examples-of-Good-Naming-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-of-Good-Naming" title="Permalink"></a></h3><pre><code class="language-julia hljs"># ✅ Good field naming
+Team_member = Models.Model(
+    _id = Models.IDField(),                     # Reserved word prefixed
     username = Models.CharField(max_length=30), # Lowercase
     first_name = Models.CharField(max_length=50), # Snake_case
-    email_address = Models.EmailField(),       # Descriptive
-    is_active = Models.BooleanField(),         # Boolean prefix
-    created_at = Models.DateTimeField(),       # Timestamp suffix
-    birth_date = Models.DateField()            # Clear purpose
+    email_address = Models.EmailField(),        # Descriptive
+    is_active = Models.BooleanField(),          # Boolean prefix
+    created_at = Models.DateTimeField(),        # Timestamp suffix
+    birth_date = Models.DateField()             # Clear purpose
 )
 
 # ✅ Good model naming
-User_profile = Models.Model(...)    # snake_case with capital first letter
-Product_category = Models.Model(...)  # Clear relationship
-Order_item = Models.Model(...)      # Descriptive compound name</code></pre><h3 id="Examples-to-Avoid"><a class="docs-heading-anchor" href="#Examples-to-Avoid">Examples to Avoid</a><a id="Examples-to-Avoid-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-to-Avoid" title="Permalink"></a></h3><pre><code class="language-julia hljs"># ❌ Bad naming practices
-user = Models.Model(                    # Should be capitalized
+Driver_profile = Models.Model(...)    # snake_case with capital first letter
+Part_category = Models.Model(...)     # Clear relationship
+Race_result = Models.Model(...)       # Descriptive compound name</code></pre><h3 id="Examples-to-Avoid"><a class="docs-heading-anchor" href="#Examples-to-Avoid">Examples to Avoid</a><a id="Examples-to-Avoid-1"></a><a class="docs-heading-anchor-permalink" href="#Examples-to-Avoid" title="Permalink"></a></h3><pre><code class="language-julia hljs"># ❌ Bad naming practices
+driver = Models.Model(                  # Should be capitalized
     ID = Models.IDField(),              # Should be _id (reserved word)
     firstName = Models.CharField(),     # Should be first_name
-    Email__Address = Models.EmailField(), # Never use __
+    Nationality__Code = Models.CharField(), # Never use __
     type = Models.CharField(),          # Reserved word without prefix
     end = Models.DateField()            # Reserved word without prefix
 )</code></pre><hr/><h2 id="Primary-Key-Fields"><a class="docs-heading-anchor" href="#Primary-Key-Fields">Primary Key Fields</a><a id="Primary-Key-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Primary-Key-Fields" title="Permalink"></a></h2><h3 id="IDField()"><a class="docs-heading-anchor" href="#IDField()">IDField()</a><a id="IDField()-1"></a><a class="docs-heading-anchor-permalink" href="#IDField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Auto-incrementing 64-bit integer primary key.</p><p><strong>Database Type</strong>: </p><ul><li><strong>PostgreSQL</strong>: <code>BIGINT</code> with <code>GENERATED AS IDENTITY</code></li><li><strong>SQLite</strong>: <code>INTEGER PRIMARY KEY AUTOINCREMENT</code></li></ul><p><strong>Use Cases</strong>: Large-scale applications, future-proof primary keys, modern PostgreSQL features.</p><pre><code class="language-julia hljs"># Basic usage (most common)
-User = Models.Model(
+Driver = Models.Model(
   _id = Models.IDField(),
-  username = Models.CharField(max_length=50)
+  surname = Models.CharField(max_length=50)
 )
 
 # With GENERATED ALWAYS (stricter identity)
-Order = Models.Model(
+Result = Models.Model(
   _id = Models.IDField(generated_always=true),
-  total = Models.DecimalField(max_digits=10, decimal_places=2)
+  points = Models.DecimalField(max_digits=10, decimal_places=2)
 )</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>generated_always::Bool = false</code>: Use GENERATED ALWAYS AS IDENTITY (stricter mode)</li><li><code>primary_key::Bool = true</code>: Always true for IDField</li><li><code>auto_increment::Bool = true</code>: Always true for IDField</li></ul><p><strong>Range</strong>: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807</p><h3 id="AutoField()"><a class="docs-heading-anchor" href="#AutoField()">AutoField()</a><a id="AutoField()-1"></a><a class="docs-heading-anchor-permalink" href="#AutoField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Auto-incrementing 32-bit integer primary key.</p><p><strong>Database Type</strong>:</p><ul><li><strong>PostgreSQL</strong>: <code>INTEGER</code> with <code>SERIAL</code></li><li><strong>SQLite</strong>: <code>INTEGER PRIMARY KEY AUTOINCREMENT</code></li></ul><p><strong>Use Cases</strong>: Small to medium applications, legacy compatibility, storage efficiency.</p><pre><code class="language-julia hljs"># Basic usage
-Category = Models.Model(
+Part_category = Models.Model(
     _id = Models.AutoField(),
     name = Models.CharField(max_length=100)
 )
@@ -42,19 +42,19 @@ Status = Models.Model(
     name = Models.CharField(max_length=20),
     description = Models.TextField()
 )</code></pre><p><strong>Range</strong>: -2,147,483,648 to 2,147,483,647</p><p><strong>IDField vs AutoField Comparison</strong>: | Feature | AutoField | IDField | |––––-|–––––-|––––-| | <strong>Storage</strong> | 4 bytes | 8 bytes | | <strong>Max Records</strong> | ~2 billion | ~9 quintillion | | <strong>PostgreSQL Type</strong> | INTEGER SERIAL | BIGINT IDENTITY | | <strong>Best For</strong> | Small/medium apps | Large-scale apps |</p><hr/><h2 id="UUID-Fields"><a class="docs-heading-anchor" href="#UUID-Fields">UUID Fields</a><a id="UUID-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#UUID-Fields" title="Permalink"></a></h2><h3 id="UUIDField()"><a class="docs-heading-anchor" href="#UUIDField()">UUIDField()</a><a id="UUIDField()-1"></a><a class="docs-heading-anchor-permalink" href="#UUIDField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: For storing Universally Unique Identifiers (UUIDs).</p><p><strong>Database Type</strong>: </p><ul><li><strong>PostgreSQL</strong>: <code>UUID</code> (Native type)</li><li><strong>SQLite</strong>: <code>TEXT</code></li></ul><p><strong>Use Cases</strong>: Distributed systems, secure primary keys, session tokens, unique object identifiers.</p><pre><code class="language-julia hljs"># UUID as a primary key
-Session = Models.Model(
+Api_session = Models.Model(
   _id = Models.UUIDField(primary_key=true, auto_add=true),
-  user_id = Models.ForeignKey(&quot;User&quot;)
+  team_member_id = Models.ForeignKey(&quot;Team_member&quot;)
 )
 
 # UUID as a unique token
-Password_reset = Models.Model(
+Access_token = Models.Model(
   _id = Models.IDField(),
-  user = Models.ForeignKey(&quot;User&quot;),
+  team_member = Models.ForeignKey(&quot;Team_member&quot;),
   token = Models.UUIDField(unique=true, auto_add=true),
   created_at = Models.DateTimeField(auto_now_add=true)
 )</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>auto_add::Bool = false</code>: If true, automatically generates a <code>uuid4()</code> on the application side when creating a new record without a provided value.</li><li><code>primary_key::Bool = false</code>: Can be used as a primary key.</li><li><code>default::Union{String, Nothing} = nothing</code>: A default UUID string.</li><li><code>unique::Bool = false</code>: Enforce uniqueness.</li></ul><hr/><h2 id="Text-Fields"><a class="docs-heading-anchor" href="#Text-Fields">Text Fields</a><a id="Text-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Text-Fields" title="Permalink"></a></h2><h3 id="CharField(max_length)"><a class="docs-heading-anchor" href="#CharField(max_length)">CharField(max_length)</a><a id="CharField(max_length)-1"></a><a class="docs-heading-anchor-permalink" href="#CharField(max_length)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Variable-length strings with maximum length constraint.</p><p><strong>Database Type</strong>: <code>VARCHAR(max_length)</code></p><p><strong>Use Cases</strong>: Names, titles, codes, short descriptions, enumerated values.</p><pre><code class="language-julia hljs"># Basic string fields
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30, unique=true),
     email = Models.CharField(max_length=100, unique=true),
@@ -63,7 +63,7 @@ User = Models.Model(
 )
 
 # Field with choices (enum-like behavior)
-Order = Models.Model(
+Store_order = Models.Model(
     _id = Models.IDField(),
     status = Models.CharField(
         max_length=20,
@@ -78,22 +78,22 @@ Order = Models.Model(
     )
 )
 
-# Field with a human-readable label (the column name follows the field name: &quot;sku&quot;)
-Product = Models.Model(
+# Field with a human-readable label (the column name follows the field name: &quot;part_number&quot;)
+Part = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
-    sku = Models.CharField(
+    part_number = Models.CharField(
         max_length=50, 
         unique=true, 
-        verbose_name=&quot;Product SKU&quot;
+        verbose_name=&quot;Part Number&quot;
     )
-)</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>max_length::Int = 250</code>: Maximum characters (1-255)</li><li><code>choices</code>: Tuple of (value, display_name) pairs</li><li><code>unique::Bool = false</code>: Enforce uniqueness</li><li><code>db_index::Bool = false</code>: Create database index</li></ul><h3 id="TextField()"><a class="docs-heading-anchor" href="#TextField()">TextField()</a><a id="TextField()-1"></a><a class="docs-heading-anchor-permalink" href="#TextField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Unlimited length text content.</p><p><strong>Database Type</strong>: <code>TEXT</code></p><p><strong>Use Cases</strong>: Articles, descriptions, comments, JSON data, large text content.</p><pre><code class="language-julia hljs">Article = Models.Model(
+)</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>max_length::Int = 250</code>: Maximum characters (1-255)</li><li><code>choices</code>: Tuple of (value, display_name) pairs</li><li><code>unique::Bool = false</code>: Enforce uniqueness</li><li><code>db_index::Bool = false</code>: Create database index</li></ul><h3 id="TextField()"><a class="docs-heading-anchor" href="#TextField()">TextField()</a><a id="TextField()-1"></a><a class="docs-heading-anchor-permalink" href="#TextField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Unlimited length text content.</p><p><strong>Database Type</strong>: <code>TEXT</code></p><p><strong>Use Cases</strong>: Articles, descriptions, comments, JSON data, large text content.</p><pre><code class="language-julia hljs">Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
     summary = Models.TextField(blank=true, null=true)
 )
-</code></pre><h3 id="EmailField()"><a class="docs-heading-anchor" href="#EmailField()">EmailField()</a><a id="EmailField()-1"></a><a class="docs-heading-anchor-permalink" href="#EmailField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Email addresses with built-in validation.</p><p><strong>Database Type</strong>: <code>VARCHAR</code> with email validation</p><p><strong>Use Cases</strong>: User emails, contact information, notification addresses.</p><pre><code class="language-julia hljs">User = Models.Model(
+</code></pre><h3 id="EmailField()"><a class="docs-heading-anchor" href="#EmailField()">EmailField()</a><a id="EmailField()-1"></a><a class="docs-heading-anchor-permalink" href="#EmailField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Email addresses with built-in validation.</p><p><strong>Database Type</strong>: <code>VARCHAR</code> with email validation</p><p><strong>Use Cases</strong>: Team-member and driver emails, contact information, notification addresses.</p><pre><code class="language-julia hljs">Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.EmailField(unique=true),
@@ -101,77 +101,27 @@ Product = Models.Model(
 )
 
 # For contact forms
-Contact = Models.Model(
+Team_contact = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     email = Models.EmailField(),
     message = Models.TextField()
-)</code></pre><h3 id="URLField(max_length200)"><a class="docs-heading-anchor" href="#URLField(max_length200)">URLField(max_length=200)</a><a id="URLField(max_length200)-1"></a><a class="docs-heading-anchor-permalink" href="#URLField(max_length200)" title="Permalink"></a></h3><p><strong>Purpose</strong>: For storing website addresses and URIs with character length validation.</p><p><strong>Database Type</strong>: <code>VARCHAR(max_length)</code></p><p><strong>Use Cases</strong>: Profile links, social media URLs, external references.</p><pre><code class="language-julia hljs">Profile = Models.Model(
+)</code></pre><h3 id="URLField(max_length200)"><a class="docs-heading-anchor" href="#URLField(max_length200)">URLField(max_length=200)</a><a id="URLField(max_length200)-1"></a><a class="docs-heading-anchor-permalink" href="#URLField(max_length200)" title="Permalink"></a></h3><p><strong>Purpose</strong>: For storing website addresses and URIs with character length validation.</p><p><strong>Database Type</strong>: <code>VARCHAR(max_length)</code></p><p><strong>Use Cases</strong>: Profile links, social media URLs, external references.</p><pre><code class="language-julia hljs">Driver_profile = Models.Model(
     _id = Models.IDField(),
     website = Models.URLField(max_length=500, null=true, blank=true),
-    github_profile = Models.URLField(unique=true)
-)</code></pre><h3 id="SlugField(max_length50)"><a class="docs-heading-anchor" href="#SlugField(max_length50)">SlugField(max_length=50)</a><a id="SlugField(max_length50)-1"></a><a class="docs-heading-anchor-permalink" href="#SlugField(max_length50)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Compressed strings typically used to build SEO-friendly URLs.</p><p><strong>Database Type</strong>: <code>VARCHAR(max_length)</code></p><p><strong>Use Cases</strong>: Article slugs, product identifiers in URLs.</p><p><strong>Best Practice</strong>: <code>SlugField</code> defaults to <code>db_index=true</code> as it is almost always used in <code>filter()</code> operations for routing.</p><pre><code class="language-julia hljs">Post = Models.Model(
+    instagram_profile = Models.URLField(unique=true)
+)</code></pre><h3 id="SlugField(max_length50)"><a class="docs-heading-anchor" href="#SlugField(max_length50)">SlugField(max_length=50)</a><a id="SlugField(max_length50)-1"></a><a class="docs-heading-anchor-permalink" href="#SlugField(max_length50)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Compressed strings typically used to build SEO-friendly URLs.</p><p><strong>Database Type</strong>: <code>VARCHAR(max_length)</code></p><p><strong>Use Cases</strong>: Race-report slugs, part identifiers in URLs.</p><p><strong>Best Practice</strong>: <code>SlugField</code> defaults to <code>db_index=true</code> as it is almost always used in <code>filter()</code> operations for routing.</p><pre><code class="language-julia hljs">Press_release = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     slug = Models.SlugField(unique=true)
-)</code></pre><h3 id="PasswordField()"><a class="docs-heading-anchor" href="#PasswordField()">PasswordField()</a><a id="PasswordField()-1"></a><a class="docs-heading-anchor-permalink" href="#PasswordField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Secure password storage with Django-compatible PBKDF2-SHA256 hashing.</p><p><strong>Database Type</strong>: <code>VARCHAR(128)</code></p><p><strong>Use Cases</strong>: User authentication, secure credential storage, Django migration compatibility.</p><p>The <code>PasswordField</code> stores hashed passwords in a format fully compatible with Django&#39;s authentication system. Passwords are <strong>never stored in plain text</strong> - they are automatically hashed using PBKDF2-SHA256 with a randomly generated salt and 720,000 iterations (Django 4.2+ default).</p><p><strong>Storage Format</strong>:</p><pre><code class="nohighlight hljs">pbkdf2_sha256$720000$randomsalt$base64encodedHash</code></pre><pre><code class="language-julia hljs"># User model with password authentication
-User = Models.Model(
+)</code></pre><h3 id="PasswordField()"><a class="docs-heading-anchor" href="#PasswordField()">PasswordField()</a><a id="PasswordField()-1"></a><a class="docs-heading-anchor-permalink" href="#PasswordField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Django-compatible storage for password hashes.</p><p><strong>Database Type</strong>: <code>VARCHAR(128)</code></p><p><strong>Use Cases</strong>: Persisting password hashes in tables that share a Django <code>auth</code>-style schema.</p><p><code>PasswordField</code> is a <code>VARCHAR(128)</code> column sized to hold a Django-format password hash. It is a <strong>storage type only</strong> — PormG does not hash, verify, or otherwise transform the value. Hash the password in your application, store the finished string here, and read it back to verify. This keeps hashing policy in your app while the column stays wire-compatible with Django&#39;s authentication tables.</p><p><strong>Expected storage format</strong> (Django PBKDF2-SHA256):</p><pre><code class="nohighlight hljs">pbkdf2_sha256$720000$randomsalt$base64encodedHash</code></pre><blockquote><p>[!WARNING] Never assign a plain-text password to a <code>PasswordField</code> — the column stores whatever string it is given, verbatim. Hash the password in your application <strong>before</strong> saving.</p></blockquote><pre><code class="language-julia hljs"># Team member account with password authentication
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=150, unique=true),
     email = Models.EmailField(unique=true),
     password = Models.PasswordField()
-)</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>max_length::Int = 128</code>: Maximum length for stored hash (Django default)</li><li><code>blank::Bool = false</code>: Whether the field can be left blank</li><li><code>null::Bool = false</code>: Whether NULL values are allowed</li><li><code>auto_hash::Bool = true</code>: Whether to automatically hash passwords</li></ul><h4 id="Password-Utility-Functions"><a class="docs-heading-anchor" href="#Password-Utility-Functions">Password Utility Functions</a><a id="Password-Utility-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Password-Utility-Functions" title="Permalink"></a></h4><p>PormG provides Django-compatible utility functions for password management:</p><p><strong><code>make_password(raw_password)</code> - Hash a password</strong>:</p><pre><code class="language-julia hljs">import PormG.Models: make_password
-
-# Hash a password before storing
-hashed = make_password(&quot;mySecurePassword123!&quot;)
-# =&gt; &quot;pbkdf2_sha256$720000$abc123...$base64hash...&quot;
-
-# Custom iterations (for testing - use default in production)
-hashed = make_password(&quot;password&quot;, iterations=100000)</code></pre><p><strong><code>check_password(raw, encoded)</code> - Verify a password</strong>:</p><pre><code class="language-julia hljs">import PormG.Models: check_password
-
-# Verify during login
-if check_password(&quot;myPassword123&quot;, user[:password])
-    println(&quot;Login successful!&quot;)
-else
-    println(&quot;Invalid password&quot;)
-end</code></pre><p><strong><code>password_needs_upgrade(encoded)</code> - Check if re-hashing is needed</strong>:</p><pre><code class="language-julia hljs">import PormG.Models: password_needs_upgrade
-
-# After successful login, upgrade old hashes
-if password_needs_upgrade(user[:password])
-    user[:password] = make_password(raw_password)
-    # Save user to database...
-end</code></pre><h4 id="Complete-Authentication-Example-(F1-Context)"><a class="docs-heading-anchor" href="#Complete-Authentication-Example-(F1-Context)">Complete Authentication Example (F1 Context)</a><a id="Complete-Authentication-Example-(F1-Context)-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Authentication-Example-(F1-Context)" title="Permalink"></a></h4><pre><code class="language-julia hljs">import PormG.models as M
-import PormG.Models: make_password, check_password
-
-# Create a team manager account
-hashed_password = make_password(&quot;McLaren1988!&quot;)
-
-M.Team_manager.objects.create(
-    &quot;username&quot; =&gt; &quot;ron_dennis&quot;,
-    &quot;email&quot;    =&gt; &quot;ron@mclaren.com&quot;,
-    &quot;password&quot; =&gt; hashed_password,
-    &quot;team_id&quot;  =&gt; 1  # McLaren
-)
-
-# Login verification
-function authenticate(username::String, raw_password::String)
-    query = M.Team_manager.objects
-    query.filter(&quot;username&quot; =&gt; username)
-    users = query.list(:dict)
-    
-    isempty(users) &amp;&amp; return nothing
-    user = users[1]
-    
-    # Verify password with timing-attack protection
-    check_password(raw_password, user[:password]) ? user : nothing
-end
-
-# Usage
-user = authenticate(&quot;ron_dennis&quot;, &quot;McLaren1988!&quot;)
-if user !== nothing
-    println(&quot;Welcome, $(user[:username])!&quot;)
-end</code></pre><h4 id="Security-Notes"><a class="docs-heading-anchor" href="#Security-Notes">Security Notes</a><a id="Security-Notes-1"></a><a class="docs-heading-anchor-permalink" href="#Security-Notes" title="Permalink"></a></h4><ul><li><strong>Never store plain text passwords</strong> - always use <code>make_password()</code></li><li>Default 720,000 iterations provides strong security (NIST-approved)</li><li>Salts are automatically generated per-password (22 characters)</li><li><code>check_password()</code> uses constant-time comparison to prevent timing attacks</li><li>Consider implementing password upgrade on login if using older hashes</li></ul><h4 id="Django-Migration"><a class="docs-heading-anchor" href="#Django-Migration">Django Migration</a><a id="Django-Migration-1"></a><a class="docs-heading-anchor-permalink" href="#Django-Migration" title="Permalink"></a></h4><p>If migrating from Django, password hashes are <strong>fully compatible</strong>. Users can continue logging in without any password reset required.</p><hr/><h2 id="Numeric-Fields"><a class="docs-heading-anchor" href="#Numeric-Fields">Numeric Fields</a><a id="Numeric-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Numeric-Fields" title="Permalink"></a></h2><h3 id="IntegerField()"><a class="docs-heading-anchor" href="#IntegerField()">IntegerField()</a><a id="IntegerField()-1"></a><a class="docs-heading-anchor-permalink" href="#IntegerField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: 32-bit signed integers for counts, quantities, and ratings.</p><p><strong>Database Type</strong>: <code>INTEGER</code></p><p><strong>Range</strong>: -2,147,483,648 to 2,147,483,647</p><pre><code class="language-julia hljs"># Basic numeric data
-Product = Models.Model(
+)</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>max_length::Int = 128</code>: Column width for the stored hash (Django default)</li><li><code>blank::Bool = false</code>: Whether the field can be left blank</li><li><code>null::Bool = false</code>: Whether NULL values are allowed</li></ul><h4 id="Hashing-lives-in-your-application"><a class="docs-heading-anchor" href="#Hashing-lives-in-your-application">Hashing lives in your application</a><a id="Hashing-lives-in-your-application-1"></a><a class="docs-heading-anchor-permalink" href="#Hashing-lives-in-your-application" title="Permalink"></a></h4><p>PormG ships no password hashing or verification. Generate the Django-format hash in your application (or a dedicated auth package) and assign the resulting string to the <code>PasswordField</code>; verify by re-hashing the candidate and comparing. Because the stored format matches Django&#39;s (<code>pbkdf2_sha256$…</code>), a table written this way stays readable by Django&#39;s own authentication code and vice versa.</p><h4 id="Django-Migration"><a class="docs-heading-anchor" href="#Django-Migration">Django Migration</a><a id="Django-Migration-1"></a><a class="docs-heading-anchor-permalink" href="#Django-Migration" title="Permalink"></a></h4><p>If migrating from Django, password hashes are <strong>fully compatible</strong>. Users can continue logging in without any password reset required.</p><hr/><h2 id="Numeric-Fields"><a class="docs-heading-anchor" href="#Numeric-Fields">Numeric Fields</a><a id="Numeric-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Numeric-Fields" title="Permalink"></a></h2><h3 id="IntegerField()"><a class="docs-heading-anchor" href="#IntegerField()">IntegerField()</a><a id="IntegerField()-1"></a><a class="docs-heading-anchor-permalink" href="#IntegerField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: 32-bit signed integers for counts, quantities, and ratings.</p><p><strong>Database Type</strong>: <code>INTEGER</code></p><p><strong>Range</strong>: -2,147,483,648 to 2,147,483,647</p><pre><code class="language-julia hljs"># Basic numeric data
+Part = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     stock_quantity = Models.IntegerField(default=0),
@@ -179,21 +129,21 @@ Product = Models.Model(
 )
 
 # Rating systems
-Review = Models.Model(
+Fan_review = Models.Model(
     _id = Models.IDField(),
-    product = Models.ForeignKey(&quot;Product&quot;),
+    race = Models.ForeignKey(&quot;Race&quot;),
     rating = Models.IntegerField(),  # 1-5 stars
     helpful_votes = Models.IntegerField(default=0)
 )
 
 # Age and demographic data
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     age = Models.IntegerField(null=true, blank=true),
     login_count = Models.IntegerField(default=0)
 )</code></pre><h3 id="BigIntegerField()"><a class="docs-heading-anchor" href="#BigIntegerField()">BigIntegerField()</a><a id="BigIntegerField()-1"></a><a class="docs-heading-anchor-permalink" href="#BigIntegerField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: 64-bit signed integers for large numbers and timestamps.</p><p><strong>Database Type</strong>: <code>BIGINT</code></p><p><strong>Range</strong>: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807</p><pre><code class="language-julia hljs"># Large counters and metrics
-Analytics = Models.Model(
+Season_analytics = Models.Model(
     _id = Models.IDField(),
     page_views = Models.BigIntegerField(default=0),
     unique_visitors = Models.BigIntegerField(default=0),
@@ -201,13 +151,13 @@ Analytics = Models.Model(
 )
 
 # Timestamp storage (Unix timestamp)
-Event = Models.Model(
+Timing_event = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     timestamp_ms = Models.BigIntegerField(),  # Milliseconds since epoch
-    user_id = Models.BigIntegerField()
-)</code></pre><h3 id="FloatField()"><a class="docs-heading-anchor" href="#FloatField()">FloatField()</a><a id="FloatField()-1"></a><a class="docs-heading-anchor-permalink" href="#FloatField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Double-precision floating-point numbers for measurements and calculations.</p><p><strong>Database Type</strong>: <code>DOUBLE PRECISION</code></p><pre><code class="language-julia hljs"># Scientific measurements
-Sensor = Models.Model(
+    driver_id = Models.BigIntegerField()
+)</code></pre><h3 id="FloatField()"><a class="docs-heading-anchor" href="#FloatField()">FloatField()</a><a id="FloatField()-1"></a><a class="docs-heading-anchor-permalink" href="#FloatField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Double-precision floating-point numbers for measurements and calculations.</p><p><strong>Database Type</strong>: <code>DOUBLE PRECISION</code></p><pre><code class="language-julia hljs"># Telemetry measurements
+Car_sensor = Models.Model(
     _id = Models.IDField(),
     temperature = Models.FloatField(),  # Celsius
     humidity = Models.FloatField(),     # Percentage
@@ -215,7 +165,7 @@ Sensor = Models.Model(
 )
 
 # Geographic coordinates
-Location = Models.Model(
+Circuit = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     latitude = Models.FloatField(),
@@ -223,14 +173,14 @@ Location = Models.Model(
     elevation = Models.FloatField(null=true)  # Meters above sea level
 )
 
-# Financial calculations (use DecimalField for currency)
-Performance = Models.Model(
+# Derived performance metrics (use DecimalField for currency)
+Car_performance = Models.Model(
     _id = Models.IDField(),
-    growth_rate = Models.FloatField(),      # Percentage
-    volatility = Models.FloatField(),       # Standard deviation
-    beta = Models.FloatField(null=true)     # Market correlation
+    pace_delta = Models.FloatField(),       # Seconds vs pole
+    tyre_deg_rate = Models.FloatField(),    # Seconds lost per lap
+    fuel_effect = Models.FloatField(null=true)  # Seconds per 10 kg
 )</code></pre><h3 id="DecimalField(max*digits,-decimal*places)"><a class="docs-heading-anchor" href="#DecimalField(max*digits,-decimal*places)">DecimalField(max<em>digits, decimal</em>places)</a><a id="DecimalField(max*digits,-decimal*places)-1"></a><a class="docs-heading-anchor-permalink" href="#DecimalField(max*digits,-decimal*places)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Precise decimal numbers for financial and monetary data.</p><p><strong>Database Type</strong>: <code>NUMERIC(max_digits, decimal_places)</code></p><p><strong>Use Cases</strong>: Currency, financial calculations, precise measurements.</p><pre><code class="language-julia hljs"># Financial data
-Order = Models.Model(
+Sponsor_invoice = Models.Model(
     _id = Models.IDField(),
     subtotal = Models.DecimalField(max_digits=10, decimal_places=2),
     tax_amount = Models.DecimalField(max_digits=8, decimal_places=2),
@@ -238,15 +188,15 @@ Order = Models.Model(
     discount_rate = Models.DecimalField(max_digits=5, decimal_places=4)  # 0.1234 = 12.34%
 )
 
-# Product pricing
-Product = Models.Model(
+# Merchandise pricing
+Merchandise = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     unit_price = Models.DecimalField(max_digits=8, decimal_places=2),
     wholesale_price = Models.DecimalField(max_digits=8, decimal_places=2),
     weight = Models.DecimalField(max_digits=6, decimal_places=3)  # Kilograms
 )</code></pre><p><strong>Key Parameters</strong>:</p><ul><li><code>max_digits::Int</code>: Total number of digits</li><li><code>decimal_places::Int</code>: Number of decimal places</li></ul><hr/><h2 id="Date-and-Time-Fields"><a class="docs-heading-anchor" href="#Date-and-Time-Fields">Date and Time Fields</a><a id="Date-and-Time-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Date-and-Time-Fields" title="Permalink"></a></h2><h3 id="DateField()"><a class="docs-heading-anchor" href="#DateField()">DateField()</a><a id="DateField()-1"></a><a class="docs-heading-anchor-permalink" href="#DateField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Calendar dates without time information.</p><p><strong>Database Type</strong>: <code>DATE</code></p><p><strong>Format</strong>: YYYY-MM-DD</p><p><strong>Current Contract</strong>:</p><ul><li>Accepts <code>Date</code> directly.</li><li>Also accepts <code>DateTime</code> and <code>ZonedDateTime</code>, coercing them to the calendar date before SQL generation.</li><li>Accepts <code>YYYY-MM-DD</code> strings.</li><li>This means <code>DateField</code> is currently permissive; it does not yet reject datetime values automatically.</li></ul><pre><code class="language-julia hljs"># Personal information
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     birth_date = Models.DateField(null=true),
@@ -254,7 +204,7 @@ User = Models.Model(
 )
 
 # Event scheduling
-Event = Models.Model(
+Grand_prix = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     event_date = Models.DateField(),
@@ -262,23 +212,23 @@ Event = Models.Model(
 )
 
 # Business records
-Invoice = Models.Model(
+Sponsor_contract = Models.Model(
     _id = Models.IDField(),
-    invoice_number = Models.CharField(max_length=50),
+    contract_number = Models.CharField(max_length=50),
     issue_date = Models.DateField(),
     due_date = Models.DateField(),
     paid_date = Models.DateField(null=true)
 )</code></pre><h3 id="DateTimeField()"><a class="docs-heading-anchor" href="#DateTimeField()">DateTimeField()</a><a id="DateTimeField()-1"></a><a class="docs-heading-anchor-permalink" href="#DateTimeField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Date and time with timezone support.</p><p><strong>Database Type</strong>: <code>TIMESTAMP WITH TIME ZONE</code></p><p><strong>Use Cases</strong>: Timestamps, logs, audit trails, precise timing.</p><p><strong>Current Contract</strong>:</p><ul><li><code>default</code> values are normalized to <code>Union{ZonedDateTime, DateTime, Nothing}</code>.</li><li><strong>Canonicalized to UTC (issue #79):</strong> every <code>DateTimeField</code> value — written, bound, or used as a filter value — is canonicalized to one UTC ISO-8601 string, <code>yyyy-mm-ddTHH:MM:SS.sss+00:00</code> (millisecond precision, <code>+00:00</code> offset). This mirrors Django <code>USE_TZ</code> / Rails / SQLAlchemy and makes SQLite&#39;s lexicographic TEXT comparison agree with PostgreSQL&#39;s <code>timestamptz</code> instant comparison: equality and range filters return the <strong>same rows on both backends</strong> regardless of how the input instant is spelled (<code>Z</code> vs <code>+00:00</code>, <code>.0</code>/<code>.000</code>/no-subsecond, or a non-UTC offset such as <code>-03:00</code>/<code>+05:30</code>).</li><li>Passing <code>ZonedDateTime</code> preserves the instant (converted to UTC for storage) and is the recommended path for shared Django/PostgreSQL tables.</li><li>Passing a plain Julia <code>DateTime</code> is interpreted as <code>UTC</code>.</li><li>Internal <code>auto_now</code> and <code>auto_now_add</code> timestamps are generated in <code>settings.time_zone</code> and then canonicalized to UTC on serialization — the same instant, stored in the UTC spelling.</li><li>The same semantics are exercised on both PostgreSQL and SQLite integration backends, including <code>bulk_insert</code> and <code>bulk_update</code> paths for <code>DateTimeField</code> values.</li><li>If your Django app uses <code>USE_TZ=True</code> with a non-UTC active timezone, you should treat plain <code>DateTime</code> as a deliberate UTC input and use <code>ZonedDateTime</code> for local civil times.</li></ul><h4 id="TIMESTAMPTZ-vs-TIMESTAMP"><a class="docs-heading-anchor" href="#TIMESTAMPTZ-vs-TIMESTAMP">TIMESTAMPTZ vs TIMESTAMP</a><a id="TIMESTAMPTZ-vs-TIMESTAMP-1"></a><a class="docs-heading-anchor-permalink" href="#TIMESTAMPTZ-vs-TIMESTAMP" title="Permalink"></a></h4><p>By default, <code>DateTimeField</code> uses <code>TIMESTAMPTZ</code>. </p><ul><li><strong>TIMESTAMPTZ</strong> (Recommended): Stores values in UTC internally and converts them to your session&#39;s timezone upon retrieval. This ensures consistency across different geographical regions.</li><li><strong>TIMESTAMP</strong>: Stores the exact date and time provided without any timezone conversion. You can switch to this by passing <code>type=&quot;TIMESTAMP&quot;</code>.</li></ul><h4 id="Naive-vs-Aware-Inputs"><a class="docs-heading-anchor" href="#Naive-vs-Aware-Inputs">Naive vs Aware Inputs</a><a id="Naive-vs-Aware-Inputs-1"></a><a class="docs-heading-anchor-permalink" href="#Naive-vs-Aware-Inputs" title="Permalink"></a></h4><ul><li><strong>Aware input</strong>: <code>ZonedDateTime(2026, 3, 13, 9, 0, tz&quot;America/Sao_Paulo&quot;)</code> keeps the source timezone semantics explicit.</li><li><strong>Naive input</strong>: <code>DateTime(2026, 3, 13, 9, 0)</code> is currently serialized as <code>UTC</code>, not as <code>settings.time_zone</code>.</li><li><strong>Interop rule</strong>: if the upstream system thinks in a local timezone, convert to <code>ZonedDateTime</code> before <code>create</code>, <code>update</code>, <code>bulk_insert</code>, or <code>bulk_update</code>.</li><li><strong>SQLite note</strong>: SQLite stores datetime values as text, but PormG reconstructs <code>ZonedDateTime</code> / <code>DateTime</code> values on read so the high-level contract matches PostgreSQL.</li></ul><pre><code class="language-julia hljs"># Audit and logging
-AuditLog = Models.Model(
+Race_audit_log = Models.Model(
     _id = Models.IDField(),
-    user = Models.ForeignKey(&quot;User&quot;),
+    team_member = Models.ForeignKey(&quot;Team_member&quot;),
     action = Models.CharField(max_length=100),
     timestamp = Models.DateTimeField(),
     ip_address = Models.CharField(max_length=45)
 )
 
 # Content management
-Article = Models.Model(
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -287,14 +237,14 @@ Article = Models.Model(
     published_at = Models.DateTimeField(null=true)
 )
 
-# E-commerce
-Order = Models.Model(
+# Team store
+Store_order = Models.Model(
     _id = Models.IDField(),
     created_at = Models.DateTimeField(),
     shipped_at = Models.DateTimeField(null=true),
     delivered_at = Models.DateTimeField(null=true)
-)</code></pre><h3 id="TimeField()"><a class="docs-heading-anchor" href="#TimeField()">TimeField()</a><a id="TimeField()-1"></a><a class="docs-heading-anchor-permalink" href="#TimeField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Time of day without date information.</p><p><strong>Database Type</strong>: <code>TIME</code></p><p><strong>Format</strong>: HH:MM:SS</p><pre><code class="language-julia hljs"># Business hours
-Store = Models.Model(
+)</code></pre><h3 id="TimeField()"><a class="docs-heading-anchor" href="#TimeField()">TimeField()</a><a id="TimeField()-1"></a><a class="docs-heading-anchor-permalink" href="#TimeField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Time of day without date information.</p><p><strong>Database Type</strong>: <code>TIME</code></p><p><strong>Format</strong>: HH:MM:SS</p><pre><code class="language-julia hljs"># Facility hours
+Team_store = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=100),
     opening_time = Models.TimeField(),
@@ -302,12 +252,12 @@ Store = Models.Model(
 )
 
 # Scheduling
-Appointment = Models.Model(
+Garage_booking = Models.Model(
     _id = Models.IDField(),
     date = Models.DateField(),
     start_time = Models.TimeField(),
     end_time = Models.TimeField(),
-    patient = Models.ForeignKey(&quot;Patient&quot;)
+    driver = Models.ForeignKey(&quot;Driver&quot;)
 )
 
 # Sports and timing
@@ -317,7 +267,7 @@ Race = Models.Model(
     start_time = Models.TimeField(),
     best_lap_time = Models.TimeField(null=true)
 )</code></pre><h3 id="DurationField()"><a class="docs-heading-anchor" href="#DurationField()">DurationField()</a><a id="DurationField()-1"></a><a class="docs-heading-anchor-permalink" href="#DurationField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Time intervals and durations.</p><p><strong>Database Type</strong>: <code>INTERVAL</code></p><p><strong>Use Cases</strong>: Elapsed time, durations, time spans.</p><pre><code class="language-julia hljs"># Task tracking
-Task = Models.Model(
+Pit_task = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     estimated_duration = Models.DurationField(),
@@ -325,13 +275,13 @@ Task = Models.Model(
 )
 
 # Media content
-Video = Models.Model(
+Onboard_video = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     duration = Models.DurationField(),
     encoding_time = Models.DurationField(null=true)
-)</code></pre><hr/><h2 id="Boolean-Fields"><a class="docs-heading-anchor" href="#Boolean-Fields">Boolean Fields</a><a id="Boolean-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Boolean-Fields" title="Permalink"></a></h2><h3 id="BooleanField()"><a class="docs-heading-anchor" href="#BooleanField()">BooleanField()</a><a id="BooleanField()-1"></a><a class="docs-heading-anchor-permalink" href="#BooleanField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: True/false values for flags and binary states.</p><p><strong>Database Type</strong>: <code>BOOLEAN</code></p><pre><code class="language-julia hljs"># User preferences and flags
-User = Models.Model(
+)</code></pre><hr/><h2 id="Boolean-Fields"><a class="docs-heading-anchor" href="#Boolean-Fields">Boolean Fields</a><a id="Boolean-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Boolean-Fields" title="Permalink"></a></h2><h3 id="BooleanField()"><a class="docs-heading-anchor" href="#BooleanField()">BooleanField()</a><a id="BooleanField()-1"></a><a class="docs-heading-anchor-permalink" href="#BooleanField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: True/false values for flags and binary states.</p><p><strong>Database Type</strong>: <code>BOOLEAN</code></p><pre><code class="language-julia hljs"># Team member preferences and flags
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     is_active = Models.BooleanField(default=true),
@@ -342,7 +292,7 @@ User = Models.Model(
 )
 
 # Content moderation
-Article = Models.Model(
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     content = Models.TextField(),
@@ -352,21 +302,21 @@ Article = Models.Model(
 )
 
 # System settings
-Configuration = Models.Model(
+System_setting = Models.Model(
     _id = Models.IDField(),
     maintenance_mode = Models.BooleanField(default=false),
     registration_enabled = Models.BooleanField(default=true),
     debug_mode = Models.BooleanField(default=false)
-)</code></pre><hr/><h2 id="Binary-and-File-Fields"><a class="docs-heading-anchor" href="#Binary-and-File-Fields">Binary and File Fields</a><a id="Binary-and-File-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Binary-and-File-Fields" title="Permalink"></a></h2><h3 id="ImageField()"><a class="docs-heading-anchor" href="#ImageField()">ImageField()</a><a id="ImageField()-1"></a><a class="docs-heading-anchor-permalink" href="#ImageField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Image file paths and metadata.</p><p><strong>Database Type</strong>: <code>VARCHAR</code> (stores file path)</p><p><strong>Use Cases</strong>: Photo uploads, galleries, avatars, product images.</p><pre><code class="language-julia hljs"># User profiles
-User_profile = Models.Model(
+)</code></pre><hr/><h2 id="Binary-and-File-Fields"><a class="docs-heading-anchor" href="#Binary-and-File-Fields">Binary and File Fields</a><a id="Binary-and-File-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Binary-and-File-Fields" title="Permalink"></a></h2><h3 id="ImageField()"><a class="docs-heading-anchor" href="#ImageField()">ImageField()</a><a id="ImageField()-1"></a><a class="docs-heading-anchor-permalink" href="#ImageField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Image file paths and metadata.</p><p><strong>Database Type</strong>: <code>VARCHAR</code> (stores file path)</p><p><strong>Use Cases</strong>: Race photos, galleries, driver avatars, car images.</p><pre><code class="language-julia hljs"># Driver profiles
+Driver_profile = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField(&quot;User&quot;),
+    driver = Models.OneToOneField(&quot;Driver&quot;),
     avatar = Models.ImageField(null=true, blank=true),
     cover_photo = Models.ImageField(null=true, blank=true)
 )
 
-# Product catalog
-Product = Models.Model(
+# Merchandise catalog
+Merchandise = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     main_image = Models.ImageField(),
@@ -374,14 +324,14 @@ Product = Models.Model(
 )
 
 # Gallery system
-Photo = Models.Model(
+Race_photo = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
     image = Models.ImageField(),
     caption = Models.TextField(blank=true),
     upload_date = Models.DateTimeField()
 )</code></pre><h3 id="BinaryField()"><a class="docs-heading-anchor" href="#BinaryField()">BinaryField()</a><a id="BinaryField()-1"></a><a class="docs-heading-anchor-permalink" href="#BinaryField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Binary data storage for files and encrypted content.</p><p><strong>Database Type</strong>: <code>BYTEA</code></p><p><strong>Use Cases</strong>: File storage, encrypted data, binary documents.</p><pre><code class="language-julia hljs"># Document storage
-Document = Models.Model(
+Technical_document = Models.Model(
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
     file_data = Models.BinaryField(),
@@ -390,74 +340,74 @@ Document = Models.Model(
 )
 
 # Encryption and security
-SecureData = Models.Model(
+Encrypted_telemetry = Models.Model(
     _id = Models.IDField(),
-    user = Models.ForeignKey(&quot;User&quot;),
+    team_member = Models.ForeignKey(&quot;Team_member&quot;),
     encrypted_content = Models.BinaryField(),
     encryption_key_hash = Models.CharField(max_length=64)
-)</code></pre><hr/><h2 id="Structured-Data-Fields"><a class="docs-heading-anchor" href="#Structured-Data-Fields">Structured Data Fields</a><a id="Structured-Data-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Structured-Data-Fields" title="Permalink"></a></h2><h3 id="JSONField()"><a class="docs-heading-anchor" href="#JSONField()">JSONField()</a><a id="JSONField()-1"></a><a class="docs-heading-anchor-permalink" href="#JSONField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Storing semi-structured data using JSON formatting.</p><p><strong>Database Type</strong>: </p><ul><li><strong>PostgreSQL</strong>: <code>JSONB</code> (binary storage, fast querying, allows indexing)</li><li><strong>SQLite</strong>: <code>TEXT</code> (stores as a JSON string)</li></ul><p><strong>Use Cases</strong>: Configuration settings, variable data payloads, complex metadata.</p><p><strong>Handling</strong>: In Julia, this field accepts and returns <code>Dict</code> or <code>Vector</code> types, automatically handling the serialization/deserialization.</p><pre><code class="language-julia hljs">Config = Models.Model(
+)</code></pre><hr/><h2 id="Structured-Data-Fields"><a class="docs-heading-anchor" href="#Structured-Data-Fields">Structured Data Fields</a><a id="Structured-Data-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Structured-Data-Fields" title="Permalink"></a></h2><h3 id="JSONField()"><a class="docs-heading-anchor" href="#JSONField()">JSONField()</a><a id="JSONField()-1"></a><a class="docs-heading-anchor-permalink" href="#JSONField()" title="Permalink"></a></h3><p><strong>Purpose</strong>: Storing semi-structured data using JSON formatting.</p><p><strong>Database Type</strong>: </p><ul><li><strong>PostgreSQL</strong>: <code>JSONB</code> (binary storage, fast querying, allows indexing)</li><li><strong>SQLite</strong>: <code>TEXT</code> (stores as a JSON string)</li></ul><p><strong>Use Cases</strong>: Configuration settings, variable data payloads, complex metadata.</p><p><strong>Handling</strong>: In Julia, this field accepts and returns <code>Dict</code> or <code>Vector</code> types, automatically handling the serialization/deserialization.</p><pre><code class="language-julia hljs">Car_setup = Models.Model(
     _id = Models.IDField(),
     settings = Models.JSONField(),
     metadata = Models.JSONField(null=true, blank=true)
 )
 
 # Example usage:
-Config.objects.create(&quot;settings&quot; =&gt; Dict(&quot;theme&quot;=&gt;&quot;dark&quot;, &quot;notifications&quot;=&gt;true))</code></pre><hr/><h2 id="Relationship-Fields"><a class="docs-heading-anchor" href="#Relationship-Fields">Relationship Fields</a><a id="Relationship-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Relationship-Fields" title="Permalink"></a></h2><h3 id="ForeignKey(to_model)"><a class="docs-heading-anchor" href="#ForeignKey(to_model)">ForeignKey(to_model)</a><a id="ForeignKey(to_model)-1"></a><a class="docs-heading-anchor-permalink" href="#ForeignKey(to_model)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Many-to-one relationships linking records to a single target record.</p><p><strong>Database Type</strong>: <code>BIGINT</code> with foreign key constraint</p><p><strong>Use Cases</strong>: Categories, users, parent-child relationships.</p><p><strong>FK Value Contract</strong>:</p><ul><li>ForeignKey fields accept scalar primary-key values, including <code>0</code>, when that key exists in the referenced table.</li><li>Use <code>nothing</code> or <code>missing</code> to write SQL <code>NULL</code> on nullable FK columns.</li></ul><pre><code class="language-julia hljs"># Blog system
-Article = Models.Model(
+Car_setup.objects.create(&quot;settings&quot; =&gt; Dict(&quot;front_wing&quot;=&gt;5, &quot;tyre_pressure&quot;=&gt;21.5))</code></pre><hr/><h2 id="Relationship-Fields"><a class="docs-heading-anchor" href="#Relationship-Fields">Relationship Fields</a><a id="Relationship-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Relationship-Fields" title="Permalink"></a></h2><h3 id="ForeignKey(to_model)"><a class="docs-heading-anchor" href="#ForeignKey(to_model)">ForeignKey(to_model)</a><a id="ForeignKey(to_model)-1"></a><a class="docs-heading-anchor-permalink" href="#ForeignKey(to_model)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Many-to-one relationships linking records to a single target record.</p><p><strong>Database Type</strong>: <code>BIGINT</code> with foreign key constraint</p><p><strong>Use Cases</strong>: Categories, users, parent-child relationships.</p><p><strong>FK Value Contract</strong>:</p><ul><li>ForeignKey fields accept scalar primary-key values, including <code>0</code>, when that key exists in the referenced table.</li><li>Use <code>nothing</code> or <code>missing</code> to write SQL <code>NULL</code> on nullable FK columns.</li></ul><pre><code class="language-julia hljs"># Press room
+Race_report = Models.Model(
     _id = Models.IDField(),
     title = Models.CharField(max_length=200),
-    author = Models.ForeignKey(&quot;User&quot;, on_delete=&quot;CASCADE&quot;),
-    category = Models.ForeignKey(&quot;Category&quot;, on_delete=&quot;PROTECT&quot;),
+    author = Models.ForeignKey(&quot;Team_member&quot;, on_delete=&quot;CASCADE&quot;),
+    category = Models.ForeignKey(&quot;Report_category&quot;, on_delete=&quot;PROTECT&quot;),
     content = Models.TextField()
 )
 
-# E-commerce
-Order = Models.Model(
+# Team store
+Store_order = Models.Model(
     _id = Models.IDField(),
-    customer = Models.ForeignKey(&quot;User&quot;, on_delete=&quot;PROTECT&quot;),
-    shipping_address = Models.ForeignKey(&quot;Address&quot;, on_delete=&quot;SET_NULL&quot;, null=true),
+    customer = Models.ForeignKey(&quot;Fan&quot;, on_delete=&quot;PROTECT&quot;),
+    shipping_address = Models.ForeignKey(&quot;Shipping_address&quot;, on_delete=&quot;SET_NULL&quot;, null=true),
     total_amount = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 
-Order_item = Models.Model(
+Order_line = Models.Model(
     _id = Models.IDField(),
-    order = Models.ForeignKey(&quot;Order&quot;, on_delete=&quot;CASCADE&quot;),
-    product = Models.ForeignKey(&quot;Product&quot;, on_delete=&quot;PROTECT&quot;),
+    order = Models.ForeignKey(&quot;Store_order&quot;, on_delete=&quot;CASCADE&quot;),
+    product = Models.ForeignKey(&quot;Merchandise&quot;, on_delete=&quot;PROTECT&quot;),
     quantity = Models.IntegerField(),
     unit_price = Models.DecimalField(max_digits=8, decimal_places=2)
 )
 
 # Multiple ForeignKeys to same model (requires related_name)
-Message = Models.Model(
+Team_radio = Models.Model(
     _id = Models.IDField(),
-    sender = Models.ForeignKey(&quot;User&quot;, on_delete=&quot;CASCADE&quot;, related_name=&quot;sent_messages&quot;),
-    recipient = Models.ForeignKey(&quot;User&quot;, on_delete=&quot;CASCADE&quot;, related_name=&quot;received_messages&quot;),
+    sender = Models.ForeignKey(&quot;Team_member&quot;, on_delete=&quot;CASCADE&quot;, related_name=&quot;sent_messages&quot;),
+    recipient = Models.ForeignKey(&quot;Team_member&quot;, on_delete=&quot;CASCADE&quot;, related_name=&quot;received_messages&quot;),
     content = Models.TextField(),
     sent_at = Models.DateTimeField()
-)</code></pre><p><strong>On Delete Options</strong>:</p><ul><li><code>CASCADE</code>: Delete this record when target is deleted</li><li><code>RESTRICT</code>: Prevent deletion of target if this record exists</li><li><code>SET_NULL</code>: Set field to NULL (requires <code>null=true</code>)</li><li><code>SET_DEFAULT</code>: Set to default value</li><li><code>PROTECT</code>: Raise error to prevent deletion</li><li><code>DO_NOTHING</code>: No action (may cause integrity errors)</li></ul><h3 id="OneToOneField(to_model)"><a class="docs-heading-anchor" href="#OneToOneField(to_model)">OneToOneField(to_model)</a><a id="OneToOneField(to_model)-1"></a><a class="docs-heading-anchor-permalink" href="#OneToOneField(to_model)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Strict one-to-one relationships where each record corresponds to exactly one target record.</p><p><strong>Database Type</strong>: <code>BIGINT</code> with unique foreign key constraint</p><p><strong>Use Cases</strong>: User profiles, settings, model extensions.</p><pre><code class="language-julia hljs"># User profile extension
-User_profile = Models.Model(
+)</code></pre><p><strong>On Delete Options</strong>:</p><ul><li><code>CASCADE</code>: Delete this record when target is deleted</li><li><code>RESTRICT</code>: Prevent deletion of target if this record exists</li><li><code>SET_NULL</code>: Set field to NULL (requires <code>null=true</code>)</li><li><code>SET_DEFAULT</code>: Set to default value</li><li><code>PROTECT</code>: Raise error to prevent deletion</li><li><code>DO_NOTHING</code>: No action (may cause integrity errors)</li></ul><h3 id="OneToOneField(to_model)"><a class="docs-heading-anchor" href="#OneToOneField(to_model)">OneToOneField(to_model)</a><a id="OneToOneField(to_model)-1"></a><a class="docs-heading-anchor-permalink" href="#OneToOneField(to_model)" title="Permalink"></a></h3><p><strong>Purpose</strong>: Strict one-to-one relationships where each record corresponds to exactly one target record.</p><p><strong>Database Type</strong>: <code>BIGINT</code> with unique foreign key constraint</p><p><strong>Use Cases</strong>: Driver profiles, settings, model extensions.</p><pre><code class="language-julia hljs"># Driver profile extension
+Driver_profile = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField(&quot;User&quot;, on_delete=&quot;CASCADE&quot;),
+    driver = Models.OneToOneField(&quot;Driver&quot;, on_delete=&quot;CASCADE&quot;),
     bio = Models.TextField(blank=true),
     birth_date = Models.DateField(null=true),
     website = Models.CharField(max_length=200, blank=true),
     location = Models.CharField(max_length=100, blank=true)
 )
 
-# Employee details
-Employee_profile = Models.Model(
+# Staff details
+Staff_profile = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField(&quot;User&quot;, on_delete=&quot;CASCADE&quot;),
-    employee_id = Models.CharField(max_length=20, unique=true),
-    department = Models.ForeignKey(&quot;Department&quot;),
+    team_member = Models.OneToOneField(&quot;Team_member&quot;, on_delete=&quot;CASCADE&quot;),
+    staff_id = Models.CharField(max_length=20, unique=true),
+    department = Models.ForeignKey(&quot;Constructor&quot;),
     hire_date = Models.DateField(),
     salary = Models.DecimalField(max_digits=10, decimal_places=2)
 )
 
 # Settings and preferences
-User_settings = Models.Model(
+Team_member_settings = Models.Model(
     _id = Models.IDField(),
-    user = Models.OneToOneField(&quot;User&quot;, on_delete=&quot;CASCADE&quot;),
+    team_member = Models.OneToOneField(&quot;Team_member&quot;, on_delete=&quot;CASCADE&quot;),
     theme = Models.CharField(max_length=20, default=&quot;light&quot;),
     language = Models.CharField(max_length=10, default=&quot;en&quot;),
     notifications_enabled = Models.BooleanField(default=true)
@@ -483,7 +433,7 @@ manager = Driver_collection.drivers(collection_id)
 manager.add!(senna_id, prost_id)  # returns nothing
 manager.remove!(prost_id)         # returns nothing
 manager.set!([senna_id])          # returns (added=X, removed=Y)
-driver_rows = manager.all().values(&quot;surname&quot;, &quot;nationality&quot;).list()</code></pre><p>Use <code>through=Existing_model</code> when the relationship table has extra fields, such as the season when a driver was added to a collection. In that case PormG treats the through model as a normal model and does not auto-generate a join table.</p><blockquote><p>[!WARNING] <strong>Django-Style Strict Mutators</strong>: If the custom <code>through</code> model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (<code>add!</code>, <code>remove!</code>, <code>clear!</code>, and <code>set!</code>) will raise an <code>ArgumentError</code>. Create or delete custom through model objects directly using the through model&#39;s objects manager instead.</p></blockquote><hr/><h2 id="Common-Field-Options"><a class="docs-heading-anchor" href="#Common-Field-Options">Common Field Options</a><a id="Common-Field-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Field-Options" title="Permalink"></a></h2><p>All field types support these common parameters:</p><h3 id="Validation-Options"><a class="docs-heading-anchor" href="#Validation-Options">Validation Options</a><a id="Validation-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-Options" title="Permalink"></a></h3><ul><li><code>null::Bool = false</code>: Allow NULL values in database</li><li><code>blank::Bool = false</code>: Allow empty values in forms  </li><li><code>unique::Bool = false</code>: Enforce uniqueness constraint on this single column. For uniqueness spanning <strong>two or more</strong> columns, use a model-level <code>UniqueConstraint</code> — see <a href="../models/#Composite-Uniqueness-(unique_together)">Composite Uniqueness</a>.</li><li><code>default</code>: Set default value for new records</li></ul><h3 id="Database-Options"><a class="docs-heading-anchor" href="#Database-Options">Database Options</a><a id="Database-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Database-Options" title="Permalink"></a></h3><ul><li><code>db_index::Bool = false</code>: Create database index for faster queries</li><li><code>db_column::Union{String, Nothing} = nothing</code>: Maps this field to a differently-named physical column; <strong>authoritative</strong> across DDL, queries, and migrations (#50). Defaults to the field name (see <a href="../schema_conventions/">Schema Conventions</a>)</li><li><code>db_constraint::Bool = true</code>: Create database constraints (for relationships)</li></ul><h3 id="Example-with-All-Common-Options"><a class="docs-heading-anchor" href="#Example-with-All-Common-Options">Example with All Common Options</a><a id="Example-with-All-Common-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Example-with-All-Common-Options" title="Permalink"></a></h3><pre><code class="language-julia hljs">Product = Models.Model(
+driver_rows = manager.all().values(&quot;surname&quot;, &quot;nationality&quot;).list()</code></pre><p>Use <code>through=Existing_model</code> when the relationship table has extra fields, such as the season when a driver was added to a collection. In that case PormG treats the through model as a normal model and does not auto-generate a join table.</p><blockquote><p>[!WARNING] <strong>Django-Style Strict Mutators</strong>: If the custom <code>through</code> model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (<code>add!</code>, <code>remove!</code>, <code>clear!</code>, and <code>set!</code>) will raise an <code>ArgumentError</code>. Create or delete custom through model objects directly using the through model&#39;s objects manager instead.</p></blockquote><hr/><h2 id="Common-Field-Options"><a class="docs-heading-anchor" href="#Common-Field-Options">Common Field Options</a><a id="Common-Field-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Field-Options" title="Permalink"></a></h2><p>All field types support these common parameters:</p><h3 id="Validation-Options"><a class="docs-heading-anchor" href="#Validation-Options">Validation Options</a><a id="Validation-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-Options" title="Permalink"></a></h3><ul><li><code>null::Bool = false</code>: Allow NULL values in database</li><li><code>blank::Bool = false</code>: Allow empty values in forms  </li><li><code>unique::Bool = false</code>: Enforce uniqueness constraint on this single column. For uniqueness spanning <strong>two or more</strong> columns, use a model-level <code>UniqueConstraint</code> — see <a href="../models/#Composite-Uniqueness-(unique_together)">Composite Uniqueness</a>.</li><li><code>default</code>: Set default value for new records</li></ul><h3 id="Database-Options"><a class="docs-heading-anchor" href="#Database-Options">Database Options</a><a id="Database-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Database-Options" title="Permalink"></a></h3><ul><li><code>db_index::Bool = false</code>: Create database index for faster queries</li><li><code>db_column::Union{String, Nothing} = nothing</code>: Maps this field to a differently-named physical column; <strong>authoritative</strong> across DDL, queries, and migrations (#50). Defaults to the field name (see <a href="../schema_conventions/">Schema Conventions</a>)</li><li><code>db_constraint::Bool = true</code>: Create database constraints (for relationships)</li></ul><h3 id="Example-with-All-Common-Options"><a class="docs-heading-anchor" href="#Example-with-All-Common-Options">Example with All Common Options</a><a id="Example-with-All-Common-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Example-with-All-Common-Options" title="Permalink"></a></h3><pre><code class="language-julia hljs">Merchandise = Models.Model(
     _id = Models.IDField(),
     
     # CharField with full options
@@ -501,7 +451,7 @@ driver_rows = manager.all().values(&quot;surname&quot;, &quot;nationality&quot;)
     
     # Nullable relationship
     category = Models.ForeignKey(
-        &quot;Category&quot;,
+        &quot;Merchandise_category&quot;,
         on_delete=&quot;SET_NULL&quot;,
         null=true,
         blank=true
@@ -528,18 +478,18 @@ status = Models.CharField(
 # Null validation
 required_field = Models.CharField(max_length=100)  # Cannot be NULL
 optional_field = Models.CharField(max_length=100, null=true)  # Can be NULL</code></pre><h3 id="Relationship-Validation"><a class="docs-heading-anchor" href="#Relationship-Validation">Relationship Validation</a><a id="Relationship-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Relationship-Validation" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Foreign key validation
-author = Models.ForeignKey(&quot;User&quot;, on_delete=&quot;CASCADE&quot;)  # Must reference valid User
+author = Models.ForeignKey(&quot;Team_member&quot;, on_delete=&quot;CASCADE&quot;)  # Must reference valid Team_member
 
 # One-to-one validation
-profile = Models.OneToOneField(&quot;User_profile&quot;)  # Must be unique relationship</code></pre><hr/><h2 id="Migration-Considerations"><a class="docs-heading-anchor" href="#Migration-Considerations">Migration Considerations</a><a id="Migration-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Migration-Considerations" title="Permalink"></a></h2><h3 id="Safe-Changes"><a class="docs-heading-anchor" href="#Safe-Changes">Safe Changes</a><a id="Safe-Changes-1"></a><a class="docs-heading-anchor-permalink" href="#Safe-Changes" title="Permalink"></a></h3><p>These changes can be made without data loss:</p><ul><li>Adding new fields with <code>null=true</code> or <code>default</code> values</li><li>Increasing <code>max_length</code> on CharField</li><li>Changing <code>blank</code> from <code>false</code> to <code>true</code></li><li>Adding database indexes</li><li>Changing <code>on_delete</code> behavior</li></ul><h3 id="Careful-Changes"><a class="docs-heading-anchor" href="#Careful-Changes">Careful Changes</a><a id="Careful-Changes-1"></a><a class="docs-heading-anchor-permalink" href="#Careful-Changes" title="Permalink"></a></h3><p>These changes require data validation:</p><ul><li>Decreasing <code>max_length</code> on CharField</li><li>Changing <code>null</code> from <code>true</code> to <code>false</code></li><li>Adding <code>unique=true</code> to existing fields</li><li>Changing field types (e.g., CharField to IntegerField)</li></ul><h3 id="Example-Migration-Safe-Model-Evolution"><a class="docs-heading-anchor" href="#Example-Migration-Safe-Model-Evolution">Example Migration-Safe Model Evolution</a><a id="Example-Migration-Safe-Model-Evolution-1"></a><a class="docs-heading-anchor-permalink" href="#Example-Migration-Safe-Model-Evolution" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Version 1: Initial model
-User = Models.Model(
+profile = Models.OneToOneField(&quot;Driver_profile&quot;)  # Must be unique relationship</code></pre><hr/><h2 id="Migration-Considerations"><a class="docs-heading-anchor" href="#Migration-Considerations">Migration Considerations</a><a id="Migration-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Migration-Considerations" title="Permalink"></a></h2><h3 id="Safe-Changes"><a class="docs-heading-anchor" href="#Safe-Changes">Safe Changes</a><a id="Safe-Changes-1"></a><a class="docs-heading-anchor-permalink" href="#Safe-Changes" title="Permalink"></a></h3><p>These changes can be made without data loss:</p><ul><li>Adding new fields with <code>null=true</code> or <code>default</code> values</li><li>Increasing <code>max_length</code> on CharField</li><li>Changing <code>blank</code> from <code>false</code> to <code>true</code></li><li>Adding database indexes</li><li>Changing <code>on_delete</code> behavior</li></ul><h3 id="Careful-Changes"><a class="docs-heading-anchor" href="#Careful-Changes">Careful Changes</a><a id="Careful-Changes-1"></a><a class="docs-heading-anchor-permalink" href="#Careful-Changes" title="Permalink"></a></h3><p>These changes require data validation:</p><ul><li>Decreasing <code>max_length</code> on CharField</li><li>Changing <code>null</code> from <code>true</code> to <code>false</code></li><li>Adding <code>unique=true</code> to existing fields</li><li>Changing field types (e.g., CharField to IntegerField)</li></ul><h3 id="Example-Migration-Safe-Model-Evolution"><a class="docs-heading-anchor" href="#Example-Migration-Safe-Model-Evolution">Example Migration-Safe Model Evolution</a><a id="Example-Migration-Safe-Model-Evolution-1"></a><a class="docs-heading-anchor-permalink" href="#Example-Migration-Safe-Model-Evolution" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Version 1: Initial model
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.CharField(max_length=100)
 )
 
 # Version 2: Safe additions
-User = Models.Model(
+Team_member = Models.Model(
     _id = Models.IDField(),
     username = Models.CharField(max_length=30),
     email = Models.CharField(max_length=150, unique=true),  # Increased length, added unique
@@ -552,4 +502,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../models/">« Models</a><a class="docs-footer-nextpage" href="../schema_conventions/">Schema Conventions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 20 July 2026 01:42">Monday 20 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../models/">« Models</a><a class="docs-footer-nextpage" href="../schema_conventions/">Schema Conventions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 21 July 2026 01:16">Tuesday 21 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

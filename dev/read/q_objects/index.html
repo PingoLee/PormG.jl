@@ -57,7 +57,7 @@ query.filter(
         &quot;grid&quot; =&gt; 1,
     )
 )
-# WHERE points &gt; 20 OR grid = 1</code></pre><hr/><h2 id="Deep-Nesting"><a class="docs-heading-anchor" href="#Deep-Nesting">Deep Nesting</a><a id="Deep-Nesting-1"></a><a class="docs-heading-anchor-permalink" href="#Deep-Nesting" title="Permalink"></a></h2><p>PormG supports arbitrary nesting depth:</p><pre><code class="language-julia hljs"># (Constructor is Ferrari AND (wins &gt; 5 OR podiums &gt; 20))
+# WHERE points &gt; 20 OR grid = 1</code></pre><hr/><h2 id="Deep-Nesting"><a class="docs-heading-anchor" href="#Deep-Nesting">Deep Nesting</a><a id="Deep-Nesting-1"></a><a class="docs-heading-anchor-permalink" href="#Deep-Nesting" title="Permalink"></a></h2><p>PormG supports arbitrary nesting depth:</p><pre><code class="language-julia hljs"># (Constructor is Ferrari AND (points &gt; 5 OR finished on the podium))
 # OR
 # (Constructor is Mercedes AND year &gt;= 2014)
 query = M.Result.objects
@@ -65,7 +65,7 @@ query.filter(
     Qor(
         Q(
             &quot;constructorid__name&quot; =&gt; &quot;Ferrari&quot;,
-            Qor(&quot;wins__@gt&quot; =&gt; 5, &quot;podiums__@gt&quot; =&gt; 20)
+            Qor(&quot;points__@gt&quot; =&gt; 5, &quot;positionorder__@lte&quot; =&gt; 3)
         ),
         Q(
             &quot;constructorid__name&quot; =&gt; &quot;Mercedes&quot;,
@@ -125,4 +125,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../window_functions/">« Window Functions</a><a class="docs-footer-nextpage" href="../../import_django/">Import from Django »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 20 July 2026 01:42">Monday 20 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../window_functions/">« Window Functions</a><a class="docs-footer-nextpage" href="../../import_django/">Import from Django »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 21 July 2026 01:16">Tuesday 21 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

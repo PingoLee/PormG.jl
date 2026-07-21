@@ -42,6 +42,28 @@ new_record.test_result = 2
 new_record.save()        # UPDATE ... WHERE id = 172
 ```
 
+### Reading the primary key
+
+Every row exposes `.pk` — the primary-key value, read from the model's declared pk column, whatever it is
+named. It's the model-agnostic way to grab a just-created id:
+
+```julia
+new_record.pk            # 172 — the primary key, regardless of the column name
+```
+
+Compare that to reading the pk column by its declared name (`new_record[:id]` here; `[:driverid]`,
+`[:circuitid]`, or `[:resultid]` for other models), which requires knowing each model's pk name. There is
+also a function form, `pk(row)` (brought in by `using PormG`), and a non-throwing variant `pk(row, default)`:
+
+```julia
+pk(new_record)           # 172 — same value, function form
+pk(new_record, nothing)  # 172, or `nothing` if the pk can't be read (never throws)
+```
+
+`.pk` and `pk(row)` throw if the model has no single-column primary key, or the row was fetched without its
+pk column selected; `pk(row, default)` returns `default` in those cases instead. A composite (multi-column)
+primary key has no scalar `.pk` — read the individual key columns.
+
 You can access returned values immediately:
 
 ```julia

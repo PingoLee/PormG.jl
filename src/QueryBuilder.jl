@@ -89,7 +89,7 @@ export page
 export query
 export update
 export get
-export PormGRow, DoesNotExist, MultipleObjectsReturned
+export PormGRow, pk, DoesNotExist, MultipleObjectsReturned
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 

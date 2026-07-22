@@ -23,12 +23,13 @@
 > isolated PG migration fixture (#36) · pool-exhaustion investigation (#37 → follow-ups
 > #124–#128) · `ORDER BY` NULL placement (#75) · `.copy()` state aliasing (#43 → #112) ·
 > bulk mapping contract, `columns=` as the single df→model border (#107) · non-mutating
-> zero-copy bulk pipeline, `copy=` kwarg removed (#132).
+> zero-copy bulk pipeline, `copy=` kwarg removed (#132) · explicit scalar correlated-subquery
+> aggregates, `Subquery`/`OuterRef` surface (#92).
 >
 > **Remaining gating work** — the `pre-publish` label is the source of truth, so this list is exactly
 > [`gh issue list --label pre-publish`](https://github.com/PingoLee/PormG.jl/issues?q=is%3Aopen+label%3Apre-publish):
 
-- [#92](https://github.com/PingoLee/PormG.jl/issues/92) — Design: explicit correlated-subquery aggregates (no auto-magic) — the supported fix for #74 fan-out
+*(none open — the gating list is empty)*
 
 ---
 

@@ -136,7 +136,7 @@ include("QueryBuilder.jl")
 # Query primitives only. The SQL function constructors are NOT imported into PormG — they
 # live solely in `PormG.Functions` (below). There is intentionally no `PormG.Sum`: the
 # function library has exactly one home, reached via `using PormG.Functions` / `PormG.Functions.X`.
-import .QueryBuilder: object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+import .QueryBuilder: object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 
 """
     PormG.Functions
@@ -168,7 +168,7 @@ end
 
 # Curated top-level surface: query primitives only. The SQL function constructors above
 # live in `PormG.Functions` and are reached via `using PormG.Functions` / `PormG.Functions.X`.
-export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)

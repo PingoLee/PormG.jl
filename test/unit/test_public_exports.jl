@@ -17,7 +17,7 @@ using PormG
 # The frozen top-level surface of `using PormG` (must match docs/src/api.md exactly).
 const EXPECTED_TOPLEVEL = Set([
     # Query builder
-    :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Interval, :show_query, :inspect_query,
+    :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :Interval, :show_query, :inspect_query,
     # Rows & exceptions
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
     # Bulk operations

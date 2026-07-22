@@ -5,6 +5,9 @@ using Dates
 
 # Mock SQLite Settings
 struct MockSQLite <: PormG.PormGSQLite end
+# ORDER BY renders NULL placement via a library-version probe (#75); pin a modern version on the
+# mock so order_by works without a live driver (same pattern as test_order_by_nulls.jl).
+PormG.backend_sqlite_version(::MockSQLite) = 3045000
 # Use a dummy path and key to prevent cross-test contamination in runtests.jl
 MockSettings = PormG.Configuration.Settings(
     connections=MockSQLite(),
@@ -17,7 +20,7 @@ PormG.config["mock_sl_key"] = MockSettings
 include("../integration/db_sl/models.jl")
 import .models as M
 PormG.Models.set_models(M, "mock_sl_path")
-import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, inspect_query, Case, When, Sum, Avg, Value, Round, With
+import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, Concat, inspect_query, Case, When, Sum, Avg, Value, Round, With
 
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
@@ -2129,3 +2132,327 @@ end
 end
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scalar correlated Subquery (#92): "alias" => Subquery(inner) projected in
+# values(), correlated via OuterRef. Verifies the SELECT-list SQL shape: the
+# paren-wrapped aliased scalar, the correlation predicate binding the inner
+# alias to the OUTER query alias ("Tb"), and Exists(...) rendering as an
+# aliased boolean column — the supported fix the #74 fan-out guard points to.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - scalar + Exists column SQL shape" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("surname",
+             "n_standings" => Subquery(standings),
+             "has_standings" => Exists(standings))
+
+    sql = (q |> inspect_query)[:sql_text]
+
+    # Scalar subquery: paren-wrapped, aggregate inside, correlated against "Tb", aliased.
+    @test contains(sql, "(SELECT")
+    @test contains(sql, "COUNT(\"R1\".\"driverstandingsid\")")
+    @test contains(sql, "\"R1\".\"driverid\" = \"Tb\".\"driverid\"")
+    @test contains(sql, ") as \"n_standings\"")
+    # Exists column: the EXISTS(SELECT 1 … LIMIT 1) template, aliased as a column.
+    @test contains(sql, "EXISTS (SELECT 1")
+    @test contains(sql, "LIMIT 1) as \"has_standings\"")
+    # No outer aggregate here, so projecting subqueries must NOT force a GROUP BY.
+    @test !contains(sql, "GROUP BY")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - mixed projection GROUP BY isolation: when the outer query
+# mixes a plain column, a real aggregate, and a projected subquery, GROUP BY
+# must reference only the plain column's positional index — a projected
+# subquery is a per-row expression, neither groupable nor an outer aggregate.
+# Regression: get_select_query used to push every non-aggregate value's index.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - mixed projection keeps subquery out of GROUP BY" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("nationality",                          # index 1 — groupable plain column
+             "n_drivers" => Count("driverid"),       # index 2 — outer aggregate (forces GROUP BY)
+             "n_standings" => Subquery(standings))   # index 3 — must NOT appear in GROUP BY
+
+    # #194 interim warn: grouped projection + projected subquery is the SQLite arbitrary-row trap
+    # (the correlation column `driverid` is NOT grouped here) — the coarse warn must fire.
+    insp = @test_logs (:warn, r"grouped aggregate.*#194"s) match_mode=:any (q |> inspect_query)
+    sql = insp[:sql_text]
+
+    m = match(r"GROUP BY\s+([0-9,\s]+)", sql)
+    @test m !== nothing                      # the outer aggregate forces a GROUP BY
+    @test strip(m.captures[1]) == "1"        # …that references ONLY the plain column
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interim GROUP BY warn (#194) - negative case: a projected Subquery WITHOUT an
+# outer aggregate produces no GROUP BY and therefore must build silently. Locks
+# the warn to the dangerous combination only, so every plain #92 usage stays
+# noise-free.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92/#194) - no grouped aggregate, no warn" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"))
+    standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.values("surname", "n_standings" => Subquery(standings))
+
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)   # must be silent
+    @test !contains(insp[:sql_text], "GROUP BY")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - SQLite parameter bucket routing: the inner subquery's own
+# filter parameter must land in the :select bucket (the SELECT list precedes
+# FROM/JOIN/WHERE in the rendered text), flattening BEFORE the outer :where
+# parameter. This is the positional-placeholder correctness core of #92.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - inner params in :select bucket, before :where" begin
+    p1_standings = M.Driver_standings.objects
+    p1_standings.filter("driverid" => OuterRef("driverid"), "position" => 1)
+    p1_standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.filter("surname" => "Senna")
+    q.values("surname", "n_p1" => Subquery(p1_standings))
+
+    insp = q |> inspect_query
+    buckets = insp[:parameter_buckets]
+
+    @test buckets[:select] == [1]              # inner filter param (position => 1)
+    @test buckets[:where] == ["Senna"]         # outer filter param
+    @test insp[:parameters] == [1, "Senna"]    # flatten order: :select before :where
+    @test count(==('?'), insp[:sql_text]) == 2 # marker count matches parameter count
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exists-as-column (#92) - bucket routing: Exists projected in values() renders
+# via _build_exists_query in the :select context (a path never exercised before
+# #92 — Exists was filter-only). Its inner filter parameter must also land in
+# the :select bucket and flatten before the outer :where parameter.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Exists projection (#92) - inner params in :select bucket" begin
+    winners = M.Driver_standings.objects
+    winners.filter("driverid" => OuterRef("driverid"), "wins__@gt" => 3)
+    winners.values("driverstandingsid")
+
+    q = M.Driver.objects
+    q.filter("driverid__@lte" => 100)
+    q.values("surname", "won_gt3" => Exists(winners))
+
+    insp = q |> inspect_query
+    buckets = insp[:parameter_buckets]
+
+    @test buckets[:select] == [3]              # inner Exists filter param (wins > 3)
+    @test buckets[:where] == [100]             # outer filter param
+    @test insp[:parameters] == [3, 100]        # :select flattens before :where
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) + CTE - full bucket interplay: a With CTE param, an inner
+# subquery param, and an outer WHERE param must flatten in SQL-clause order
+# :cte → :select → :where, matching the rendered text order of a query that
+# opens with WITH, then the SELECT list, then WHERE.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - CTE + subquery + where flatten cte→select→where" begin
+    races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
+
+    p1_standings = M.Driver_standings.objects
+    p1_standings.filter("driverid" => OuterRef("driverid"), "position" => 1)
+    p1_standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Result.objects
+    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    q.filter("positionorder" => 1)
+    q.values("driverid", "n_p1" => Subquery(p1_standings))
+
+    insp = q |> inspect_query
+    buckets = insp[:parameter_buckets]
+
+    @test buckets[:cte] == [1991]              # CTE body param
+    @test buckets[:select] == [1]              # inner subquery param (position => 1)
+    @test buckets[:where] == [1]               # outer filter param (positionorder => 1)
+    @test insp[:parameters] == [1991, 1, 1]    # :cte → :select → :where
+    @test count(==('?'), insp[:sql_text]) == 3
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - latest-value (non-aggregate) scalar: the inner query's own
+# ORDER BY + LIMIT 1 must survive into the rendered subquery — the canonical
+# "latest related value per outer row" pattern. With the LIMIT present, no
+# multi-row warning may fire.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - latest-value keeps ORDER BY + LIMIT, no warn" begin
+    latest_pos = M.Driver_standings.objects
+    latest_pos.filter("driverid" => OuterRef("driverid"))
+    latest_pos.values("position")
+    latest_pos.order_by("-driverstandingsid")
+    latest_pos.limit(1)
+
+    q = M.Driver.objects
+    q.values("surname", "latest_position" => Subquery(latest_pos))
+
+    # A limit-1 non-aggregate scalar is the supported pattern — assert NO warning fires.
+    insp = @test_logs min_level=Logging.Warn (q |> inspect_query)
+    sql = insp[:sql_text]
+
+    @test contains(sql, "\"R1\".\"position\"")                       # plain column projection
+    @test contains(sql, "ORDER BY \"R1\".\"driverstandingsid\" DESC") # inner ORDER BY preserved
+    @test occursin(r"LIMIT 1\s*\n?\) as \"latest_position\""s, sql)   # inner LIMIT inside the paren wrap
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - soft multi-row warning: a NON-aggregate single-column
+# subquery with NO LIMIT may match >1 row and would fail at execution with
+# "more than one row returned by a subquery used as an expression" — PormG
+# warns at build time (mirrors the CTE Cartesian-product warning philosophy).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - non-aggregate without LIMIT warns" begin
+    unlimited = M.Driver_standings.objects
+    unlimited.filter("driverid" => OuterRef("driverid"))
+    unlimited.values("position")                 # plain column, no order_by/limit
+
+    q = M.Driver.objects
+    q.values("surname", "some_position" => Subquery(unlimited))
+
+    @test_logs (:warn, r"non-aggregate column with no LIMIT") match_mode=:any (q |> inspect_query)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - error paths: the one-column contract (0 or ≥2 projected
+# columns throw), alias is mandatory (bare Subquery in values throws), and the
+# up_values! silent-drop fix (an unsupported "alias" => value pair now throws
+# instead of silently vanishing from the projection).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - error paths" begin
+    # ≥2 projected columns → build-time ArgumentError naming the contract.
+    two_cols = M.Driver_standings.objects
+    two_cols.filter("driverid" => OuterRef("driverid"))
+    two_cols.values("points", "wins")
+    q_two = M.Driver.objects
+    q_two.values("x" => Subquery(two_cols))
+    err_two = try q_two |> inspect_query; nothing catch e; e end
+    @test err_two isa ArgumentError && occursin("exactly one column", err_two.msg)
+
+    # No values() on the inner → implicit all-columns projection → same contract error.
+    all_cols = M.Driver_standings.objects
+    all_cols.filter("driverid" => OuterRef("driverid"))
+    q_all = M.Driver.objects
+    q_all.values("x" => Subquery(all_cols))
+    err_all = try q_all |> inspect_query; nothing catch e; e end
+    @test err_all isa ArgumentError && occursin("exactly one column", err_all.msg)
+
+    # Bare Subquery(...) without an alias pair → rejected at values() time.
+    one_col = M.Driver_standings.objects
+    one_col.filter("driverid" => OuterRef("driverid"))
+    one_col.values("t" => Count("driverstandingsid"))
+    err_bare = try M.Driver.objects.values("surname", Subquery(one_col)); nothing catch e; e end
+    @test err_bare isa ArgumentError && occursin("Subquery", err_bare.msg)
+
+    # Silent-drop fix: an unsupported pair value now throws instead of vanishing.
+    err_pair = try M.Driver.objects.values("x" => 42); nothing catch e; e end
+    @test err_pair isa ArgumentError && occursin("Invalid values pair", err_pair.msg)
+
+    # Silent-drop fix, function-pair branch: a function that constructs but fails
+    # _check_function validation (Concat accepts the Int; validation rejects it) used to be
+    # logged + silently dropped — values() returned normally minus the column. It must now
+    # propagate the original error. The @error context log still fires first — silence it.
+    q_fn = M.Driver.objects
+    err_fn = Logging.with_logger(Logging.NullLogger()) do
+        try q_fn.values("driverid", "broken" => Concat("surname", 42)); nothing catch e; e end
+    end
+    @test err_fn isa MethodError                 # propagated, not swallowed
+    @test length(q_fn.object.values) == 1        # the failing column was never half-pushed
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - fail-loud nesting boundary: a Subquery/Exists projected
+# INSIDE another subquery must raise, because OuterRef resolves one level only —
+# a nested projection could silently correlate to the wrong outer query and
+# return a wrong number (the exact failure mode the #74 guard exists to stop).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - nested projected subquery raises" begin
+    innermost = M.Driver_standings.objects
+    innermost.filter("driverid" => OuterRef("driverid"))
+    innermost.values("t" => Count("driverstandingsid"))
+
+    middle = M.Driver_standings.objects
+    middle.filter("driverid" => OuterRef("driverid"))
+    middle.values("nested" => Subquery(innermost))    # one column — passes the column check
+
+    q = M.Driver.objects
+    q.values("x" => Subquery(middle))
+
+    # The nested projection is detected while rendering `middle` as a subquery. `middle` also
+    # triggers the incidental non-aggregate/no-LIMIT soft warn first — silence it; the throw is
+    # what this testset locks in.
+    err = Logging.with_logger(Logging.NullLogger()) do
+        try q |> inspect_query; nothing catch e; e end
+    end
+    @test err isa ArgumentError && occursin("one level", err.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - render-isolation: rendering a query holding a Subquery must
+# not corrupt the wrapped handler (query() runs on an internal deepcopy), so
+# the same Subquery object renders identically across repeated inspections and
+# across two different outer queries.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - repeated renders are stable (internal deepcopy)" begin
+    standings = M.Driver_standings.objects
+    standings.filter("driverid" => OuterRef("driverid"), "position" => 1)
+    standings.values("t" => Count("driverstandingsid"))
+    shared = Subquery(standings)
+
+    q1 = M.Driver.objects
+    q1.values("surname", "n" => shared)
+    first_sql = (q1 |> inspect_query)[:sql_text]
+    first_params = (q1 |> inspect_query)[:parameters]
+
+    # Same outer query re-rendered: identical SQL and parameters (no accumulated state).
+    @test (q1 |> inspect_query)[:sql_text] == first_sql
+    @test (q1 |> inspect_query)[:parameters] == first_params
+
+    # A different outer query reusing the SAME Subquery object still renders the
+    # correlation correctly and keeps its own parameter list uncorrupted.
+    q2 = M.Driver.objects
+    q2.filter("nationality" => "Brazilian")
+    q2.values("surname", "n" => shared)
+    insp2 = q2 |> inspect_query
+    @test contains(insp2[:sql_text], "\"R1\".\"driverid\" = \"Tb\".\"driverid\"")
+    @test insp2[:parameters] == [1, "Brazilian"]   # :select (inner) before :where (outer)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#92) - order_by on a projected subquery alias: ORDER BY must
+# reference the quoted ALIAS, not re-render the subquery. A re-render would
+# duplicate the inner bind parameter into the ORDER BY clause — which has no
+# parameter bucket — silently misaligning every SQLite placeholder after it.
+# The exact parameter list proves the subquery rendered exactly once.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery projection (#92) - order_by on subquery alias renders alias only" begin
+    p1_standings = M.Driver_standings.objects
+    p1_standings.filter("driverid" => OuterRef("driverid"), "position" => 1)
+    p1_standings.values("t" => Count("driverstandingsid"))
+
+    q = M.Driver.objects
+    q.filter("driverid__@lte" => 5)
+    q.values("driverid", "n" => Subquery(p1_standings))
+    q.order_by("-n")
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    @test contains(sql, "ORDER BY \"n\" DESC")      # alias reference…
+    @test length(collect(eachmatch(r"\(SELECT", sql))) == 1  # …not a second rendered subquery
+    @test insp[:parameters] == [1, 5]               # inner param once, outer param once
+    @test count(==('?'), sql) == 2                  # marker count matches — no orphan placeholder
+end

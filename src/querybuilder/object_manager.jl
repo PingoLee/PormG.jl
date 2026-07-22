@@ -33,9 +33,18 @@ function up_values!(q::SQLObject, values)
         try
           push!(q.values, SQLField(_check_function(v.second), v.first))
         catch e
-          @pormg_debug false
-          @error "Error processing values pair: $e" exception = (e, catch_backtrace())
+          # #92: this used to swallow the error and continue — the column silently vanished from
+          # the result while values() returned normally. Log the failing alias for context (the
+          # underlying error may not name it), then propagate: an invalid projection must surface
+          # at values() time, consistent with the fail-loud branches below.
+          @error "Invalid values pair" alias = v.first exception = (e, catch_backtrace())
+          rethrow()
         end
+      elseif isa(v.second, Union{SubqueryObject,ExistsObject})
+        # #92: project a scalar subquery / EXISTS as an aliased column, e.g.
+        # "total" => Subquery(inner)  or  "has_x" => Exists(inner). The alias goes in _as; the
+        # subquery is rendered by _get_select_query(::SubqueryObject/::ExistsObject) during build.
+        push!(q.values, SQLField(v.second, v.first))
       elseif isa(v.second, SQLTypeText)
         # Support Value(x) as an aliased pair: "label" => Value("hello")
         v.second.custom_as = v.first
@@ -44,11 +53,15 @@ function up_values!(q::SQLObject, values)
         z = _up_values(v.second)
         z.custom_as = v.first
         push!(q.values, z)
+      else
+        # #92: previously an unhandled pair value was silently dropped — the column just vanished from
+        # the result. Fail loud instead so a wrong projection surfaces at build time.
+        throw(_argerr("Invalid values pair \"$(v.first)\" => ::$(typeof(v.second)): the right side must be a field name, a function (Count, Sum, …), Value(x), Subquery(inner), or Exists(inner)."))
       end
     elseif isa(v, String)
       push!(q.values, _up_values(v))
     else
-      throw("Invalid argument: $(v) (::$(typeof(v)))); please use a string or a function (Mounth, Year, Day, Y_M ...)")
+      throw(_argerr("Invalid argument: $(v) (::$(typeof(v)))); use a string field name, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
     end
   end
 

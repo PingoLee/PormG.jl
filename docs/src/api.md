@@ -609,7 +609,7 @@ scope — the SQL function constructors are *not* among them (see
 [SQL function library](#sql-function-library-pormgfunctions)).
 
 ### Query Builder
-`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Interval`, `show_query`, `inspect_query`
+`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `Interval`, `show_query`, `inspect_query`
 
 ### Rows & exceptions
 `PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`
@@ -653,8 +653,8 @@ M.Result.objects.values(              # …or qualify without importing
     "n" => PormG.Functions.Count("resultid"))
 ```
 
-`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Interval` stay at the top level — they are
-query primitives, not part of the function library.
+`bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `Interval` stay at the top level —
+they are query primitives, not part of the function library.
 
 **Aggregate** — `Sum`, `Avg`, `Count`, `Max`, `Min`
 **Conditional** — `Case`, `When`

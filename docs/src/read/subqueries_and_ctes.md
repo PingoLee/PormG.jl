@@ -1,6 +1,6 @@
 # Subqueries and CTEs
 
-This page covers nested queries with `IN (SELECT ...)`, Common Table Expressions (`WITH`), CTE join types, deep join paths, and mixing CTEs with custom joins.
+This page covers nested queries with `IN (SELECT ...)`, scalar correlated subqueries projected as columns (`Subquery` / `Exists`), Common Table Expressions (`WITH`), CTE join types, deep join paths, and mixing CTEs with custom joins.
 
 ---
 
@@ -100,6 +100,117 @@ query.values(
 query.order_by("raceid__date__quarter")
 df = query |> DataFrame
 ```
+
+---
+
+## Scalar correlated subqueries
+
+A **scalar correlated subquery** computes one value per outer row — "each driver's standings count", "each driver's latest position" — inside its own sub-`SELECT`, correlated to the outer query with `OuterRef`. Project it as a column with `"alias" => Subquery(inner)` inside `values()`:
+
+```julia
+# Inner query: correlated via OuterRef, projects exactly ONE column
+standings = M.Driver_standings.objects
+standings.filter("driverid" => OuterRef("driverid"))
+standings.values("t" => Count("driverstandingsid"))
+
+query = M.Driver.objects
+query.values(
+    "surname",
+    "total_standings" => Subquery(standings),   # scalar subquery column
+    "has_standings"   => Exists(standings),     # boolean subquery column
+)
+df = query |> DataFrame
+```
+
+Generated SQL (PostgreSQL; SQLite renders `?` placeholders):
+
+```sql
+SELECT
+    "Tb"."surname" as "surname",
+  (SELECT
+    COUNT("R1"."driverstandingsid") as "t"
+FROM "driver_standings" as "R1"
+WHERE "R1"."driverid" = "Tb"."driverid"
+) as "total_standings",
+  EXISTS (SELECT 1
+FROM "driver_standings" as "R2"
+WHERE "R2"."driverid" = "Tb"."driverid"
+LIMIT 1) as "has_standings"
+FROM "driver" as "Tb"
+```
+
+`OuterRef("driverid")` binds the inner query's filter to the **outer** query's column — that is the correlation. `Exists(...)` (already familiar from [filters](filters_and_aggregates.md)) can likewise be projected as a per-row boolean column (SQLite returns `0`/`1` integers, PostgreSQL booleans).
+
+### Why: the fan-out-safe aggregate
+
+This is the supported fix the [aggregate fan-out guard](filters_and_aggregates.md#Aggregating-Across-To-Many-Relations-(Fan-Out-Guard)) points to. A to-many join repeats each outer row once per related row, so a naive join aggregate over a base column is silently multiplied — PormG raises instead. Moving the aggregate into a correlated `Subquery` dissolves the fan-out entirely: the aggregate runs in its own scalar subquery and the outer rows are never row-multiplied.
+
+It also **composes** — multiple independent aggregates in one query, something a join-based rewrite cannot do without multiplying the counts against each other:
+
+```julia
+standings = M.Driver_standings.objects
+standings.filter("driverid" => OuterRef("driverid"))
+standings.values("t" => Count("driverstandingsid"))
+
+results = M.Result.objects
+results.filter("driverid" => OuterRef("driverid"))
+results.values("t" => Count("resultid"))
+
+query = M.Driver.objects
+query.values(
+    "surname",
+    "n_standings" => Subquery(standings),   # each count stays exact —
+    "n_results"   => Subquery(results),     # no interaction between the two relations
+)
+df = query |> DataFrame
+```
+
+### Latest-value scalars (non-aggregate)
+
+The inner projection does not have to be an aggregate — any one-column query works. Use the inner query's own `order_by` + `limit(1)` for the "latest related value per row" pattern:
+
+```julia
+# Each driver's most recent standings position
+latest = M.Driver_standings.objects
+latest.filter("driverid" => OuterRef("driverid"))
+latest.values("position")
+latest.order_by("-driverstandingsid")
+latest.limit(1)
+
+query = M.Driver.objects
+query.values("surname", "latest_position" => Subquery(latest))
+df = query |> DataFrame
+```
+
+For an outer row with **no** related rows, an aggregate scalar returns its natural value (`Count` → `0`), while a plain-column scalar is SQL `NULL` → `missing` in the DataFrame.
+
+### Rules and limitations
+
+- **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise an `ArgumentError` at build time — the same one-column rule as `@in` subqueries.
+- **The alias is mandatory.** Always project as a pair: `"alias" => Subquery(...)`. A bare `Subquery(...)` inside `values()` raises.
+- **At most one row.** The database requires a scalar subquery to return ≤ 1 row ("more than one row returned by a subquery used as an expression" at execution otherwise). An aggregate always satisfies this; for a plain column add `order_by` + `limit(1)` — PormG emits a build-time warning for the non-aggregate/no-limit case but does not block it.
+- **One level of correlation.** `OuterRef` resolves against the immediately enclosing query only, so a `Subquery`/`Exists` projected *inside another subquery* raises rather than risk silently correlating to the wrong level. Multi-level correlation is a possible future extension.
+- **Correlate on base columns.** `OuterRef("driverid")` against a plain outer column is the canonical, supported case. A joined-path `OuterRef` (e.g. `OuterRef("constructorid__name")`) adds a join to the outer query and is not part of the validated #92 surface.
+- **Outer `GROUP BY` — backend divergence, be careful.** Combining a correlated `Subquery` with an outer aggregate/`GROUP BY` is only well-defined when the correlated column is itself grouped (e.g. group by `driverid` and correlate on `OuterRef("driverid")` — this works on both backends). If the correlated column is **not** grouped, PostgreSQL fails loud (`subquery uses ungrouped column … from outer query`), but **SQLite silently evaluates the subquery against an arbitrary row of each group** — a plausible-looking wrong number. PormG emits a build-time warning whenever a projected `Subquery`/`Exists` coexists with a grouped projection; the warning is a false positive when the correlated column is in the group. A precise fail-loud guard is tracked in [#194](https://github.com/PingoLee/PormG.jl/issues/194).
+- **Untested SQL edges.** A CTE *inside* a subquery is not blocked, but not validated by the test suite either.
+
+### CTE-aggregate vs scalar `Subquery`
+
+Both are explicit, fan-out-safe ways to attach related aggregates. Pick by shape:
+
+| | CTE aggregate + `join_field` | Scalar `Subquery` column |
+|---|---|---|
+| Result shape | one pre-aggregated table, joined once | one scalar per outer row |
+| Multiple independent aggregates | one CTE each + join-key management per CTE | just add another `values()` pair |
+| Reusing the aggregated set (filter/order on it) | ✓ natural (`HAVING`-style via the CTE) | ✗ recompute per use |
+| Join-key bookkeeping | explicit `join_field` | none — correlation via `OuterRef` |
+| Latest-value (non-aggregate) per row | awkward (needs window functions) | ✓ `order_by` + `limit(1)` |
+
+**Performance.** A correlated subquery is evaluated once **per outer row** (SQLite in particular never decorrelates it). For a filtered outer set — one driver, a season's entrants — it is ideal. For a full-table scan projecting several aggregates over large related tables, the CTE aggregate (computed once, joined once) usually wins; measure before choosing at scale.
+
+### Positioning: explicit, not magic
+
+Django offers two paths for related-set aggregates: the implicit `annotate(Count("relation"))` — which silently row-multiplies when two annotations are combined (the documented "Cartesian product trap") — and the explicit `Subquery()` + `OuterRef()` its own docs recommend as the fix. PormG ships **only** the explicit path (with the same recognizable names) and goes one step further: the [#74 guard](filters_and_aggregates.md#Aggregating-Across-To-Many-Relations-(Fan-Out-Guard)) turns the silent-fan-out form into a hard error. This is the same explicit-subquery camp as jOOQ (`DSL.field(select …)`) and SQLAlchemy (`.scalar_subquery()`), with correlation always spelled out via `OuterRef` — never inferred.
 
 ---
 
@@ -366,6 +477,8 @@ See [Custom Joins](custom_joins.md) for the full `.cjoin()` and `.on()` document
 | Feature | Syntax | Use Case |
 | :--- | :--- | :--- |
 | Subquery `IN` | `"field__@in" => subquery` | Filter by a set computed on the server. |
+| Scalar subquery column | `values("n" => Subquery(inner))` | Fan-out-safe per-row aggregate / latest value. |
+| Boolean subquery column | `values("has_x" => Exists(inner))` | Per-row existence flag. |
 | CTE with JOIN | `.with("name" => subq, join_field=...)` | Pre-aggregate data and join it. |
 | CTE without JOIN | `.with("name" => subq)` | Declare for use in filters only. |
 | CTE INNER JOIN | `join_type="INNER"` | Only keep matching rows. |

@@ -9,14 +9,28 @@ end
 Exists(query::SQLObjectHandler) = ExistsObject(query=query)
 Base.deepcopy(x::ExistsObject) = ExistsObject(query=deepcopy(x.query))
 
+# SubqueryObject is a scalar single-column subquery projected as a SELECT-list column (#92).
+# Like ExistsObject it inherits SQLType directly. It is rendered via query() and correlated with the
+# enclosing query through OuterRef. It is defined before FieldPart (below), which is widened to admit
+# it so an SQLField.field can carry it until get_select_query resolves it to SQL text.
+@kwdef mutable struct SubqueryObject <: SQLType
+  query::SQLObjectHandler
+end
+Subquery(query::SQLObjectHandler) = SubqueryObject(query=query)
+Base.deepcopy(x::SubqueryObject) = SubqueryObject(query=deepcopy(x.query))
+# Defensive backstop: a SubqueryObject is always resolved to a string by get_select_query before any
+# string()/show consumer sees it (audited). If one ever leaked, this keeps it legible rather than dumping
+# the whole struct into a SQL string.
+Base.show(io::IO, ::SubqueryObject) = print(io, "Subquery(…)")
+
 #
 # Type Aliases for Heavy Unions
 #
 """Filter components: Operator objects, Q (AND), Qor (OR), F expressions, and EXISTS predicates."""
 const FilterType = Union{SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF,ExistsObject}
 
-"""Field references in SQL: text, functions, or string names."""
-const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF}
+"""Field references in SQL: text, functions, string names, or projected subqueries (Subquery/Exists, #92)."""
+const FieldPart = Union{SQLTypeText,SQLTypeFunction,String,SQLTypeF,SubqueryObject,ExistsObject}
 
 """Column references: fields, functions, strings, or vectors of operations."""
 const ColumnPart = Union{SQLTypeField,SQLTypeFunction,String,SQLTypeF,Vector{Union{String,SQLTypeF}}}

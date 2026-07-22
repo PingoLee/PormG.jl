@@ -646,7 +646,7 @@ df = query |> DataFrame
 
 1. **Aggregate the related table's own column** — count/sum the related rows directly, as above.
 2. **Pass `distinct=true`** if de-duplicated counting is what you want: `Count("driverid", distinct=true)` renders `COUNT(DISTINCT …)`.
-3. **Compute the aggregate in a correlated subquery** so the base rows are never multiplied.
+3. **Compute the aggregate in a correlated `Subquery(...)`** projected in `values()` so the base rows are never multiplied — see [Scalar correlated subqueries](subqueries_and_ctes.md#Scalar-correlated-subqueries) for the full pattern.
 
 **Not affected.** Ordinary forward (to-one) `ForeignKey` traversals never trip the guard — only *to-many* joins (reverse FK / many-to-many) multiply rows. Aggregating across a normal FK is always fine:
 
@@ -661,7 +661,7 @@ df = query |> DataFrame
 **Exemptions.** `Max` and `Min` are immune to row duplication and are never blocked; an aggregate built with `distinct=true` is treated as an explicit opt-in.
 
 !!! note
-    The guard is deliberately fail-loud: an aggregate it cannot prove safe (for example one wrapping a multi-column expression) raises rather than risk a silent wrong number. A first-class, explicit correlated-subquery construct for pattern 3 is under design discussion ([#92](https://github.com/PingoLee/PormG.jl/issues/92)).
+    The guard is deliberately fail-loud: an aggregate it cannot prove safe (for example one wrapping a multi-column expression) raises rather than risk a silent wrong number. The first-class fix for pattern 3 is the explicit [`Subquery` scalar column](subqueries_and_ctes.md#Scalar-correlated-subqueries) — the aggregate runs in its own correlated subquery, so the outer rows are never row-multiplied.
 
 ---
 

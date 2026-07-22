@@ -11,7 +11,7 @@ All tests use mock PostgreSQL connections (no live database required).
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField
-using PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, inspect_query, list, update, delete, bulk_insert, bulk_update
+using PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, inspect_query, list, update, delete, bulk_insert, bulk_update
 import DataFrames
 
 # Initialize test models
@@ -548,6 +548,47 @@ PormG.config["default"] = MockSettings
     @test contains(sql, "\"R1\".\"body\" ILIKE \$2")
     @test contains(sql, "LIMIT 1)")
     @test res[:parameters] == ["British", "%wet%"]
+    @test res[:dialect] == :postgresql
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Scalar correlated Subquery projection (#92) on PostgreSQL: the linear $N
+  # collector must number parameters in SQL-text order — inner subquery ($1),
+  # projected EXISTS ($2), then the outer WHERE ($3) — with the scalar wrapped
+  # in parens, aliased, and correlated against the outer alias "Tb".
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Subquery projection (#92) - PostgreSQL scalar + Exists column" begin
+    note_query = DriverNoteModel.objects.filter(
+      "driver_id" => OuterRef("id"),
+      "body__@icontains" => "rain",
+    )
+    note_query.values("n" => Count("id"))
+
+    q = DriverModel.objects
+    q.filter("nationality" => "British")
+    q.values("surname",
+             "n_rain_notes" => Subquery(note_query),
+             "has_rain" => Exists(note_query))
+
+    res = inspect_query(q)
+    sql = res[:sql_text]
+
+    # Scalar subquery column: paren-wrapped aggregate, correlated, aliased.
+    @test contains(sql, "(SELECT")
+    @test contains(sql, "COUNT(\"R1\".\"id\")")
+    @test contains(sql, "\"R1\".\"driver_id\" = \"Tb\".\"id\"")
+    @test contains(sql, ") as \"n_rain_notes\"")
+    # EXISTS column reuses the EXISTS(SELECT 1 … LIMIT 1) template with its own alias (R2).
+    @test contains(sql, "EXISTS (SELECT 1")
+    @test contains(sql, "\"R2\".\"driver_id\" = \"Tb\".\"id\"")
+    @test contains(sql, "LIMIT 1) as \"has_rain\"")
+    # Linear $N numbering follows SQL-text order: subquery, EXISTS, outer WHERE.
+    @test contains(sql, "\"R1\".\"body\" ILIKE \$1")
+    @test contains(sql, "\"R2\".\"body\" ILIKE \$2")
+    @test contains(sql, "\"Tb\".\"nationality\" = \$3")
+    @test res[:parameters] == ["%rain%", "%rain%", "British"]
+    # A projected subquery is a per-row expression — it must not force a GROUP BY.
+    @test !contains(sql, "GROUP BY")
     @test res[:dialect] == :postgresql
   end
 

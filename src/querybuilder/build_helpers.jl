@@ -805,11 +805,66 @@ function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Noth
   end
   return "(" * join(resp, " AND ") * ")"
 end
+# #92: fail loud rather than silently mis-correlate a projected subquery nested inside another one —
+# OuterRef resolves only one level, so nesting could bind to the wrong outer query and return a wrong
+# value. `instruc.outer !== nothing` means the current build is itself a subquery.
+function _guard_no_nested_projection(instruc::SQLInstruction, what::AbstractString)
+  instruc.outer === nothing || throw(_argerr(
+    "$what(...) projected inside another subquery is not supported yet: OuterRef resolves one level " *
+    "only, so a nested projected subquery could correlate to the wrong level. Keep projected subqueries " *
+    "to a single level of correlation."))
+  return nothing
+end
+
+_projection_is_aggregate(v)::Bool =
+  v isa SQLTypeField && v.field isa SQLTypeFunction &&
+  hasproperty(v.field, :agregate) && getproperty(v.field, :agregate) === true
+
+# Soft heads-up: a non-aggregate scalar subquery with no LIMIT may match >1 row and error at the DB.
+function _warn_if_possible_multirow(handler::SQLObjectHandler)
+  vals = handler.object.values
+  length(vals) == 1 || return nothing
+  is_agg = _projection_is_aggregate(vals[1])
+  has_limit = handler.object.limit != 0
+  (!is_agg && !has_limit) && @warn(_emsg(
+    "Subquery(...) projects a non-aggregate column with no LIMIT; if the correlation matches more than " *
+    "one row the database raises \"more than one row returned by a subquery used as an expression\". " *
+    "Use an aggregate, or add order_by + a limit of 1."))
+  return nothing
+end
+
 function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  _guard_no_nested_projection(instruc, "Exists")   # #92
   return _get_filter_query(v, instruc)
 end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _get_filter_query(v, instruc)
+end
+function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  # #92: scalar single-column correlated subquery projected as a SELECT-list column.
+  _guard_no_nested_projection(instruc, "Subquery")
+
+  # query() mutates the handler's parameters, and SQLField deepcopy is shallow on `.field`, so the same
+  # SubqueryObject can be shared across list()/count() deepcopies — copy before rendering.
+  handler = deepcopy(v.query)
+
+  # Exactly one projected column (reuse the @in one-column rule).
+  labels = _subquery_projection_labels(handler)
+  length(labels) == 1 || throw(_argerr(
+    "Subquery(...) must project exactly one column; it currently projects $(length(labels)): " *
+    "$(_summarize_projection_labels(labels)). Call .values(\"alias\" => <expr>) on the inner query."))
+
+  _warn_if_possible_multirow(handler)
+
+  # Passing the shared `parameters` makes query() treat this as a subquery: it inherits the ambient
+  # :select bucket (set by build()) and restores the context afterward, so the inner params flatten in
+  # :select — textually correct (the SELECT list precedes FROM/JOIN/WHERE). Correlate via outer=instruc.
+  inner_sql = query(handler,
+                    table_alias=instruc.table_alias,
+                    connection=instruc.connection,
+                    parameters=instruc.parameters,
+                    outer=instruc)
+  return string("(", inner_sql, ")")
 end
 function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _set_update_query(q, instruc)

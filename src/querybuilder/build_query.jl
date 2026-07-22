@@ -36,12 +36,17 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       else
         instruc.agregate = true
       end
+    elseif isa(v_copy.field, Union{SubqueryObject, ExistsObject})
+      # #92: a projected scalar subquery / EXISTS is a per-row expression — neither a groupable
+      # column nor an outer aggregate. It must NOT be pushed into GROUP BY (in a mixed projection
+      # with a real aggregate, that would otherwise emit the subquery's positional index into GROUP BY).
+      nothing
     else
       push!(instruc.group, i |> string)
     end
 
     if haskey(instruc.cache, v_copy._as)
-      instruc.select[i] = instruc.cache[v_copy._as]  # TODO That is necessary in get_select_query    
+      instruc.select[i] = instruc.cache[v_copy._as]  # TODO That is necessary in get_select_query
     else
       @pormg_debug false
       v_copy.field = _get_select_query(v_copy.field, instruc, _as=v_copy._as)
@@ -51,6 +56,22 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       end
       instruc.cache[v_copy._as] = instruc.select[i]
     end
+  end
+
+  # #194 (interim, coarse): a projected correlated Subquery/Exists alongside a grouped projection is
+  # dangerous when the OuterRef column is not in the GROUP BY — PostgreSQL raises a GroupingError, but
+  # SQLite silently evaluates the subquery against an ARBITRARY row of each group (a plausible-looking
+  # wrong number). We cannot yet resolve which outer columns the inner OuterRefs reference (tracked in
+  # #194 for a precise fail-loud guard), so warn on the combination itself. False positive when the
+  # correlation column IS grouped — the message says so. `values` holds the originals (the loop deep-
+  # copies), so the SubqueryObject/ExistsObject fields are still inspectable here.
+  if instruc.agregate && !isempty(instruc.group) &&
+     any(v -> v isa SQLTypeField && isa(v.field, Union{SubqueryObject,ExistsObject}), values)
+    @warn(_emsg(
+      "Subquery/Exists projected alongside a grouped aggregate: if the inner OuterRef column is not " *
+      "in the GROUP BY, SQLite silently returns an arbitrary row's value per group and PostgreSQL " *
+      "raises a GroupingError. Ensure the correlated column is part of the grouped projection " *
+      "(then this warning is a false positive — precise guard tracked in #194)."))
   end
 end
 
@@ -468,5 +489,6 @@ function _fanout_error_msg(a, many, ambiguous::Bool)
     "  Fix one of:\n",
     "    \e[32m1.\e[0m Aggregate the RELATED table's own column instead (e.g. count related rows: Count(\"reverse_relation__id\")).\n",
     "    \e[32m2.\e[0m Pass \e[32mdistinct=true\e[0m to the aggregate if de-duplicated counting is what you want.\n",
-    "    \e[32m3.\e[0m Compute the aggregate in a correlated subquery so the base rows are not multiplied.\n")
+    "    \e[32m3.\e[0m Compute the aggregate in a correlated \e[32mSubquery(...)\e[0m projected in values() " *
+    "(correlate the inner query with \e[32mOuterRef(...)\e[0m) so the base rows are not multiplied.\n")
 end

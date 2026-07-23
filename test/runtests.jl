@@ -96,6 +96,7 @@ end
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
     @testset "Public Export Surface (#35)" include("unit/test_public_exports.jl")
+    @testset "Upgrade Guide Emitter (#216)" include("unit/test_upgrade_guide.jl")
     # include("unit/test_migration_planner.jl")
 end
 

@@ -651,7 +651,7 @@ scope — the SQL function constructors are *not* among them (see
 `pool_stats`, `PoolTimeoutError`, `PoolConnectError`
 
 ### Utilities & lifecycle
-`setup`, `install_ai_skills`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
+`setup`, `install_ai_skills`, `upgrade_guide`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
 
 !!! note "`fetch` extends `Base.fetch`"
     The low-level `fetch(settings, sql; params=…)` escape hatch is a method of

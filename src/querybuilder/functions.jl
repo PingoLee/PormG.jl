@@ -14,7 +14,7 @@
 
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(_argerr("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
   return QObject(filters = colect)
 end
 
@@ -35,7 +35,7 @@ end
 
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw("Invalid argument: $(v); please use a pair (key => value)") for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(_argerr("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
   return QorObject(or = colect)
 end
 
@@ -480,7 +480,7 @@ end
 
 function ISNULL(v::String , value::Bool)
   if contains(v, "(")
-    throw("Error in ISNULL, the column $(v) can't be a function")
+    throw(_argerr("Error in ISNULL: the column $(v) cannot be a function expression."))
   end
   if value
     return string(v, " IS NULL")

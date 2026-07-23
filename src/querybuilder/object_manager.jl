@@ -9,7 +9,7 @@ function _up_values(str::String)
   if size(check, 1) == 1
     return SQLField(str, str)
   elseif haskey(PormGsuffix, check[end])
-    throw("Invalid argument: $(str) does not must contain operators (lte, gte, contains ...)")
+    throw(_argerr("Invalid values() field \"$(str)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
   else
     @pormg_debug false
     return SQLField(_check_function(check), join(check, "__"))
@@ -27,7 +27,7 @@ function up_values!(q::SQLObject, values)
       push!(q.values, SQLField(_check_function(v), v._as))
     elseif isa(v, Pair)
       if !isa(v.first, String)
-        throw("Invalid argument: $(v.first) (::$(typeof(v.first)))); please use a string as key in the pair (key => value)")
+        throw(_argerr("Invalid values() pair key: $(v.first) (::$(typeof(v.first))) — use a String alias as the key in \"alias\" => expr."))
       end
       if isa(v.second, Union{SQLTypeFunction,SQLTypeF})
         try
@@ -86,7 +86,7 @@ function up_update!(q::SQLObject, values; kwargs...)
       if k == :show_query
         show_query = v
       else
-        throw("Invalid keyword argument: $(k); please use :show_query")
+        throw(_argerr("Invalid keyword argument for update(): $(k) — the only supported keyword is show_query."))
       end
     end
   end
@@ -178,7 +178,9 @@ function up_filter!(q::SQLObject, filter)
     elseif isa(v, Pair)
       push!(q.filter, _check_filter(v))
     else
-      error("Invalid argument: $(v) (::$(typeof(v)))); please use a pair (key => value) or a Q(key => value...) or a Qor(key => value...)")
+      # ArgumentError (not ErrorException) so filter() misuse matches the values()/order_by()
+      # siblings — this call site was the two-era inconsistency #197 calls out explicitly.
+      throw(_argerr("Invalid filter argument: $(v) (::$(typeof(v))) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
     end
   end
   return q
@@ -199,7 +201,7 @@ end
 distinct!(q::SQLObject, value::Tuple{}) = distinct!(q, true) # if no value is passed, distinct is true
 distinct!(q::SQLObject, value::Tuple{Bool}) = distinct!(q, value[1]) # if a value is passed, distinct is the value
 function distinct!(q::SQLObject, value)
-  throw("Invalid argument: $(value) (::$(typeof(value))); please use a boolean value (true or false)")
+  throw(_argerr("Invalid distinct() argument: $(value) (::$(typeof(value))) — use a Bool (true or false)."))
 end
 
 # #26: mark the query for row-level locking. Renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]`
@@ -259,7 +261,7 @@ function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} wh
       if size(check, 1) == 1
         push!(q.order, SQLOrder(SQLField(v, v), orientation=orientation))
       elseif haskey(PormGsuffix, check[end])
-        throw("Invalid argument: $(v) does not must contain operators (lte, gte, contains ...)")
+        throw(_argerr("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
       else
         push!(q.order, SQLOrder(SQLField(_check_function(check), join(check, "__")), orientation=orientation))
       end
@@ -270,7 +272,7 @@ function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} wh
   return q
 end
 function order_by!(q::SQLObject, values)
-  throw("Invalid argument: $(values) (::$(typeof(values))); please use a string or a SQLTypeOrder)")
+  throw(_argerr("Invalid order_by() argument: $(values) (::$(typeof(values))) — use field-name Strings (\"-field\" for DESC) or SQLTypeOrder values."))
 end
 
 

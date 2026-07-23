@@ -25,7 +25,7 @@ function With(q::SQLObject, name::String, query::SQLObjectHandler;
   join_type::String="LEFT")
   cte_fields = _preset_cte_fields(name, query, join_field=join_field, join_type=join_type)
   if haskey(q.ctes, name)
-    throw("CTE with name $(name) already exists in the query; please use a different name")
+    throw(_argerr("CTE with name \"$(name)\" already exists in the query; please use a different name."))
   end
   @pormg_debug false
   q.ctes[name] = cte_fields

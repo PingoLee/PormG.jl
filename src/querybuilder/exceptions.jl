@@ -22,3 +22,10 @@ Base.showerror(io::IO, e::MultipleObjectsReturned) =
 # non-TTY sink (CI output, file logs, `sprint(showerror, e)`). `_argerr` wraps the
 # common case so a call site only changes `ArgumentError(` → `_argerr(`.
 _argerr(msg::AbstractString) = ArgumentError(_emsg(msg))
+
+# Internal dispatch fallback (#197): a connection object that is neither a PostgreSQL nor a
+# SQLite pool reached an execution path. Typed (ErrorException) so downstream
+# `catch e; e isa Exception` works — these sites previously threw raw Strings, which are not
+# Exceptions and escape every typed catch.
+_unsupported_conn(op::AbstractString, conn) = error(_emsg(
+  "PormG internal error in $(op): unsupported connection type $(typeof(conn)) — expected a PostgreSQL or SQLite connection pool."))

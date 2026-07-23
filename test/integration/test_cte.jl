@@ -339,7 +339,9 @@ end
         q = M.Result.objects
         sub = M.Driver.objects.filter("driverid__@lte" => 5).values("driverid")
         q.with("dup" => sub, join_field="driverid" => "driverid")
-        @test_throws String q.with("dup" => sub, join_field="driverid" => "driverid")
+        # #197: With() now throws a typed ArgumentError (was a raw String, which no
+        # `catch e; e isa Exception` could see).
+        @test_throws ArgumentError q.with("dup" => sub, join_field="driverid" => "driverid")
     end
 
 end

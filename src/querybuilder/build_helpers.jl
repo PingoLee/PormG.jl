@@ -374,7 +374,7 @@ function _check_filter(x::Pair)
       rethrow(e)
     end
   else
-    throw("Error in filter: '$(x.first) => ...' must be a String, got $(typeof(x.first))")
+    throw(_argerr("Error in filter: '$(x.first) => ...' must use a String key, got $(typeof(x.first))"))
   end
 end
 
@@ -463,7 +463,10 @@ function _insert_join(
       return row["alias_b"]
     else
       if size(check, 1) > 1
-        throw("Error in join")
+        # #197: was `throw("Error in join")` — a raw String with zero context. This branch means
+        # the dedup filter matched the same (a, b, key_a, key_b, alias_a) join row more than once,
+        # which the dedup invariant forbids.
+        error(_emsg("PormG internal error in _insert_join: duplicate deduplicated join rows for $(row["a"]) → $(row["b"]) (alias $(row["alias_a"])) — please report this."))
       end
       return check[1]["alias_b"]
     end
@@ -534,19 +537,8 @@ _solve_field(field::String, _module::Module, model_name::String, instruct::SQLIn
 _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
 
 
-
-# outher functions
-function _df_to_dic(df::DataFrames.DataFrame, column::String, filter::String)
-  column = Symbol(column)
-  loc = DataFrames.subset(df, DataFrames.AsTable([column]) => (@. x -> x[column] == filtro))
-  if size(loc, 1) == 0
-    throw("Error in _df_to_dic, $(filter) not found in $(column)")
-  elseif size(loc, 1) > 1
-    throw("Error in _df_to_dic, $(filter) found more than one time in $(column)")
-  else
-    return loc[1, :]
-  end
-end
+# `_df_to_dic` used to live here — deleted in #197: it had zero callers and referenced an
+# undefined variable (`filtro`), so it was both dead and broken.
 
 # ---
 # Build the SQLInstruction object
@@ -1129,7 +1121,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
       @pormg_debug
-      throw("Error in values, $(v.column.field) in filter is not a object")
+      throw(_argerr("Invalid subquery filter on \"$(v.column.field)\": a queryset value requires a membership operator — use \"$(v.column.field)__@in\" => subquery or __@nin."))
     end
     _validate_membership_subquery(v)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
@@ -1188,7 +1180,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
-      throw("Error in values, $(v.column.field) not found in $(instruc.object.model.name)")
+      throw(_argerr("Field \"$(v.column.field)\" not found in model $(instruc.object.model.name)"))
     end
   end
 
@@ -1209,13 +1201,14 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif isa(placeholders, AbstractArray)
       return string(column, " ", v.operator, " (", join(placeholders, ", "), ")")
     else
-      throw("Error in operator: $(v.operator), the value must be a String or a Vector of Strings")
+      # Internal invariant: add_parameter! only ever returns a String or a Vector of placeholders.
+      error(_emsg("PormG internal error rendering $(v.operator): parameter placeholders must be a String or a Vector, got $(typeof(placeholders))."))
     end
   elseif v.operator in ["contains", "icontains", "iunaccent_contains", "iunaccent_exact", "startswith", "endswith"]
     @pormg_debug false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else
-    throw("Error in operator, $(v.operator) is not a valid operator")
+    throw(_argerr("Invalid filter operator: $(v.operator) is not a supported operator."))
   end
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)

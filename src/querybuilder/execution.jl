@@ -615,7 +615,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return PormGRow(result_dict, model)
   else
-    throw("Unsupported connection type")
+    _unsupported_conn("insert()", connection)
   end
 
 end
@@ -721,7 +721,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return (PormGRow(dict, model), created)
   else
-    throw("Unsupported connection type")
+    _unsupported_conn("update_or_create()", connection)
   end
 end
 
@@ -775,16 +775,15 @@ end
 
 function _fix_sequence_name(connection::PormGPostgres, model::PormGModel; ignore_tx::Bool = false) # TODO maby i need use Migration get_sequence_name aproach
   pk_field = [field for field in keys(model.fields) if model.fields[field].primary_key]
+  # #197 review: guard BEFORE anything indexes pk_field[1] — the empty-PK check used to sit
+  # after an indexing condition, so BoundsError always won and the guard could never fire.
+  length(pk_field) == 0 && throw(_argerr("Cannot fix the PK sequence for model $(model.name): the model does not define a primary key."))
+  length(pk_field) > 1 && throw(_argerr("Cannot fix the PK sequence for model $(model.name): composite primary keys are not supported here."))
   sequences = fetch(connection, """SELECT *
       FROM pg_sequences
-      WHERE sequencename LIKE '$(model.name |> lowercase)%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame  
+      WHERE sequencename LIKE '$(model.name |> lowercase)%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame
   for (index, row) in enumerate(eachrow(sequences))
     if index == 1 && row.sequencename != "$(model.name |> lowercase)_$(pk_field[1])_seq"
-      if length(pk_field) == 0
-        throw("Error in _fix_sequence_name, the model $(model.name) does not have a primary key")
-      elseif length(pk_field) > 1
-        throw("Error in _fix_sequence_name, the model $(model.name) has more than one primary key")
-      end
       fetch(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;"; ignore_tx=ignore_tx)
     else
       fetch(connection, "DROP SEQUENCE $(row.sequencename);"; ignore_tx=ignore_tx)
@@ -973,7 +972,7 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     isempty(mods) && return left_side
     return "$wrapper($(left_side), $(join(mods, ", ")))"
   else
-    throw("Unsupported connection type")
+    _unsupported_conn("date/interval arithmetic", instruc.connection)
   end
 end
 
@@ -1058,7 +1057,7 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
 
       return "((($(left_side1)) | ($(right_side1))) - (($(left_side2)) & ($(right_side2))))"
     else
-      throw("Unsupported connection type")
+      _unsupported_conn("xor update expression", instruc.connection)
     end
   elseif v.operation in ("+", "-") && v.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
     # Date arithmetic with an explicit Julia duration type (#25). Handled ahead of the generic
@@ -1225,7 +1224,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 
   # Don't allow to update a field without filter
-  instruction._where |> isempty && throw("Error in update, the update must have a filter")
+  instruction._where |> isempty && throw(_argerr("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
   
   parameters = instruction.parameters
   fields = model.field_names
@@ -1303,7 +1302,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       end
     else
       @error "Error in update: Unsupported database type for JOIN operations" connection_type=typeof(connection)
-      throw("Error in update: Unsupported database type for JOIN operations")
+      _unsupported_conn("update() with JOINs", connection)
     end
   else
     # No joins - simple UPDATE
@@ -1351,7 +1350,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         end
       end
     else
-      throw("Unsupported connection type")
+      _unsupported_conn("update()", connection)
     end
   catch e
     @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql

@@ -235,7 +235,9 @@ end
         e
     end
     @test err !== nothing
-    @test occursin("must have a filter", lowercase(string(err)))
+    # #197: the guard is now a typed ArgumentError with reworded message — assert both.
+    @test err isa ArgumentError
+    @test occursin("requires a filter", lowercase(string(err)))
 
     row_after_unfiltered_attempt = M.Just_a_test_deletion.objects.filter("name" => "valid").list() |> first
     @test row_after_unfiltered_attempt[:name] == "valid"

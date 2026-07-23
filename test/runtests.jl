@@ -54,6 +54,7 @@ end
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")
     @testset "JSON Containment Operators (#27)" include("unit/test_json_operators.jl")
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
+    @testset "Typed Exceptions on Query Surface (#197)" include("unit/test_typed_exceptions.jl")
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Reload Regressions" include("unit/test_reload.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")

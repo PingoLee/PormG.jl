@@ -65,6 +65,7 @@ makedocs(
         "Import from Django" => "import_django.md",
 
         "PostgreSQL Guide" => "postgres.md",
+        "Async & Concurrency" => "async.md",
         "Architecture" => "architecture.md",
         "Advisory Locks" => "advisory_lock.md",
         "Extending PormG" => "extending.md",

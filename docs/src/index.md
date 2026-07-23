@@ -316,6 +316,7 @@ This documentation is organized into the following sections:
 |  [Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
 |  [Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |
+| [Async & Concurrency](async.md) | Task-based concurrent queries, fan-out patterns, `fetch_async`, pool interplay. |
 | [Advisory Locks](advisory_lock.md) | Distributed locking with `with_advisory_lock`. |
 | [Contributing](contributing.md) | Development workflow, `@pormg_debug` breakpoints, and testing conventions. |
 | [API Reference](api.md) | Full auto-generated API reference and exported function catalog. |

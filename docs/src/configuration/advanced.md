@@ -4,7 +4,7 @@ PormG is designed for Julia's asynchronous task scheduling. This section covers 
 
 ## Connection Pooling & Async-First Design
 
-- **Async-First API:** The synchronous `fetch()` API is a wrapper around the asynchronous `fetch_async()` core. This wrapper yields to the Julia scheduler while waiting for the database, ensuring compatibility with async frameworks.
+- **Async-First API:** The synchronous `fetch()` API is a wrapper around the asynchronous `fetch_async()` core. This wrapper yields to the Julia scheduler while waiting for the database, ensuring compatibility with async frameworks. See the [Async & Concurrency guide](../async.md) for usage patterns.
 - **Pooling Strategy:** The default strategy is `:poll`, which retries at configured intervals. Use `:block` for PostgreSQL to let the server-side manage the wait, often combined with a `statement_timeout`.
 - **Sizing & capacity:** A pool starts at `pool_size` connections (default `3`) and grows **lazily, on demand,** up to `pool_size × 10` under concurrent load — so the idle footprint stays small while async fan-out still gets headroom. If every connection is busy and none frees within the retry/timeout budget, `acquire_connection` raises a catchable `PoolTimeoutError` (exported by PormG). Raise `pool_size` in your `connection.yml` to add capacity for genuinely high-concurrency workloads:
 

@@ -152,6 +152,8 @@ PormG.bulk_insert(query, df, chunk_size=5)
 
 One of PormG's key strengths is that spawned `@async` tasks automatically inherit the transaction context. This lets you write elegant concurrent code without worrying about connection pools.
 
+Note that inherited context means every child task shares the transaction's **single pinned connection**, so their statements serialize — this propagation is about *correctness* (all work joins the same transaction), not throughput. For concurrent throughput, fan out whole transactions instead; see [Async & Concurrency — Transactions and concurrency](../async.md#Transactions-and-concurrency).
+
 ### Single Async Task
 
 ```julia

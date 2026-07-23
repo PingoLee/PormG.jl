@@ -7,7 +7,7 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 ## How to use
 
 - One `##` entry per breaking change, **newest first**.
-- Each entry records: what changed, why, the concrete **before → after** code edit, and a **per-app rollout** table.
+- Each entry records: the PormG **version** it shipped in, what changed, why, the concrete **before → after** code edit, and a **per-app rollout** table.
 - An app is done when its code is updated **and** its tests pass against the new PormG.
 - Rename the placeholder app rows (`app-1` … `app-4`) to your real app names once, then reuse them in every entry.
 
@@ -19,6 +19,21 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 | ⏳ | pending — not yet migrated |
 | — | n/a — app does not use the affected API |
 
+## Versioning (`0.y.z`)
+
+PormG follows `0.y.z` pre-publish: **`y` bumps on any breaking/behavior change**, `z` on
+everything else. Julia's Pkg treats the `y` slot as the major version pre-1.0, so a
+consumer's `compat = "0.y"` accepts `0.y.*` and rejects the next breaking release. Each
+breaking change therefore bumps `version` in `Project.toml` **and** adds one entry here,
+stamped with the version it shipped in.
+
+**Scoping an upgrade by version.** To roll a consuming app from PormG `0.a` to `0.b`, read
+the entries **newest-first from the top and stop when you reach an entry whose `Version` is
+≤ `0.a`** — everything above that line is what changed since your pinned version. Entries
+are version-stamped from **`0.2.0`** onward; entries below the `pre-0.2 history` marker
+predate the versioning policy and are unstamped (treat them as "already shipped before
+`0.2.0`").
+
 ## Applying these in a consuming app
 
 This file is the **source of truth, kept in the PormG repo**. To fix a dependent app after a
@@ -26,8 +41,10 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 (e.g. `~/.julia/dev/PormG/UPGRADING.md`) or from GitHub — and work the entries
 **newest first**:
 
-1. **Scope to this app.** In each entry's rollout table, skip rows already marked ✅ or —.
-   Work only the ⏳ rows for this app.
+1. **Scope to this app — and to your version.** Read newest-first and stop at the first entry
+   whose **Version** is ≤ the PormG you are upgrading *from* (see the Versioning section above);
+   everything above that line is what changed. Within each in-range entry's rollout table, skip
+   rows already marked ✅ or —, and work only the ⏳ rows for this app.
 2. **Find the call sites.** Run the entry's *"How to find the calls to migrate"* grep/error
    inside the app.
 3. **Apply the `before → after`.** Edit each call site to the ✓ form shown in the entry.
@@ -42,6 +59,70 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 > Then an agent working in that repo will pick up the rollout automatically.
 
 ---
+
+## Typed exceptions across the query surface — raw-`String` throws are now `ArgumentError`/`ErrorException` (#197)
+
+- **Version**: 0.2.0
+- **PormG ref**: issue #197 ; `src/querybuilder/` (`build_helpers.jl`, `build_joins.jl`, `build_query.jl`,
+  `ctes.jl`, `deletion.jl`, …), `src/Configuration.jl`, `src/migrations/planner.jl`
+- **Recorded**: 2026-07-23
+- **Severity**: **breaking (error type)** — ~46 raw-string `throw("...")` sites now raise typed
+  exceptions. No new exported types (existing `ArgumentError`/`ErrorException` +
+  `DoesNotExist`/`MultipleObjectsReturned`/pool errors cover the surface).
+
+### What changed
+
+Every `throw("...")` in the query builder — a bare `String`, which is **not** an `Exception` — plus
+stragglers in `Configuration.jl` and `migrations/planner.jl` now throws a typed exception:
+
+- `ArgumentError` for user misuse (bad args, unsupported `values()` pairs, malformed lookups, …);
+- `ErrorException` (via the internal `_unsupported_conn` helper) for internal dispatch fallbacks;
+- `bulk_insert`'s catch blocks now `@error` + `rethrow()`, so the original driver exception survives
+  instead of being reduced to a string.
+
+A raw `String` throw escaped every `catch e; e isa Exception` a package user could write — so any
+error handling that expected a real exception silently failed to match. Now `e isa Exception` (and
+`e isa ArgumentError`) behave as expected.
+
+### How to find the calls to migrate
+
+Grep each app for `catch` blocks that **string-match** a PormG error rather than catching a type:
+
+```
+rg -n "catch" <app>/src | rg -iE "isa String|occursin\("
+```
+
+Only handlers that string-matched a PormG throw are affected. A `catch e … rethrow()`, or a handler
+already keyed on `ArgumentError`/`ErrorException`/`DoesNotExist`/`PoolTimeoutError`, needs no change.
+
+### Migrate your app
+
+```julia
+# ✗ before — the throw was a bare String; `e isa String` was the only way to match, and
+#            `e isa Exception` never fired
+catch e
+    e isa String && occursin("<PormG error text>", e) && handle()
+
+# ✓ after — catch the typed exception; read the text off `.msg`
+catch e
+    e isa ArgumentError && occursin("<PormG error text>", e.msg) && handle()
+```
+
+If a handler only needs "PormG rejected this call", `e isa Exception` (or the narrower
+`e isa ArgumentError`) now suffices — no string matching required.
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | check for `catch` blocks string-matching PormG throws; most apps have none |
+| app-2 | ⏳ | as above |
+| app-3 | ⏳ | as above |
+| app-4 | ⏳ | as above |
+
+---
+
+<!-- ───────────────────────── pre-0.2 history (unstamped) ───────────────────────── -->
 
 ## Scalar correlated subqueries: `Subquery(...)` in `values()`; unsupported `values()` pairs now throw (#92)
 
@@ -1116,6 +1197,7 @@ Copy the block below to the top of the log (under the legend) for each new break
 
 ## `<api>` — <one-line summary of the change>
 
+- **Version**: <0.y.0 — the release this shipped in; bump `Project.toml` in the same change>
 - **PormG ref**: <issue / PR / commit> ; <src file>
 - **Recorded**: <YYYY-MM-DD>
 - **Severity**: breaking | behavior change | deprecation

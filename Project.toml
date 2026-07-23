@@ -1,6 +1,6 @@
 name = "PormG"
 uuid = "7d8d7541-4d3d-4580-80a2-17064efb0993"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["PingoLee <eurafael@msn.com>"]
 
 [deps]

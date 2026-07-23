@@ -485,7 +485,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
   end
 
-  sql == "" && throw("Error in delete, the SQL query is empty, this should not happen")
+  sql == "" && error(_emsg("PormG internal error in delete(): the generated SQL is empty — this should not happen; please report it."))
       
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)

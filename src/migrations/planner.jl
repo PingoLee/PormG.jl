@@ -437,8 +437,7 @@ function _resolve_table_fields(
           response_idx = parse(Int, response)
           old_field_sym = colect_numbered[response_idx]          
         catch e
-          throw("Invalid number, please try makemigrations again")
-          return
+          throw(ArgumentError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
         end
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
@@ -659,16 +658,19 @@ for (model_name, model) in current_schema
           if response in ["no", "n"]
             _add_new_table(conn, migration_plan, model_name, model[:model])
           else
+            # Only the input parse/lookup is guarded (mirrors the field-rename prompt above) — a
+            # genuine planner failure below must propagate as itself, not as "invalid choice" (#197).
+            local old_model_name
             try
               res_idx = parse(Int, response)
               old_model_name = dict_rename[res_idx]
-              # first i need to alter the fields from old table named in postgres
-              _alter_table_fields(conn, migration_plan, old_model_name, futher_processing[:drop_table][old_model_name]["model"], current_schema, settings, interactive=interactive)
-              _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, model_name, old_model_name |> string))
-              futher_processing[:drop_table][old_model_name]["exist"] = true
-            catch e
-              throw("Invalid number, please try makemigrations again")
+            catch
+              throw(ArgumentError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
             end
+            # first i need to alter the fields from old table named in postgres
+            _alter_table_fields(conn, migration_plan, old_model_name, futher_processing[:drop_table][old_model_name]["model"], current_schema, settings, interactive=interactive)
+            _configure_order_dict_migration_plan(migration_plan, model_name, "Rename table", Dialect.rename_table(conn, model_name, old_model_name |> string))
+            futher_processing[:drop_table][old_model_name]["exist"] = true
           end
         end         
       end    

@@ -1224,12 +1224,17 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
             _update_sequence(model, connection, pk_field, settings)
             fetch(settings, sql, parameters)
           else
-            throw("Error in bulk_insert, the row has a duplicate key value and no primary key sequence can be synchronized")
+            # #197: keep the original driver exception (it carries the constraint detail and is a
+            # real Exception type); the String throw this replaces destroyed both. The diagnostic
+            # hint moves to the log.
+            @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the DataFrame" model=model.name exception=e
+            rethrow()
           end
         elseif occursin("violates foreign key constraint", e |> string)
-          throw("Error in bulk_insert, the row has a foreign key constraint")
+          @error "bulk_insert: foreign key constraint violated — a referenced row is missing" model=model.name exception=e
+          rethrow()
         else
-          throw(e)
+          rethrow()
         end
       end
     elseif connection isa PormGSQLite
@@ -1237,7 +1242,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
       # and pass the parameterized query with correct bucket ordering
       fetch(settings, sql, parameters)
     else
-      throw("Unsupported connection type")
+      _unsupported_conn("bulk_insert()", connection)
     end
 
     pk_exist && _update_sequence(model, connection, pk_field, settings)
@@ -1448,7 +1453,7 @@ function _bulk_update(model::PormGModel,
 
   @pormg_debug false
   if instruction !== nothing && instruction.join |> length > 0
-    throw("Error in bulk_update, the join is not allowed in bulk_update")
+    throw(_argerr("bulk_update() does not allow joined field paths (\"__\") — restrict filters and update columns to the model's own fields."))
   end
 
   # Security: Quote table name and field names

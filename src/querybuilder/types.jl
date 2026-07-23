@@ -339,7 +339,7 @@ function Base.push!(q::SQLTypeQ, x...)
     elseif isa(v, FilterType)
       push!(q.filters, v)
     else
-      throw("Invalid argument: $(v); please use a pair (key => value) or Q/Qor/OP object")
+      throw(_argerr("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
     end
   end
   return q
@@ -352,7 +352,7 @@ function Base.push!(q::SQLTypeQor, x...)
     elseif isa(v, FilterType)
       push!(q.or, v)
     else
-      throw("Invalid argument: $(v); please use a pair (key => value) or Q/Qor/OP object")
+      throw(_argerr("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
     end
   end
   return q

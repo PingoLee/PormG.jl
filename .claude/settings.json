@@ -2,7 +2,6 @@
   "permissions": {
     "allow": [
       "Bash(timeout 420 julia --project=. docs/make.jl)",
-      "Bash(timeout 5 echo \"done\")",
       "Bash(gh issue list*)",
       "Bash(gh issue view*)",
       "Bash(gh issue create*)",

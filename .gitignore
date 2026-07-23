@@ -47,3 +47,7 @@ test/integration/db_test_migration_pg/migrations/
 # Claude Code parallel-session worktrees live here; keep their contents out of the main
 # checkout's status (they are provisioned per-worktree, see .worktreeinclude).
 .claude/worktrees/
+
+# Personal Claude Code settings (machine-specific permission grants). Shared,
+# repo-wide permissions live in .claude/settings.json instead.
+.claude/settings.local.json

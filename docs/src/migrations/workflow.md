@@ -32,9 +32,9 @@ This is safe to run on existing databases and will create the `pormg_migrations`
 
 Edit your models in `db/models.jl` (or your chosen models file). PormG uses these definitions as the "target state" for your database.
 
-> [!IMPORTANT]
-> **Active Memory Registration**: PormG generates migrations by comparing the live database schema against the **in-memory** representations of your models. 
-> Before running `makemigrations`, make sure your model definitions file has been evaluated or loaded in the current Julia session (for example, by calling `include("db/models.jl")` or using the `@import_models` macro).
+!!! info "Important"
+    **Active Memory Registration**: PormG generates migrations by comparing the live database schema against the **in-memory** representations of your models. 
+    Before running `makemigrations`, make sure your model definitions file has been evaluated or loaded in the current Julia session (for example, by calling `include("db/models.jl")` or using the `@import_models` macro).
 
 ---
 

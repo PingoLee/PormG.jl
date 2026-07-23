@@ -200,8 +200,8 @@ query.filter("driverid" => 1)
 df = query |> DataFrame
 ```
 
-> [!NOTE]
-> For cross-database compatibility, avoid examples that depend on ambiguous floating-point half-rounding behavior (e.g., rounding `0.5`).
+!!! note
+    For cross-database compatibility, avoid examples that depend on ambiguous floating-point half-rounding behavior (e.g., rounding `0.5`).
 
 ---
 
@@ -285,9 +285,9 @@ query.values(
 Plain Julia values — including strings — can be passed to `then`, `otherwise`, and `default` directly.
 No `Value()` wrapper is required.
 
-> [!NOTE]
-> If no branch matches and neither `otherwise` nor `default` is set, the expression returns `NULL`.
-> Always provide a fallback when the column must be non-null.
+!!! note
+    If no branch matches and neither `otherwise` nor `default` is set, the expression returns `NULL`.
+    Always provide a fallback when the column must be non-null.
 
 ### Binary When (single condition, two outcomes)
 

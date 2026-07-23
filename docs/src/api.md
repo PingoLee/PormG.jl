@@ -37,12 +37,12 @@ These methods modify the query builder and return the handler for further chaini
 
 See also: [`.cjoin()`](#cjoin) for custom join definitions and [`.with()`](#with-common-table-expressions) for CTEs.
 
-> [!IMPORTANT]
-> Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution.
-> A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with
-> `ArgumentError: Duplicate variable names`. PormG throws a clear error if you forget.
-> Use `.values("*", "joined_model__field")` to quickly select all main-table columns
-> plus specific fields from the joined table.
+!!! info "Important"
+    Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution.
+    A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with
+    `ArgumentError: Duplicate variable names`. PormG throws a clear error if you forget.
+    Use `.values("*", "joined_model__field")` to quickly select all main-table columns
+    plus specific fields from the joined table.
 
 ### Terminal Methods
 
@@ -143,8 +143,8 @@ println(inspection[:operation])  # Automatically detects :select
 println(inspection[:dialect])    # :postgresql or :sqlite
 ```
 
-> [!NOTE]
-> `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string. They do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
+!!! note
+    `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string. They do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
 
 ---
 

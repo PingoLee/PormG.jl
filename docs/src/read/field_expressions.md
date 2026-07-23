@@ -2,8 +2,8 @@
 
 `F()` expressions enable database-side field references and arithmetic. They let you compare fields to other fields, perform calculations in SQL, and create computed columns — all without pulling data into Julia.
 
-> [!NOTE]
-> **For Django users:** PormG's `F()` is inspired by Django but leverages Julia's operator overloading (e.g., `F("a") + F("b")`). It also allows seamless mixing with aggregate functions like `Sum()` and `Count()`, and the engine automatically detects aggregates to generate `HAVING` clauses.
+!!! note
+    **For Django users:** PormG's `F()` is inspired by Django but leverages Julia's operator overloading (e.g., `F("a") + F("b")`). It also allows seamless mixing with aggregate functions like `Sum()` and `Count()`, and the engine automatically detects aggregates to generate `HAVING` clauses.
 
 ---
 
@@ -17,8 +17,8 @@
 | **Aggregate ratios** | — | `Sum("points") / Count("resultid")` |
 | **Atomic updates** | — | `F("points") + 1` |
 
-> [!TIP]
-> Reserve `F()` for column-to-column or column-to-expression operations. For scalar comparisons like `points > 10`, prefer the suffix syntax `"points__@gt" => 10` — it's clearer and idiomatic.
+!!! tip
+    Reserve `F()` for column-to-column or column-to-expression operations. For scalar comparisons like `points > 10`, prefer the suffix syntax `"points__@gt" => 10` — it's clearer and idiomatic.
 
 ---
 
@@ -240,8 +240,8 @@ df = query |> DataFrame
 | `"alias" => F("field") * 1.5` | Compute value | `SELECT "points" * 1.5 AS "alias"` |
 | `"alias" => Sum("field")` | Aggregate | `SELECT SUM("points") AS "alias"` |
 
-> [!TIP]
-> Aliasing happens at the SQL level. This is significantly more efficient than renaming columns in a Julia DataFrame after the query finishes.
+!!! tip
+    Aliasing happens at the SQL level. This is significantly more efficient than renaming columns in a Julia DataFrame after the query finishes.
 
 ---
 
@@ -287,8 +287,8 @@ GROUP BY 1
 
 The constant is **parameterized** (`$1`), never interpolated into the SQL string — so it stays safe even when the value comes from user input. (On SQLite the placeholder is `?` instead of `$1`.)
 
-> [!IMPORTANT]
-> Do **not** wrap the aggregated column in `F()` for this. `F("points") - 10` renders `points - 10` (a row-level column expression), whereas `Sum("points") - 10` renders `SUM(points) - 10` (arithmetic on the aggregate). Reach for the aggregate constructor — `Sum`, `Max`, `Min`, `Count`, `Avg` — whenever the math should apply to the *aggregated* value, and pass the column as a plain string: `Max("points")`, not `Max(F("points"))`.
+!!! info "Important"
+    Do **not** wrap the aggregated column in `F()` for this. `F("points") - 10` renders `points - 10` (a row-level column expression), whereas `Sum("points") - 10` renders `SUM(points) - 10` (arithmetic on the aggregate). Reach for the aggregate constructor — `Sum`, `Max`, `Min`, `Count`, `Avg` — whenever the math should apply to the *aggregated* value, and pass the column as a plain string: `Max("points")`, not `Max(F("points"))`.
 
 ### In Filters (Auto-HAVING)
 
@@ -360,8 +360,8 @@ M.Result.objects.filter(
 ).update("points" => F("points") + 10)
 ```
 
-> [!WARNING]
-> You can **filter** by joined fields during an update, but you generally cannot **set** a column using a value from a joined table (e.g., `update("col" => F("joined__col"))`). Stick to expressions involving columns from the table being updated for maximum cross-database compatibility.
+!!! warning
+    You can **filter** by joined fields during an update, but you generally cannot **set** a column using a value from a joined table (e.g., `update("col" => F("joined__col"))`). Stick to expressions involving columns from the table being updated for maximum cross-database compatibility.
 
 ---
 
@@ -441,11 +441,11 @@ All examples in this section are **100% real and executable** directly against t
 | `>>` | `>>` | Bitwise Shift Right |
 | `xor` / `⊻` | `#` (Postgres) / emulated (SQLite) | Bitwise XOR |
 
-> [!NOTE]
-> **XOR Dialect Support:**
-> - In standard Julia, `^` represents exponentiation, which aligns with PostgreSQL's `^`. PormG preserves this by keeping `^` for mathematical exponentiation.
-> - For bitwise XOR, PormG overloads Julia's idiomatic `xor` and `⊻` functions.
-> - PormG handles dialect differences transparently: rendering `(a # b)` on PostgreSQL, and emulating it via `((a | b) - (a & b))` on SQLite while correctly duplicating any internal parameters to preserve positional alignment.
+!!! note
+    **XOR Dialect Support:**
+    - In standard Julia, `^` represents exponentiation, which aligns with PostgreSQL's `^`. PormG preserves this by keeping `^` for mathematical exponentiation.
+    - For bitwise XOR, PormG overloads Julia's idiomatic `xor` and `⊻` functions.
+    - PormG handles dialect differences transparently: rendering `(a # b)` on PostgreSQL, and emulating it via `((a | b) - (a & b))` on SQLite while correctly duplicating any internal parameters to preserve positional alignment.
 
 ### Real-World F1 Case Study: The "Clean vs. Dirty" Grid Side Analysis
 
@@ -509,9 +509,9 @@ FROM "drivers" as "Tb"
 -- Parameters: $1 = 1
 ```
 
-> [!TIP]
-> **Dialect Optimization:**
-> When generating left-hand shifts (`<<` or `>>`), PormG automatically types the left-side scalar parameter as `integer` (4-byte) on PostgreSQL, avoiding type-signature compiler mismatch errors.
+!!! tip
+    **Dialect Optimization:**
+    When generating left-hand shifts (`<<` or `>>`), PormG automatically types the left-side scalar parameter as `integer` (4-byte) on PostgreSQL, avoiding type-signature compiler mismatch errors.
 
 ### In Projections (`values()`)
 

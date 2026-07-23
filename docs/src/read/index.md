@@ -260,5 +260,5 @@ If you are learning the API from scratch, the recommended order is:
 5. **[Field Expressions](field_expressions.md)** — Reach for `F()` when you need column-to-column logic or arithmetic.
 6. **[Q Objects](q_objects.md)** — Use `Q()`/`Qor()` only when plain filter pairs stop being expressive enough.
 
-> [!TIP]
-> For write operations (create, update, delete, bulk), see the [Writing](../write/index.md) section.
+!!! tip
+    For write operations (create, update, delete, bulk), see the [Writing](../write/index.md) section.

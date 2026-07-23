@@ -49,8 +49,8 @@ Sometimes you need to store extra data *on the relationship itself*. For example
 
 To do this, you define a regular model with two `ForeignKey` fields, and then tell the `ManyToManyField` to use it via the `through` keyword argument.
 
-> [!TIP]
-> **Django Style**: You can pass the `through` model as a **string**. This allows you to define the `ManyToManyField` inline before the through model is actually defined, avoiding circular reference errors in Julia.
+!!! tip
+    **Django Style**: You can pass the `through` model as a **string**. This allows you to define the `ManyToManyField` inline before the through model is actually defined, avoiding circular reference errors in Julia.
 
 ```julia
 using PormG.Models
@@ -84,8 +84,8 @@ This pattern matches Django exactly and keeps your model definitions clean and r
 
 ### Relationship Mutator Limitations on Custom Through Tables
 
-> [!WARNING]
-> **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add!`, `remove!`, `clear!`, and `set!`) are disabled and will raise an `ArgumentError`.
+!!! warning
+    **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add!`, `remove!`, `clear!`, and `set!`) are disabled and will raise an `ArgumentError`.
 
 This constraint prevents silent failures or incomplete rows, as PormG cannot determine appropriate values to insert for your custom fields. 
 
@@ -226,5 +226,5 @@ FROM "m2m_driver_multi_hop_scratch" as "Tb"
 WHERE "Tb_3"."name" = $1
 ```
 
-> [!NOTE]
-> The transparent joining works equally well whether you are using an implicit or an explicit through table!
+!!! note
+    The transparent joining works equally well whether you are using an implicit or an explicit through table!

@@ -175,7 +175,7 @@ export PoolTimeoutError  # thrown by acquire_connection when the pool is saturat
 export PoolConnectError  # thrown by acquire_connection when a connection can't be opened (#72)
 export pool_stats  # connection-pool health snapshot (#127)
 export with_tx_context, in_transaction_context  # Transaction context helpers
-export setup, install_ai_skills
+export setup, install_ai_skills, upgrade_guide  # upgrade_guide: version-scoped UPGRADING.md emitter (#216)
 
 # Fallback stub for the Tachikoma TUI extension.
 # When `using Tachikoma`, PormGTachikomaExt overrides this with the real implementation.

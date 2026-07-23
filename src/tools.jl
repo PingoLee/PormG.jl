@@ -142,3 +142,113 @@ function install_ai_skills(target_dir::String = pwd())
         @error "Failed to install AI skills" exception=e
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# upgrade_guide — version-scoped emitter over UPGRADING.md (issue #216)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Unstamped ("pre-0.2 history") UPGRADING.md entries sort just below 0.2.0: under any
+# 0.2.x release, but above every 0.1.x. So a consumer coming from before the versioning
+# policy still sees them, while one already on ≥ 0.2.0 does not.
+const _UNSTAMPED_VERSION = v"0.2.0-"
+
+const _UpgradeEntry = @NamedTuple{version::VersionNumber, title::String, body::String}
+
+_asver(v::VersionNumber) = v
+_asver(v::AbstractString) = VersionNumber(v)
+
+"""
+    _read_upgrading_entries() -> Vector{_UpgradeEntry}
+
+Parse the `UPGRADING.md` bundled with the resolved PormG install into change entries,
+newest-first. `body` is the entry's markdown with its PormG-internal `### Per-app rollout`
+table trimmed off. Unstamped pre-0.2 entries get `version = _UNSTAMPED_VERSION`.
+"""
+function _read_upgrading_entries()
+    path = joinpath(Base.pkgdir(@__MODULE__), "UPGRADING.md")
+    isfile(path) || throw(ArgumentError(
+        "UPGRADING.md not found next to the installed PormG (looked in $(dirname(path)))."))
+    text = read(path, String)
+
+    # Drop the "## Template for new entries" section: its body is an HTML comment holding a
+    # fake `## …` heading and a `- **Version**:` placeholder that would parse as a bogus entry.
+    tmpl = findfirst("## Template for new entries", text)
+    tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
+
+    entries = _UpgradeEntry[]
+    for block in split(text, r"(?m)^---[ \t]*$")
+        # A real change entry has a `## ` heading AND a `- **Recorded**:` bullet — this rejects
+        # the header/recipe prose and any stray section, regardless of `---` placement.
+        title_m = match(r"(?m)^##[ \t]+(.+)$", block)
+        (title_m === nothing || !occursin(r"(?m)^-[ \t]+\*\*Recorded\*\*:", block)) && continue
+
+        ver_m = match(r"(?m)^-[ \t]+\*\*Version\*\*:[ \t]*(\S+)", block)
+        version = ver_m === nothing ? _UNSTAMPED_VERSION : VersionNumber(ver_m[1])
+
+        # Trim the internal per-app rollout table (which of PormG's own apps adopted it) —
+        # noise for a consuming app, which only needs the porting work.
+        body = block
+        roll = findfirst("### Per-app rollout", body)
+        roll === nothing || (body = body[1:prevind(body, first(roll))])
+
+        push!(entries, (version = version,
+                        title = String(strip(title_m[1])),
+                        body = String(strip(body))))
+    end
+    return entries
+end
+
+"""
+    upgrade_guide([io::IO = stdout]; from, to = pkgversion(PormG), structured = false)
+
+Print the `UPGRADING.md` entries a consuming app must work through to move from PormG
+version `from` up to `to` (default: the installed version). Reads the `UPGRADING.md`
+shipped with the *resolved* PormG install, so the scope is accurate against the version
+your app actually depends on — not a latest-on-GitHub copy that may not match.
+
+Entries print newest-first; each keeps its "How to find the calls to migrate" grep and its
+`before → after`, with the PormG-internal per-app rollout table trimmed off.
+
+`from` is required — pass the PormG version your app currently depends on. Both `from` and
+`to` accept a `VersionNumber` or a version string (`v"0.2"` or `"0.2"`).
+
+Pass `structured = true` to get the entries back as data instead of printing — a `Vector`
+of `(; version, title, body)` named tuples, newest-first — for programmatic consumers.
+
+# Examples
+```julia
+julia> using PormG
+
+julia> PormG.upgrade_guide(from = v"0.1")            # everything up to the installed version
+
+julia> PormG.upgrade_guide(from = "0.2", to = "0.3")
+
+julia> entries = PormG.upgrade_guide(from = v"0.1", structured = true);
+```
+"""
+function upgrade_guide(io::IO = stdout; from = nothing, to = pkgversion(@__MODULE__),
+                       structured::Bool = false)
+    from === nothing && throw(ArgumentError(
+        "upgrade_guide requires `from` — the PormG version your app currently depends on, " *
+        "e.g. `upgrade_guide(from = v\"0.2\")`."))
+    from_v = _asver(from)
+    to_v   = _asver(to)
+
+    entries = filter(e -> from_v < e.version <= to_v, _read_upgrading_entries())
+
+    structured && return entries
+
+    if isempty(entries)
+        println(io, "# PormG: nothing to port between $from_v and $to_v.")
+        return nothing
+    end
+
+    println(io, "# Porting a PormG consumer from $from_v → $to_v")
+    println(io, "# Work newest-first; for each entry run its \"How to find the calls to migrate\"")
+    println(io, "# grep, apply before → after, then run your app's tests.")
+    for e in entries
+        println(io)
+        println(io, e.body)
+    end
+    return nothing
+end

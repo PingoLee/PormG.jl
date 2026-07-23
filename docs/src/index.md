@@ -281,11 +281,11 @@ PormG is structured into five distinct, decoupled layers, ensuring a clean separ
 
 | Layer | Responsibility | Key Components & Files |
 | :--- | :--- | :--- |
-| **1. Application** | High-level user interface. Developers define models and write fluent queries. | `M.Driver.objects.filter(...)`<br>• [Models.jl](file:///c:/Sistemas/PormG.jl/src/Models.jl) |
-| **2. Query Builder** | Fluent Functor API. Resolves chaining, table joins (`__` notation), and subqueries into an abstract AST. | `filter`, `values`, `order_by`, `cjoin`<br>• [QueryBuilder.jl](file:///c:/Sistemas/PormG.jl/src/QueryBuilder.jl) |
-| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL vs. SQLite translation<br>• [Dialect.jl](file:///c:/Sistemas/PormG.jl/src/Dialect.jl) |
-| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`<br>• [ConnectionPool.jl](file:///c:/Sistemas/PormG.jl/src/ConnectionPool.jl) |
-| **5. Config & Tenants** | Multi-database and multi-tenancy registry. Loads configurations and maps active tenant resolvers. | `load`, `load_many`, `resolver`<br>• [Configuration.jl](file:///c:/Sistemas/PormG.jl/src/Configuration.jl) |
+| **1. Application** | High-level user interface. Developers define models and write fluent queries. | `M.Driver.objects.filter(...)`<br>• [Models.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Models.jl) |
+| **2. Query Builder** | Fluent chaining API. Resolves chaining, table joins (`__` notation), and subqueries into an abstract AST. | `filter`, `values`, `order_by`, `cjoin`<br>• [QueryBuilder.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/QueryBuilder.jl) |
+| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL vs. SQLite translation<br>• [Dialect.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Dialect.jl) |
+| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`<br>• [ConnectionPool.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/ConnectionPool.jl) |
+| **5. Config & Tenants** | Multi-database and multi-tenancy registry. Loads configurations and maps active tenant resolvers. | `load`, `load_many`, `resolver`<br>• [Configuration.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Configuration.jl) |
 
 ---
 

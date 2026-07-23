@@ -503,15 +503,36 @@ end
 
 ## Async Execution
 
-### `fetch_async`
-
-Execute a query asynchronously, returning a `FetchTask`:
+PormG is async-first *internally*: every terminal (`list()`, `count()`, `create()`, …) already
+yields to the Julia scheduler while the database round-trip is in flight. There is no separate
+async query API — wrap the ordinary call in a task:
 
 ```julia
-task = fetch_async(M.Driver.objects.filter("nationality" => "Brazilian"))
-# ... do other work ...
-result = await_result(task)
+t = Threads.@spawn M.Driver.objects.filter("nationality" => "Brazilian").list()
+# ... other work overlaps the database round-trip ...
+rows = fetch(t)   # Base.fetch on the Task — same rows as calling list() directly
 ```
+
+### `fetch_async` / `await_result` (raw SQL)
+
+The lower-level escape hatch accepts **raw SQL only** — not query-builder objects — and returns
+a `FetchTask`:
+
+```julia
+settings = PormG.Configuration.get_settings("db")
+
+task = fetch_async(settings, "SELECT count(*) FROM driver")
+# ... do other work ...
+result = await_result(task)   # returns rows and releases the pooled connection
+```
+
+!!! warning "An un-awaited `FetchTask` leaks its pool connection"
+    `fetch_async` checks its connection out synchronously; only `await_result` returns it.
+    Always await every task you start.
+
+See the [Async & Concurrency guide](async.md) for fan-out patterns, `@async` vs
+`Threads.@spawn`, connection-pool sizing, and why you must not fan out queries *inside* a
+transaction.
 
 ---
 
@@ -618,7 +639,7 @@ scope — the SQL function constructors are *not* among them (see
 `bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`
 
 ### Async API
-`fetch_async`, `await_result`, `FetchTask`
+`fetch_async`, `await_result`, `FetchTask` — see [Async & Concurrency](async.md)
 
 ### Transactions
 `run_in_transaction`, `atomic`, `with_savepoint`, `with_tx_context`, `in_transaction_context`

@@ -191,6 +191,7 @@ characterizations worth stating plainly.
     **SQLite**, every statement is funnelled through a single global worker (serialized), with write
     transactions further pinned behind a process-wide lock — pool size buys no query-level
     concurrency. "Async-first" is a real PostgreSQL capability, not a blanket ORM property.
+    Usage patterns live in the [Async & Concurrency guide](async.md).
 
 ## Where to look next
 

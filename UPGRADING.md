@@ -1116,7 +1116,7 @@ Copy the block below to the top of the log (under the legend) for each new break
 
 ## `<api>` — <one-line summary of the change>
 
-- **PormG ref**: <TODO.md item / PR / commit> ; <src file>
+- **PormG ref**: <issue / PR / commit> ; <src file>
 - **Recorded**: <YYYY-MM-DD>
 - **Severity**: breaking | behavior change | deprecation
 

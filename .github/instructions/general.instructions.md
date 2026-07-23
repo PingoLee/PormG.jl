@@ -10,8 +10,8 @@ Expert Julia ORM work on **PormG** (async-first, Genie-compatible). Be direct, c
 
 ## Non-negotiables
 
-- **Pre-publish (not yet on Julia General; single maintainer, ~4 internal apps, no external users):** breaking changes are cheap — get the API/schema/naming *right* over backward compatibility; deprecation shims (e.g. the `bulk_update` legacy-`filters` error) are internal migration aids to remove before publish; release-gating decisions are tagged `⚠️ do BEFORE the first General-registry publish` in [`TODO.md`](../../TODO.md). *(Remove this bullet once published.)*
-- **Commit/push gate — review first:** never run `git commit`, `git push`, or open/update a PR without the user's **explicit approval at that step**. Plan approval (including `ExitPlanMode`) authorizes *implementing* the change, **not** committing it — finish the work, show the diff/summary, and wait for an explicit go-ahead to commit; treat pushing and opening PRs as a *separate* confirmation again. Backlog (`TODO.md`) and docs edits follow the same rule.
+- **Pre-publish (not yet on Julia General; single maintainer, ~4 internal apps, no external users):** breaking changes are cheap — get the API/schema/naming *right* over backward compatibility; deprecation shims (e.g. the `bulk_update` legacy-`filters` error) are internal migration aids to remove before publish; release-gating decisions carry the [`pre-publish` label](https://github.com/PingoLee/PormG.jl/issues?q=is%3Aopen+label%3Apre-publish) — currently none open, the gate is clear. *(Remove this bullet once published.)*
+- **Commit/push gate — review first:** never run `git commit`, `git push`, or open/update a PR without the user's **explicit approval at that step**. Plan approval (including `ExitPlanMode`) authorizes *implementing* the change, **not** committing it — finish the work, show the diff/summary, and wait for an explicit go-ahead to commit; treat pushing and opening PRs as a *separate* confirmation again. Backlog operations (issue create/edit/close — outward-facing) and docs edits follow the same rule.
 - Use the ORM surface (`M.Model.objects`, fluent terminals). No raw SQL in docs, examples, or integration tests unless the feature requires it.
 - **Julia chains:** multi-line method chains **must** use **trailing-dot** syntax (placing `.` at the end of the previous line to continue) or stay inline — leading-dot lines are a Julia `ParseError`.
 - Parameterized queries only; never interpolate user input into SQL strings.
@@ -45,7 +45,7 @@ rows = M.Result.objects
 | `src/migrations/`, `src/Migrations.jl`, migration CI | `.github/skills/pormg-migrations-development/SKILL.md` |
 | Consuming PormG in a downstream app — setup, queries, examples (no internals) | `.github/skills/pormg-usage/SKILL.md` |
 | Pre-push / pre-PR review | `.github/skills/pormg-changed-code-review/SKILL.md` |
-| Managing the backlog — creating/updating GitHub issues, migrating or syncing the `TODO.md` index | `.github/skills/pormg-issue-management/SKILL.md` |
+| Managing the backlog — creating/updating/closing GitHub issues and curating labels | `.github/skills/pormg-issue-management/SKILL.md` |
 | Tests failing, flaky, or environment-dependent (pool exhaustion, PG/SQLite divergence, fixture isolation) | `.github/skills/pormg-test-troubleshooting/SKILL.md` |
 
 Cross-cutting changes: public-API skill + the most specific subsystem skill. Reviews: review skill only — **except doc-content reviews** ("review the doc/examples in …"), which read the review skill **and** the public-API skill, so the live-database example-verification recipe applies.
@@ -71,7 +71,7 @@ The subsystem map below is also the review **architecture checkpoint**: when a n
 
 - Run the narrowest relevant test slice first; broaden only after green.
 - PostgreSQL integration: `db_2`. SQLite: `PORMG_DB="db_sl"`.
-- Docs: `julia --project=. docs/make.jl`
+- Docs: `julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'` (the main project env has no Documenter — `--project=.` fails)
 
 ## Tool notes
 

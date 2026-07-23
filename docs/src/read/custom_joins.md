@@ -210,8 +210,8 @@ df = M.Result.objects.
 
 With the default `LEFT` semantics, all three `Result` rows remain, but only the matching reverse rows are attached. If you want only the matched base rows, switch to `join_type="INNER"` on the same `on()` call.
 
-> [!TIP]
-> **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on("test_deletion", "just_a_nested_roll_back__description" => "nested-value")` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
+!!! tip
+    **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on("test_deletion", "just_a_nested_roll_back__description" => "nested-value")` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
 
 ### Contract of `on()`
 

@@ -6,18 +6,18 @@ PormG provides a Django-inspired ORM for Julia with an async-first architecture.
 
 ---
 
-## Query Builder: Functor API
+## Query Builder: Fluent API
 
 PormG uses a Django-style, object-oriented query builder. All database operations start from `Model.objects` and are chained using methods that either modify the query or execute it.
 
 ```julia
-# The general pattern
-results = M.Driver.objects
-    .filter("nationality" => "Brazilian")
-    .values("forename", "surname")
-    .order_by("surname")
-    .limit(10)
-    .list()
+# The general pattern (trailing-dot chain — a leading dot on the next line is a ParseError)
+results = M.Driver.objects.
+    filter("nationality" => "Brazilian").
+    values("forename", "surname").
+    order_by("surname").
+    limit(10).
+    list()
 ```
 
 ### Chainable Methods
@@ -37,12 +37,12 @@ These methods modify the query builder and return the handler for further chaini
 
 See also: [`.cjoin()`](#cjoin) for custom join definitions and [`.with()`](#with-common-table-expressions) for CTEs.
 
-> [!IMPORTANT]
-> Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution.
-> A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with
-> `ArgumentError: Duplicate variable names`. PormG throws a clear error if you forget.
-> Use `.values("*", "joined_model__field")` to quickly select all main-table columns
-> plus specific fields from the joined table.
+!!! info "Important"
+    Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution.
+    A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with
+    `ArgumentError: Duplicate variable names`. PormG throws a clear error if you forget.
+    Use `.values("*", "joined_model__field")` to quickly select all main-table columns
+    plus specific fields from the joined table.
 
 ### Terminal Methods
 
@@ -88,11 +88,11 @@ driver.save()
 **Example:**
 
 ```julia
-# Full query chain with DataFrame output
-df = M.Result.objects
-    .filter("driverid__nationality" => "Brazilian", "positionorder" => 1)
-    .values("driverid__forename", "driverid__surname", "raceid__year")
-    .order_by("-raceid__year") |> DataFrame
+# Full query chain with DataFrame output (trailing-dot chain)
+df = M.Result.objects.
+    filter("driverid__nationality" => "Brazilian", "positionorder" => 1).
+    values("driverid__forename", "driverid__surname", "raceid__year").
+    order_by("-raceid__year") |> DataFrame
 
 # Count and existence checks
 n = M.Driver.objects.filter("nationality" => "British").count()
@@ -143,8 +143,8 @@ println(inspection[:operation])  # Automatically detects :select
 println(inspection[:dialect])    # :postgresql or :sqlite
 ```
 
-> [!NOTE]
-> `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string. They do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
+!!! note
+    `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string. They do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
 
 ---
 

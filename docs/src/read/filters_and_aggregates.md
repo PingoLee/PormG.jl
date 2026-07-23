@@ -107,12 +107,12 @@ query.filter("raceid__circuitid__name__@icontains" => "monaco")
 count = query.count()
 ```
 
-> [!NOTE]
-> `@icontains` uses `ILIKE` on PostgreSQL. On SQLite it renders `pormg_lower(col) LIKE pormg_lower(val)`,
-> where `pormg_lower` is a Unicode-aware case-folding function PormG registers on every SQLite
-> connection — so accented text folds case on SQLite as it does on PostgreSQL
-> (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on both backends). It folds case but
-> preserves accents; for accent-insensitive matching use the PostgreSQL-only `@iunaccent_*` lookups below.
+!!! note
+    `@icontains` uses `ILIKE` on PostgreSQL. On SQLite it renders `pormg_lower(col) LIKE pormg_lower(val)`,
+    where `pormg_lower` is a Unicode-aware case-folding function PormG registers on every SQLite
+    connection — so accented text folds case on SQLite as it does on PostgreSQL
+    (`"surname__@icontains" => "RÄIKKÖNEN"` finds `"Räikkönen"` on both backends). It folds case but
+    preserves accents; for accent-insensitive matching use the PostgreSQL-only `@iunaccent_*` lookups below.
 
 ### Prefix / Suffix (`@startswith`, `@endswith`)
 
@@ -151,8 +151,8 @@ M.Driver.objects.filter(Qor(
 ))
 ```
 
-> [!NOTE]
-> `immutable_unaccent(col)` is not sargable without a matching index. For large tables add a `pg_trgm` GIN index (for `@iunaccent_contains`) or a btree on `lower(immutable_unaccent(col))` (for `@iunaccent_exact`) — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions).
+!!! note
+    `immutable_unaccent(col)` is not sargable without a matching index. For large tables add a `pg_trgm` GIN index (for `@iunaccent_contains`) or a btree on `lower(immutable_unaccent(col))` (for `@iunaccent_exact`) — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions).
 
 ---
 
@@ -190,17 +190,17 @@ M.Constructor.objects.values("name", "metadata__principal")
 Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@lt`, `@lte`, and
 `@isnull`. Path lookups also work in `.values(...)` and `.order_by(...)`.
 
-> [!NOTE]
-> Keys must be simple (letters, digits, underscore) or an integer array index — a key with
-> spaces, dots, or quotes is not addressable via the `__` path and raises an `ArgumentError`.
-> Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
-> (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
-> (`"metadata__wins" => 121`) works on both backends.
->
-> A numeric segment is always treated as an **array index**. An object key that is a number
-> (e.g. `{"2024": …}`) is therefore not portably addressable: PostgreSQL's `#>>` may still resolve
-> it as an object key, but SQLite treats `[2024]` as an array subscript and returns nothing —
-> avoid numeric object keys in a `__` path.
+!!! note
+    Keys must be simple (letters, digits, underscore) or an integer array index — a key with
+    spaces, dots, or quotes is not addressable via the `__` path and raises an `ArgumentError`.
+    Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
+    (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
+    (`"metadata__wins" => 121`) works on both backends.
+
+    A numeric segment is always treated as an **array index**. An object key that is a number
+    (e.g. `{"2024": …}`) is therefore not portably addressable: PostgreSQL's `#>>` may still resolve
+    it as an object key, but SQLite treats `[2024]` as an array subscript and returns nothing —
+    avoid numeric object keys in a `__` path.
 
 ### Containment and key-existence operators (PostgreSQL only)
 
@@ -546,8 +546,8 @@ Filters apply to every form:
 M.Result.objects.filter("constructorid" => 1).count("driverid__nationality", distinct=true)
 ```
 
-> [!NOTE]
-> `count("col", distinct=true)` is the scalar, single-query equivalent of the `Count("col", distinct=true)` aggregate used inside [`values()`](#Aggregations-and-Grouping) — reach for the terminal form when you just want the number, and the aggregate form when you want it grouped alongside other columns.
+!!! note
+    `count("col", distinct=true)` is the scalar, single-query equivalent of the `Count("col", distinct=true)` aggregate used inside [`values()`](#Aggregations-and-Grouping) — reach for the terminal form when you just want the number, and the aggregate form when you want it grouped alongside other columns.
 
 ---
 
@@ -587,8 +587,8 @@ GROUP BY 1, 2, 3, 4   -- groups by non-aggregate columns
 
 You do **not** write `GROUP BY` manually — PormG handles it.
 
-> [!TIP]
-> Window functions (`Rank`, `RowNumber`, `Lag`, …) can coexist with aggregates in the same `values()` call. PormG keeps window aliases out of `GROUP BY` automatically. See [Window Functions](window_functions.md).
+!!! tip
+    Window functions (`Rank`, `RowNumber`, `Lag`, …) can coexist with aggregates in the same `values()` call. PormG keeps window aliases out of `GROUP BY` automatically. See [Window Functions](window_functions.md).
 
 ### Aggregating Without Grouping
 

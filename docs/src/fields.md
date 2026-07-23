@@ -318,8 +318,8 @@ Press_release = Models.Model(
 pbkdf2_sha256$720000$randomsalt$base64encodedHash
 ```
 
-> [!WARNING]
-> Never assign a plain-text password to a `PasswordField` — the column stores whatever string it is given, verbatim. Hash the password in your application **before** saving.
+!!! warning
+    Never assign a plain-text password to a `PasswordField` — the column stores whatever string it is given, verbatim. Hash the password in your application **before** saving.
 
 ```julia
 # Team member account with password authentication
@@ -913,8 +913,8 @@ driver_rows = manager.all().values("surname", "nationality").list()
 
 Use `through=Existing_model` when the relationship table has extra fields, such as the season when a driver was added to a collection. In that case PormG treats the through model as a normal model and does not auto-generate a join table.
 
-> [!WARNING]
-> **Django-Style Strict Mutators**: If the custom `through` model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (`add!`, `remove!`, `clear!`, and `set!`) will raise an `ArgumentError`. Create or delete custom through model objects directly using the through model's objects manager instead.
+!!! warning
+    **Django-Style Strict Mutators**: If the custom `through` model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (`add!`, `remove!`, `clear!`, and `set!`) will raise an `ArgumentError`. Create or delete custom through model objects directly using the through model's objects manager instead.
 
 ---
 

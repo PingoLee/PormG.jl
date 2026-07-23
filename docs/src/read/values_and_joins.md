@@ -66,8 +66,8 @@ FROM "result" as "Tb"
 WHERE "Tb_3"."status" = $1
 ```
 
-> [!NOTE]
-> PormG uses table aliases (`Tb`, `Tb_1`, `Tb_2`, …) automatically. You never need to manage aliases yourself. Each joined table gets a sequential alias.
+!!! note
+    PormG uses table aliases (`Tb`, `Tb_1`, `Tb_2`, …) automatically. You never need to manage aliases yourself. Each joined table gets a sequential alias.
 
 ---
 
@@ -160,8 +160,8 @@ df = query |> DataFrame
 
 This selects every column from `Result` plus `surname` and `forename` from the joined `Driver` table.
 
-> [!IMPORTANT]
-> Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution. A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with `ArgumentError: Duplicate variable names`. Use `.values("*", "joined__field")` to safely include joined columns.
+!!! info "Important"
+    Queries that use `.cjoin()` **must** call `.values(...)` explicitly before execution. A bare `SELECT *` across joined tables causes `DataFrames.jl` to crash with `ArgumentError: Duplicate variable names`. Use `.values("*", "joined__field")` to safely include joined columns.
 
 ---
 
@@ -233,11 +233,11 @@ df = M.Driver.objects.filter("driverref" => "hamilton").
 # PostgreSQL would fold these to lowercase without quoting
 ```
 
-> [!NOTE]
-> Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases containing spaces, punctuation, or other special characters throw an `ArgumentError` at query-build time.
+!!! note
+    Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases containing spaces, punctuation, or other special characters throw an `ArgumentError` at query-build time.
 
-> [!TIP]
-> Aliasing happens at the SQL level (`SELECT "field" AS "alias"`). This is more efficient than renaming columns in a Julia DataFrame after the query.
+!!! tip
+    Aliasing happens at the SQL level (`SELECT "field" AS "alias"`). This is more efficient than renaming columns in a Julia DataFrame after the query.
 
 ---
 

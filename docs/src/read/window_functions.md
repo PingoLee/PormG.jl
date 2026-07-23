@@ -2,8 +2,8 @@
 
 Window functions compute values over a sliding frame of rows without collapsing them the way `GROUP BY` aggregates do. Each row keeps its identity in the result while gaining an extra computed column derived from its surrounding rows.
 
-> [!NOTE]
-> **For Django users:** PormG's `WindowOver` / `Rank` / `Lag` / … mirror Django's `Window(expression, partition_by=..., order_by=...)` API. The main difference is that PormG passes the `WindowSpec` directly to the function constructor rather than wrapping it in a separate `Window()` call.
+!!! note
+    **For Django users:** PormG's `WindowOver` / `Rank` / `Lag` / … mirror Django's `Window(expression, partition_by=..., order_by=...)` API. The main difference is that PormG passes the `WindowSpec` directly to the function constructor rather than wrapping it in a separate `Window()` call.
 
 ---
 
@@ -99,8 +99,8 @@ ORDER BY "raceid" ASC,
   "race_rank" ASC
 ```
 
-> [!NOTE]
-> `?` placeholders are SQLite syntax. On PostgreSQL the same query uses `$1`, `$2`, `$3`.
+!!! note
+    `?` placeholders are SQLite syntax. On PostgreSQL the same query uses `$1`, `$2`, `$3`.
 
 ---
 
@@ -269,8 +269,8 @@ ORDER BY "positionorder" ASC
 
 Notice: **no `PARTITION BY`** in the `OVER` clause. That is the global-frame pattern.
 
-> [!TIP]
-> The primary use for a fully empty frame (`WindowOver()`) is **aggregate window functions** such as `SUM(...) OVER ()` or `AVG(...) OVER ()` — broadcasting a total or average to every row. These are not yet implemented in PormG. Use a CTE to achieve the same result for now.
+!!! tip
+    The primary use for a fully empty frame (`WindowOver()`) is **aggregate window functions** such as `SUM(...) OVER ()` or `AVG(...) OVER ()` — broadcasting a total or average to every row. These are not yet implemented in PormG. Use a CTE to achieve the same result for now.
 
 ### Summary
 
@@ -375,8 +375,8 @@ WHERE "Tb"."raceid" = $1
 ORDER BY "constructorid" ASC, "positionorder" ASC
 ```
 
-> [!WARNING]
-> Explicit frame strings are PostgreSQL-only. Passing `frame=` on a SQLite connection throws `ArgumentError` with a helpful message.
+!!! warning
+    Explicit frame strings are PostgreSQL-only. Passing `frame=` on a SQLite connection throws `ArgumentError` with a helpful message.
 
 **Frame unit — `ROWS` vs `RANGE`**
 
@@ -460,8 +460,8 @@ The three tie-handling strategies are now clearly visible:
 - **`DenseRank`** — shared rank, no gap. Berger gets rank 4, not 5.
 - **`RowNumber`** — always unique, even for ties. The ordering between tied rows (`Piquet=3` vs `Patrese=4`) is **non-deterministic** unless you add a tiebreaker column to the window `order_by`.
 
-> [!TIP]
-> To make `RowNumber` deterministic for tied rows, add a unique column as a secondary sort: `WindowOver(partition_by=["raceid"], order_by=["-points", "driverid"])`.
+!!! tip
+    To make `RowNumber` deterministic for tied rows, add a unique column as a secondary sort: `WindowOver(partition_by=["raceid"], order_by=["-points", "driverid"])`.
 
 Generated SQL (SQLite):
 
@@ -537,8 +537,8 @@ WHERE "Tb"."raceid" = $5
 ORDER BY "lap" ASC
 ```
 
-> [!TIP]
-> The `offset` and `default` values are **parameterized** — `$1`/`$3` are the offsets (`1`), `$2`/`$4` are the defaults (`0`). They are never interpolated raw into the SQL string. The `::integer` and `::bigint` casts are PostgreSQL type-inference artefacts; SQLite omits them.
+!!! tip
+    The `offset` and `default` values are **parameterized** — `$1`/`$3` are the offsets (`1`), `$2`/`$4` are the defaults (`0`). They are never interpolated raw into the SQL string. The `::integer` and `::bigint` casts are PostgreSQL type-inference artefacts; SQLite omits them.
 
 ---
 
@@ -608,8 +608,8 @@ FROM "result" as "Tb"
 WHERE "Tb"."raceid" = $1
 ```
 
-> [!NOTE]
-> The `n` argument in `NthValue` is rendered as a **SQL literal integer** — notice `NTH_VALUE(..., 2)` above, not `NTH_VALUE(..., $2)`. PostgreSQL and SQLite do not accept a placeholder in that position.
+!!! note
+    The `n` argument in `NthValue` is rendered as a **SQL literal integer** — notice `NTH_VALUE(..., 2)` above, not `NTH_VALUE(..., $2)`. PostgreSQL and SQLite do not accept a placeholder in that position.
 
 ---
 
@@ -732,8 +732,8 @@ HAVING COUNT("Tb"."resultid") > $3
 
 The second `.filter()` call after `.values()` targets a `Count` alias, so PormG promotes it to a `HAVING` clause rather than a `WHERE` clause.
 
-> [!WARNING]
-> **Semantic trap:** if the window `PARTITION BY` key matches the `GROUP BY` key exactly, each partition holds exactly one row after grouping — making `RANK()` always return `1`. Choose a partition key that differs from the grouping key, or use a subquery / CTE to apply the window after aggregation.
+!!! warning
+    **Semantic trap:** if the window `PARTITION BY` key matches the `GROUP BY` key exactly, each partition holds exactly one row after grouping — making `RANK()` always return `1`. Choose a partition key that differs from the grouping key, or use a subquery / CTE to apply the window after aggregation.
 
 ---
 

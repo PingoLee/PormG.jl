@@ -35,8 +35,8 @@ using Pkg
 Pkg.develop(url="https://github.com/PingoLee/PormG.jl")
 ```
 
-> [!NOTE]
-> Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
+!!! note
+    Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
 
 ### Install a database driver
 
@@ -103,21 +103,21 @@ dev:
     change_data: true    # allow data mutations
 ```
 
-> [!WARNING]
-> **Implicit Defaults & The Omitted `config:` Gotcha:**
-> If the `config:` block is omitted or left empty under an environment, PormG applies strict safety-first defaults:
-> * **`change_db` defaults to `false`**: Database migrations and schema modifications (`makemigrations` / `migrate`) are disabled.
-> * **`change_data` defaults to `false`**: All data modifications (creates, updates, deletes) are disabled at the query layer.
-> * **`time_zone` defaults to `"UTC"`**: Default database timezone.
->
-> To perform migrations or modify data, you **must** explicitly define `config:` and set these settings to `true` in your active environment.
+!!! warning
+    **Implicit Defaults & The Omitted `config:` Gotcha:**
+    If the `config:` block is omitted or left empty under an environment, PormG applies strict safety-first defaults:
+    * **`change_db` defaults to `false`**: Database migrations and schema modifications (`makemigrations` / `migrate`) are disabled.
+    * **`change_data` defaults to `false`**: All data modifications (creates, updates, deletes) are disabled at the query layer.
+    * **`time_zone` defaults to `"UTC"`**: Default database timezone.
+
+    To perform migrations or modify data, you **must** explicitly define `config:` and set these settings to `true` in your active environment.
 
 ### 3. Define Your Models
 
 Create `db/models.jl` with your model definitions. 
 
-> [!NOTE]
-> PormG **preserves the case** you declare field names with: `driverid` stays `driverid` (column `"driverid"`), and field lookups are **case-sensitive** — query a field by the exact case you declared it. The recommended house style is **lowercase snake_case** (PormG's own models use it), so define new fields that way; reserve mixed-case declarations for faithfully mapping existing mixed-case/uppercase columns you don't control.
+!!! note
+    PormG **preserves the case** you declare field names with: `driverid` stays `driverid` (column `"driverid"`), and field lookups are **case-sensitive** — query a field by the exact case you declared it. The recommended house style is **lowercase snake_case** (PormG's own models use it), so define new fields that way; reserve mixed-case declarations for faithfully mapping existing mixed-case/uppercase columns you don't control.
 
 ```julia
 module models
@@ -232,20 +232,20 @@ df = M.Result.objects.filter(
     ).order_by("-wins") |> DataFrame
 ```
 
-> [!IMPORTANT]
-> **Julia Method Chain Syntax Gotcha:** Multi-line method chains must use **trailing-dot** syntax (the `.` must be at the end of the line) or stay completely inline. Placing the dot at the start of the next line (leading-dot syntax) will cause a Julia `ParseError`.
-> 
-> ```julia
-> # ✓ CORRECT: Trailing dot or inline
-> df = M.Driver.objects.
->     filter("nationality" => "Brazilian").
->     list()
-> 
-> # ✗ INCORRECT (ParseError): Leading dot
-> df = M.Driver.objects
->     .filter("nationality" => "Brazilian")
->     .list()
-> ```
+!!! info "Important"
+    **Julia Method Chain Syntax Gotcha:** Multi-line method chains must use **trailing-dot** syntax (the `.` must be at the end of the line) or stay completely inline. Placing the dot at the start of the next line (leading-dot syntax) will cause a Julia `ParseError`.
+
+    ```julia
+    # ✓ CORRECT: Trailing dot or inline
+    df = M.Driver.objects.
+        filter("nationality" => "Brazilian").
+        list()
+
+    # ✗ INCORRECT (ParseError): Leading dot
+    df = M.Driver.objects
+        .filter("nationality" => "Brazilian")
+        .list()
+    ```
 
 ### 8. Update and Delete
 
@@ -281,11 +281,11 @@ PormG is structured into five distinct, decoupled layers, ensuring a clean separ
 
 | Layer | Responsibility | Key Components & Files |
 | :--- | :--- | :--- |
-| **1. Application** | High-level user interface. Developers define models and write fluent queries. | `M.Driver.objects.filter(...)`<br>• [Models.jl](file:///c:/Sistemas/PormG.jl/src/Models.jl) |
-| **2. Query Builder** | Fluent Functor API. Resolves chaining, table joins (`__` notation), and subqueries into an abstract AST. | `filter`, `values`, `order_by`, `cjoin`<br>• [QueryBuilder.jl](file:///c:/Sistemas/PormG.jl/src/QueryBuilder.jl) |
-| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL vs. SQLite translation<br>• [Dialect.jl](file:///c:/Sistemas/PormG.jl/src/Dialect.jl) |
-| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`<br>• [ConnectionPool.jl](file:///c:/Sistemas/PormG.jl/src/ConnectionPool.jl) |
-| **5. Config & Tenants** | Multi-database and multi-tenancy registry. Loads configurations and maps active tenant resolvers. | `load`, `load_many`, `resolver`<br>• [Configuration.jl](file:///c:/Sistemas/PormG.jl/src/Configuration.jl) |
+| **1. Application** | High-level user interface. Developers define models and write fluent queries. | `M.Driver.objects.filter(...)`<br>• [Models.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Models.jl) |
+| **2. Query Builder** | Fluent chaining API. Resolves chaining, table joins (`__` notation), and subqueries into an abstract AST. | `filter`, `values`, `order_by`, `cjoin`<br>• [QueryBuilder.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/QueryBuilder.jl) |
+| **3. Dialect Adapter** | Compiles the abstract query builder AST into vendor-specific, parameterized SQL strings. | PostgreSQL vs. SQLite translation<br>• [Dialect.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Dialect.jl) |
+| **4. Connection Pool** | Async-first execution layer. Manages active connections and non-blocking I/O without blocking the Julia event loop. | `LibPQ.async_execute`, `SQLite.execute`<br>• [ConnectionPool.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/ConnectionPool.jl) |
+| **5. Config & Tenants** | Multi-database and multi-tenancy registry. Loads configurations and maps active tenant resolvers. | `load`, `load_many`, `resolver`<br>• [Configuration.jl](https://github.com/PingoLee/PormG.jl/blob/main/src/Configuration.jl) |
 
 ---
 

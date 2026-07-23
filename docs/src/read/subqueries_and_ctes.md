@@ -28,8 +28,8 @@ SELECT ... FROM "result" as "Tb" ...
 WHERE "Tb"."statusid" IN (SELECT "Tb"."statusid" FROM "status" as "Tb" WHERE "Tb"."status" = $1)
 ```
 
-> [!TIP]
-> Subqueries run entirely on the server — PormG does not materialize the subquery in Julia. This is much more efficient for large datasets.
+!!! tip
+    Subqueries run entirely on the server — PormG does not materialize the subquery in Julia. This is much more efficient for large datasets.
 
 ---
 
@@ -73,8 +73,8 @@ WHERE "Tb"."driverid" IN (
 )
 ```
 
-> [!NOTE]
-> SQL function projections (like `Max`, `Min`, `Count`) compile to inline SQL with no bind parameters. `result[:parameters]` will be empty for such subqueries.
+!!! note
+    SQL function projections (like `Max`, `Min`, `Count`) compile to inline SQL with no bind parameters. `result[:parameters]` will be empty for such subqueries.
 
 ---
 
@@ -435,8 +435,8 @@ query.with("sub" => subq)
 query.filter("statusid__@in" => subq)   # Reuse the subquery in a filter
 ```
 
-> [!TIP]
-> Always provide `join_field` when you want CTE data accessible via `.values()`. Without it, the CTE is emitted but produces no additional projectable columns.
+!!! tip
+    Always provide `join_field` when you want CTE data accessible via `.values()`. Without it, the CTE is emitted but produces no additional projectable columns.
 
 ---
 

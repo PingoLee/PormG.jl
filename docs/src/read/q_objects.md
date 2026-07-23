@@ -283,8 +283,8 @@ df = M.Driver.objects.filter(or_q) |> DataFrame
 df = M.Driver.objects.filter("nationality__@in" => nationalities) |> DataFrame
 ```
 
-> [!TIP]
-> For simple set-membership checks, `@in` is preferred over dynamically building a `Qor`. Use `Qor` when conditions span **different fields** or involve **different operators**.
+!!! tip
+    For simple set-membership checks, `@in` is preferred over dynamically building a `Qor`. Use `Qor` when conditions span **different fields** or involve **different operators**.
 
 ---
 
@@ -299,8 +299,8 @@ df = M.Driver.objects.filter("nationality__@in" => nationalities) |> DataFrame
 | Set membership (`IN`) | `"field__@in" => [values]` |
 | NOT operator | `"field__@ne"` or `"field__@nin"` |
 
-> [!WARNING]
-> PormG does **not** define `|` or `&` operators between Q objects. Use `Qor(...)` for OR logic and `Q(...)` or multiple `filter()` arguments for AND logic.
+!!! warning
+    PormG does **not** define `|` or `&` operators between Q objects. Use `Qor(...)` for OR logic and `Q(...)` or multiple `filter()` arguments for AND logic.
 
 ---
 

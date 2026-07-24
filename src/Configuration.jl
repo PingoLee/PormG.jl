@@ -874,7 +874,13 @@ function __cleanup__()
   for (path, settings) in config
     # Close the registered pool if there is one. `settings.connections` is a PormGBackend pool or nothing.
     if settings.connections isa PormGBackend
-      close_pool!(settings.connections)
+      # Registered as an atexit hook (#203): one bad pool must not abort cleanup of the rest, nor
+      # surface a stray error during process teardown. @debug (not @warn) — at-exit logging stays quiet.
+      try
+        close_pool!(settings.connections)
+      catch e
+        @debug "PormG atexit cleanup: error closing pool for '$path'" exception=e
+      end
     end
   end
 end

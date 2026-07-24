@@ -23,8 +23,6 @@ const TEST_FILE_IDENTIFIER = "_test.jl"
 
 const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"
 
-const PORMG_ENV = ENV["PORMG_ENV"]
-
 # Constants for dealing with datetime in UTC
 const DATETIME_FORMAT = "yyyy-mm-ddTHH:MM:SS.ssszzzz"
 const UTC_TIMEZONE = "UTC"

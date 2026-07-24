@@ -73,10 +73,6 @@ abstract type Migration <: PormGAbstractType end
 
 const config::Dict{String,PormGSettings} = Dict()
 
-if !haskey(ENV, "PORMG_ENV")
-  ENV["PORMG_ENV"] = "dev"
-end
-
 include("constants.jl")
 
 # Backend interface (empty generics + friendly fallbacks); driver bodies live in the
@@ -200,7 +196,12 @@ using .Migrations
 
 include("precompile.jl")
 
-atexit(Configuration.__cleanup__)
-
+function __init__()
+    # Runtime side effects belong in __init__, NOT the module body: with cached precompilation the
+    # module body runs only in the precompile worker, so a top-level `atexit` was never registered at
+    # runtime and connection pools were never closed at process exit — issue #203. See the
+    # "no module-body side effects" non-negotiable in .github/instructions/general.instructions.md.
+    atexit(Configuration.__cleanup__)
+end
 
 end # module PormG

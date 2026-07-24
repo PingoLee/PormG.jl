@@ -42,16 +42,31 @@ driver = M.Driver.objects.create(
     "nationality" => "Brazilian",
     "driverref"   => "senna"
 )
-# Returns Dict with all fields including the new PK
+# Returns a PormGRow (since #166) — the same row object get()/first()/list() return,
+# fully populated (including the new PK) and ready to mutate and save().
+new_id = driver[:driverid]
 ```
 
-### Update matching records
+### Mutate a fetched row and persist with `row.save()`
+`get()`, `first()`, `list()`, and `create()` return `PormGRow` values (and `update_or_create()`
+returns `(row::PormGRow, created::Bool)`). Assigning a field marks it dirty; `save()` writes only
+the changed columns.
 ```julia
-M.Driver.objects.
+driver = M.Driver.objects.get("driverref" => "senna")   # a PormGRow
+driver.nationality = "Brazil"        # dirty-tracked on assignment
+driver.save()                        # UPDATE ... WHERE <pk> = ...; returns the PormGRow
+# save() is a no-op (returns the row unchanged) when nothing was mutated.
+# Inspect without executing: driver.save(show_query=:sql)
+```
+
+### Update matching records (queryset)
+```julia
+n = M.Driver.objects.
     filter("driverid" => 1).
     update("nationality" => "Brazil")
+# Queryset .update() returns the matched-row count (Int), not a row.
 
-# With F-expression (atomic)
+# With F-expression (atomic, at the database)
 M.Result.objects.
     filter("resultid__@in" => [1, 2, 3]).
     update("points" => F("points") * 1.1)
@@ -67,6 +82,22 @@ sql = M.Result.objects.filter("raceid" => 999).delete(show_query=:sql)
 
 # Delete all (requires explicit opt-in to prevent accidents)
 M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+```
+
+## Many-to-Many Relationships
+
+Access a `ManyToMany` field on a fetched row to get a relation manager, then call its
+bang-free methods (`add`/`remove`/`clear`/`set`/`all` — renamed from `add!`/… in 0.3.0).
+Targets may be primary keys or row objects. (The example assumes the model declares the
+relation — here `Driver` has a `sponsors` `ManyToManyField`.)
+```julia
+driver = M.Driver.objects.get("driverref" => "senna")
+
+driver.sponsors.add(1, 2)                 # link sponsors 1 and 2
+driver.sponsors.remove(2)                 # unlink sponsor 2
+changes = driver.sponsors.set(1, 4, 5)    # replace the whole set → (added=…, removed=…)
+driver.sponsors.clear()                   # unlink all
+rows = driver.sponsors.all() |> DataFrame # query the related rows
 ```
 
 ## Bulk Operations
@@ -112,13 +143,48 @@ end
 
 ## Transactions
 
+Wrap multiple writes so they commit together or all roll back on error. `atomic(db) do … end`
+is the friendly alias of `run_in_transaction`; both take a db-key `String`.
 ```julia
 using PormG
 
-# Wrap multiple operations in a single atomic transaction
-PormG.run_in_transaction("db") do
+atomic("db") do
     M.Race.objects.create("year" => 2025, "name" => "New Race", "date" => today())
     bulk_insert(M.Result.objects, results_df)
 end
-# All operations commit together, or all roll back on error
+# All operations commit together, or all roll back on error.
+```
+
+**Nested `atomic` = SAVEPOINT.** A nested `atomic`/`run_in_transaction` on the same db becomes
+a savepoint (partial rollback), not a second top-level transaction:
+```julia
+atomic("db") do
+    M.Race.objects.create("year" => 2025, "name" => "New Race", "date" => today())
+    try
+        atomic("db") do                       # SAVEPOINT
+            M.Result.objects.create("raceid" => 1, "driverid" => 1, "points" => 25)
+        end                                    # rolls back to the savepoint on error…
+    catch
+        # …leaving the outer Race insert intact; the outer transaction continues.
+    end
+end
+
+# Force a real top-level transaction (throws if one is already active):
+atomic("db"; durable=true) do
+    # ...
+end
+```
+
+**Row locking — `select_for_update()`** (PostgreSQL; silent no-op on SQLite). Chainable; must
+run inside a transaction, and locks the matched rows until COMMIT:
+```julia
+atomic("db") do
+    standing = M.Constructor_standings.objects.
+        filter("constructorid" => 131, "raceid" => 1120).
+        select_for_update().                   # kwargs: nowait, skip_locked, no_key
+        list() |> first
+    M.Constructor_standings.objects.
+        filter("constructorstandingsid" => standing[:constructorstandingsid]).
+        update("points" => standing[:points] + 25)
+end
 ```

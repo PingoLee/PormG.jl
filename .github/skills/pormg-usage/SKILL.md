@@ -21,11 +21,11 @@ PormG exposes a fluent, expressive query API. Your default posture is:
 This skill is split so the common read/query path stays lean. Read these sibling files **only when the task needs them**:
 
 - **[`reference.md`](reference.md)** — full field-type table, field parameters, and `on_delete` options. Load when *defining models* or choosing a field type.
-- **[`writing.md`](writing.md)** — migrations flow, create/update/delete, bulk insert/copy/update, and transactions. Load when *changing data or schema*.
+- **[`writing.md`](writing.md)** — migrations flow, create/update/delete, the `row.save()` lifecycle, many-to-many managers, bulk insert/copy/update, and transactions (`atomic`/savepoints/`select_for_update`). Load when *changing data or schema*.
 
 > Building a **package on top of** PormG (extension hooks like `register_ignore_tables!`, `set_before_connect_hook`, the package-extension pattern)? That's a framework-author topic — see `docs/src/extending.md`, not this skill.
 
-Everything below covers setup and the read/query surface.
+Everything below covers setup, the read/query surface, and a summary of the write path (full detail in `writing.md`).
 
 ---
 
@@ -147,9 +147,40 @@ df   = query |> DataFrame   # DataFrames.DataFrame
 | `.list(:json)` | `String` | Results as JSON string. |
 | `query \|> DataFrame` | `DataFrame` | Tabular output. |
 | `.first()` | `PormGRow` or `nothing` | First matching row. |
-| `.get(filters...)` | `PormGRow` | Exactly one matching row, or a typed exception. |
+| `.get(filters...)` | `PormGRow` | Exactly one matching row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
 | `.count()` | `Int` | `SELECT COUNT(*)`. |
 | `.exists()` | `Bool` | True if any rows match. |
+
+---
+
+## Writing & Mutating Data
+
+Full detail (create/update/delete, bulk ops, transactions) is in [`writing.md`](writing.md); this
+is the at-a-glance surface so you don't reach for a stale pattern.
+
+**Row lifecycle.** `create()`, `get()`, `first()`, and `list()` return `PormGRow` values (not `Dict`
+— changed in #166); `update_or_create()` returns `(row::PormGRow, created::Bool)`. A `PormGRow` is
+dirty-tracked: assign fields, then `save()` writes only the changed columns.
+```julia
+driver = M.Driver.objects.create("forename" => "Ayrton", "surname" => "Senna")  # PormGRow
+driver.nationality = "Brazilian"    # dirty-tracked on assignment
+driver.save()                       # UPDATE ... WHERE <pk>; returns the row (no-op if clean)
+
+# Queryset .update() returns the matched-row count (Int), not a row:
+n = M.Result.objects.filter("raceid" => 1).update("points" => F("points") + 1)
+```
+
+**Many-to-many managers** (bang-free since 0.3.0) — access a `ManyToMany` field declared on the
+model (here `Driver` declares `sponsors`) to get a manager: `driver.sponsors.add(1, 2)`,
+`.remove(2)`, `.set(1, 4, 5)`, `.clear()`, `.all()`.
+
+**Transactions** — `atomic("db") do … end` (friendly alias of `run_in_transaction`); a nested
+`atomic` on the same db is a SAVEPOINT; `atomic("db"; durable=true)` forces a top-level transaction.
+Row locking: `query.select_for_update().list()` (PostgreSQL only; must run inside a transaction;
+silent no-op on SQLite).
+
+**`get()` exceptions** — `get()` raises `PormG.DoesNotExist` when nothing matches and
+`PormG.MultipleObjectsReturned` when more than one row matches. Catch them to handle lookups.
 
 ---
 

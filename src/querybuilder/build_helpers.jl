@@ -378,50 +378,6 @@ function _check_filter(x::Pair)
   end
 end
 
-# does this obsolet?
-function _get_join_query(array::Vector{String}; array_store::Vector{String}=String[])
-  array = copy(array)
-  for i in 1:size(array, 1)
-    for (k, value) in PormGsuffix
-      if endswith(array[i], k)
-        array[i] = array[i][1:end-length(k)]
-      end
-    end
-    for (k, value) in PormGtransform
-      if endswith(array[i], k)
-        array[i] = array[i][1:end-length(k)]
-      end
-    end
-  end
-
-  # how join to Vector
-  append!(array_store, array)
-  unique!(array_store)
-  return array_store
-end
-
-function _get_join_query(x::Tuple{Pair{String,Integer},Vararg{Pair{String,Integer}}}; array_store::Vector{String}=String[])
-  array = String[]
-  for (k, v) in x
-    push!(array, k)
-  end
-  _get_join_query(array, array_store=array_store)
-end
-function _get_join_query(x::Tuple{String,Vararg{String}}; array_store::Vector{String}=String[])
-  array = String[]
-  for v in x
-    push!(array, v)
-  end
-  _get_join_query(array, array_store=array_store)
-end
-function _get_join_query(x::Dict{String,Union{Integer,String}}; array_store::Vector{String}=String[])
-  array = String[]
-  for (k, v) in x
-    push!(array, k)
-  end
-  _get_join_query(array, array_store=array_store)
-end
-
 function _get_alias_name(df::DataFrames.DataFrame, alias::String)
   array = vcat(df.alias_a, df.alias_b)
   count = 1

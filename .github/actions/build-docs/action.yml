@@ -1,0 +1,43 @@
+name: Build PormG docs
+description: >-
+  Set up the docs environment and build the Documenter site, optionally
+  deploying it. Shared by Documentation.yml (/dev) and DocumentationRelease.yml
+  (/stable) so the build sequence lives in exactly one place.
+
+inputs:
+  deploy:
+    description: "'true' to run deploydocs after the build (needs the secrets below); 'false' to build only."
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GITHUB_TOKEN, used by deploydocs. Ignored when deploy is false.'
+    required: false
+    default: ''
+  documenter-key:
+    description: 'DOCUMENTER_KEY (SSH deploy key), used by deploydocs. Ignored when deploy is false.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # NOTE: the calling workflow must run actions/checkout BEFORE this action so
+    # the local action file and the repo sources are already on disk.
+    - uses: julia-actions/setup-julia@v2
+      with:
+        version: '1'
+    - uses: julia-actions/cache@v2
+    - name: Configure doc environment
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+    - name: Build docs
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        # Secrets are only materialised for a deploy build; plain builds (PRs)
+        # get empty strings, so the deploy key is never present on a non-deploy run.
+        GITHUB_TOKEN: ${{ inputs.deploy == 'true' && inputs.github-token || '' }}
+        DOCUMENTER_KEY: ${{ inputs.deploy == 'true' && inputs.documenter-key || '' }}
+        DOCS_DEPLOY: ${{ inputs.deploy }}
+      run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'

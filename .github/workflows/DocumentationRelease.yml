@@ -1,0 +1,25 @@
+name: Documentation (release)
+
+# Deploys the /stable docs for a release tag. Split out from Documentation.yml
+# because a push trigger's paths filter applies to tag pushes too, so a TagBot
+# tag whose commit doesn't touch docs/** would otherwise be filtered out and
+# /stable would never rebuild. No paths filter here: every tag builds + deploys.
+# `deploydocs` reads the git ref and routes a tag to /stable.
+on:
+  push:
+    tags: '*'
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      pages: write
+      statuses: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-docs
+        with:
+          deploy: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          documenter-key: ${{ secrets.DOCUMENTER_KEY }}

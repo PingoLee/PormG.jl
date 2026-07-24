@@ -59,17 +59,19 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
-## Unreleased — next `0.3.0`
+## Unreleased — next `0.4.0`
 
 _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD is running these,
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
-consuming app, `/pormg-cut-release` stamps every entry below with `0.3.0`, dates them, and tags it._
+consuming app, `/pormg-cut-release` stamps every entry below with `0.4.0`, dates them, and tags it._
 
 ---
 
+## 0.3.0 — 2026-07-24
+
 ## Query-builder errors are a typed `PormGError` taxonomy — stop catching `ArgumentError` (#231)
 
-- **Version**: Unreleased
+- **Version**: 0.3.0
 - **PormG ref**: issue #231 ; `src/PormG.jl` (abstract root + exports), `src/querybuilder/exceptions.jl`
   (subtypes + `showerror` + `_write_not_allowed`), the throw sites across `src/querybuilder/*.jl`,
   `docs/src/api.md`
@@ -136,7 +138,7 @@ end
 
 ## `connection.yml` env selection: `env:` → `default_env:`; `load()` fails loud on a missing config (#205)
 
-- **Version**: Unreleased
+- **Version**: 0.3.0
 - **PormG ref**: issue #205 ; `src/Configuration.jl`, `src/Generator.jl`,
   `src/querybuilder/{exceptions,execution,execution_bulk,many_to_many,deletion}.jl`,
   `README.md`, `docs/src/{index,configuration/connection_yml,configuration/setup}.md`
@@ -202,7 +204,7 @@ environments. `default_env:` is a convenience for scripts/single-env apps.
 
 ## Public naming settled — ToChar, formatter, aggregate, M2M `add`/`remove`/`clear`/`set`, setup unexported (#201)
 
-- **Version**: Unreleased
+- **Version**: 0.3.0
 - **PormG ref**: issue #201 ; `src/querybuilder/{functions,types,many_to_many}.jl`, `src/models/fields.jl`,
   `src/PormG.jl` exports, `docs/src/{api,many_to_many,import_django}.md`
 - **Recorded**: 2026-07-24
@@ -240,7 +242,7 @@ the `PormG.` prefix — `PormG.setup()` calls keep working as-is.
 
 ## `PormG.QueryBuilder` export prune — `query`/`update`/`page` no longer dumped; `OP` internal; `With` import-only (#202)
 
-- **Version**: Unreleased
+- **Version**: 0.3.0
 - **PormG ref**: issue #202 (follow-up to #35) ; `src/QueryBuilder.jl`, `src/documentation/querybuilder.jl`, `docs/src/{api,read/subqueries_and_ctes}.md`
 - **Recorded**: 2026-07-25
 - **Severity**: **breaking (submodule export surface)** — affects only code that does a **bare**
@@ -286,7 +288,7 @@ Apps that use only the top-level `using PormG` surface, or the fluent `.page()` 
 
 ## Removed `Base.first` type piracy — curried `first(; kwargs…)` form (#200)
 
-- **Version**: Unreleased
+- **Version**: 0.3.0
 - **PormG ref**: issue #200 ; `src/querybuilder/execution.jl`
 - **Recorded**: 2026-07-24
 - **Severity**: **breaking (method removal)** — but the removed form was undocumented, unexported, and

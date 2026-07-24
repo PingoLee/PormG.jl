@@ -20,11 +20,11 @@ function _normalize_bulk_columns(columns)
       elseif column isa Pair{String, String}
         push!(_columns, column)
       else
-        throw(ArgumentError("Invalid column specification: $column"))
+        throw(QueryBuildError("Invalid column specification: $column"))
       end
     end
   else
-    throw(ArgumentError("Invalid columns argument: $columns"))
+    throw(QueryBuildError("Invalid columns argument: $columns"))
   end
   return _columns
 end
@@ -48,19 +48,19 @@ function _normalize_bulk_match_on(match_on)::Vector{String}
   elseif match_on isa AbstractString
     push!(_match_on, match_on)
   elseif match_on isa Pair
-    throw(ArgumentError(_match_on_pair_migration_msg(match_on)))
+    throw(QueryBuildError(_match_on_pair_migration_msg(match_on)))
   elseif match_on isa Vector
     for key in match_on
       if key isa AbstractString
         push!(_match_on, key)
       elseif key isa Pair
-        throw(ArgumentError(_match_on_pair_migration_msg(key)))
+        throw(QueryBuildError(_match_on_pair_migration_msg(key)))
       else
-        throw(ArgumentError("Invalid match_on specification: $key"))
+        throw(QueryBuildError("Invalid match_on specification: $key"))
       end
     end
   else
-    throw(ArgumentError("Invalid match_on argument: $match_on"))
+    throw(QueryBuildError("Invalid match_on argument: $match_on"))
   end
   return _match_on
 end
@@ -106,11 +106,11 @@ function _normalize_bulk_filters(filters)
       if f isa Union{String, Pair{String, <:Any}}
         push!(_filters, f)
       else
-        throw(ArgumentError("Invalid filter specification: $f"))
+        throw(QueryBuildError("Invalid filter specification: $f"))
       end
     end
   else
-    throw(ArgumentError("Invalid filters argument: $filters"))
+    throw(QueryBuildError("Invalid filters argument: $filters"))
   end
   return _filters
 end
@@ -172,7 +172,7 @@ it is blank (`missing`, `nothing`, or an empty string), ids are reserved from th
 
 If the column contains **mixed** values—some rows have explicit pk values and some are
 blank—a `@warn` is emitted and the DataFrame is still returned unchanged. The blank rows
-are left as-is and will raise an `ArgumentError` when `bulk_insert` is called. To resolve
+are left as-is and will raise a `QueryBuildError` when `bulk_insert` is called. To resolve
 this you can: (1) provide a pk value for every row, (2) remove the pk column so all ids
 are allocated automatically, or (3) pre-fill the blank rows before calling this function.
 
@@ -254,7 +254,7 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
   isempty(pk_fields) && return df
 
   if length(pk_fields) > 1
-    throw(ArgumentError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
+    throw(QueryBuildError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
   end
 
   pk_field = pk_fields[1]
@@ -268,7 +268,7 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
       if has_blank
         n_blank = count(_is_blank_bulk_primary_key_value, col)
         @warn "allocate_primary_keys: column '$pk_field' in model $(model.name) has mixed values — $n_blank blank row(s) alongside explicit pk values. " *
-              "The DataFrame is returned unchanged. Those blank rows will raise an ArgumentError at bulk_insert time. " *
+              "The DataFrame is returned unchanged. Those blank rows will raise a QueryBuildError at bulk_insert time. " *
               "Options: (1) supply a pk value for every row, (2) remove the column so all ids are allocated automatically, " *
               "or (3) pre-fill the blank rows before calling allocate_primary_keys."
       end
@@ -291,7 +291,7 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
       end
     end
   else
-    throw(ArgumentError("allocate_primary_keys: unsupported connection type $(typeof(connection))"))
+    throw(UnsupportedConnectionError("allocate_primary_keys: unsupported connection type $(typeof(connection))"))
   end
 
   df[!, pk_field] = ids
@@ -306,7 +306,7 @@ function _single_auto_generated_primary_key(model::PormGModel)
   isempty(pk_fields) && return nothing
 
   if length(pk_fields) > 1
-    throw(ArgumentError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
+    throw(QueryBuildError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
   end
 
   return pk_fields[1]
@@ -457,9 +457,9 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
           # consistent with the string/auto-detect/match_on paths above.
           candidates = _case_fold_candidates(column.first, names(df))
           isempty(candidates) ||
-            throw(_argerr(_bulk_case_mismatch_msg(operation, column.first, candidates,
+            throw(UnknownFieldError(_bulk_case_mismatch_msg(operation, column.first, candidates,
               "\"$(candidates[1])\" => \"$(column.second)\"")))
-          throw(_argerr("Error in bulk_$(operation), the column \e[4m\e[31m$(column.first)\e[0m mapped to field \e[4m\e[31m$(column.second)\e[0m is not in the DataFrame; available columns: \e[4m\e[32m$(names(df))\e[0m"))
+          throw(UnknownFieldError("Error in bulk_$(operation), the column \e[4m\e[31m$(column.first)\e[0m mapped to field \e[4m\e[31m$(column.second)\e[0m is not in the DataFrame; available columns: \e[4m\e[32m$(names(df))\e[0m"))
         end
       else
         # String column: match the DataFrame column name EXACTLY (case-sensitive).
@@ -471,7 +471,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
           # silently case-folding (see the case-sensitive matching contract above).
           candidates = _case_fold_candidates(column, names(df))
           isempty(candidates) ||
-            throw(_argerr(_bulk_case_mismatch_msg(operation, column, candidates,
+            throw(UnknownFieldError(_bulk_case_mismatch_msg(operation, column, candidates,
               "\"$(candidates[1])\" => \"$(column)\"")))
           # Truly absent — it may be an auto-populated field added later (e.g. updated_at).
           push!(fields_df, column)
@@ -489,7 +489,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       else
         candidates = _case_fold_candidates(col_name, fields)
         isempty(candidates) ||
-          throw(_argerr(_bulk_case_mismatch_msg(operation, col_name, candidates,
+          throw(UnknownFieldError(_bulk_case_mismatch_msg(operation, col_name, candidates,
             "\"$(col_name)\" => \"$(candidates[1])\"")))
       end
     end
@@ -533,7 +533,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         elseif f_meta.primary_key
           # It's a PK, we'll collect it later
         elseif !f_meta.null && operation in [:insert, :copy]
-          throw(_argerr("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m does not allow null and has no default value"))
+          throw(InvalidValueError("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m does not allow null and has no default value"))
         end
       end
 
@@ -566,7 +566,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   
   # Final sanity check for fields_df existence in model
   for field in fields_df
-    in(field, fields) || throw(_argerr("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m"))
+    in(field, fields) || throw(UnknownFieldError("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(model.name)\e[0m"))
   end
 
   # Return fields_df cleaned up (unique and existing in mapping)
@@ -586,7 +586,7 @@ function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
     key = Tuple(row[mapping[field]] for field in dynamic_filters)
     if haskey(seen_keys, key)
       filters_text = join(dynamic_filters, ", ")
-      throw(ArgumentError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index): $(collect(key))"))
+      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index): $(collect(key))"))
     end
     seen_keys[key] = index
   end
@@ -608,7 +608,7 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   kind::String="match_on")
 
   field in model.field_names ||
-    throw(_argerr("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
+    throw(UnknownFieldError("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
 
   resolved = if haskey(mapping, field)
     # `columns=` mapping wins. If the df ALSO carries a column named exactly like the
@@ -624,9 +624,9 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
     # loud error, not a silent fold (see the case-sensitive matching contract above).
     candidates = _case_fold_candidates(field, names(df))
     isempty(candidates) ||
-      throw(_argerr(_bulk_case_mismatch_msg(:update, field, candidates,
+      throw(UnknownFieldError(_bulk_case_mismatch_msg(:update, field, candidates,
         "columns = [..., \"$(candidates[1])\" => \"$(field)\"]")))
-    throw(_argerr("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: $(names(df))) and no columns= mapping targets that field"))
+    throw(UnknownFieldError("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: $(names(df))) and no columns= mapping targets that field"))
   end
 
   mapping[field] = resolved
@@ -718,17 +718,17 @@ function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
     # Only meaningful when match_on is absent: turn the old dynamic-in-`filters`
     # usage into an actionable migration error instead of the generic one.
     if !match_on_given && _is_legacy_dynamic_filter(f, df, model)
-      throw(ArgumentError(_bulk_update_migration_msg(f)))
+      throw(QueryBuildError(_bulk_update_migration_msg(f)))
     end
     # ── end shim ───────────────────────────────────────────────────────────────
 
-    f isa Pair || throw(ArgumentError(_bulk_update_static_only_msg(f)))
+    f isa Pair || throw(QueryBuildError(_bulk_update_static_only_msg(f)))
     push!(static_filters, f.first => f.second)
   end
 
   # Fallback: nothing to match on => use the model primary key(s)
   if isempty(dynamic_filters)
-    isempty(pks) && throw(ArgumentError(
+    isempty(pks) && throw(QueryBuildError(
       "bulk_update: no match_on= given and model $(model.name) has no primary key to match on"))
     for pk in pks
       _resolve_match_column!(df, model, mapping, fields_df, dynamic_filters, pk; kind="primary key")
@@ -982,7 +982,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
 
-  !(connection isa PormGPostgres) && throw(ArgumentError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
+  !(connection isa PormGPostgres) && throw(UnsupportedConnectionError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))
@@ -1080,7 +1080,7 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     try
       model.fields[field].formatter(row[col_name])
     catch e
-      throw(_argerr("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
+      throw(InvalidValueError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
     end
   end  
 end
@@ -1141,7 +1141,7 @@ function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vecto
       throw(_argerr("Error in bulk_insert, on_conflict $kind has duplicate column entries"))
     for col in cols
       haskey(model.fields, col) ||
-        throw(_argerr("Error in bulk_insert, on_conflict $kind column $(col) is not a field of " *
+        throw(UnknownFieldError("Error in bulk_insert, on_conflict $kind column $(col) is not a field of " *
           "model $(model.name)"))
       kind === :set && !(col in insert_cols) &&
         throw(_argerr("Error in bulk_insert, on_conflict set column $(col) does not participate " *

@@ -224,8 +224,8 @@ end
     @test quote_identifier("localização", nothing) == "\"localização\""
     
     # Test malicious identifiers are rejected instead of silently rewritten
-    @test_throws ArgumentError quote_identifier("field'; DROP TABLE users; --", nothing)
-    @test_throws ArgumentError quote_identifier("field OR 1=1", nothing)
+    @test_throws PormGError quote_identifier("field'; DROP TABLE users; --", nothing)
+    @test_throws PormGError quote_identifier("field OR 1=1", nothing)
     
     # Test table name sanitization
     @test safe_table_identifier("users", nothing) == "\"users\""
@@ -315,7 +315,7 @@ end
         query.filter(bad_filter => 1)
         @test false # Should not reach here
       catch e
-        @test e isa ArgumentError
+        @test e isa PormGError
         @test occursin("is invalid;", e.msg)
       end
     end
@@ -327,16 +327,16 @@ end
     import PormG.QueryBuilder: quote_identifier
     
     # Empty identifier
-    @test_throws ArgumentError quote_identifier("", nothing)
+    @test_throws PormGError quote_identifier("", nothing)
     
     # Double quotes inside (attempt to break the identifier)
-    @test_throws ArgumentError quote_identifier("column\"name", nothing)
+    @test_throws PormGError quote_identifier("column\"name", nothing)
     
     # SQL comments
-    @test_throws ArgumentError quote_identifier("admin--", nothing)
+    @test_throws PormGError quote_identifier("admin--", nothing)
     
     # Whitespace is not part of PormG's identifier contract.
-    @test_throws ArgumentError quote_identifier("user name", nothing)
+    @test_throws PormGError quote_identifier("user name", nothing)
   end
 
 

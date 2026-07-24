@@ -108,7 +108,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
     q = JO.Json_op_scratch.objects
     q.filter("name__@has_key" => "x")          # `name` is a CharField
     q.values("id")
-    @test_throws ArgumentError _pg(q)
+    @test_throws PormGError _pg(q)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
     q = JO.Json_op_scratch.objects
     q.filter("payload__meta__@has_key" => "x")
     q.values("id")
-    @test_throws ArgumentError _pg(q)
+    @test_throws PormGError _pg(q)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
       q = JO.Json_op_scratch.objects
       q.filter("payload__@$(suffix)" => "single")   # scalar, not a vector
       q.values("id")
-      @test_throws ArgumentError _pg(q)
+      @test_throws PormGError _pg(q)
     end
   end
 

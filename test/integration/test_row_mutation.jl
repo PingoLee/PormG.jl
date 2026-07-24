@@ -28,14 +28,14 @@ end
     @test :positiontext in row._dirty
 
     # Wrong-case assignment misses the lowercase-declared field (no silent normalization).
-    @test_throws ArgumentError (row.positionText = "x")
+    @test_throws PormGError (row.positionText = "x")
 
-    @test_throws ArgumentError (row.unknownField = 1)
-    @test_throws ArgumentError (row.badFk__name = "x")
+    @test_throws PormGError (row.unknownField = 1)
+    @test_throws PormGError (row.badFk__name = "x")
 
     # Primary-key mutation is rejected (driverid is Driver's PK).
     driver = M.Driver.objects.get("driverref" => "hamilton")
-    @test_throws ArgumentError (driver.driverid = driver.driverid + 1)
+    @test_throws PormGError (driver.driverid = driver.driverid + 1)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ end
         ).get()
         race_row.required_parent_id = parent[:id]
         race_row.required_parent_id__label = "race_guard_$(uuid4())"
-        @test_throws ArgumentError race_row.save()
+        @test_throws PormGError race_row.save()
     finally
         if payload !== nothing
             M.Bulk_update_payload_scratch.objects.filter("id" => payload[:id]).delete()
@@ -142,7 +142,7 @@ end
 @testset "PormGRow unsupported save targets" begin
     keyless = M.Lap_times.objects.values("raceid", "driverid", "lap", "position").limit(1).first()
     keyless.position = keyless.position
-    @test_throws ArgumentError keyless.save()
+    @test_throws PormGError keyless.save()
 
     multi_pk_model = Models.Model("row_mutation_multi_pk_scratch",
         firstid = Models.IDField(),
@@ -151,7 +151,7 @@ end
     )
     multi_pk_row = PormGRow(Dict(:firstid => 1, :secondid => 2, :label => "before"), multi_pk_model)
     multi_pk_row.label = "after"
-    @test_throws ArgumentError multi_pk_row.save()
+    @test_throws PormGError multi_pk_row.save()
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,5 +185,5 @@ end
 
     # save() must detect pk_field === nothing and throw ArgumentError
     # instead of building a filter on the literal string "nothing".
-    @test_throws ArgumentError row.save()
+    @test_throws PormGError row.save()
 end

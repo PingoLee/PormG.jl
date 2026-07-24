@@ -11,7 +11,7 @@ function _determine_join_type(field::PormGField; previus_how::Union{String, Noth
     if second_fild_name !== nothing
       _check_if_field_is_a_operator(second_fild_name)
     end
-    throw(ArgumentError("The field '$(field)' does not have a 'how' property"))
+    throw(QueryBuildError("The field '$(field)' does not have a 'how' property"))
   elseif field.how !== nothing && !isempty(field.how)
     return _normalize_join_type(field.how)
   end
@@ -87,7 +87,7 @@ function _resolve_django_join_field(model::PormGModel, field_name::String, instr
     # The field exists directly. Reject the explicit "_id" FK form (callers must use the short form).
     if endswith(field_name, "_id") && hasfield(typeof(field), :to)
       short_name = field_name[1:end-3]
-      throw(ArgumentError("In Django-style join paths use '$(short_name)__...' instead of '$(field_name)__...'."))
+      throw(QueryBuildError("In Django-style join paths use '$(short_name)__...' instead of '$(field_name)__...'."))
     end
     return field_name
   end
@@ -118,7 +118,7 @@ function _resolve_m2m_side_model(_module::Module, binding::String, model_name::S
     Models.format_model_name(model.name) == target_name && return model
   end
 
-  throw(ArgumentError("The many-to-many model $(binding) for accessor $(field_name) is not defined"))
+  throw(QueryBuildError("The many-to-many model $(binding) for accessor $(field_name) is not defined"))
 end
 
 function _resolve_many_to_many_related_model(_module::Module, relation::Models.ManyToManyRelation)::PormGModel
@@ -170,7 +170,7 @@ function _row_join_for_alias(row_join::Vector{Dict{String, Union{String, Vector{
   for row in row_join
     row["alias_b"] == alias && return row
   end
-  throw(ArgumentError("Internal error: join alias $(alias) was not found in row_join"))
+  error(_emsg("PormG internal error: join alias $(alias) was not found in row_join — this should not happen; please report it."))
 end
 
 # Shared helper used at the four sites in `_build_row_join` where a many-to-many
@@ -212,7 +212,7 @@ function _validate_json_key_segments(segments::Vector{String})::Vector{String}
     if occursin(r"^\d+$", seg) || occursin(SAFE_IDENTIFIER_PATTERN, seg)
       continue
     end
-    throw(_argerr("Invalid JSON key segment \e[31m$(seg)\e[0m in a JSON path lookup. Segments must be a non-negative integer (array index) or a simple key (letters, digits, underscore). Keys with spaces, dots, or quotes are not addressable via the `__` path syntax."))
+    throw(InvalidValueError("Invalid JSON key segment \e[31m$(seg)\e[0m in a JSON path lookup. Segments must be a non-negative integer (array index) or a simple key (letters, digits, underscore). Keys with spaces, dots, or quotes are not addressable via the `__` path syntax."))
   end
   return segments
 end
@@ -262,7 +262,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     cte_name = vector[1]
     cte_dict = instruct.object.ctes[cte_name]
     if !haskey(cte_dict, "model")
-      throw(ArgumentError("Internal error: CTE $(cte_name) has not been materialized yet"))
+      error(_emsg("PormG internal error: CTE $(cte_name) has not been materialized yet — this should not happen; please report it."))
     end
     cte_model = cte_dict["model"]::PormGModel
     
@@ -277,7 +277,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       # does not apply to a CROSS JOIN (INNER-like by nature).
       if !haskey(cte_model.fields, vector[2])
         available = join(collect(keys(cte_model.fields)), ", ")
-        throw(ArgumentError("CTE field '$(vector[2])' not found in '$(cte_name)'; available fields: $(available)"))
+        throw(UnknownFieldError("CTE field '$(vector[2])' not found in '$(cte_name)'; available fields: $(available)"))
       end
       row_join["a"] = instruct.object.model.name
       row_join["alias_a"] = instruct.alias
@@ -303,7 +303,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
       if !haskey(cte_model.fields, cte_table_key)
         available = join(collect(keys(cte_model.fields)), ", ")
-        throw(ArgumentError("CTE join_field column '$(cte_table_key)' not found in $(cte_name); available fields: $(available)"))
+        throw(UnknownFieldError("CTE join_field column '$(cte_table_key)' not found in $(cte_name); available fields: $(available)"))
       end
 
 
@@ -317,7 +317,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         row_join["alias_a"] = v_split[1] |> string
         row_join["key_a"] = v_split[2] |> string
       else
-        throw(ArgumentError("Main table join_field column '$(main_table_key)' not found in $(instruct.object.model.name); available fields: $(join(instruct.object.model.field_names, ", "))"))
+        throw(UnknownFieldError("Main table join_field column '$(main_table_key)' not found in $(instruct.object.model.name); available fields: $(join(instruct.object.model.field_names, ", "))"))
       end
 
       # Set up the join with the CTE
@@ -405,7 +405,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
   else
     @pormg_debug false
-    throw(_argerr("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
+    throw(UnknownFieldError("the column \e[4m\e[31m$(vector[1])\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m, that contains the fields: \e[4m\e[32m$(join(instruct.object.model.field_names, ", "))\e[0m and the related objects: \e[4m\e[32m$(join(keys(instruct.object.model.related_objects), ", "))\e[0m"))
   end
 
   if !m2m_inserted
@@ -489,7 +489,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       s_model = Symbol(uppercasefirst(string(new_object.related_objects[vector[1]][3])))
       reverse_model = getfield(foreing_table_module, s_model)
       length(vector) == 1 && throw(_argerr("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
-      !(vector[2] in reverse_model.field_names) && throw(_argerr("Invalid field path: the column $(vector[2]) not found in $(reverse_model.name)"))
+      !(vector[2] in reverse_model.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(reverse_model.name)"))
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias
       join_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
@@ -513,7 +513,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
     else
-      throw(_argerr("Invalid field path: the column $(vector[1]) not found in $(new_object.name)"))
+      throw(UnknownFieldError("Invalid field path: the column $(vector[1]) not found in $(new_object.name)"))
     end
 
     @pormg_debug false   

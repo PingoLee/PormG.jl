@@ -33,10 +33,10 @@ end
         # Predicates that belong to the calling model (New_join_position) are rejected
         # by cjoin. Allowing them would silently produce WHERE semantics, not ON semantics.
         q1 = M.New_join_position.objects
-        @test_throws ArgumentError q1.cjoin("result" => "Result", filters=["description" => "teste 1"], warn=false)
+        @test_throws PormGError q1.cjoin("result" => "Result", filters=["description" => "teste 1"], warn=false)
 
         q2 = M.New_join_position.objects
-        @test_throws ArgumentError q2.cjoin("result" => "Result", filters=["result__description" => "teste 1"], warn=false)
+        @test_throws PormGError q2.cjoin("result" => "Result", filters=["result__description" => "teste 1"], warn=false)
     end
 
     @testset "ON filter restricts joined rows (LEFT JOIN default)" begin
@@ -102,7 +102,7 @@ end
         query.cjoin("result" => "Result", filters=["resultid" => 1, "statusid" => 1], join_type="INNER", warn=false)
 
         # Guard: a bare DataFrame() across a multi-table cjoin is rejected
-        @test_throws ArgumentError query |> DataFrame
+        @test_throws PormGError query |> DataFrame
 
         # Wildcard selects all New_join_position columns plus the one named from Result
         query.values("*", "result__statusid")
@@ -122,7 +122,7 @@ end
         query.filter("positionorder" => 1)
 
         # Guard: missing explicit values() is rejected
-        @test_throws ArgumentError query |> DataFrame
+        @test_throws PormGError query |> DataFrame
 
         query.values("*", "driverid__surname", "raceid__name")
         df = query |> DataFrame
@@ -175,21 +175,21 @@ end
         # so it is rejected with an explicit error.
         q = M.Result.objects
         q.cjoin("driverid" => "Driver", warn=false)
-        @test_throws ArgumentError q.cjoin("driverid" => "Driver", warn=false)
+        @test_throws PormGError q.cjoin("driverid" => "Driver", warn=false)
     end
 
     @testset "cjoin to unknown model name is rejected" begin
         # Model names are looked up via isdefined/getfield in the model's module;
         # a typo or wrong casing produces a clear error rather than a runtime crash.
         q = M.New_join_position.objects
-        @test_throws ArgumentError q.cjoin("result" => "NonExistentModel")
+        @test_throws PormGError q.cjoin("result" => "NonExistentModel")
     end
 
     @testset "cjoin mismatched FK target is rejected" begin
         # When the base field is already a FK (driverid → Driver), attempting to cjoin
         # it to a different model is rejected before any SQL is generated.
         q = M.Result.objects
-        @test_throws ArgumentError q.cjoin("driverid" => "Constructor", warn=false)
+        @test_throws PormGError q.cjoin("driverid" => "Constructor", warn=false)
     end
 
     @testset "cjoin_on self-join executes and correlates correctly (#45)" begin

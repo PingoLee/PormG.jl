@@ -729,7 +729,7 @@ end
         # suite runs against. See issue #76.
 
         # Misaligned: distinct driverids ordered by surname (not projected) -> raises everywhere.
-        @test_throws ArgumentError begin
+        @test_throws PormGError begin
             M.Driver.objects.values("driverid").distinct().order_by("surname") |> DataFrame
         end
 
@@ -741,7 +741,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         @test occursin("surname", msg)
         @test occursin("DISTINCT", msg)
@@ -1089,7 +1089,7 @@ end
     # Returns the thrown error (or nothing). is_fanout confirms it is the #74 guard, so an unrelated
     # ArgumentError (e.g. a bad field path) cannot masquerade as a passing raise.
     fanout_err(f) = try; f(); nothing; catch e; e; end
-    is_fanout(e)  = e isa ArgumentError && occursin("fan-out", e.msg)
+    is_fanout(e)  = e isa PormGError && occursin("fan-out", e.msg)
 
     did = 1  # F1 dataset: driver 1 (Hamilton) has many driver_standings rows.
 

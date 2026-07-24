@@ -72,7 +72,7 @@ end
   try
     pk(bare); @test false
   catch e
-    @test e isa ArgumentError && occursin("no single-column primary key", e.msg)
+    @test e isa PormGError && occursin("no single-column primary key", e.msg)
   end
 
   # Edge: pk column absent from the row's data — distinct "missing column" throw / default behavior.
@@ -81,6 +81,6 @@ end
   try
     pk(missing_pk); @test false
   catch e
-    @test e isa ArgumentError && occursin("missing its primary-key column", e.msg)
+    @test e isa PormGError && occursin("missing its primary-key column", e.msg)
   end
 end

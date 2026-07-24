@@ -54,7 +54,7 @@ end
         e
     end
 
-    @test err isa ArgumentError
+    @test err isa PormGError
 
     message = sprint(showerror, err)
     @test occursin("'statusid__@in' requires a subquery that returns exactly one column", message)
@@ -103,7 +103,7 @@ end
     naive.values("surname", "n" => Count("driverid"))
     naive.filter("driver_standings__position__@gte" => 1)
     err = try; naive |> DataFrame; nothing; catch e; e; end
-    @test err isa ArgumentError && occursin("fan-out", err.msg)
+    @test err isa PormGError && occursin("fan-out", err.msg)
 
     # #92 form: the aggregate moves into a correlated scalar subquery.
     standings = M.Driver_standings.objects
@@ -297,7 +297,7 @@ end
     naive.values("driverref", "n" => Count("id"))
     naive.filter("teams__name__@contains" => slug)
     err = try; naive |> DataFrame; nothing; catch e; e; end
-    @test err isa ArgumentError && occursin("fan-out", err.msg)
+    @test err isa PormGError && occursin("fan-out", err.msg)
 
     # #92 form: count the through-table rows in a correlated scalar subquery.
     links = M.M2m_link_plain_scratch.objects
@@ -374,5 +374,5 @@ end
         values("x" => Subquery(middle))
 
     err = try; q |> DataFrame; nothing; catch e; e; end
-    @test err isa ArgumentError && occursin("one level", err.msg)
+    @test err isa PormGError && occursin("one level", err.msg)
 end

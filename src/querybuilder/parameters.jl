@@ -125,7 +125,7 @@ set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== 
 
 # --- PostgreSQL (unchanged behaviour) ---
 function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
-  contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
+  contains && (throw(FilterError("Contains option is not supported for array parameters")))
   pq.parameter_count += 1
   push!(pq.parameters, value)
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
@@ -141,7 +141,7 @@ end
 
 # --- SQLite – Contextual Bucket Strategy ---
 function add_parameter!(sq::PormGSQLiteParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
-  contains && (throw(ArgumentError("Contains option is not supported for array parameters")))
+  contains && (throw(FilterError("Contains option is not supported for array parameters")))
   # Expand array into multiple positional parameters for SQLite
   placeholders = join(fill("?", length(value)), ", ")
   for v in value

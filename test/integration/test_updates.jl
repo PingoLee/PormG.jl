@@ -236,21 +236,21 @@ end
     end
     @test err !== nothing
     # #197: the guard is now a typed ArgumentError with reworded message — assert both.
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin("requires a filter", lowercase(string(err)))
 
     row_after_unfiltered_attempt = M.Just_a_test_deletion.objects.filter("name" => "valid").list() |> first
     @test row_after_unfiltered_attempt[:name] == "valid"
     
     # 1. Primary Key Protection: Attempting to update the ID field should throw
-    @test_throws ErrorException query.filter("name" => "valid").update("id" => 999)
+    @test_throws PormGError query.filter("name" => "valid").update("id" => 999)
     
     # 2. Max Length Validation: CharField default max_length is 250
     long_name = "a"^256
-    @test_throws ErrorException query.filter("name" => "valid").update("name" => long_name)
+    @test_throws PormGError query.filter("name" => "valid").update("name" => long_name)
     
     # 3. Non-existent field: Should throw informative error
-    @test_throws ErrorException query.filter("name" => "valid").update("non_existent" => "foo")
+    @test_throws PormGError query.filter("name" => "valid").update("non_existent" => "foo")
 end
 
 @testset "Update inspection modes do not execute" begin
@@ -294,7 +294,7 @@ end
         @test isnothing(none_result)
         @test M.Just_a_test_deletion.objects.filter("name" => "still-not-landed").count() == 0
 
-        @test_throws ArgumentError M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
+        @test_throws PormGError M.Just_a_test_deletion.objects.filter("name" => "inspect-update").update(
             "name" => "bad-mode",
             show_query = :bogus
         )
@@ -681,7 +681,7 @@ end
             catch e
                 e
             end
-            @test err isa ArgumentError
+            @test err isa PormGError
             @test occursin("case", lowercase(sprint(showerror, err)))
             # The failed call must not have inserted the row.
             @test M.Just_a_test_deletion.objects.filter("name" => "CaseTest").count() == 0
@@ -1411,7 +1411,7 @@ end
     catch e
         e
     end
-    @test err_limit isa ArgumentError
+    @test err_limit isa PormGError
     @test occursin("limit", lowercase(sprint(showerror, err_limit)))
 
     # offset() must be rejected
@@ -1421,7 +1421,7 @@ end
     catch e
         e
     end
-    @test err_offset isa ArgumentError
+    @test err_offset isa PormGError
     @test occursin("offset", lowercase(sprint(showerror, err_offset)))
 
     # order_by() must be rejected
@@ -1431,7 +1431,7 @@ end
     catch e
         e
     end
-    @test err_order isa ArgumentError
+    @test err_order isa PormGError
     @test occursin("order_by", lowercase(sprint(showerror, err_order)))
 
     # Verify no mutations slipped through despite the guard being in the execution path.
@@ -1542,7 +1542,7 @@ end
     catch e
         e
     end
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin("case", lowercase(sprint(showerror, err)))
 
     # The failed call must not have touched the database.
@@ -1593,7 +1593,7 @@ end
             e
         end
 
-        @test err_filter isa ArgumentError
+        @test err_filter isa PormGError
         @test occursin("match_on column", lowercase(sprint(showerror, err_filter)))
         @test occursin("id", lowercase(sprint(showerror, err_filter)))
 
@@ -1609,7 +1609,7 @@ end
             e
         end
 
-        @test err_pk isa ArgumentError
+        @test err_pk isa PormGError
         @test occursin("primary key column", lowercase(sprint(showerror, err_pk)))
         @test occursin("id", lowercase(sprint(showerror, err_pk)))
 
@@ -1908,7 +1908,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("distinct", lowercase(sprint(showerror, err)))
 
         # Verify no rows were mutated.
@@ -1936,7 +1936,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("group", lowercase(sprint(showerror, err)))
 
         # Verify no rows were mutated.

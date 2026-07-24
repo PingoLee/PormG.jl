@@ -65,7 +65,7 @@ end
 @testset "Alignment Verification - cjoin Rejects Base-Model Filters" begin
     q = M.Result.objects
 
-    @test_throws ArgumentError begin
+    @test_throws PormGError begin
         q.cjoin("raceid" => "Race", filters=["points" => 10], warn=false)
     end
 end
@@ -161,7 +161,7 @@ end
 @testset "Alignment Verification - OuterRef requires correlated context" begin
     q = M.Result.objects.filter("raceid" => OuterRef("raceid"))
 
-    @test_throws ArgumentError begin
+    @test_throws PormGError begin
         q |> inspect_query
     end
 end
@@ -1095,7 +1095,7 @@ end
     q = M.Result.objects
 
     # This should raise an error because driverid points to Driver, not Constructor
-    @test_throws ArgumentError begin
+    @test_throws PormGError begin
         q.cjoin("driverid" => "Constructor", filters=["name" => "Ferrari"])
     end
 
@@ -1965,7 +1965,7 @@ end
     # over get_all_models; a name that matches no model raises ArgumentError.
     resolved = PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "m2m_rpk_sponsor_scratch", "sponsors")
     @test resolved === M.M2m_rpk_sponsor_scratch
-    @test_throws ArgumentError PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "no_such_model_zzz", "sponsors")
+    @test_throws PormGError PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "no_such_model_zzz", "sponsors")
 end
 
 @testset "Related Objects - Auto-generated related_name key format" begin
@@ -2035,7 +2035,7 @@ end
         e
     end
 
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin("circular dependency", lowercase(sprint(showerror, err)))
 
     # Pin the dispatch contract: Julia infers Dict{Model_Type,...} (concrete) when keys are
@@ -2175,7 +2175,7 @@ end
     excl_err = try
       M.Result.objects.select_for_update(nowait = true, skip_locked = true); nothing
     catch e; e end
-    @test excl_err isa ArgumentError && occursin("mutually exclusive", excl_err.msg)
+    @test excl_err isa PormGError && occursin("mutually exclusive", excl_err.msg)
 end
 
 
@@ -2387,7 +2387,7 @@ end
     q_two = M.Driver.objects
     q_two.values("x" => Subquery(two_cols))
     err_two = try q_two |> inspect_query; nothing catch e; e end
-    @test err_two isa ArgumentError && occursin("exactly one column", err_two.msg)
+    @test err_two isa PormGError && occursin("exactly one column", err_two.msg)
 
     # No values() on the inner → implicit all-columns projection → same contract error.
     all_cols = M.Driver_standings.objects
@@ -2395,18 +2395,18 @@ end
     q_all = M.Driver.objects
     q_all.values("x" => Subquery(all_cols))
     err_all = try q_all |> inspect_query; nothing catch e; e end
-    @test err_all isa ArgumentError && occursin("exactly one column", err_all.msg)
+    @test err_all isa PormGError && occursin("exactly one column", err_all.msg)
 
     # Bare Subquery(...) without an alias pair → rejected at values() time.
     one_col = M.Driver_standings.objects
     one_col.filter("driverid" => OuterRef("driverid"))
     one_col.values("t" => Count("driverstandingsid"))
     err_bare = try M.Driver.objects.values("surname", Subquery(one_col)); nothing catch e; e end
-    @test err_bare isa ArgumentError && occursin("Subquery", err_bare.msg)
+    @test err_bare isa PormGError && occursin("Subquery", err_bare.msg)
 
     # Silent-drop fix: an unsupported pair value now throws instead of vanishing.
     err_pair = try M.Driver.objects.values("x" => 42); nothing catch e; e end
-    @test err_pair isa ArgumentError && occursin("Invalid values pair", err_pair.msg)
+    @test err_pair isa PormGError && occursin("Invalid values pair", err_pair.msg)
 
     # Silent-drop fix, function-pair branch: a function that constructs but fails
     # _check_function validation (Concat accepts the Int; validation rejects it) used to be
@@ -2444,7 +2444,7 @@ end
     err = Logging.with_logger(Logging.NullLogger()) do
         try q |> inspect_query; nothing catch e; e end
     end
-    @test err isa ArgumentError && occursin("one level", err.msg)
+    @test err isa PormGError && occursin("one level", err.msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

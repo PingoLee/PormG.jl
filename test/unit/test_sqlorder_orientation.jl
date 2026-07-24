@@ -58,9 +58,9 @@ PormG.config["orientation_guard_pg"] = PormG.Configuration.Settings(
   @testset "injection-shaped orientations raise at construction" begin
     for bad in ("ASC; DROP TABLE drivers --", "DESC --", "ASC, (SELECT 1)", "")
       # Keyword constructor (the direct-construction path the issue flags).
-      @test_throws ArgumentError SQLOrder(SQLField("surname", "surname"); orientation=bad)
+      @test_throws PormGError SQLOrder(SQLField("surname", "surname"); orientation=bad)
       # Positional constructor (deepcopy's path) is guarded by the same whitelist.
-      @test_throws ArgumentError SQLOrder(SQLField("surname", "surname"), nothing, bad, "surname", nothing)
+      @test_throws PormGError SQLOrder(SQLField("surname", "surname"), nothing, bad, "surname", nothing)
     end
 
     # The rejection must fail loudly and name the valid options — not silently default.
@@ -71,7 +71,7 @@ PormG.config["orientation_guard_pg"] = PormG.Configuration.Settings(
     catch e
       e
     end
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin("ASC", string(err))
     @test occursin("DESC", string(err))
   end
@@ -106,7 +106,7 @@ PormG.config["orientation_guard_pg"] = PormG.Configuration.Settings(
     catch e
       e
     end
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin("DESC", string(err))   # the whitelist error, naming the valid options
 
     # Sanity (negative case): the same query shape with a valid order renders fine.

@@ -213,10 +213,10 @@ end
     
     # Since the explicit through model has an extra field (`joined_year`),
     # all direct mutators (add, remove, clear, set) must raise an ArgumentError (Django behavior).
-    @test_throws ArgumentError manager.add(team_a)
-    @test_throws ArgumentError manager.remove(team_a)
-    @test_throws ArgumentError manager.clear()
-    @test_throws ArgumentError manager.set(team_a)
+    @test_throws PormGError manager.add(team_a)
+    @test_throws PormGError manager.remove(team_a)
+    @test_throws PormGError manager.clear()
+    @test_throws PormGError manager.set(team_a)
     
     # Instead, we create the intermediate record directly using the objects manager:
     M.M2m_membership_scratch.objects.create("driver" => driver[:id], "team" => team_a[:id])
@@ -316,7 +316,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         after_failed_set = Set([row[:name] for row in manager.all().list()])
         @test after_failed_set == expected
     finally
@@ -486,10 +486,10 @@ end
 
         PormG.config[PORMG_DB_FOLDER].change_data = false
         try
-            @test_throws ArgumentError readonly_manager.add(1)
-            @test_throws ArgumentError readonly_manager.remove(1)
-            @test_throws ArgumentError readonly_manager.clear()
-            @test_throws ArgumentError readonly_manager.set([1])
+            @test_throws PormGError readonly_manager.add(1)
+            @test_throws PormGError readonly_manager.remove(1)
+            @test_throws PormGError readonly_manager.clear()
+            @test_throws PormGError readonly_manager.set([1])
         finally
             PormG.config[PORMG_DB_FOLDER].change_data = orig_change_data
         end

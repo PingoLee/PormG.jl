@@ -23,7 +23,7 @@ function _m2m_model_from_binding(_module::Module, binding::String, table_name::S
     Models.format_model_name(model.name) == target_name && return model
   end
 
-  throw(ArgumentError("The many-to-many related model $(binding) is not defined"))
+  throw(QueryBuildError("The many-to-many related model $(binding) is not defined"))
 end
 
 function _m2m_extract_pk(value, pk_field::String)
@@ -53,7 +53,7 @@ function _m2m_settings(manager::ManyToManyManager)
     if length(config) == 1
       conn_key = first(keys(config))
     else
-      throw(ArgumentError("Model '$(manager.owner_model.name)' is not bound to a database connection key. Call set_models() before using a many-to-many manager."))
+      throw(UnsupportedConnectionError("Model '$(manager.owner_model.name)' is not bound to a database connection key. Call set_models() before using a many-to-many manager."))
     end
   end
   settings = get_configuration_settings(conn_key)
@@ -80,14 +80,17 @@ function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
   owner_module = manager.owner_model._module
   owner_module === nothing && return false
 
-  # Only catch ArgumentError ("binding not found") — the expected failure when
+  # Only catch PormGError ("binding not found") — the expected failure when
   # the through model is auto-generated and not registered in the module.
   # Any other exception (type error, module error, etc.) should propagate so
   # the caller is not silently allowed to mutate a through table with extra fields.
   through_model = try
     _m2m_model_from_binding(owner_module, manager.relation.through_model, manager.relation.through_model)
   catch e
-    e isa ArgumentError && return false
+    # The binding-not-found signal from _m2m_model_from_binding is now QueryBuildError <:
+    # PormGError (#231, was ArgumentError). Catch the taxonomy root so this stays robust to
+    # reclassification; any non-PormGError (type/module error) still propagates as intended.
+    e isa PormGError && return false
     rethrow(e)
   end
 
@@ -106,7 +109,7 @@ end
 function (descriptor::ManyToManyDescriptor)(owner)
   owner_id = _m2m_extract_pk(owner, descriptor.relation.owner_pk)
   owner_module = descriptor.owner_model._module
-  owner_module === nothing && throw(ArgumentError("Many-to-many descriptor $(descriptor.accessor) requires initialized models. Call set_models() before using it."))
+  owner_module === nothing && throw(QueryBuildError("Many-to-many descriptor $(descriptor.accessor) requires initialized models. Call set_models() before using it."))
   related_model = _m2m_model_from_binding(owner_module, descriptor.relation.related_binding, descriptor.relation.related_model)
   return ManyToManyManager(descriptor.owner_model, related_model, descriptor.relation, owner_id)
 end
@@ -120,7 +123,7 @@ function _m2m_query(manager::ManyToManyManager)
 end
 
 function add(manager::ManyToManyManager, targets...)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+  _m2m_has_extra_fields(manager) && throw(QueryBuildError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
@@ -165,14 +168,14 @@ function add(manager::ManyToManyManager, targets...)
     sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
     fetch(settings, sql, parameters)
   else
-    throw(ArgumentError("Unsupported connection type $(typeof(connection)) for many-to-many add"))
+    throw(UnsupportedConnectionError("Unsupported connection type $(typeof(connection)) for many-to-many add"))
   end
 
   return nothing
 end
 
 function remove(manager::ManyToManyManager, targets...)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+  _m2m_has_extra_fields(manager) && throw(QueryBuildError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
@@ -200,7 +203,7 @@ function remove(manager::ManyToManyManager, targets...)
 end
 
 function clear(manager::ManyToManyManager)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+  _m2m_has_extra_fields(manager) && throw(QueryBuildError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   settings, connection, conn_key = _m2m_settings(manager)
   !settings.change_data && throw(_write_not_allowed("many-to-many clear", conn_key))
 
@@ -228,7 +231,7 @@ function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
 end
 
 function set(manager::ManyToManyManager, targets...)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+  _m2m_has_extra_fields(manager) && throw(QueryBuildError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   desired_ids = Set(_m2m_target_ids(manager, targets))
   settings, _, _ = _m2m_settings(manager)
 

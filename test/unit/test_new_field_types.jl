@@ -105,13 +105,13 @@ end
             @test validate_field_data(mock_model, "token", "550e8400-e29b-41d4-a716-446655440000", "insert") === true
 
             # Invalid string
-            @test_throws ErrorException validate_field_data(mock_model, "token", "bad-uuid", "insert")
+            @test_throws PormGError validate_field_data(mock_model, "token", "bad-uuid", "insert")
 
             # Wrong type
-            @test_throws ErrorException validate_field_data(mock_model, "token", 42, "insert")
+            @test_throws PormGError validate_field_data(mock_model, "token", 42, "insert")
 
             # Null handling
-            @test_throws ErrorException validate_field_data(mock_model, "token", nothing, "insert")
+            @test_throws PormGError validate_field_data(mock_model, "token", nothing, "insert")
             @test validate_field_data(mock_model, "nullable_token", nothing, "insert") === true
         end
     end
@@ -154,7 +154,7 @@ end
 
             # Max length enforcement: a URL exceeding max_length should fail
             long_url = "https://example.com/" * repeat("a", 50)
-            @test_throws ErrorException validate_field_data(mock_model, "website", long_url, "insert")
+            @test_throws PormGError validate_field_data(mock_model, "website", long_url, "insert")
         end
     end
 
@@ -197,7 +197,7 @@ end
             @test validate_field_data(mock_model, "slug", "test_slug_123", "insert") === true
 
             # Max length enforcement
-            @test_throws ErrorException validate_field_data(mock_model, "slug", repeat("a", 21), "insert")
+            @test_throws PormGError validate_field_data(mock_model, "slug", repeat("a", 21), "insert")
         end
     end
 
@@ -278,10 +278,10 @@ end
             @test validate_field_data(mock_model, "data", true, "insert") === true
 
             # Invalid JSON string
-            @test_throws ErrorException validate_field_data(mock_model, "data", "{bad json", "insert")
+            @test_throws PormGError validate_field_data(mock_model, "data", "{bad json", "insert")
 
             # Null handling
-            @test_throws ErrorException validate_field_data(mock_model, "data", nothing, "insert")
+            @test_throws PormGError validate_field_data(mock_model, "data", nothing, "insert")
             @test validate_field_data(mock_model, "nullable_data", nothing, "insert") === true
         end
     end

@@ -339,7 +339,7 @@ function Base.push!(q::SQLTypeQ, x...)
     elseif isa(v, FilterType)
       push!(q.filters, v)
     else
-      throw(_argerr("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
+      throw(FilterError("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
     end
   end
   return q
@@ -352,7 +352,7 @@ function Base.push!(q::SQLTypeQor, x...)
     elseif isa(v, FilterType)
       push!(q.or, v)
     else
-      throw(_argerr("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
+      throw(FilterError("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
     end
   end
   return q
@@ -386,7 +386,7 @@ function _parse_time_string_to_compoundperiod(s::AbstractString)::Dates.Compound
   normalized = Models._normalize_duration_string(s)  # -> "±H:MM:SS(.fff)" (fields may exceed 2 digits,
                                                      # e.g. bare "120" seconds normalizes to "00:00:120")
   m = match(r"^(-?)(\d+):(\d+):(\d+)(?:\.(\d+))?$", normalized)
-  m === nothing && throw(ArgumentError("Interval: could not parse normalized duration '$(normalized)'"))
+  m === nothing && throw(InvalidValueError("Interval: could not parse normalized duration '$(normalized)'"))
   sign = m.captures[1] == "-" ? -1 : 1
   parts = Dates.Period[Hour(sign * parse(Int, m.captures[2])),
                        Minute(sign * parse(Int, m.captures[3])),
@@ -649,7 +649,7 @@ end
 end
 function OuterRef(field_name::AbstractString)
   normalized = String(field_name)
-  isempty(normalized) && throw(ArgumentError("OuterRef requires a non-empty field name"))
+  isempty(normalized) && throw(QueryBuildError("OuterRef requires a non-empty field name"))
   return OuterRefObject(field_name=normalized)
 end
 Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
@@ -876,7 +876,7 @@ PormGRow(data::Dict{Symbol,<:Any}, model::PormGModel) = PormGRow(Dict{Symbol,Any
 (strips a leading underscore per `format_fild_name`; case is preserved, #57)."""
 function _normalize_row_symbol(sym::Symbol)::Symbol
   parts = split(String(sym), "__")
-  any(isempty, parts) && throw(ArgumentError("Invalid projected row field '$sym'. Empty '__' path segment."))
+  any(isempty, parts) && throw(UnknownFieldError("Invalid projected row field '$sym'. Empty '__' path segment."))
   return Symbol(join(Models.format_fild_name.(String.(parts)), "__"))
 end
 
@@ -913,7 +913,7 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
   end
 
   if haskey(model.fields, String(normalized)) && model.fields[String(normalized)] isa Models.sForeignKey
-    throw(ArgumentError(
+    throw(LazyTraversalError(
       "$(model.name).$(normalized) is a ForeignKey that this row didn't project; " *
       "PormG does not support lazy FK access (`row.$(normalized)`). " *
       "Project it up front in `values(...)`: add `\"$(normalized)\"` for the raw key value, " *
@@ -922,7 +922,7 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
     ))
   end
 
-  throw(ArgumentError("$(model.name) row has no field or accessor '$(sym)'"))
+  throw(UnknownFieldError("$(model.name) row has no field or accessor '$(sym)'"))
 end
 
 function Base.setproperty!(row::PormGRow, sym::Symbol, value)
@@ -935,14 +935,14 @@ function Base.setproperty!(row::PormGRow, sym::Symbol, value)
   if occursin("__", normalized_string)
     fk_name = first(split(normalized_string, "__", limit=2)) |> String
     if !(haskey(model.fields, fk_name) && model.fields[fk_name] isa Models.sForeignKey)
-      throw(ArgumentError("Cannot assign to '$(sym)': '$(fk_name)' is not a ForeignKey field on $(model.name)."))
+      throw(QueryBuildError("Cannot assign to '$(sym)': '$(fk_name)' is not a ForeignKey field on $(model.name)."))
     end
   else
     if !haskey(model.fields, normalized_string)
-      throw(ArgumentError("$(model.name) row has no writable field '$(sym)'."))
+      throw(UnknownFieldError("$(model.name) row has no writable field '$(sym)'."))
     end
     if model.fields[normalized_string].primary_key
-      throw(ArgumentError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))
+      throw(QueryBuildError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))
     end
   end
 
@@ -964,9 +964,9 @@ read the individual key columns instead.
 function pk(row::PormGRow)
   model = getfield(row, :_model)
   field = Models.get_model_pk_field(model)
-  field === nothing && throw(ArgumentError("$(model.name) row has no single-column primary key"))
+  field === nothing && throw(QueryBuildError("$(model.name) row has no single-column primary key"))
   data = getfield(row, :_data)
-  haskey(data, field) || throw(ArgumentError("$(model.name) row is missing its primary-key column '$(field)'"))
+  haskey(data, field) || throw(QueryBuildError("$(model.name) row is missing its primary-key column '$(field)'"))
   return data[field]
 end
 

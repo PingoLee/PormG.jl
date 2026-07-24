@@ -7,6 +7,7 @@ import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_sym
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: PormGError  # root of the semantic error taxonomy (#231); concrete subtypes in querybuilder/exceptions.jl
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
@@ -94,6 +95,9 @@ export get
 # methods and explicit `import PormG.QueryBuilder: page`/`query`/`update` are unaffected —
 # export status only governs the bare-`using` dump.
 export PormGRow, pk, DoesNotExist, MultipleObjectsReturned
+# Semantic error taxonomy (#231): every query-builder misuse throws a PormGError subtype.
+export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
+  QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 

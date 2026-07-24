@@ -65,14 +65,14 @@ function _normalize_cjoin_filter_key(key::String, prefix::String, foreign_model:
 
   if startswith(key, prefix * "__")
     suffix = key[length(prefix) + 3:end]
-    isempty(suffix) && throw(ArgumentError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. Provide a field on the joined model after the join path prefix."))
+    isempty(suffix) && throw(FilterError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. Provide a field on the joined model after the join path prefix."))
 
     base_field = String(split(suffix, "__")[1])
     if base_field in foreign_model.field_names || haskey(foreign_model.related_objects, base_field)
       return key
     end
 
-    throw(ArgumentError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. The joined model '$(foreign_model.name)' does not contain the field or related path '$(base_field)'."))
+    throw(FilterError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. The joined model '$(foreign_model.name)' does not contain the field or related path '$(base_field)'."))
   end
 
   base_field = String(split(key, "__")[1])
@@ -80,7 +80,7 @@ function _normalize_cjoin_filter_key(key::String, prefix::String, foreign_model:
     return string(prefix, "__", key)
   end
 
-  throw(ArgumentError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. cjoin filters modify the JOIN ON clause and must target fields on the joined model '$(foreign_model.name)'. Use a joined-model field like '$(prefix)__field' (or just 'field' for auto-prefixing), and keep base-query filters in .filter(...)."))
+  throw(FilterError("Invalid cjoin filter field '$(key)' for join path '$(prefix)'. cjoin filters modify the JOIN ON clause and must target fields on the joined model '$(foreign_model.name)'. Use a joined-model field like '$(prefix)__field' (or just 'field' for auto-prefixing), and keep base-query filters in .filter(...)."))
 end
 
 function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGModel,Nothing})
@@ -155,11 +155,11 @@ function _collect_join_filters(filters)
       if isa(f, Union{Pair,SQLTypeQ,SQLTypeQor,SQLTypeOper,SQLTypeF})
         push!(_filters, f)
       else
-        throw(ArgumentError("Invalid filter type in array: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
+        throw(FilterError("Invalid filter type in array: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
       end
     end
   else
-    throw(ArgumentError("Invalid filters type: $(typeof(filters)). Use a Pair, Q, Qor, OP, F expression, or an array of these."))
+    throw(FilterError("Invalid filters type: $(typeof(filters)). Use a Pair, Q, Qor, OP, F expression, or an array of these."))
   end
 
   return _filters
@@ -167,7 +167,7 @@ end
 
 function _resolve_join_target_model(q::SQLObject, join_path::String)
   parts = split(join_path, "__")
-  isempty(parts) && throw(ArgumentError("on() requires a non-empty join path."))
+  isempty(parts) && throw(QueryBuildError("on() requires a non-empty join path."))
 
   current_model = q.model
   current_module = q.model._module
@@ -176,7 +176,7 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
     current_path = join(parts[1:index], "__")
 
     if index == 1 && haskey(q.ctes, part)
-      throw(ArgumentError("on() does not target CTE names. Use with(..., join_type=...) to configure CTE join types."))
+      throw(QueryBuildError("on() does not target CTE names. Use with(..., join_type=...) to configure CTE join types."))
     end
 
     field = if part in current_model.field_names
@@ -189,7 +189,7 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
 
     if field !== nothing
       if !hasproperty(field, :to) || field.to === nothing
-        throw(ArgumentError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use cjoin(..., field=...) first if this path depends on a custom link."))
+        throw(QueryBuildError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use cjoin(..., field=...) first if this path depends on a custom link."))
       end
 
       current_model = field.to isa PormGModel ? field.to : getfield(current_module, Symbol(String(field.to)))
@@ -205,7 +205,7 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
         current_model = getfield(current_module, reverse_model)
       end
     else
-      throw(ArgumentError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'."))
+      throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'."))
     end
   end
 
@@ -224,14 +224,14 @@ function on(q::SQLObject, join_path::String, filters::AbstractVector; join_type:
     elseif isa(prefixed, FilterType)
       push!(parsed_filters, prefixed)
     else
-      throw(ArgumentError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
+      throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
     end
   end
 
   existing = get(q.custom_join, join_path, Dict{String,Any}())
 
   if isempty(parsed_filters) && join_type === nothing
-    throw(ArgumentError("on() requires at least one ON predicate or a join_type override."))
+    throw(QueryBuildError("on() requires at least one ON predicate or a join_type override."))
   end
 
   existing_join_type = get(existing, "join_type", nothing)
@@ -305,19 +305,19 @@ function cjoin(
 
   # # Validations
   if main_join === nothing
-    throw(ArgumentError("Please, main_join argument is required to create a new join."))
+    throw(QueryBuildError("Please, main_join argument is required to create a new join."))
   end
 
   # if field_destination !== nothing && !contains(field_destination, "__")
-  #   throw(ArgumentError("Invalid field_destination format: '$field_destination'. Expected format 'related_model__field'."))
+  #   throw(QueryBuildError("Invalid field_destination format: '$field_destination'. Expected format 'related_model__field'."))
   # end
   if (split(main_join.first, "__") |> length) > 1
-    throw(ArgumentError("That is not supported yet: main_join with related fields. Please, provide just the field name of the main model."))
+    throw(QueryBuildError("That is not supported yet: main_join with related fields. Please, provide just the field name of the main model."))
   end
 
   @pormg_debug false
   if (split(main_join.first, "__") |> length) == 1 && main_join.first ∉ q.model.field_names
-    throw(ArgumentError("The field '$(main_join.first)' is not a field in model '$(q.model.table_name)'. The fields are: $(q.model.field_names)"))
+    throw(UnknownFieldError("The field '$(main_join.first)' is not a field in model '$(q.model.table_name)'. The fields are: $(q.model.field_names)"))
   end
 
   # Validation: if field already exists as a FK on the model, ensure target model matches
@@ -334,7 +334,7 @@ function cjoin(
 
     # Compare case-insensitively since model names may be capitalized differently
     if existing_target !== nothing && lowercase(existing_target) != lowercase(main_join.second)
-      throw(ArgumentError("Field '$(main_join.first)' is already a ForeignKey pointing to '$(existing_target)', but cjoin attempted to join with '$(main_join.second)'. To add ON conditions to an existing FK, the target model must match. Use cjoin(query, \"$(main_join.first)\" => \"$(existing_target)\", filters=[...]) instead."))
+      throw(QueryBuildError("Field '$(main_join.first)' is already a ForeignKey pointing to '$(existing_target)', but cjoin attempted to join with '$(main_join.second)'. To add ON conditions to an existing FK, the target model must match. Use cjoin(query, \"$(main_join.first)\" => \"$(existing_target)\", filters=[...]) instead."))
     end
   end
 
@@ -346,14 +346,14 @@ function cjoin(
 
     #   test_result = Models.ForeignKey(Result, pk_field="resultId", on_delete="CASCADE", null=true, related_name="test_deletion"),
     if !isdefined(q.model._module, main_join.second |> Symbol)
-      throw(ArgumentError("Model '$(main_join.second)' not found in module. Please remember that model names are case-sensitive."))
+      throw(QueryBuildError("Model '$(main_join.second)' not found in module. Please remember that model names are case-sensitive."))
       return nothing
     end
     foreign_model = getfield(q.model._module, Symbol(main_join.second))
     @pormg_debug false
     pk_field = Models.get_model_pk_field(foreign_model)
     if !isa(pk_field, Symbol)
-      throw(ArgumentError("Foreign model '$(foreign_model.name)' does not have a valid/single primary key field."))
+      throw(QueryBuildError("Foreign model '$(foreign_model.name)' does not have a valid/single primary key field."))
     end
 
     if warn
@@ -393,7 +393,7 @@ function cjoin(
     elseif isa(prefixed, FilterType)
       push!(parsed_filters, prefixed)
     else
-      throw(ArgumentError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
+      throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
     end
   end
 
@@ -402,7 +402,7 @@ function cjoin(
   if !haskey(q.custom_join, main_join.first)
     q.custom_join[main_join.first] = Dict{String,Any}("filters" => parsed_filters, "field" => field)
   else
-    throw(ArgumentError("Join path '$(main_join.first)' already exists"))
+    throw(QueryBuildError("Join path '$(main_join.first)' already exists"))
   end
 
 
@@ -424,7 +424,7 @@ function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing
   _filters = _collect_join_filters(filters)
 
   if field !== nothing && !isa(field, PormGField)
-    throw(ArgumentError("Invalid field type: $(typeof(field)). Use a PormGField or nothing."))
+    throw(QueryBuildError("Invalid field type: $(typeof(field)). Use a PormGField or nothing."))
   end
 
   @pormg_debug false
@@ -467,7 +467,7 @@ function cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias:
     elseif isa(f, FilterType)
       push!(parsed, f)
     else
-      throw(_argerr("Invalid cjoin_on `on` element: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
+      throw(FilterError("Invalid cjoin_on `on` element: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
     end
   end
   isempty(parsed) && throw(_argerr("cjoin_on requires at least one `on` predicate."))
@@ -609,7 +609,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
     elseif haskey(fields, field)
       return fields[field]
     else
-      throw(_argerr("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m (base column: \e[31m$(base_col)\e[0m) not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
+      throw(UnknownFieldError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m (base column: \e[31m$(base_col)\e[0m) not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
     end
   end
 
@@ -620,7 +620,7 @@ function _set_field_from_sql_function(func::String, field::String, instruct::SQL
   elseif haskey(instruct.object.model.fields, field)
     return instruct.object.model.fields[field]
   else
-    throw(_argerr("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
+    throw(UnknownFieldError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
   end
 end
 

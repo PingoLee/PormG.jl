@@ -1,5 +1,5 @@
 using Test
-using PormG: object, Q
+using PormG: object, Q, PormGError, PermissionError
 using PormG.Models: Model, CharField, IDField
 import PormG
 import DataFrames
@@ -93,7 +93,7 @@ end
     e
   end
 
-  @test err isa ArgumentError
+  @test err isa PormGError
 
   message = sprint(showerror, err)
   @test occursin("'id__@in' requires a subquery that returns exactly one column", message)
@@ -136,7 +136,7 @@ end
     e
   end
 
-  @test err isa ArgumentError
+  @test err isa PormGError
   message = sprint(showerror, err)
   @test occursin("'id__@in' requires a subquery that returns exactly one column", message)
 end
@@ -157,7 +157,7 @@ end
       e
     end
 
-    @test err isa ArgumentError
+    @test err isa PermissionError    # #231: write-blocked is a typed PermissionError
     # #205: unified write-disabled message names the op and points at the `config:` block.
     let m = lowercase(sprint(showerror, err))
       @test occursin("error in delete:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
@@ -181,7 +181,7 @@ end
       e
     end
 
-    @test err isa ArgumentError
+    @test err isa PermissionError    # #231: write-blocked is a typed PermissionError
     let m = lowercase(sprint(showerror, err))
       @test occursin("error in update:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
     end
@@ -193,7 +193,7 @@ end
       e
     end
 
-    @test inspect_err isa ArgumentError
+    @test inspect_err isa PermissionError    # #231: write-blocked is a typed PermissionError
     let m = lowercase(sprint(showerror, inspect_err))
       @test occursin("error in update:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
     end
@@ -227,7 +227,7 @@ end
   catch e
     e
   end
-  @test err_limit isa ArgumentError
+  @test err_limit isa PormGError
   @test occursin("limit", lowercase(sprint(showerror, err_limit)))
 
   # offset() must be rejected — fresh handler, no prior limit
@@ -237,7 +237,7 @@ end
   catch e
     e
   end
-  @test err_offset isa ArgumentError
+  @test err_offset isa PormGError
   @test occursin("offset", lowercase(sprint(showerror, err_offset)))
 
   # order_by() must be rejected — fresh handler, no prior limit or offset
@@ -247,7 +247,7 @@ end
   catch e
     e
   end
-  @test err_order isa ArgumentError
+  @test err_order isa PormGError
   @test occursin("order_by", lowercase(sprint(showerror, err_order)))
 
   # show_query=:dict must also be rejected (the guard fires before SQL dispatch)
@@ -257,7 +257,7 @@ end
   catch e
     e
   end
-  @test err_dry isa ArgumentError
+  @test err_dry isa PormGError
   @test occursin("limit", lowercase(sprint(showerror, err_dry)))
 end
 
@@ -293,9 +293,9 @@ end
       e
     end
 
-    # Must raise an ArgumentError with a message about not being allowed to
-    # insert (sequence allocation is an insert-class operation).
-    @test err isa ArgumentError
+    # Must raise a PermissionError with a message about not being allowed to
+    # write (sequence allocation is an insert-class operation).
+    @test err isa PermissionError
     @test occursin("not allowed", lowercase(sprint(showerror, err)))
 
     # The DataFrame must not have been mutated: no :id column should be present
@@ -358,7 +358,7 @@ end
     e
   end
 
-  @test err isa ArgumentError
+  @test err isa PormGError
   message = sprint(showerror, err)
   @test occursin("requires a subquery that returns exactly one column", message)
 end

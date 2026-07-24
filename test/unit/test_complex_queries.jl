@@ -183,7 +183,7 @@ ResultCamelDjangoModel._module = Main
     catch e
       e
     end
-    @test err_values isa ArgumentError
+    @test err_values isa PormGError
     @test contains(sprint(showerror, err_values), "driver__...")
     @test contains(sprint(showerror, err_values), "driver_id__...")
 
@@ -210,7 +210,7 @@ ResultCamelDjangoModel._module = Main
     catch e
       e
     end
-    @test err_filter isa ArgumentError
+    @test err_filter isa PormGError
     @test contains(sprint(showerror, err_filter), "driver__...")
 
     # ---- 3b-5: Multi-hop join (tests the while-loop call site) ----

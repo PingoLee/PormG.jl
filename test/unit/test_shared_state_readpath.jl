@@ -165,21 +165,23 @@ end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # AC1 names .first() explicitly. It intentionally mutates the caller's limit (documented
-  # last-call semantics) but must NOT leak parameters or the CTE "model" — the two must
-  # coexist. .first() funnels through query_list, so the read-path copy covers it.
+  # AC1 names .first() explicitly. Post-#199 it is copy-first like every read terminal:
+  # limit(1) is applied to an internal copy only, so the caller's limit / parameters /
+  # CTE "model" are all left untouched. .first() funnels through query_list, so the
+  # read-path copy covers it.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "first() mutates only its documented limit(1), nothing else" begin
+  @testset "first() does not mutate the caller (copy-first, #199)" begin
     q = _cte_query()
     @test q.object.parameters === nothing
     @test !haskey(q.object.ctes["agg"], "model")
 
+    limit_before = q.object.limit
     sql = q.first(show_query = :sql)
     @test sql isa String && occursin("WITH", sql)
-    @test occursin("LIMIT 1", sql)                 # first() applied limit(1) to the build
-    @test q.object.limit == 1                       # documented: limit(1) persists on the caller
-    @test q.object.parameters === nothing           # but parameters did NOT leak (fixed)
-    @test !haskey(q.object.ctes["agg"], "model")    # and the CTE "model" did NOT leak (fixed)
+    @test occursin("LIMIT 1", sql)                 # first() applied limit(1) to its internal copy
+    @test q.object.limit == limit_before            # #199: copy-first — caller's limit is untouched
+    @test q.object.parameters === nothing           # parameters did NOT leak
+    @test !haskey(q.object.ctes["agg"], "model")    # and the CTE "model" did NOT leak
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

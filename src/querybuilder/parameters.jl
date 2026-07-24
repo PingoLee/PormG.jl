@@ -95,18 +95,22 @@ end
     _apply_like_wildcards(value::Any, operator::String)::Any
 
 Apply appropriate LIKE wildcards based on the operator:
-- contains/icontains/iunaccent_contains: %value%
-- startswith: value%
-- endswith: %value
+- contains/icontains/iunaccent_contains (and their negated n… twins): %value%
+- startswith / nstartswith: value%
+- endswith / nendswith: %value
 - Other operators: no wildcards
+
+The negated pattern operators (#207) decorate the value identically to their positive twin — only
+the Dialect renderer differs (NOT LIKE vs LIKE), so the wildcard placement is the same.
 """
 function _apply_like_wildcards(value::Any, operator::String)::Any
   escaped = escape_like_pattern(string(value))
-  if operator in ["contains", "icontains", "iunaccent_contains"]
+  if operator in ["contains", "icontains", "iunaccent_contains",
+                  "ncontains", "nicontains", "niunaccent_contains"]
     return string("%", escaped, "%")
-  elseif operator == "startswith"
+  elseif operator in ["startswith", "nstartswith"]
     return string(escaped, "%")
-  elseif operator == "endswith"
+  elseif operator in ["endswith", "nendswith"]
     return string("%", escaped)
   else
     return value

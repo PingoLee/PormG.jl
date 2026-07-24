@@ -53,6 +53,17 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "startswith" => "startswith",
   "endswith" => "endswith",
   "range" => "BETWEEN",
+  # #207: negated twins of the pattern/range lookups above. Each LIKE-family value is the operator
+  # name itself — it doubles as the `Dialect.<name>` dispatch symbol in _get_filter_query(::SQLTypeOper)
+  # (rendered as NOT LIKE / NOT ILIKE / <>). `nrange` renders NOT BETWEEN via the BETWEEN branch.
+  # These negate a match rather than compose a NOT-group (PormG has no .exclude()/~Q by design).
+  "ncontains" => "ncontains",
+  "nicontains" => "nicontains",
+  "niunaccent_contains" => "niunaccent_contains",
+  "niunaccent_exact" => "niunaccent_exact",
+  "nstartswith" => "nstartswith",
+  "nendswith" => "nendswith",
+  "nrange" => "NOT BETWEEN",
   # #27: PostgreSQL JSONB containment/overlap operators. Each maps to a Dialect renderer of the
   # same name (PG emits the operator; SQLite/abstract throw a friendly PG-only error). Distinct
   # from the LIKE `contains` above — a JSON `@>` and a string LIKE are different operations.

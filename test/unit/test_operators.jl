@@ -211,6 +211,97 @@ const _E = _OperTestEvent
   end
 
   # =========================================================================
+  # 4b. Negated pattern operators (#207): NOT LIKE / NOT ILIKE / <>
+  # Same wildcard decoration as the positive twin; only the operator flips.
+  # NOTE (as above): the _OperTest models render through a PostgreSQL mock, so
+  # these assert the PG operator SHAPE. Crucially, "NOT LIKE" contains "LIKE"
+  # and "NOT ILIKE" contains "ILIKE", so each test asserts the "NOT " prefix
+  # explicitly — a bare contains(…, "LIKE") would pass on the positive form too.
+  # =========================================================================
+  @testset "Negated pattern operators (ncontains, nstartswith, nendswith, nicontains) — #207" begin
+    # ncontains → NOT LIKE '%val%'
+    q_nc = _D.objects.filter("forename__@ncontains" => "lew")
+    r_nc = q_nc.list(show_query=:dict)
+    @test contains(r_nc[:sql_text], "NOT LIKE")
+    @test contains(r_nc[:sql_text], "ESCAPE")
+    @test r_nc[:parameters] == ["%lew%"]
+
+    # nicontains → NOT ILIKE '%val%' (PostgreSQL) / pormg_lower(col) NOT LIKE … (SQLite, #78)
+    q_nic = _D.objects.filter("forename__@nicontains" => "LEW")
+    r_nic = q_nic.list(show_query=:dict)
+    @test contains(r_nic[:sql_text], "NOT ILIKE") || contains(r_nic[:sql_text], "NOT LIKE")
+    @test contains(r_nic[:sql_text], "ESCAPE")
+    @test r_nic[:parameters] == ["%LEW%"]
+
+    # nstartswith → NOT LIKE 'val%'
+    q_nsw = _D.objects.filter("nationality__@nstartswith" => "Brit")
+    r_nsw = q_nsw.list(show_query=:dict)
+    @test contains(r_nsw[:sql_text], "NOT LIKE")
+    @test contains(r_nsw[:sql_text], "ESCAPE")
+    @test r_nsw[:parameters] == ["Brit%"]
+
+    # nendswith → NOT LIKE '%val'
+    q_new = _D.objects.filter("forename__@nendswith" => "wis")
+    r_new = q_new.list(show_query=:dict)
+    @test contains(r_new[:sql_text], "NOT LIKE")
+    @test contains(r_new[:sql_text], "ESCAPE")
+    @test r_new[:parameters] == ["%wis"]
+  end
+
+  # =========================================================================
+  # 4c. Negated unaccent operators (#207) — PostgreSQL-only, mirror positive twin
+  # =========================================================================
+  @testset "Negated unaccent operators (niunaccent_contains, niunaccent_exact) — #207" begin
+    # niunaccent_contains → immutable_unaccent(col) NOT ILIKE immutable_unaccent('%val%')
+    q_niuc = _D.objects.filter("forename__@niunaccent_contains" => "sao jose")
+    r_niuc = q_niuc.list(show_query=:dict)
+    @test contains(r_niuc[:sql_text], "public.immutable_unaccent")
+    @test contains(r_niuc[:sql_text], "NOT ILIKE")
+    @test contains(r_niuc[:sql_text], "ESCAPE")
+    @test r_niuc[:parameters] == ["%sao jose%"]
+
+    # niunaccent_exact → LOWER(immutable_unaccent(col)) <> LOWER(immutable_unaccent('val'))
+    # No wildcards, no ESCAPE, value passed as-is.
+    q_niue = _D.objects.filter("forename__@niunaccent_exact" => "são josé")
+    r_niue = q_niue.list(show_query=:dict)
+    @test contains(r_niue[:sql_text], "public.immutable_unaccent")
+    @test contains(r_niue[:sql_text], "LOWER")
+    @test contains(r_niue[:sql_text], "<>")
+    @test !contains(r_niue[:sql_text], "ESCAPE")
+    @test r_niue[:parameters] == ["são josé"]
+  end
+
+  # =========================================================================
+  # 4d. Negated range operator (#207): nrange → NOT BETWEEN
+  # =========================================================================
+  @testset "Negated range operator (nrange → NOT BETWEEN) — #207" begin
+    # With Vector — "NOT BETWEEN" contains "BETWEEN", so assert the "NOT " prefix.
+    q_vec = _D.objects.filter("id__@nrange" => [10, 50])
+    res_vec = q_vec.list(show_query=:dict)
+    @test contains(res_vec[:sql_text], "NOT BETWEEN")
+    @test res_vec[:parameters] == [10, 50]
+
+    # With Tuple — both forms must be accepted, same as positive range.
+    q_tup = _D.objects.filter("id__@nrange" => (10, 50))
+    res_tup = q_tup.list(show_query=:dict)
+    @test contains(res_tup[:sql_text], "NOT BETWEEN")
+    @test res_tup[:parameters] == [10, 50]
+
+    # Shape guard: a 3-element vector is rejected, and the error must name the operator and
+    # the 2-value requirement. A bare @test_throws would also pass on an unrelated error
+    # (e.g. if `nrange` were missing from the vector allowed-op list), so assert the cause.
+    err_nr = try
+      _D.objects.filter("id__@nrange" => [1, 2, 3]).list(show_query=:dict)
+      nothing
+    catch e
+      e
+    end
+    @test err_nr !== nothing
+    @test occursin("nrange", sprint(showerror, err_nr))
+    @test occursin("exactly 2 values", sprint(showerror, err_nr))
+  end
+
+  # =========================================================================
   # 5. NULL checks  (isnull)
   # =========================================================================
   @testset "NULL check operator (isnull)" begin

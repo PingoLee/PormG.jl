@@ -34,6 +34,29 @@ These work in both `filter()` and `values()`.
 | `@iunaccent_contains` | `immutable_unaccent(col) ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring (PostgreSQL only) | `"surname__@iunaccent_contains" => "raikkonen"` |
 | `@iunaccent_exact` | `LOWER(immutable_unaccent(col)) = LOWER(immutable_unaccent(val))` | Accent- & case-insensitive equality (PostgreSQL only) | `"surname__@iunaccent_exact" => "raikkonen"` |
 
+### Negating Pattern and Range Lookups
+
+The pattern and range lookups each have a **negated twin** — same value handling, the SQL operator
+flipped to `NOT LIKE` / `NOT ILIKE` / `<>` / `NOT BETWEEN`. Use these to express "does **not** match"
+without inverting the logic by hand.
+
+| Operator | SQL | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `@ncontains` | `NOT LIKE '%val%'` | Case-sensitive substring absent | `"name__@ncontains" => "Racing"` |
+| `@nicontains` | `NOT ILIKE '%val%'` | Case-insensitive substring absent | `"name__@nicontains" => "racing"` |
+| `@nstartswith` | `NOT LIKE 'val%'` | Does not start with | `"surname__@nstartswith" => "M"` |
+| `@nendswith` | `NOT LIKE '%val'` | Does not end with | `"surname__@nendswith" => "son"` |
+| `@nrange` | `NOT BETWEEN a AND b` | Outside two bounds | `"laps__@nrange" => [1, 10]` |
+| `@niunaccent_contains` | `immutable_unaccent(col) NOT ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring absent (PostgreSQL only) | `"surname__@niunaccent_contains" => "raikkonen"` |
+| `@niunaccent_exact` | `LOWER(immutable_unaccent(col)) <> LOWER(immutable_unaccent(val))` | Accent- & case-insensitive inequality (PostgreSQL only) | `"surname__@niunaccent_exact" => "raikkonen"` |
+
+!!! note "NULL semantics"
+    `NOT LIKE`, `<>`, and `NOT BETWEEN` follow SQL three-valued logic: when the column is `NULL` the
+    predicate is UNKNOWN, so the **row is excluded** — exactly like `@ne` and `@nin`. If you also want
+    the `NULL` rows, add an explicit `Qor(..., "field__@isnull" => true)`. PormG deliberately keeps
+    negation per-field (there is no `.exclude()` / `~Q` group-negation) so the emitted SQL stays
+    predictable — see [Q Objects](q_objects.md).
+
 ### Transform Functions (Modifiers)
 
 | Transform | Description | Use in `filter()` | Use in `values()` |

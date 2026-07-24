@@ -158,7 +158,10 @@ end
     end
 
     @test err isa ArgumentError
-    @test occursin("not allowed to delete", lowercase(sprint(showerror, err)))
+    # #205: unified write-disabled message names the op and points at the `config:` block.
+    let m = lowercase(sprint(showerror, err))
+      @test occursin("error in delete:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
+    end
   finally
     PormG.config["default"].change_data = previous_change_data
   end
@@ -179,7 +182,9 @@ end
     end
 
     @test err isa ArgumentError
-    @test occursin("not allowed to update", lowercase(sprint(showerror, err)))
+    let m = lowercase(sprint(showerror, err))
+      @test occursin("error in update:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
+    end
 
     inspect_err = try
       q.update("forename" => "Blocked", show_query=:dict)
@@ -189,7 +194,9 @@ end
     end
 
     @test inspect_err isa ArgumentError
-    @test occursin("not allowed to update", lowercase(sprint(showerror, inspect_err)))
+    let m = lowercase(sprint(showerror, inspect_err))
+      @test occursin("error in update:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
+    end
   finally
     PormG.config["default"].change_data = previous_change_data
   end

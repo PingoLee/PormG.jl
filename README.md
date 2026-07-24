@@ -78,7 +78,7 @@ Prefer to wire it up by hand? The next steps show the files `setup()` would crea
 `db/connection.yml`:
 
 ```yaml
-env: dev
+default_env: dev
 
 dev:
   adapter: PostgreSQL       # or SQLite

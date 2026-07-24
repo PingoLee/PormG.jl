@@ -439,3 +439,115 @@ end
         _cleanup_configuration_test_keys([key_off])
     end
 end
+
+# ── #205: connection.yml env selection + fail-loud load ────────────────────────────────────────
+# Pins the config-loading onboarding fixes: `default_env:` is honored as the lowest-priority
+# environment selector, the legacy `env:` key is inert but warns, `load` throws (rather than
+# silently scaffolding + returning `nothing`) on a missing folder/yml with an opt-in `scaffold=true`,
+# and a missing env block reports the available ones. All DB-free (SQLite `:memory:`), isolated via
+# `mktempdir` + `_cleanup_configuration_test_keys`.
+@testset "config env selection + fail-loud load (#205)" begin
+    MDCE = PormG.Configuration.MissingDatabaseConfigurationException
+
+    # dev (read-only) + prod (writable) blocks, so the selected env is identifiable by change_data.
+    _dev_prod_blocks =
+        "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  config:\n    change_db: false\n    change_data: false\n" *
+        "prod:\n  adapter: SQLite\n  database: \":memory:\"\n  config:\n    change_db: true\n    change_data: true\n"
+
+    @testset "default_env: honored as the lowest-priority default" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            write(joinpath(db_dir, "connection.yml"), "default_env: prod\n" * _dev_prod_blocks)
+
+            # No `env=` and no PORMG_ENV → the file's `default_env: prod` beats the built-in `dev`.
+            withenv("PORMG_ENV" => nothing) do
+                PormG.Configuration.load(db_dir)
+            end
+            s = PormG.Configuration.get_settings(db_dir)
+            @test s.app_env == "prod"
+            @test s.change_data == true
+
+            # An explicit `env=` outranks `default_env:` → back to the dev block.
+            withenv("PORMG_ENV" => nothing) do
+                PormG.Configuration.load(db_dir; env="dev")
+            end
+            s2 = PormG.Configuration.get_settings(db_dir)
+            @test s2.app_env == "dev"
+            @test s2.change_data == false
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "PORMG_ENV outranks default_env:" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            write(joinpath(db_dir, "connection.yml"), "default_env: prod\n" * _dev_prod_blocks)
+
+            # The middle precedence rung: ENV["PORMG_ENV"] beats the file's default_env: prod.
+            withenv("PORMG_ENV" => "dev") do
+                PormG.Configuration.load(db_dir)
+            end
+            s = PormG.Configuration.get_settings(db_dir)
+            @test s.app_env == "dev"
+            @test s.change_data == false
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "legacy env: key is inert and warns" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            # A bare `env: prod` must NOT select prod; with no PORMG_ENV/kwarg the env falls to the
+            # built-in `dev`, and a one-time deprecation warning fires.
+            write(joinpath(db_dir, "connection.yml"), "env: prod\n" * _dev_prod_blocks)
+
+            withenv("PORMG_ENV" => nothing) do
+                @test_logs (:warn,) match_mode=:any PormG.Configuration.load(db_dir)
+            end
+            s = PormG.Configuration.get_settings(db_dir)
+            @test s.app_env == "dev"          # bare `env: prod` ignored
+            @test s.change_data == false      # dev block
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "load throws on a missing folder/yml (no silent scaffold)" begin
+        mktempdir() do temp_root
+            missing_dir = joinpath(temp_root, "nope")
+            @test_throws MDCE PormG.Configuration.load(missing_dir)
+            @test !isdir(missing_dir)                       # nothing scaffolded behind our back
+
+            empty_dir = joinpath(temp_root, "empty"); mkpath(empty_dir)
+            @test_throws MDCE PormG.Configuration.load(empty_dir)    # folder exists, no yml
+
+            # Opt-in scaffolding writes a skeleton (with default_env:, no legacy env:) and returns.
+            scaffold_dir = joinpath(temp_root, "scaffolded")
+            PormG.Configuration.load(scaffold_dir; scaffold=true)
+            yml = read(joinpath(scaffold_dir, "connection.yml"), String)
+            @test occursin("default_env:", yml)
+            @test !occursin(r"^env:"m, yml)                 # no bare legacy key
+        end
+    end
+
+    @testset "missing env block lists the available blocks" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))  # dev + test
+
+            err = nothing
+            try
+                PormG.Configuration.load(db_dir; env="staging")
+            catch e
+                err = e
+            end
+            @test err isa MDCE
+            @test occursin("staging", err.msg)
+            @test occursin("dev", err.msg) && occursin("test", err.msg)
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+end

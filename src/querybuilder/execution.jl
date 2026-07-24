@@ -549,7 +549,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   set_context!(parameters, :select)
 
   # check if is allowed to insert
-  !settings.change_data && throw(_argerr("Error in insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_write_not_allowed("insert", conn_key))
 
   # Fill defaults/auto_now/auto_now_add/UUID, reserve SQLite ids, validate, and collect the quoted
   # physical columns + bound VALUES params. Shared with _update_or_create (#30) so both build the
@@ -645,7 +645,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
   parameters = get_parameter(connection)
   set_context!(parameters, :select)
 
-  !settings.change_data && throw(_argerr("Error in update_or_create, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_write_not_allowed("update_or_create", conn_key))
 
   quoted_field_columns, param_values, pk_exist, pk_field =
     _prepare_row_insert!(real_obj, model, settings, connection, parameters)
@@ -1189,7 +1189,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   settings, connection, conn_key = get_settings(objct, connection=connection)
 
   # Check if is allowed to update
-  !settings.change_data && throw(_argerr("Error in update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
+  !settings.change_data && throw(_write_not_allowed("update", conn_key))
 
   # Guard: limit(), offset(), and order_by() cannot be combined with update().
   # Standard SQL UPDATE does not support these clauses. Silently dropping them

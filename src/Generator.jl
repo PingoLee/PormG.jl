@@ -31,7 +31,7 @@ function create_db_folder_and_yml(;
         if lowercase(adapter) == "sqlite"
             db_name = isempty(database) ? "database.sqlite" : database
             write(f, """
-env: dev
+default_env: dev
 
 dev:
   adapter: SQLite
@@ -43,7 +43,7 @@ dev:
 """)
         else
             write(f, """
-env: dev
+default_env: dev
 
 dev:
   adapter: $adapter

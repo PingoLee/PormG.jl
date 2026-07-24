@@ -60,4 +60,4 @@ PormG supports explicit environment loading via `env`:
 PormG.Configuration.load("db"; env="prod")
 ```
 This is the **preferred method** for server applications, as it avoids relying on global `ENV` state.
-If `env` is not provided, PormG will fallback to `ENV["PORMG_ENV"]` (defaults to `dev`).
+If `env` is not provided, PormG falls back to `ENV["PORMG_ENV"]`, then to a top-level `default_env:` key in `connection.yml`, then to `dev`.

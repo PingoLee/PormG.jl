@@ -67,6 +67,17 @@ const DEV   = "dev"
 const PROD  = "prod"
 const TEST  = "test"
 
+# Raised when configuration cannot be loaded: a missing folder/yml (`load` no longer silently
+# scaffolds + returns `nothing` — #205) or a selected environment with no matching block in the
+# yaml. Typed so callers can `catch e; e isa MissingDatabaseConfigurationException`. Previously the
+# "no matching block" path referenced this name without defining it, so it threw an `UndefVarError`
+# instead of the intended message.
+struct MissingDatabaseConfigurationException <: Exception
+  msg::String
+end
+Base.showerror(io::IO, e::MissingDatabaseConfigurationException) =
+  print(io, "MissingDatabaseConfigurationException: ", e.msg)
+
 #
 # Thread-Local Transaction Context
 # This ensures that fetch() calls within a transaction use the same connection
@@ -208,8 +219,35 @@ function env(;path::String=DB_PATH)::String
 end
 env(x::String) = env(path=x)
 
-function _effective_env(env::Union{Nothing, String})::String
-  return env === nothing ? (haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : DEV) : env
+# Resolve the active environment (#205). Precedence, first wins:
+#   1. explicit `env=` kwarg to `load(...)`
+#   2. `ENV["PORMG_ENV"]` (set by the user or a host framework)
+#   3. the yaml's top-level `default_env:` (a per-file default)
+#   4. `"dev"`
+function _effective_env(env::Union{Nothing, String}, file_default::Union{Nothing, String} = nothing)::String
+  env !== nothing && return env
+  haskey(ENV, "PORMG_ENV") && return ENV["PORMG_ENV"]
+  file_default !== nothing && return file_default
+  return DEV
+end
+
+# Read only the top-level `default_env:` from a connection.yml, for env precedence (#205).
+# Returns it as a String, or `nothing` when the key is absent/blank. Parsed independently of
+# `read_db_connection_data` (a tiny yaml — negligible) so that function keeps its signature; a parse
+# error here is swallowed (returns `nothing`) and surfaces properly when `read_db_connection_data`
+# re-parses.
+function _peek_default_env(db_settings_file::String)::Union{Nothing, String}
+  raw = try
+    open(db_settings_file) do io
+      YAML.load(io)
+    end
+  catch
+    return nothing
+  end
+  raw isa AbstractDict || return nothing
+  val = get(raw, "default_env", nothing)
+  (val === nothing || (val isa AbstractString && isempty(strip(val)))) && return nothing
+  return string(val)
 end
 
 function _resolve_loaded_key(path_or_key::String)::Union{Nothing, String}
@@ -498,17 +536,13 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
     YAML.load(io)
   end
 
-  # println(db_conn_data)
-
-  # if  haskey(db_conn_data, "env") && db_conn_data["env"] !== nothing
-  #   Base.ENV["PORMG_ENV"] =  if strip(uppercase(string(db_conn_data["env"]))) == """ENV["GENIE_ENV"]"""
-  #                               haskey(ENV, "GENIE_ENV") ? ENV["GENIE_ENV"] : DEV
-  #                             else
-  #                               db_conn_data["env"]
-  #                             end
-
-  #   settings.app_env = Base.ENV["PORMG_ENV"]
-  # end
+  # The top-level `env:` key is inert (#205): it was renamed to `default_env:`, and a bare `env:`
+  # never selected anything (its reader was long dead). Warn once per file so stale configs get a
+  # migration nudge — the environment comes from `load(...; env=)`, `ENV["PORMG_ENV"]`, or the
+  # file's `default_env:`, never from `env:`.
+  if haskey(db_conn_data, "env")
+    @warn "Ignoring the legacy top-level `env:` key in $(db_settings_file) — it was renamed to `default_env:` (#205) and a bare `env:` no longer selects an environment. Rename it to `default_env:` or remove it. Active environment: $(settings.app_env)." maxlog=1 _id=Symbol(:pormg_legacy_env_key_, db_settings_file)
+  end
 
   if  haskey(db_conn_data, settings.app_env)
       if haskey(db_conn_data[settings.app_env], "config") && isa(db_conn_data[settings.app_env]["config"], Dict)
@@ -531,33 +565,45 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
       end
   end
 
-  haskey(db_conn_data, settings.app_env) ?
-    db_conn_data[settings.app_env] :
-    throw(MissingDatabaseConfigurationException("DB configuration for $(settings.app_env) not found"))
+  haskey(db_conn_data, settings.app_env) && return db_conn_data[settings.app_env]
+
+  # No block for the selected env — list the available ones so the fix is obvious (#205).
+  available = sort!(String[string(k) for (k, v) in db_conn_data if v isa AbstractDict])
+  avail_str = isempty(available) ? "(none defined)" : join(available, ", ")
+  throw(MissingDatabaseConfigurationException(
+    "environment \"$(settings.app_env)\" not found in $(db_settings_file); available: $(avail_str). " *
+    "Select one with `load(...; env=\"…\")`, `ENV[\"PORMG_ENV\"]`, or a top-level `default_env:` in the yaml."))
 end
 
 
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config)
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
-  selected_env = _effective_env(env)
 
   @pormg_debug false
 
-  # check if the path exists
-  if !isdir(path)
-    Generator.create_db_folder_and_yml(path=path)
-    @error("The database $(path) does not exist. A new folder and configuration file have been created. Please edit the file and run again.")
-    return nothing
+  db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME)
+
+  # Fail loudly on a missing folder/yml (#205). The old behavior — scaffold a skeleton, log an
+  # `@error`, and `return nothing` — turned a typo'd path into a silent no-op that resurfaced far
+  # away as a confusing settings-lookup error. First-run scaffolding is now explicit: pass
+  # `scaffold=true`, or use `PormG.setup(path)`.
+  if !isdir(path) || !isfile(db_settings_file)
+    if scaffold
+      Generator.create_db_folder_and_yml(path=path)
+      @info "PormG wrote a new configuration skeleton at $(db_settings_file). Edit it, then call `PormG.Configuration.load(\"$(path)\")` again."
+      return nothing
+    end
+    missing_what = !isdir(path) ? "the folder \"$(path)\" does not exist" :
+                                  "no \"$(PORMG_DB_CONFIG_FILE_NAME)\" was found in \"$(path)\""
+    throw(MissingDatabaseConfigurationException(
+      "cannot load PormG configuration: $(missing_what). Create it interactively with " *
+      "`PormG.setup(\"$(path)\")`, or call `PormG.Configuration.load(\"$(path)\"; scaffold=true)` " *
+      "to write a skeleton to edit."))
   end
 
-  # check if the yml file exists
-  db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME)
-  if !isfile(db_settings_file)
-    Generator.create_db_folder_and_yml(path=path)
-    @error("The database $(db_settings_file) does not exist. A new configuration file have been created. Please edit the configuration.yml file and run again.")
-    return nothing
-  end
+  # Resolve the environment with the file's `default_env:` folded into the precedence (#205).
+  selected_env = _effective_env(env, _peek_default_env(db_settings_file))
 
   if haskey(config, path) && config[path].connections !== nothing
     close_pool!(config[path].connections)

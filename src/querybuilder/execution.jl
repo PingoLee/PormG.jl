@@ -1548,7 +1548,11 @@ function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
   end
   return isempty(res) ? nothing : res[1]
 end
-first(; kwargs...) = (objct) -> first(objct; kwargs...)
+# NOTE (#200): the curried `first(; kwargs...) = (objct) -> first(objct; kwargs...)` form
+# was removed — a zero-positional method on Base.first with no PormG type is type piracy.
+# `q.first(...)`, `first(q; kw...)` and `q |> first` are unaffected. See the piracy guard in
+# test/unit/test_public_exports.jl. (`delete`/`inspect_query` keep their curried forms — those
+# functions are package-owned, so a kwargs-only method on them is not piracy.)
 
 function _get_filter_repr(filter::SQLTypeOper)::String
   column = filter.column isa SQLTypeField ? filter.column.field : filter.column

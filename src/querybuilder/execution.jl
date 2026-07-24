@@ -55,7 +55,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
         :parameter_buckets => bucket_breakdown
     )
   else
-    throw(ArgumentError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :inspection, :params, :none"))
+    throw(QueryBuildError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :inspection, :params, :none"))
   end
 end
 
@@ -140,7 +140,7 @@ function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPost
       # steps).  Return the result as-is so callers can inspect every step.
       return res isa Tuple ? res[2] : res
   else
-      throw(ArgumentError("Unsupported or unknown operation for inspection: $operation"))
+      throw(QueryBuildError("Unsupported or unknown operation for inspection: $operation"))
   end
 end
 inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
@@ -191,7 +191,7 @@ function query(q::SQLObjectHandler;
   # :inspection, etc.) must be allowed to build joined queries without .values() so that
   # inspect_query() and show_query=:dict work on un-projected joined queries.
   if isempty(q.object.values) && !isempty(instruction.join) && show_query === :execute
-    throw(ArgumentError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
+    throw(QueryBuildError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
   end
 
   # Restore the context for parent query if this was a subquery
@@ -493,7 +493,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else
-        throw(_argerr("Error in insert, the field \e[4m\e[31m$(field)\e[0m not allow null"))
+        throw(InvalidValueError("Error in insert, the field \e[4m\e[31m$(field)\e[0m not allow null"))
       end
     end
   end
@@ -519,7 +519,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
   for field in keys(real_obj.insert)
     # Validation checks
     validate_field_data(model, field, real_obj.insert[field], "insert"; allow_primary_key = true)
-    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in create(); use $(model.name).$(field)(source_id).add(target_id) after creating the source row"))
+    Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in create(); use $(model.name).$(field)(source_id).add(target_id) after creating the source row"))
 
     # check if the field is a primary key
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
@@ -901,7 +901,7 @@ function _decompose_period(period::Union{Dates.Period, Dates.CompoundPeriod})
     elseif p isa Microsecond ; frac_nanos += Int64(val) * 1_000
     elseif p isa Nanosecond  ; frac_nanos += Int64(val)
     else
-      throw(_argerr("Unsupported duration component $(typeof(p)) in F-expression date arithmetic"))
+      throw(InvalidValueError("Unsupported duration component $(typeof(p)) in F-expression date arithmetic"))
     end
   end
   comps = Tuple{Symbol, Real}[]
@@ -931,7 +931,7 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
   # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
   if v.field_name isa String && _field_type_known(v.field_name, instruc) &&
      _date_field_type(v.field_name, instruc) === nothing
-    throw(_argerr("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
+    throw(InvalidValueError("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
   end
 
   if instruc.connection isa PormGPostgres
@@ -1197,7 +1197,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # would mutate ALL matching rows, not just 5). To update a bounded set of rows,
   # filter by primary key explicitly or compose a subquery.
   if real_obj.limit > 0 || real_obj.offset > 0 || !isempty(real_obj.order)
-    throw(ArgumentError(
+    throw(UnsafeMutationError(
       "Cannot call update() on a query that has limit(), offset(), or order_by() set. " *
       "Standard SQL UPDATE does not support these clauses, and silently dropping them " *
       "risks updating more rows than intended. " *
@@ -1206,7 +1206,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
 
   if real_obj.distinct
-    throw(ArgumentError(
+    throw(UnsafeMutationError(
       "Cannot call update() on a query with distinct(). " *
       "DISTINCT collapses the result set, which would cause UPDATE to target " *
       "different rows than intended. Remove distinct() or filter by primary key."
@@ -1214,7 +1214,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   end
 
   if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, real_obj.values)
-    throw(ArgumentError(
+    throw(UnsafeMutationError(
       "Cannot call update() on a query with group_by() / annotate aggregations. " *
       "GROUP BY collapses rows, making the UPDATE target ambiguous. " *
       "Remove the aggregation or filter by primary key."
@@ -1224,7 +1224,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   instruction = build(real_obj, table_alias=table_alias, connection=connection) 
 
   # Don't allow to update a field without filter
-  instruction._where |> isempty && throw(_argerr("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
+  instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
   
   parameters = instruction.parameters
   fields = model.field_names
@@ -1247,7 +1247,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   for field in keys(objct.insert)    
     # Validation checks
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
-    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
+    Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
     
     quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
@@ -1516,7 +1516,7 @@ function list(objct::SQLObjectHandler, ::Val{:json}; show_query::Symbol = :execu
 end
 
 function list(objct::SQLObjectHandler, ::Val{F}; kwargs...) where F
-  throw(ArgumentError("Unknown list format :$F. Expected :row, :dict, or :json."))
+  throw(QueryBuildError("Unknown list format :$F. Expected :row, :dict, or :json."))
 end
 
 list(objct::SQLObjectHandler, format::Symbol; kwargs...) = list(objct, Val(format); kwargs...)
@@ -1616,15 +1616,15 @@ end
 function _row_related_model(model::PormGModel, fk_meta::Models.sForeignKey)::PormGModel
   fk_meta.to isa PormGModel && return fk_meta.to
 
-  model._module !== nothing || throw(ArgumentError("Cannot resolve related model $(fk_meta.to) for $(model.name); model module is not initialized."))
+  model._module !== nothing || throw(QueryBuildError("Cannot resolve related model $(fk_meta.to) for $(model.name); model module is not initialized."))
   related = Base.invokelatest(getfield, model._module, Symbol(fk_meta.to))
   related isa PormGModel && return related
-  throw(ArgumentError("Related model $(fk_meta.to) for $(model.name) is not a PormG model."))
+  throw(QueryBuildError("Related model $(fk_meta.to) for $(model.name) is not a PormG model."))
 end
 
 function _row_require_data_key(data::Dict{Symbol,Any}, key::Symbol, context::String)
   haskey(data, key) && return data[key]
-  throw(ArgumentError("Cannot save() $(context): row data does not include required key '$(key)'. Select it before mutating and saving the row."))
+  throw(QueryBuildError("Cannot save() $(context): row data does not include required key '$(key)'. Select it before mutating and saving the row."))
 end
 
 """
@@ -1646,10 +1646,13 @@ function save(row::PormGRow; show_query::Symbol = :execute)
   pk_sym = try
     Models.get_model_pk_field(model)
   catch e
+    # `get_model_pk_field` lives in Models, which is OUT OF SCOPE for the #231 error taxonomy and
+    # still throws `ArgumentError` (not a `PormGError`). Keep `isa ArgumentError` here; revisit when
+    # the Models error contract migrates. The re-thrown save() error below is in-scope (QueryBuildError).
     e isa ArgumentError || rethrow(e)
-    throw(ArgumentError("save() requires exactly one primary key field; $(model.name) is not supported."))
+    throw(QueryBuildError("save() requires exactly one primary key field; $(model.name) is not supported."))
   end
-  pk_sym === nothing && throw(ArgumentError("save() requires exactly one primary key field; $(model.name) is not supported."))
+  pk_sym === nothing && throw(QueryBuildError("save() requires exactly one primary key field; $(model.name) is not supported."))
 
   own_updates = Dict{String,Any}()
   fk_updates = Dict{Symbol,Dict{String,Any}}()
@@ -1674,7 +1677,7 @@ function save(row::PormGRow; show_query::Symbol = :execute)
   end
 
   conflict = intersect(touched_fk_fields, Set(keys(fk_updates)))
-  isempty(conflict) || throw(ArgumentError(
+  isempty(conflict) || throw(QueryBuildError(
     "Cannot save() a row after mutating both FK field(s) $(collect(conflict)) and projected '__' fields under the same prefix. Save the FK change separately first."
   ))
 
@@ -1692,7 +1695,7 @@ function save(row::PormGRow; show_query::Symbol = :execute)
     for fk_sym in sort(collect(keys(fk_updates)); by=String)
       fk_meta = model.fields[String(fk_sym)]::Models.sForeignKey
       if fk_meta.pk_field === nothing
-        throw(ArgumentError(
+        throw(QueryBuildError(
           "save() cannot update projected fields under '$(fk_sym)' because the FK's " *
           "target primary key has not been resolved. Call set_models() to initialize " *
           "the model before using save() with projected FK fields."

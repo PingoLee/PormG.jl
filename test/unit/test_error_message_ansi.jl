@@ -36,14 +36,14 @@ const SAMPLE = "the field \e[4m\e[31mpoints\e[0m is not allowed"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Error colorization: _argerr routes ArgumentError messages through _emsg
-# Every QueryBuilder call site builds ArgumentErrors via `_argerr`; this proves
-# the wiring (so a regression that bypasses `_emsg` is caught) without depending
-# on the ambient color mode — both sides resolve `Base.have_color` identically.
+# Error colorization: _argerr routes messages through _emsg
+# `_argerr` is the long-tail funnel; #231 makes it return `QueryBuildError` (a `PormGError`)
+# instead of `ArgumentError`, still routing the message through `_emsg`. This proves the wiring
+# (so a regression that bypasses `_emsg` is caught) without depending on the ambient color mode.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "_argerr wiring" begin
     err = _argerr(SAMPLE)
-    @test err isa ArgumentError
+    @test err isa PormG.QueryBuildError     # #231: the funnel now returns QueryBuildError
     # _argerr must produce exactly what _emsg produces under the same color mode.
     @test err.msg == _emsg(SAMPLE)
 end
@@ -162,7 +162,7 @@ PormG.config["ansi_bulk_default"] = PormG.Configuration.Settings(
     df = DataFrames.DataFrame(id = [1], weight = [5])
 
     # `match_on = ["not_a_field"]` fails the model-field check in execution_bulk.jl
-    # (`bulk_update: match_on field … is not a field of model`), a `_argerr` site.
+    # (`bulk_update: match_on field … is not a field of model`) → UnknownFieldError (#231).
     raise_bulk = () -> try
         bulk_update(model.objects, df;
             columns = ["weight"], match_on = ["not_a_field"], show_query = :dict)
@@ -173,14 +173,14 @@ PormG.config["ansi_bulk_default"] = PormG.Configuration.Settings(
 
     _with_have_color(false) do
         err = raise_bulk()
-        @test err isa ArgumentError                       # not a raw String
+        @test err isa PormG.UnknownFieldError             # #231: field-not-found, not a raw String
         @test !occursin("\e[", err.msg)
         @test !occursin("\e[", sprint(showerror, err))
     end
 
     _with_have_color(true) do
         err = raise_bulk()
-        @test err isa ArgumentError
+        @test err isa PormG.UnknownFieldError
         @test occursin("\e[", err.msg)                    # highlighting kept on-TTY
     end
 end

@@ -354,7 +354,7 @@ PormG.config["default"] = MockSettings
       catch e
         e
       end
-      @test err isa ArgumentError
+      @test err isa PormGError
       msg = sprint(showerror, err)
       # Discriminating: names the offending column, the DISTINCT context, and the .values() fix —
       # not a bare @test_throws that any ArgumentError would satisfy.
@@ -376,7 +376,7 @@ PormG.config["default"] = MockSettings
       catch e
         e
       end
-      @test err isa ArgumentError
+      @test err isa PormGError
       msg = sprint(showerror, err)
       @test occursin("created_at", msg)   # names the offending order term
       @test occursin("DISTINCT", msg)
@@ -438,7 +438,7 @@ PormG.config["default"] = MockSettings
     @test (q.list(show_query=:none)) === nothing
     
     # Invalid mode should throw
-    @test_throws ArgumentError (q.list(show_query=:invalid))
+    @test_throws PormGError (q.list(show_query=:invalid))
   end
 
   # ===== Section 14: Comparison: inspect_query vs show_query =====
@@ -643,7 +643,7 @@ PormG.config["default"] = MockSettings
     )
 
     # inspect_query on the raw subquery (no Exists wrapper, no outer) must error
-    @test_throws ArgumentError inspect_query(note_query)
+    @test_throws PormGError inspect_query(note_query)
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -890,14 +890,14 @@ PormG.config["default"] = MockSettings
     excl_err = try
       DriverModel.objects.select_for_update(nowait = true, skip_locked = true); nothing
     catch e; e end
-    @test excl_err isa ArgumentError && occursin("mutually exclusive", excl_err.msg)
+    @test excl_err isa PormGError && occursin("mutually exclusive", excl_err.msg)
 
     # FOR UPDATE + DISTINCT is invalid on PostgreSQL → friendly error at render time.
     q = DriverModel.objects
     q.distinct(true)
     q.select_for_update()
     dist_err = try inspect_query(q); nothing catch e; e end
-    @test dist_err isa ArgumentError && occursin("distinct", dist_err.msg)
+    @test dist_err isa PormGError && occursin("distinct", dist_err.msg)
   end
 
 end

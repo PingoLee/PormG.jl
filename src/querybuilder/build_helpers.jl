@@ -19,7 +19,7 @@ function get_settings(obj::Union{SQLObject,SQLObjectHandler}; connection::Union{
     if length(config) == 1
       conn_key = first(keys(config))
     else
-      throw(ArgumentError("Model '$(q.model.name)' is not bound to a database connection key. " *
+      throw(UnsupportedConnectionError("Model '$(q.model.name)' is not bound to a database connection key. " *
         "Call `set_models()` or `PormG.@import_models` to bind the model before querying."))
     end
   end
@@ -94,9 +94,9 @@ function _check_function(x::Vector{String})
       if haskey(PormGsuffix, x[end])
         yes = "you can use \"column__@\e[32m$(x[end])\e[0m\""
         not = "you can not use \"column__\e[31m@$(x[end])__@function\e[0m\". valid functions are:\n$(joined_keys_with_prefix_func)\e[0m\nvalid operators are:\n$(joined_keys_with_prefix_oper)\e[0m"
-        throw(_argerr("\e[4m\e[31m$(x[end])\e[0m is not allowed.\n$yes\n$not"))
+        throw(FilterError("\e[4m\e[31m$(x[end])\e[0m is not allowed.\n$yes\n$not"))
       else
-        throw(_argerr("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid;\n please use a valid function:\n  - $(joined_keys_with_prefix_func)\e[0m\nor a valid operator:\n  - $(joined_keys_with_prefix_oper)\e[0m"))
+        throw(FilterError("\"$(x[1])__\e[31m@$(x[end])\e[0m\" is invalid;\n please use a valid function:\n  - $(joined_keys_with_prefix_func)\e[0m\nor a valid operator:\n  - $(joined_keys_with_prefix_oper)\e[0m"))
       end
     end
   end
@@ -166,7 +166,7 @@ function _raise_invalid_filter_operator(field_path::Vector{String}, shape::Abstr
     # No __@ suffix at all: a bare field was paired with a $shape value.
     field = field_path[end]
     examples = join(map(a -> "$(field)__@" * a, allowed), ", ")
-    throw(_argerr("Error in filter: field \e[31m$(field)\e[0m was given a $(shape) value but no operator.\n" *
+    throw(FilterError("Error in filter: field \e[31m$(field)\e[0m was given a $(shape) value but no operator.\n" *
                   "With a $(shape) value, use one of: $(examples)"))
   end
   suffix = field_path[end]
@@ -175,12 +175,12 @@ function _raise_invalid_filter_operator(field_path::Vector{String}, shape::Abstr
     # input looks like a near-miss, suggest the intended one (e.g. @notin → @nin).
     suggestion = _suggest_operator(suffix)
     hint = suggestion === nothing ? "" : " Did you mean \e[32m@$(suggestion)\e[0m?"
-    throw(_argerr("Error in filter: \e[31m@$(suffix)\e[0m is not a valid operator.$(hint)\n" *
+    throw(FilterError("Error in filter: \e[31m@$(suffix)\e[0m is not a valid operator.$(hint)\n" *
                   "Valid operators: $(all_opers)\n" *
                   "With a $(shape) value, use one of: $(allowed_opers)"))
   else
     # Known operator, but not valid for this value shape (e.g. @gte with a vector).
-    throw(_argerr("Error in filter: operator \e[31m@$(suffix)\e[0m is not valid with a $(shape) value.\n" *
+    throw(FilterError("Error in filter: operator \e[31m@$(suffix)\e[0m is not valid with a $(shape) value.\n" *
                   "With a $(shape) value, use one of: $(allowed_opers)"))
   end
 end
@@ -241,7 +241,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Mis
     return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   elseif suffix in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
     if length(x.second) != 2
-      throw(_argerr("Error in filter, '$(suffix)' operator requires exactly 2 values, got $(length(x.second))"))
+      throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got $(length(x.second))"))
     end
     return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   elseif suffix in ("has_any_keys", "has_keys")
@@ -354,7 +354,7 @@ function _validate_membership_subquery(v::SQLTypeOper)
     "The subquery currently selects $(projection_count) columns: $(_summarize_projection_labels(projection_labels))."
   end
 
-  throw(ArgumentError(
+  throw(FilterError(
     "PormG: '$lookup' requires a subquery that returns exactly one column. " *
     detail * " Fix: call .values(\"field_name\") on the subquery so it projects only the key used by the filter."
   ))
@@ -374,7 +374,7 @@ function _check_filter(x::Pair)
       rethrow(e)
     end
   else
-    throw(_argerr("Error in filter: '$(x.first) => ...' must use a String key, got $(typeof(x.first))"))
+    throw(FilterError("Error in filter: '$(x.first) => ...' must use a String key, got $(typeof(x.first))"))
   end
 end
 
@@ -436,14 +436,14 @@ function _check_if_field_is_a_operator(field::String)
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
     "hour", "minute", "second", "isnull", "regex", "iregex"]
   if field in common_operators
-    throw(_argerr("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
+    throw(FilterError("The filter operator '\e[31m$field\e[0m' requires '@' prefix. Use '\e[32m$field\e[0m' => ... as part of '__\e[33m@$field\e[0m' syntax. Example: \e[36mq.filter(\"name__@$field\" => value)\e[0m"))
   end
 end
 
 function _normalize_join_type(join_type::String)
   valid_joins = ["INNER", "LEFT", "RIGHT", "FULL", "CROSS"]
   normalized = uppercase(strip(join_type))
-  normalized in valid_joins || throw(ArgumentError("Invalid join type '$(join_type)'. Valid types: $(join(valid_joins, ", "))"))
+  normalized in valid_joins || throw(QueryBuildError("Invalid join type '$(join_type)'. Valid types: $(join(valid_joins, ", "))"))
   return normalized
 end
 
@@ -480,7 +480,7 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   if !(field in model.field_names)
     _check_if_field_is_a_operator(field)
     @pormg_debug false
-    throw(_argerr("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
+    throw(UnknownFieldError("The field \e[31m$(field)\e[0m not found in \e[34m$(model.name)\e[0m: \e[32m$(join(model.field_names, ", "))\e[0m"))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
 
@@ -576,12 +576,12 @@ function _resolve_window_expression(v, instruc::SQLInstruction)
   if v isa Symbol
     return _resolve_window_expression(String(v), instruc)
   elseif v isa String
-    isempty(v) && throw(ArgumentError("Window expression fields cannot be empty"))
+    isempty(v) && throw(QueryBuildError("Window expression fields cannot be empty"))
     return _get_select_query(_check_function(v), instruc)
   elseif v isa SQLType
     return _get_select_query(v, instruc)
   else
-    throw(ArgumentError("Unsupported window expression $(repr(v)) of type $(typeof(v))"))
+    throw(QueryBuildError("Unsupported window expression $(repr(v)) of type $(typeof(v))"))
   end
 end
 
@@ -590,10 +590,10 @@ _normalize_window_orientation(orientation::AbstractString)::String =
   _normalize_order_orientation(orientation; context="Window ORDER BY")
 
 function _resolve_window_order(v::String, instruc::SQLInstruction)::String
-  isempty(v) && throw(ArgumentError("Window ORDER BY fields cannot be empty"))
+  isempty(v) && throw(QueryBuildError("Window ORDER BY fields cannot be empty"))
   orientation = startswith(v, "-") ? "DESC" : "ASC"
   field = startswith(v, "-") ? v[2:end] : v
-  isempty(field) && throw(ArgumentError("Window ORDER BY fields cannot be empty"))
+  isempty(field) && throw(QueryBuildError("Window ORDER BY fields cannot be empty"))
   return string(_resolve_window_expression(field, instruc), " ", orientation)
 end
 
@@ -615,9 +615,9 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   end
 
   if over.frame !== nothing
-    instruc.connection isa PormGSQLite && throw(ArgumentError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(over.frame)) or use PostgreSQL."))
+    instruc.connection isa PormGSQLite && throw(QueryBuildError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(over.frame)) or use PostgreSQL."))
     frame = strip(over.frame)
-    isempty(frame) && throw(ArgumentError("Window frame cannot be empty"))
+    isempty(frame) && throw(QueryBuildError("Window frame cannot be empty"))
     push!(parts, frame)
   end
 
@@ -640,7 +640,7 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
 
   if v.column === nothing
     v.function_name in ["LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE"] &&
-      throw(ArgumentError("$(v.function_name) requires a column argument; got nothing"))
+      throw(QueryBuildError("$(v.function_name) requires a column argument; got nothing"))
     return getfield(Dialect, func_name)(over_sql, instruc.connection)
   end
 
@@ -657,8 +657,8 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     return getfield(Dialect, func_name)(resolved_column, over_sql, resolved_kwargs, instruc.connection)
   elseif v.function_name == "NTH_VALUE"
     n = get(v.kwargs, "n", nothing)
-    n isa Integer || throw(ArgumentError("NthValue requires a positive integer n"))
-    n <= 0 && throw(ArgumentError("NthValue n must be a positive integer"))
+    n isa Integer || throw(QueryBuildError("NthValue requires a positive integer n"))
+    n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
     return getfield(Dialect, func_name)(resolved_column, n, over_sql, instruc.connection)
   else
     return getfield(Dialect, func_name)(resolved_column, over_sql, instruc.connection)
@@ -822,7 +822,7 @@ end
 function _resolve_outer_ref_field_name(ref::OuterRefObject, outer::SQLInstruction)::String
   if ref.field_name == "pk"
     pk_field = Models.get_model_pk_field(outer.object.model)
-    pk_field === nothing && throw(ArgumentError("OuterRef(\"pk\") requires the outer model '$(outer.object.model.name)' to define exactly one primary key field"))
+    pk_field === nothing && throw(QueryBuildError("OuterRef(\"pk\") requires the outer model '$(outer.object.model.name)' to define exactly one primary key field"))
     return String(pk_field)
   end
   return ref.field_name
@@ -934,7 +934,7 @@ function _resolve_cjoin_on_alias_column(v::String, instruc::SQLInstruction)
   config = get(instruc.object.custom_join, alias, nothing)
   (config isa Dict{String,Any} && get(config, "no_anchor", false) == true) || return nothing
   target_model = getfield(instruc.object.model._module, Symbol(config["target_model"]::String))::PormGModel
-  (col in target_model.field_names) || throw(_argerr(
+  (col in target_model.field_names) || throw(UnknownFieldError(
     "cjoin_on: column '$(col)' not found on aliased model '$(target_model.name)' (alias '$(alias)')."))
   return string(quote_identifier(alias, instruc.connection), ".",
                 quote_identifier(Models.field_db_column(target_model.fields[col], col), instruc.connection))
@@ -946,7 +946,7 @@ function _get_filter_query(v::ExistsObject, instruc::SQLInstruction)
   return _build_exists_query(v.query, instruc)
 end
 function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
-  instruc.outer === nothing && throw(ArgumentError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
+  instruc.outer === nothing && throw(QueryBuildError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
   return _get_filter_query(_resolve_outer_ref_field_name(v, instruc.outer), instruc.outer)
 end
 # function _get_filter_query(v::SQLTypeText, instruc::SQLInstruction)
@@ -976,7 +976,7 @@ function _json_numeric_rhs(value)
   s = strip(string(value))
   n = tryparse(Int, s); n !== nothing && return n
   f = tryparse(Float64, s); (f !== nothing && isfinite(f)) && return f
-  throw(_argerr("A numeric JSON comparison requires a number; got \e[31m$(value)\e[0m."))
+  throw(FilterError("A numeric JSON comparison requires a number; got \e[31m$(value)\e[0m."))
 end
 
 # #27: render a comparison against a JSON path lookup (e.g. `payload__driver`). The RHS binds
@@ -1002,7 +1002,7 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
     ph = add_parameter!(instruc, _json_numeric_rhs(v.values))
     return string(lhs, " ", op, " ", ph)
   else
-    throw(_argerr("The operator \e[31m$(op)\e[0m is not supported on a JSON path lookup. Use =, !=, <, <=, >, >=, or __@isnull."))
+    throw(FilterError("The operator \e[31m$(op)\e[0m is not supported on a JSON path lookup. Use =, !=, <, <=, >, >=, or __@isnull."))
   end
 end
 
@@ -1013,11 +1013,11 @@ end
 function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   col_as = isa(v.column, SQLTypeField) ? v.column._as : nothing
   if col_as !== nothing && haskey(instruc.json_lookup_cache, col_as)
-    throw(_argerr("The \e[31m@$(v.operator)\e[0m operator applies to a JSON column, not a nested key path (\e[31m$(col_as)\e[0m); this is not supported in v1."))
+    throw(FilterError("The \e[31m@$(v.operator)\e[0m operator applies to a JSON column, not a nested key path (\e[31m$(col_as)\e[0m); this is not supported in v1."))
   end
   base = _resolve_json_operator_field(v, instruc)
   (base !== nothing && Models.is_json_field(base)) ||
-    throw(_argerr("The \e[31m@$(v.operator)\e[0m operator requires a JSONField column; \e[31m$(something(col_as, "the target"))\e[0m is not JSON."))
+    throw(FilterError("The \e[31m@$(v.operator)\e[0m operator requires a JSONField column; \e[31m$(something(col_as, "the target"))\e[0m is not JSON."))
   op = v.operator
   ph = if op == "jcontains"
     add_parameter!(instruc, Models.format_json_sql(v.values); sql_type="jsonb")
@@ -1025,7 +1025,7 @@ function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstr
     add_parameter!(instruc, string(v.values))
   else  # has_any_keys / has_keys
     v.values isa AbstractVector ||
-      throw(_argerr("The \e[31m@$(op)\e[0m operator requires an array of keys, e.g. filter(\"col__@$(op)\" => [\"a\", \"b\"]); got a single value."))
+      throw(FilterError("The \e[31m@$(op)\e[0m operator requires an array of keys, e.g. filter(\"col__@$(op)\" => [\"a\", \"b\"]); got a single value."))
     add_parameter!(instruc, String.(v.values); sql_type="text[]")
   end
   return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
@@ -1078,7 +1078,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
       @pormg_debug
-      throw(_argerr("Invalid subquery filter on \"$(v.column.field)\": a queryset value requires a membership operator — use \"$(v.column.field)__@in\" => subquery or __@nin."))
+      throw(FilterError("Invalid subquery filter on \"$(v.column.field)\": a queryset value requires a membership operator — use \"$(v.column.field)__@in\" => subquery or __@nin."))
     end
     _validate_membership_subquery(v)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
@@ -1124,7 +1124,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       catch e
         @pormg_debug false
         if contains(string(e), "The date") && contains(string(e), "is invalid")
-          throw(_argerr("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
+          throw(FilterError("The \e[4m\e[31m$(v.column.field)\e[0m field is the type \e[4m\e[32m$(instruc.object.model.fields[v.column.field].type)\e[0m. Please check the value: \e[4m\e[31m$(v.values)\e[0m"))
         end
         @pormg_debug false
         rethrow(e)
@@ -1141,7 +1141,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
-      throw(_argerr("Field \"$(v.column.field)\" not found in model $(instruc.object.model.name)"))
+      throw(UnknownFieldError("Field \"$(v.column.field)\" not found in model $(instruc.object.model.name)"))
     end
   end
 
@@ -1170,7 +1170,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     @pormg_debug false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else
-    throw(_argerr("Invalid filter operator: $(v.operator) is not a supported operator."))
+    throw(FilterError("Invalid filter operator: $(v.operator) is not a supported operator."))
   end
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)

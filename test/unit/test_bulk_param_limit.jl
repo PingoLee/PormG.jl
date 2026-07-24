@@ -92,7 +92,7 @@ const _effective_chunk_size  = PormG.QueryBuilder._effective_chunk_size
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("999", string(err))              # names the backend limit
         @test occursin("chunk_size", string(err))        # points at the lever
         @test occursin(r"bulk_insert"i, string(err))     # names the operation
@@ -105,7 +105,7 @@ const _effective_chunk_size  = PormG.QueryBuilder._effective_chunk_size
         catch e
             e
         end
-        @test err_fixed isa ArgumentError
+        @test err_fixed isa PormGError
         @test occursin("999", string(err_fixed))
         @test occursin(r"bulk_update"i, string(err_fixed))
     end

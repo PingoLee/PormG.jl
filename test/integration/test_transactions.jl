@@ -603,7 +603,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
       autocommit_err = try
         M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list(); nothing
       catch e; e end
-      @test autocommit_err isa ArgumentError && occursin("transaction", autocommit_err.msg)
+      @test autocommit_err isa PormGError && occursin("transaction", autocommit_err.msg)
     else
       # SQLite: select_for_update is a pure no-op — returns rows normally and never raises,
       # both inside and outside a transaction (the documented PG/SQLite divergence).

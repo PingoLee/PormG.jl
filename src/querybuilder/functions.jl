@@ -14,7 +14,7 @@ a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
 ```
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(_argerr("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
   return QObject(filters = colect)
 end
 
@@ -34,7 +34,7 @@ a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
 ```
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(_argerr("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
   return QorObject(or = colect)
 end
 
@@ -88,7 +88,7 @@ function _window_part_vector(value, part_name::String)::Vector{WindowPartitionPa
   parts = WindowPartitionPart[]
   for item in values
     item isa Symbol && (item = String(item))
-    item isa WindowPartitionPart || throw(ArgumentError("WindowOver $part_name entries must be strings, SQL fields, SQL functions, or F expressions. Got $(typeof(item))."))
+    item isa WindowPartitionPart || throw(QueryBuildError("WindowOver $part_name entries must be strings, SQL fields, SQL functions, or F expressions. Got $(typeof(item))."))
     push!(parts, item)
   end
   return parts
@@ -100,7 +100,7 @@ function _window_order_vector(value)::Vector{WindowOrderPart}
   parts = WindowOrderPart[]
   for item in values
     item isa Symbol && (item = String(item))
-    item isa WindowOrderPart || throw(ArgumentError("WindowOver order_by entries must be strings or SQLOrder objects. Got $(typeof(item))."))
+    item isa WindowOrderPart || throw(QueryBuildError("WindowOver order_by entries must be strings or SQLOrder objects. Got $(typeof(item))."))
     push!(parts, item)
   end
   return parts
@@ -125,14 +125,14 @@ RowNumber(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="ROW_N
 RowNumber(over::WindowSpec) = RowNumber(over=over)
 
 function Lag(x::WindowColumnPart; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
-  offset < 0 && throw(ArgumentError("Lag offset must be a non-negative integer"))
+  offset < 0 && throw(QueryBuildError("Lag offset must be a non-negative integer"))
   kwargs = Dict{String,Any}("offset" => offset)
   default !== nothing && (kwargs["default"] = default)
   return WindowFunction(function_name="LAG", column=x, over=over, kwargs=kwargs)
 end
 
 function Lead(x::WindowColumnPart; offset::Integer=1, default=nothing, over::WindowSpec=WindowOver())
-  offset < 0 && throw(ArgumentError("Lead offset must be a non-negative integer"))
+  offset < 0 && throw(QueryBuildError("Lead offset must be a non-negative integer"))
   kwargs = Dict{String,Any}("offset" => offset)
   default !== nothing && (kwargs["default"] = default)
   return WindowFunction(function_name="LEAD", column=x, over=over, kwargs=kwargs)
@@ -141,7 +141,7 @@ end
 FirstValue(x::WindowColumnPart; over::WindowSpec=WindowOver()) = WindowFunction(function_name="FIRST_VALUE", column=x, over=over)
 LastValue(x::WindowColumnPart; over::WindowSpec=WindowOver()) = WindowFunction(function_name="LAST_VALUE", column=x, over=over)
 function NthValue(x::WindowColumnPart, n::Integer; over::WindowSpec=WindowOver())
-  n <= 0 && throw(ArgumentError("NthValue n must be a positive integer"))
+  n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
   return WindowFunction(function_name="NTH_VALUE", column=x, over=over, kwargs=Dict{String,Any}("n" => n))
 end
 
@@ -479,7 +479,7 @@ end
 
 function ISNULL(v::String , value::Bool)
   if contains(v, "(")
-    throw(_argerr("Error in ISNULL: the column $(v) cannot be a function expression."))
+    throw(FilterError("Error in ISNULL: the column $(v) cannot be a function expression."))
   end
   if value
     return string(v, " IS NULL")
@@ -528,13 +528,13 @@ function limit!(object::SQLObject, limit::Tuple{Integer})
   object.limit = limit[1]
 end
 function limit!(object::SQLObject, limit)
-  throw(ArgumentError("Error in page, limit must be an Integer"))
+  throw(QueryBuildError("Error in page, limit must be an Integer"))
 end
 function offset!(object::SQLObject, offset::Tuple{Integer})
   object.offset = offset[1]
 end
 function offset!(object::SQLObject, offset)
-  throw(ArgumentError("Error in page, offset must be an Integer"))
+  throw(QueryBuildError("Error in page, offset must be an Integer"))
 end
 function page!(object::SQLObject, v::Tuple{Integer, Integer})
   object.limit = v[1]

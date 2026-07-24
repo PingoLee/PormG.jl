@@ -51,7 +51,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         )
 
         @test validate_field_data(mock_int_model, "id", 10, "insert") === true
-        @test_throws ErrorException validate_field_data(mock_int_model, "id", "not-an-int", "insert")
+        @test_throws PormGError validate_field_data(mock_int_model, "id", "not-an-int", "insert")
         
         @test validate_field_data(mock_int_model, "age", 25, "insert") === true
         # Django accepts Decimal for IntegerField by coercing through int(value).
@@ -59,9 +59,9 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # must still reject fractional Decimal values to avoid silent truncation.
         @test validate_field_data(mock_int_model, "age", parse(Decimal, "25"), "insert") === true
         @test validate_field_data(mock_int_model, "age", parse(Decimal, "25.0"), "insert") === true
-        @test_throws ErrorException validate_field_data(mock_int_model, "age", parse(Decimal, "25.5"), "insert")
+        @test_throws PormGError validate_field_data(mock_int_model, "age", parse(Decimal, "25.5"), "insert")
         @test Models.format2int64(parse(Decimal, "25.0")) == 25
-        @test_throws ErrorException validate_field_data(mock_int_model, "age", nothing, "insert")
+        @test_throws PormGError validate_field_data(mock_int_model, "age", nothing, "insert")
         
         @test validate_field_data(mock_int_model, "big_val", 9223372036854775807, "insert") === true
     end
@@ -91,7 +91,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
 
         @test validate_field_data(mock_str_model, "code", "abc", "insert") === true
         # Bounded CharField still enforces its limit (max_length=5).
-        @test_throws ErrorException validate_field_data(mock_str_model, "code", "toolong", "insert")
+        @test_throws PormGError validate_field_data(mock_str_model, "code", "toolong", "insert")
 
         @test validate_field_data(mock_str_model, "email", "test@example.com", "insert") === true
 
@@ -161,14 +161,14 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         
         # Test 10: Decimal respects decimal_places
         @test validate_field_data(mock_decimal_model, "price", "10.50", "insert") === true
-        @test_throws ErrorException validate_field_data(mock_decimal_model, "price", "10.123", "insert")
-        @test_throws ErrorException validate_field_data(mock_decimal_model, "score", 1.25, "insert")
+        @test_throws PormGError validate_field_data(mock_decimal_model, "price", "10.123", "insert")
+        @test_throws PormGError validate_field_data(mock_decimal_model, "score", 1.25, "insert")
 
         # Test 11: Decimal respects max_digits
-        @test_throws ErrorException validate_field_data(mock_decimal_model, "price", "12345678901", "insert")
+        @test_throws PormGError validate_field_data(mock_decimal_model, "price", "12345678901", "insert")
 
         # Test 12: Invalid Decimal - non-numeric string
-        @test_throws ErrorException validate_field_data(mock_decimal_model, "price", "not-a-number", "insert")
+        @test_throws PormGError validate_field_data(mock_decimal_model, "price", "not-a-number", "insert")
         
         # ===== FLOAT FIELD TESTS =====
         # Test 13: Float with integer input
@@ -203,18 +203,18 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         @test validate_field_data(mock_float_model, "percentage", missing, "insert") === true
         
         # Test 23: Float rejects non-finite values
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", Inf, "insert")
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", -Inf, "insert")
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", NaN, "insert")
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "Inf", "insert")
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "NaN", "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", Inf, "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", -Inf, "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", NaN, "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", "Inf", "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", "NaN", "insert")
 
         # Test 24: Float rejects invalid numeric strings during validation
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "not-a-number", "insert")
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", "1,25", "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", "not-a-number", "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", "1,25", "insert")
 
         # Test 25: Invalid Float - non-nullable with nothing
-        @test_throws ErrorException validate_field_data(mock_float_model, "ratio", nothing, "insert")
+        @test_throws PormGError validate_field_data(mock_float_model, "ratio", nothing, "insert")
     end
 
     @testset "Numeric Formatter: Bool input converts to Int" begin
@@ -287,10 +287,10 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         @test validate_field_data(DateTimeModel, "scheduled_at", missing, "insert") === true
         
         # Test 3: Non-nullable field with nothing (should fail)
-        @test_throws ErrorException validate_field_data(DateTimeModel, "event_time", nothing, "insert")
+        @test_throws PormGError validate_field_data(DateTimeModel, "event_time", nothing, "insert")
         
         # Test 4: Non-nullable field with missing (should fail)
-        @test_throws ErrorException validate_field_data(DateTimeModel, "event_time", missing, "insert")
+        @test_throws PormGError validate_field_data(DateTimeModel, "event_time", missing, "insert")
         
         # --- VALID DATETIME VALUES ---
         
@@ -450,9 +450,9 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         @test validate_field_data(DateModel, "inspection_day", nothing, "insert") === true
         @test validate_field_data(DateModel, "inspection_day", missing, "insert") === true
 
-        @test_throws ErrorException validate_field_data(DateModel, "race_day", nothing, "insert")
-        @test_throws ErrorException validate_field_data(DateModel, "race_day", "2024/07/28", "insert")
-        @test_throws ErrorException validate_field_data(DateModel, "race_day", 20240728, "insert")
+        @test_throws PormGError validate_field_data(DateModel, "race_day", nothing, "insert")
+        @test_throws PormGError validate_field_data(DateModel, "race_day", "2024/07/28", "insert")
+        @test_throws PormGError validate_field_data(DateModel, "race_day", 20240728, "insert")
 
         create_date = DateModel.objects.create(
             "race_day" => race_day,
@@ -525,11 +525,11 @@ end
         @test validate_field_data(ExtensiveModel, "email", "lewis@mercedes.com", "insert")
         
         # Invalid type checks
-        @test_throws ErrorException validate_field_data(ExtensiveModel, "age", 39.5, "insert")
+        @test_throws PormGError validate_field_data(ExtensiveModel, "age", 39.5, "insert")
         @test validate_field_data(ExtensiveModel, "salary", "5e7", "insert") === true
         
         # Nullability checks
-        @test_throws ErrorException validate_field_data(ExtensiveModel, "name", nothing, "insert")
+        @test_throws PormGError validate_field_data(ExtensiveModel, "name", nothing, "insert")
         @test validate_field_data(ExtensiveModel, "description", nothing, "insert")
         @test validate_field_data(ExtensiveModel, "ratio", nothing, "insert")
     end
@@ -587,31 +587,31 @@ end
         # --- EXCEED DECIMAL_PLACES (Should Fail) ---
         
         # Test 9: 3 decimal places (1 too many)
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 123.456, "insert")
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "123.456", "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 123.456, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", "123.456", "insert")
         
         # Test 10: 4 decimal places
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 99.9999, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 99.9999, "insert")
         
         # Test 11: Many decimal places
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 1.123456789, "insert")
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "1.123456789", "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 1.123456789, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", "1.123456789", "insert")
         
         # --- EXCEED MAX_DIGITS (Should Fail) ---
         
         # Test 12: 13 digits total (1 too many with 2 decimals)
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 99999999999.99, "insert")
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "99999999999.99", "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 99999999999.99, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", "99999999999.99", "insert")
         
         # Test 13: 14 digits total
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 999999999999.99, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 999999999999.99, "insert")
         
         # Test 14: Massive number
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 1e15, "insert")
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "1e15", "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 1e15, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", "1e15", "insert")
         
         # Test 15: Multiple violations (too many decimals AND too many digits)
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", 99999999999.999, "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", 99999999999.999, "insert")
         
         # --- EDGE CASES ---
         
@@ -622,10 +622,10 @@ end
         @test validate_field_data(BoundaryModel, "price", 123456789.1, "insert") === true
         
         # Test 18: Invalid string input (non-numeric)
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "not-a-number", "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", "not-a-number", "insert")
         
         # Test 19: Invalid notation
-        @test_throws ErrorException validate_field_data(BoundaryModel, "price", "12.34.56", "insert")
+        @test_throws PormGError validate_field_data(BoundaryModel, "price", "12.34.56", "insert")
         
         # --- USER OPERATIONS: CREATE, UPDATE, BULK ---
         
@@ -645,13 +645,13 @@ end
         @test create_scientific[:operation] === :insert
         
         # Test 22: Create with invalid scale (should fail before SQL)
-        @test_throws ErrorException BoundaryModel.objects.create(
+        @test_throws PormGError BoundaryModel.objects.create(
             "price" => 123.456,
             show_query=:inspection
         )
         
         # Test 23: Create exceeding max_digits (should fail before SQL)
-        @test_throws ErrorException BoundaryModel.objects.create(
+        @test_throws PormGError BoundaryModel.objects.create(
             "price" => 99999999999.99,
             show_query=:inspection
         )
@@ -678,7 +678,7 @@ end
         # Test 26: Update with invalid scale (should fail before SQL)
         update_bad_q = BoundaryModel.objects
         update_bad_q.filter("price__@gt" => 0)
-        @test_throws ErrorException update_bad_q.update(
+        @test_throws PormGError update_bad_q.update(
             "price" => 99.9999,
             show_query=:dict
         )
@@ -686,7 +686,7 @@ end
         # Test 27: Update exceeding max_digits (should fail before SQL)
         update_exceed_q = BoundaryModel.objects
         update_exceed_q.filter("price__@gt" => 0)
-        @test_throws ErrorException update_exceed_q.update(
+        @test_throws PormGError update_exceed_q.update(
             "price" => 99999999999.99,
             show_query=:dict
         )
@@ -763,8 +763,8 @@ end
         @test validate_field_data(ComplexModel, "salary", nothing, "insert") === true
         
         # Test: Non-nullable field validation
-        @test_throws ErrorException validate_field_data(ComplexModel, "username", nothing, "insert")
-        @test_throws ErrorException validate_field_data(ComplexModel, "email", nothing, "insert")
+        @test_throws PormGError validate_field_data(ComplexModel, "username", nothing, "insert")
+        @test_throws PormGError validate_field_data(ComplexModel, "email", nothing, "insert")
         
         # Test 5: Public API with show_query=:inspection (NO DB EXECUTION)
         q_handler = ComplexModel.objects
@@ -849,7 +849,7 @@ end
         @test create_scientific_decimal[:parameter_count] == 3
 
         # Float invalid strings are also rejected during validation now.
-        @test_throws ErrorException NumericApiModel.objects.create(
+        @test_throws PormGError NumericApiModel.objects.create(
             "label" => "bad_float_string",
             "amount" => "12.34",
             "ratio" => "not-a-number",
@@ -857,7 +857,7 @@ end
         )
 
         # Decimal scale enforcement must also trigger through the create() public API.
-        @test_throws ErrorException NumericApiModel.objects.create(
+        @test_throws PormGError NumericApiModel.objects.create(
             "label" => "bad_decimal_scale",
             "amount" => "10.123",
             "ratio" => "2.5",
@@ -893,7 +893,7 @@ end
         # Update rejects invalid float strings before building SQL.
         bad_float_update_q = NumericApiModel.objects
         bad_float_update_q.filter("id" => 1)
-        @test_throws ErrorException bad_float_update_q.update(
+        @test_throws PormGError bad_float_update_q.update(
             "ratio" => "NaN",
             show_query=:dict
         )
@@ -901,7 +901,7 @@ end
         # Decimal scale enforcement also applies on update.
         bad_scale_update_q = NumericApiModel.objects
         bad_scale_update_q.filter("id" => 1)
-        @test_throws ErrorException bad_scale_update_q.update(
+        @test_throws PormGError bad_scale_update_q.update(
             "amount" => "7.777",
             show_query=:dict
         )
@@ -990,11 +990,11 @@ end
         @test res_update[:parameters] == [1, false]  # filter value first, then update value
 
         # Direct validator coverage and public API coverage should both reject PK mutations.
-        @test_throws ErrorException validate_field_data(InspectModel, "id", 2, "update"; allow_primary_key=false)
+        @test_throws PormGError validate_field_data(InspectModel, "id", 2, "update"; allow_primary_key=false)
 
         pk_update_q = InspectModel.objects
         pk_update_q.filter("id" => 1)
-        @test_throws ErrorException pk_update_q.update("id" => 2, show_query=:dict)
+        @test_throws PormGError pk_update_q.update("id" => 2, show_query=:dict)
 
         # inspect_query has a dedicated delete branch that unwraps the inspection payload.
         q_delete = InspectModel.objects
@@ -1048,15 +1048,15 @@ end
         @test validate_field_data(TimeModel, "closing_hour", missing, "insert") === true
 
         # Test 7: Non-nullable TimeField with nothing (should fail)
-        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", nothing, "insert")
+        @test_throws PormGError validate_field_data(TimeModel, "opening_hour", nothing, "insert")
 
         # Test 8: Invalid input (DateTime instead of Time)
         invalid_time = DateTime(2024, 6, 15, 14, 30, 0)
-        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", invalid_time, "insert")
+        @test_throws PormGError validate_field_data(TimeModel, "opening_hour", invalid_time, "insert")
 
         # Test 9: Invalid input (Date instead of Time)
         invalid_date = Date(2024, 6, 15)
-        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", invalid_date, "insert")
+        @test_throws PormGError validate_field_data(TimeModel, "opening_hour", invalid_date, "insert")
 
         # Test 10: Invalid input (String time format not yet supported)
         @test validate_field_data(TimeModel, "opening_hour", "14:30:00", "insert") === true
@@ -1090,7 +1090,7 @@ end
         @test contains(update_time[:sql_text], "UPDATE")
 
         # TimeField should reject elapsed-duration strings such as F1 lap times.
-        @test_throws ErrorException validate_field_data(TimeModel, "opening_hour", "1:27.452", "insert")
+        @test_throws PormGError validate_field_data(TimeModel, "opening_hour", "1:27.452", "insert")
     end
 
     @testset "DurationField (Elapsed Time Values)" begin
@@ -1114,8 +1114,8 @@ end
         @test Models.format_duration_sql("1:27.452") == "00:01:27.452"
         @test Models.format_duration_sql(Minute(1) + Second(27) + Millisecond(452)) == "00:01:27.452"
 
-        @test_throws ErrorException validate_field_data(DurationModel, "lap_time", Time(1, 27, 45), "insert")
-        @test_throws ErrorException validate_field_data(DurationModel, "lap_time", "bad-duration", "insert")
+        @test_throws PormGError validate_field_data(DurationModel, "lap_time", Time(1, 27, 45), "insert")
+        @test_throws PormGError validate_field_data(DurationModel, "lap_time", "bad-duration", "insert")
     end
 
     @testset "DateTimeField Timezone Conversions & Round-Trip" begin
@@ -1300,25 +1300,25 @@ end
         @test validate_field_data(DateFormatModel, "event_date", ZonedDateTime(DateTime(2024, 6, 15, 14, 30, 0), TimeZone("UTC")), "insert") === true
 
         # Test 5: Invalid DD-MM-YYYY format (should fail)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "15-06-2024", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "15-06-2024", "insert")
 
         # Test 6: Invalid MM/DD/YYYY format (should fail)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "06/15/2024", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "06/15/2024", "insert")
 
         # Test 7: Invalid YYYY/MM/DD format (should fail)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2024/06/15", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "2024/06/15", "insert")
 
         # Test 8: Invalid ISO format with time (should fail because DateField is date-only)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2024-06-15T14:30:00", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "2024-06-15T14:30:00", "insert")
 
         # Test 9: Invalid malformed string (should fail)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2024-6-15", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "2024-6-15", "insert")
 
         # Test 10: Invalid malformed string (not a date at all)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "not-a-date", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "not-a-date", "insert")
 
         # Test 11: Invalid numeric input (should fail)
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", 20240615, "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", 20240615, "insert")
 
         # Test 12: Valid edge case - Jan 1 (year boundary)
         @test validate_field_data(DateFormatModel, "event_date", "2024-01-01", "insert") === true
@@ -1331,7 +1331,7 @@ end
 
         # Test 15: Invalid non-leap year Feb 29 (should fail)
         # Note: Base.Date(2023, 2, 29) throws ArgumentError, validate_field_data catches it
-        @test_throws ErrorException validate_field_data(DateFormatModel, "event_date", "2023-02-29", "insert")
+        @test_throws PormGError validate_field_data(DateFormatModel, "event_date", "2023-02-29", "insert")
 
         # Test 16: Nullable field with nothing
         @test validate_field_data(DateFormatModel, "optional_date", nothing, "insert") === true
@@ -1391,7 +1391,7 @@ end
                 "15-06-2024"  # Invalid format
             ]
         )
-        @test_throws ArgumentError bulk_insert(DateFormatModel.objects, df_invalid_dates, show_query=:dict)
+        @test_throws PormGError bulk_insert(DateFormatModel.objects, df_invalid_dates, show_query=:dict)
 
         # Test 23: Bulk update with valid string dates
         df_bulk_update_dates = DataFrame(
@@ -1409,7 +1409,7 @@ end
         @test contains(res_bulk_update_dates[:sql_text], "UPDATE")
 
         # Test 24: Verify that invalid string format fails before SQL generation
-        @test_throws ErrorException DateFormatModel.objects.create(
+        @test_throws PormGError DateFormatModel.objects.create(
             "event_date" => "2024/06/15",
             show_query=:inspection
         )
@@ -1447,16 +1447,16 @@ end
         @test validate_field_data(PostModel, "author", 9223372036854775807, "insert") === true
 
         # Test 2: ForeignKey rejects non-integer values
-        @test_throws ErrorException validate_field_data(PostModel, "author", "not-an-id", "insert")
-        @test_throws ErrorException validate_field_data(PostModel, "author", 1.5, "insert")
+        @test_throws PormGError validate_field_data(PostModel, "author", "not-an-id", "insert")
+        @test_throws PormGError validate_field_data(PostModel, "author", 1.5, "insert")
 
         # Test 3: Nullable ForeignKey accepts nothing/missing
         @test validate_field_data(PostModel, "editor", nothing, "insert") === true
         @test validate_field_data(PostModel, "editor", missing, "insert") === true
 
         # Test 4: Non-nullable ForeignKey rejects nothing/missing
-        @test_throws ErrorException validate_field_data(PostModel, "author", nothing, "insert")
-        @test_throws ErrorException validate_field_data(PostModel, "author", missing, "insert")
+        @test_throws PormGError validate_field_data(PostModel, "author", nothing, "insert")
+        @test_throws PormGError validate_field_data(PostModel, "author", missing, "insert")
 
         # Test 5: ForeignKey field contains on_delete information
         author_field = PostModel.fields["author"]
@@ -1607,8 +1607,8 @@ end
         @test validate_field_data(UniqueModel, "firstname", "Alice", "insert") === true  # Duplicate is OK at validation level
 
         # Test 5: Unique field rejects null for non-nullable unique fields
-        @test_throws ErrorException validate_field_data(UniqueModel, "email", nothing, "insert")
-        @test_throws ErrorException validate_field_data(UniqueModel, "username", nothing, "insert")
+        @test_throws PormGError validate_field_data(UniqueModel, "email", nothing, "insert")
+        @test_throws PormGError validate_field_data(UniqueModel, "username", nothing, "insert")
 
         # Test 6: Create with unique fields
         create_unique = UniqueModel.objects.create(
@@ -1676,20 +1676,20 @@ end
         @test validate_field_data(StringModel, "title", "A" ^ 100, "insert") === true
 
         # Test 2: CharField exceeds max_length
-        @test_throws ErrorException validate_field_data(StringModel, "code", "ABCDEF", "insert")
-        @test_throws ErrorException validate_field_data(StringModel, "code", "A" ^ 10, "insert")
-        @test_throws ErrorException validate_field_data(StringModel, "title", "A" ^ 101, "insert")
+        @test_throws PormGError validate_field_data(StringModel, "code", "ABCDEF", "insert")
+        @test_throws PormGError validate_field_data(StringModel, "code", "A" ^ 10, "insert")
+        @test_throws PormGError validate_field_data(StringModel, "title", "A" ^ 101, "insert")
 
         # Test 3: CharField with empty string (should be OK)
         @test validate_field_data(StringModel, "code", "", "insert") === true
 
         # Test 4: CharField with whitespace (counts toward max_length)
         @test validate_field_data(StringModel, "code", "A B C", "insert") === true
-        @test_throws ErrorException validate_field_data(StringModel, "code", "A B C D E", "insert")
+        @test_throws PormGError validate_field_data(StringModel, "code", "A B C D E", "insert")
 
         # Test 5: CharField with special characters (counts toward max_length)
         @test validate_field_data(StringModel, "code", "A-BC!", "insert") === true
-        @test_throws ErrorException validate_field_data(StringModel, "code", "A-BC!!", "insert")
+        @test_throws PormGError validate_field_data(StringModel, "code", "A-BC!!", "insert")
 
         # Test 6: TextField has no max_length (very large strings OK)
         large_text = "X" ^ 10000
@@ -1702,7 +1702,7 @@ end
         # Test 8: Slug field with alphanumeric and hyphen
         @test validate_field_data(StringModel, "slug", "my-great-post-2024", "insert") === true
         @test validate_field_data(StringModel, "slug", "s" ^ 50, "insert") === true
-        @test_throws ErrorException validate_field_data(StringModel, "slug", "s" ^ 51, "insert")
+        @test_throws PormGError validate_field_data(StringModel, "slug", "s" ^ 51, "insert")
 
         # Test 9: Create with max_length string
         create_max = StringModel.objects.create(
@@ -1714,7 +1714,7 @@ end
         @test create_max[:operation] === :insert
 
         # Test 10: Create with string exceeding max_length (should fail)
-        @test_throws ErrorException StringModel.objects.create(
+        @test_throws PormGError StringModel.objects.create(
             "code" => "ABCDEF",
             "title" => "X" ^ 100,
             "slug" => "my-slug",
@@ -1733,7 +1733,7 @@ end
         # Test 12: Update with string exceeding max_length (should fail)
         update_bad_q = StringModel.objects
         update_bad_q.filter("id" => 1)
-        @test_throws ErrorException update_bad_q.update(
+        @test_throws PormGError update_bad_q.update(
             "code" => "ABCDEF",
             show_query=:dict
         )
@@ -1763,7 +1763,7 @@ end
 
         # Test 15: Unicode strings (count as characters, not bytes)
         @test validate_field_data(StringModel, "code", "你好世", "insert") === true
-        @test_throws ErrorException validate_field_data(StringModel, "code", "你好世界中国", "insert")
+        @test_throws PormGError validate_field_data(StringModel, "code", "你好世界中国", "insert")
     end
 
 end
@@ -2012,9 +2012,9 @@ end
         @test validate_field_data(PriceModel, "price", "-1234.56", "insert") === true
         @test validate_field_data(PriceModel, "price", 3.14,       "insert") === true
 
-        @test_throws ErrorException validate_field_data(PriceModel, "price", "99.999",       "insert")
-        @test_throws ErrorException validate_field_data(PriceModel, "price", 9.141,          "insert")
-        @test_throws ErrorException validate_field_data(PriceModel, "price", "12345678901",  "insert")
+        @test_throws PormGError validate_field_data(PriceModel, "price", "99.999",       "insert")
+        @test_throws PormGError validate_field_data(PriceModel, "price", 9.141,          "insert")
+        @test_throws PormGError validate_field_data(PriceModel, "price", "12345678901",  "insert")
     end
 
     @testset "SQL function helpers preserve advanced constructor inputs" begin

@@ -110,7 +110,7 @@ function _uoc_error(f)
   catch e
     e
   end
-  @test err isa ArgumentError
+  @test err isa PormGError
   # Strip ANSI so the content assertions are color-agnostic: CI runs --color=yes, which bakes the
   # field-name highlight (\e[4m\e[31m…\e[0m) into the message via _argerr/_emsg. Reuse the repo's own
   # stripper so the assertions still check the message TEXT (incl. the offending field name), not TTY state.

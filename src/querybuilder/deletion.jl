@@ -62,7 +62,7 @@ function delete(objct::SQLObjectHandler;
   !settings.change_data && throw(_write_not_allowed("delete", conn_key))
 
   if objct.object.limit > 0 || objct.object.offset > 0 || !isempty(objct.object.order)
-    throw(ArgumentError(
+    throw(UnsafeMutationError(
       "Cannot call delete() on a query that has limit(), offset(), or order_by() set. " *
       "The deletion collector operates on complete filtered object sets so counts, cascades, " *
       "and constraint handling stay deterministic. Filter by primary key explicitly to delete " *
@@ -71,7 +71,7 @@ function delete(objct::SQLObjectHandler;
   end
 
   if objct.object.distinct
-    throw(ArgumentError(
+    throw(UnsafeMutationError(
       "Cannot call delete() on a query with distinct(). " *
       "DISTINCT collapses the result set, making the deletion collector's " *
       "cascade counting unreliable. Remove distinct() or filter by primary key."
@@ -79,7 +79,7 @@ function delete(objct::SQLObjectHandler;
   end
 
   if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, objct.object.values)
-    throw(ArgumentError(
+    throw(UnsafeMutationError(
       "Cannot call delete() on a query with group_by() / annotate aggregations. " *
       "GROUP BY collapses rows, making cascade counting and constraint handling " *
       "unreliable. Remove the aggregation or filter by primary key."
@@ -88,7 +88,7 @@ function delete(objct::SQLObjectHandler;
 
   # don't allow to delete without filter
   if !allow_delete_all && objct.object.filter |> isempty
-    throw(_argerr(
+    throw(UnsafeMutationError(
       "Error in delete, the delete must have a filter. " *
       "To delete every row, pass \e[4m\e[31mallow_delete_all = true\e[0m explicitly, e.g. " *
       "Model.objects.delete(allow_delete_all = true) or delete(query; allow_delete_all = true)."
@@ -214,13 +214,13 @@ function resolve_delete_key(model::PormGModel; fallback::Union{Nothing,String}=n
 
   if fallback !== nothing
     # Match the user-supplied fallback verbatim — field lookup is case-sensitive (#57).
-    fallback in model.field_names || throw(ArgumentError("The fallback delete field $(fallback) was not found in $(model.name)"))
+    fallback in model.field_names || throw(UnknownFieldError("The fallback delete field $(fallback) was not found in $(model.name)"))
     return fallback
   end
 
   allow_direct && return DIRECT_DELETE_KEY_SENTINEL
 
-  throw(ArgumentError("Delete on $(model.name) requires a primary key or an explicit fallback delete field"))
+  throw(QueryBuildError("Delete on $(model.name) requires a primary key or an explicit fallback delete field"))
 end
 
 # Shared helper: resolves the delete key for a related model and returns a properly filtered
@@ -350,7 +350,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     @pormg_debug false
     # check if the field allow null
     if !field.null
-      throw(_argerr("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
+      throw(InvalidValueError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
     end
 
     # Add field update to set field to NULL
@@ -382,7 +382,7 @@ function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
   
   function visit(node)
     if node in temp_mark
-      throw(ArgumentError("Circular dependency detected in model relationships"))
+      throw(QueryBuildError("Circular dependency detected in model relationships"))
     end
     
     if !(node in perm_mark)
@@ -438,7 +438,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   @pormg_debug false
   if size(keys, 1) == 1 && keys[1][:key] == DIRECT_DELETE_KEY_SENTINEL
     objct = keys[1][:objct]
-    isempty(objct.object.filter) || throw(ArgumentError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
+    isempty(objct.object.filter) || throw(QueryBuildError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
 
     deleted_counter[model.name] = show_query === :execute ? (objct |> do_count) : 0
     sql = "DELETE FROM $(model.name |> lowercase)"
@@ -469,7 +469,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     # Multi-path merge: all entries for the same model share the same resolved key field.
     # Keyless (sentinel) models reaching this path are not supported.
     pk_field = keys[1][:key]
-    pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(ArgumentError("Multi-path delete on keyless model $(model.name) is not supported; define a primary key"))
+    pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(QueryBuildError("Multi-path delete on keyless model $(model.name) is not supported; define a primary key"))
     _query = model |> object;
     or_object = Qor("$(pk_field)__@in" => keys[1][:objct])
     for (index, key) in enumerate(keys)
@@ -499,7 +499,7 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   # Update field values using query object like CASCADE
   @pormg_debug false
   pk_field = keys[:key]
-  pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(ArgumentError("Cannot update field on keyless model $(model.name); define a primary key"))
+  pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(QueryBuildError("Cannot update field on keyless model $(model.name); define a primary key"))
   _query = keys[:objct]
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)

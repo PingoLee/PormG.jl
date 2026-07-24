@@ -3,7 +3,7 @@ const SAFE_IDENTIFIER_PATTERN = r"^[\p{L}_][\p{L}\p{M}\p{N}_]*$"
 
 function _validate_identifier(identifier::String)::String
     if !occursin(SAFE_IDENTIFIER_PATTERN, identifier)
-        throw(ArgumentError("Invalid SQL identifier: $identifier"))
+        throw(InvalidValueError("Invalid SQL identifier: $identifier"))
     end
     return identifier
 end
@@ -16,7 +16,7 @@ against model schema.
 function sanitize_identifier(identifier::String, valid_identifiers::Vector{String})::String
     # Validate against whitelist
     if !(identifier in valid_identifiers)
-        throw(ArgumentError("Invalid identifier: $identifier"))
+        throw(InvalidValueError("Invalid identifier: $identifier"))
     end
     
     return quote_identifier(identifier, nothing)
@@ -53,7 +53,7 @@ Validate field name against model and return quoted identifier
 function safe_field_identifier(field_name::String, model::PormGModel, conn)::String
     # Validate field exists in model
     if !(field_name in model.field_names)
-        throw(ArgumentError("Invalid field name: $field_name for model $(model.name)"))
+        throw(UnknownFieldError("Invalid field name: $field_name for model $(model.name)"))
     end
     return quote_identifier(field_name, conn)
 end
@@ -68,12 +68,12 @@ Checks:
 3. Max length for CharFields.
 4. Max digits for Decimal/Numeric fields.
 
-Returns `true` if valid, throws an `ErrorException` otherwise.
+Returns `true` if valid, throws an `InvalidValueError` otherwise (#231; was `ErrorException`).
 SQL expressions (SQLTypeF, SQLTypeFunction) skip data validation as they are evaluated by the DB.
 """
 function _validation_error(operation::String, model::PormGModel, field::String, message::String; suggestion::Union{Nothing, String}=nothing)
     suffix = suggestion === nothing ? "" : " Suggested fix: $suggestion"
-    error("Error in $operation for model $(model.name), field \"$field\": $message$suffix")
+    throw(InvalidValueError("Error in $operation for model $(model.name), field \"$field\": $message$suffix"))
 end
 
 function _type_mismatch_error(operation::String, model::PormGModel, field::String, value::Any, expected::String; suggestion::Union{Nothing, String}=nothing)

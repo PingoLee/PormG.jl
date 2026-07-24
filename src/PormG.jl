@@ -71,6 +71,12 @@ abstract type PormGField <: PormGAbstractType end # define the type of the colum
 
 abstract type Migration <: PormGAbstractType end
 
+# Root of the semantic error taxonomy (#231). Subtypes <: Exception (NOT <: ArgumentError — a
+# clean break, so callers catch a type instead of string-matching a message). Declared at the top
+# module level so every submodule can `import PormG: PormGError`; the concrete query-builder
+# subtypes live in `src/querybuilder/exceptions.jl`. Extends the #197 typed-exception lineage.
+abstract type PormGError <: Exception end
+
 const config::Dict{String,PormGSettings} = Dict()
 
 include("constants.jl")
@@ -133,6 +139,9 @@ include("QueryBuilder.jl")
 # live solely in `PormG.Functions` (below). There is intentionally no `PormG.Sum`: the
 # function library has exactly one home, reached via `using PormG.Functions` / `PormG.Functions.X`.
 import .QueryBuilder: object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+# Semantic error taxonomy concrete subtypes (#231); the abstract `PormGError` root is defined
+# above in this module. Bridge the QueryBuilder-defined subtypes up so `using PormG` exposes them.
+import .QueryBuilder: FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
 
 """
     PormG.Functions
@@ -165,6 +174,8 @@ end
 # Curated top-level surface: query primitives only. The SQL function constructors above
 # live in `PormG.Functions` and are reached via `using PormG.Functions` / `PormG.Functions.X`.
 export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+# Semantic error taxonomy (#231): catch `PormGError` for any query-builder misuse, or a specific subtype.
+export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)

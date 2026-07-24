@@ -348,7 +348,7 @@ end
         lap_query.filter("raceid" => 841, "driverid" => 20, "lap" => 1)
 
         @test lap_query.count() == 1
-        @test_throws ArgumentError lap_query.delete()
+        @test_throws PormGError lap_query.delete()
         @test lap_query.count() == 1   # Row must still be there after the rejected attempt.
 
         # Inspection of the delete-all path must produce well-formed SQL without
@@ -611,7 +611,7 @@ end
                 e
             end
 
-            @test err isa ArgumentError
+            @test err isa PormGError
             msg = _strip_ansi(lowercase(sprint(showerror, err)))
             # The error must identify the field name and the null-constraint violation.
             @test occursin("parent_id", msg)
@@ -695,7 +695,7 @@ end
             e
         end
 
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = _strip_ansi(lowercase(sprint(showerror, err)))
         # The error must name the parent table, the offending FK field,
         # and the on_delete constraint type.
@@ -768,7 +768,7 @@ end
                 e
             end
 
-            @test err isa ArgumentError
+            @test err isa PormGError
             msg = _strip_ansi(sprint(showerror, err))
             # Error must identify the parent table, the child FK field, and the constraint.
             @test occursin("Cannot delete delete_protect_parent_scratch", msg)
@@ -945,7 +945,7 @@ end
         catch e
             e
         end
-        @test err_limit isa ArgumentError
+        @test err_limit isa PormGError
         @test occursin("limit", lowercase(sprint(showerror, err_limit)))
 
         err_offset = try
@@ -954,7 +954,7 @@ end
         catch e
             e
         end
-        @test err_offset isa ArgumentError
+        @test err_offset isa PormGError
         @test occursin("offset", lowercase(sprint(showerror, err_offset)))
 
         err_order = try
@@ -963,7 +963,7 @@ end
         catch e
             e
         end
-        @test err_order isa ArgumentError
+        @test err_order isa PormGError
         @test occursin("order_by", lowercase(sprint(showerror, err_order)))
 
         @test M.Just_a_test_deletion.objects.filter("name__@contains" => "delete-guard").count() == 2
@@ -1068,7 +1068,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("distinct", lowercase(sprint(showerror, err)))
 
         # Rows must survive — the delete was rejected.
@@ -1096,7 +1096,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("group", lowercase(sprint(showerror, err)))
 
         # Rows must survive — the delete was rejected.

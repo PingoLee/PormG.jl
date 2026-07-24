@@ -23,7 +23,7 @@ import TimeZones: ZonedDateTime
     @test row.driverid == row["driverid"]
     @test haskey(row, :driverid)
     @test !haskey(row, :driverId)
-    @test_throws ArgumentError row.driverId   # getproperty validates → ArgumentError
+    @test_throws PormG.UnknownFieldError row.driverId   # camelCase misses → no field/accessor
     @test_throws KeyError row[:driverId]      # raw getindex → KeyError
     @test get(row, "missingField", :fallback) === :fallback
 
@@ -39,7 +39,7 @@ import TimeZones: ZonedDateTime
     @test parsed[1]["driverid"] == row.driverid
     @test parsed[1]["driverref"] == "hamilton"
 
-    @test_throws ArgumentError M.Driver.objects.filter("driverref" => "hamilton").list(:typo)
+    @test_throws PormG.QueryBuildError M.Driver.objects.filter("driverref" => "hamilton").list(:typo)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,11 +106,12 @@ end
     standings = M.Driver_standings.objects.values("driverstandingsid").limit(1).first()
     @test standings isa PormGRow
     # Accessing an un-projected ForeignKey (`driverid`) triggers the lazy-FK refusal.
-    # Lock not just the error TYPE but the guidance: it must steer to up-front
-    # `values("fk__field")` projection and never re-suggest `.on(...)` (which throws
-    # its own error and does not project columns — issue #204).
+    # #231 backs this with a semantic type (LazyTraversalError); we still lock the #204
+    # guidance wording: it must steer to up-front `values("fk__field")` projection and
+    # never re-suggest `.on(...)` (which throws its own error and does not project columns).
     err = try; standings.driverid; nothing; catch e; e; end
-    @test err isa ArgumentError
+    @test err isa PormG.LazyTraversalError    # #231: typed, was a bare ArgumentError (#204)
+    @test err isa PormG.FieldAccessError      # catch the field-access family
     @test occursin("values(", err.msg)   # steers to projection
     @test occursin("__", err.msg)        # via the __ lookup
     @test !occursin(".on(", err.msg)     # never re-suggests the on() dead end

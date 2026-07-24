@@ -630,6 +630,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | `SQLTypeCTE` | Common Table Expression type. |
 | `PormGModel` | Base for model types. |
 | `PormGField` | Base for field type definitions. |
+| `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every query-builder misuse raises a subtype (see [Error taxonomy](#error-taxonomy)); `catch PormGError` catches them all. |
 
 ---
 
@@ -644,6 +645,36 @@ scope — the SQL function constructors are *not* among them (see
 
 ### Rows & exceptions
 `PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`
+
+### Error taxonomy
+Every query-builder misuse raises a subtype of `PormGError` (`<: Exception`) so callers can
+`catch` a **type** instead of matching on a message string. Catch `PormGError` for any
+query-builder failure, or a specific subtype for a specific reaction (#231):
+
+`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `PermissionError`, `UnsupportedConnectionError`
+
+| Type | Raised when |
+| :--- | :--- |
+| `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures — `catch` it to get both cases below. |
+| `UnknownFieldError` | A field, alias, column, or `__` lookup path does not exist on the model or projected row. |
+| `LazyTraversalError` | An unprojected `ForeignKey` was read off a fetched row — project it in `values(...)` first. |
+| `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
+| `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). |
+| `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter (or another unsafe shape). |
+| `InvalidValueError` | A value failed coercion/type validation, an identifier failed the safety check, or an interval/duration could not be parsed. |
+| `PermissionError` | The connection is not permitted to insert/update/delete (`change_data=false`). |
+| `UnsupportedConnectionError` | A connection is neither PostgreSQL nor SQLite, or a model is not bound to a connection. |
+| `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. Both are `<: PormGError`. |
+
+```julia
+try
+    M.Result.objects.update("points" => 25)   # no filter → refused, protects every row
+catch e
+    e isa PormG.UnsafeMutationError && @warn "add a filter before update()"
+    e isa PormG.PermissionError    && @warn "this connection is read-only"
+    rethrow(e)
+end
+```
 
 ### Bulk Operations
 `bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`

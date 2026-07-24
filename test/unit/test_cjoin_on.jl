@@ -150,19 +150,19 @@ end
 
 @testset "Validation" begin
   # Unknown target model.
-  @test_throws ArgumentError SL.Lap.objects.cjoin_on("Nope", alias = "b2", on = [F("b2.raceid") == F("raceid")])
+  @test_throws PormGError SL.Lap.objects.cjoin_on("Nope", alias = "b2", on = [F("b2.raceid") == F("raceid")])
   # Duplicate alias.
-  @test_throws ArgumentError begin
+  @test_throws PormGError begin
     q = SL.Lap.objects
     q.cjoin_on("Lap", alias = "b2", on = [F("b2.raceid") == F("raceid")])
     q.cjoin_on("Circuit", alias = "b2", on = [F("b2.raceid") == F("raceid")])
   end
   # Invalid alias identifier (fail-closed).
-  @test_throws ArgumentError SL.Lap.objects.cjoin_on("Lap", alias = "b2; DROP", on = [F("b2.raceid") == F("raceid")])
+  @test_throws PormGError SL.Lap.objects.cjoin_on("Lap", alias = "b2; DROP", on = [F("b2.raceid") == F("raceid")])
   # Empty ON list.
-  @test_throws ArgumentError SL.Lap.objects.cjoin_on("Lap", alias = "b2", on = [])
+  @test_throws PormGError SL.Lap.objects.cjoin_on("Lap", alias = "b2", on = [])
   # Unknown column on the aliased model surfaces at render time.
-  @test_throws ArgumentError begin
+  @test_throws PormGError begin
     q = SL.Lap.objects
     q.cjoin_on("Lap", alias = "b2", on = [F("b2.nonexistent") == F("raceid")])
     q.values("id")

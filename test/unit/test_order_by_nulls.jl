@@ -68,7 +68,7 @@ PormG.config["order_nulls_pg"] = PormG.Configuration.Settings(
     catch e
       e
     end
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin(":first", string(err))
     @test occursin(":last", string(err))
   end

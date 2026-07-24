@@ -20,6 +20,9 @@ const EXPECTED_TOPLEVEL = Set([
     :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :Interval, :show_query, :inspect_query,
     # Rows & exceptions
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
+    # Semantic error taxonomy (#231): PormGError root + query-builder subtypes
+    :PormGError, :FieldAccessError, :UnknownFieldError, :LazyTraversalError, :FilterError,
+    :QueryBuildError, :UnsafeMutationError, :InvalidValueError, :PermissionError, :UnsupportedConnectionError,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
     # Async API

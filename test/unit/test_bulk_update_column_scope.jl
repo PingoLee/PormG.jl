@@ -399,7 +399,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         # The message must show the exact rewrite: mapping moves to columns=,
         # match_on keeps the bare field name.
@@ -441,7 +441,7 @@ end
 
     # A bare string in filters cannot be a constant predicate once match_on is set.
     @testset "bare-string filter with match_on is rejected" begin
-        @test_throws ArgumentError bulk_update(
+        @test_throws PormGError bulk_update(
             Metric.objects, df_upd,
             columns    = ["weight"],
             match_on   = ["id"],
@@ -465,7 +465,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("match_on", sprint(showerror, err))
     end
 
@@ -485,7 +485,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         @test occursin("columns  = [..., \"record_id\" => \"id\"]", msg)
         @test occursin("match_on = [\"id\"]", msg)
@@ -507,7 +507,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         # Assert the error CLASS and SUBJECT, not just substrings: a bare
         # occursin("id", msg) also matches "record_id" in the column dump, so it
@@ -557,7 +557,7 @@ end
             city_id = [5, 5],
             weight  = [10, 20],
         )
-        @test_throws ArgumentError bulk_update(
+        @test_throws PormGError bulk_update(
             Metric.objects, dup_df,
             columns    = ["weight"],
             match_on   = ["id", "city_id"],
@@ -580,7 +580,7 @@ end
 
     # A match_on key that is not a model field is a hard error.
     @testset "match_on referencing a non-field raises" begin
-        @test_throws ArgumentError bulk_update(
+        @test_throws PormGError bulk_update(
             Metric.objects, df_upd,
             columns    = ["weight"],
             match_on   = ["not_a_field"],
@@ -609,7 +609,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         # The error must name the case-only candidate and point at the case-sensitivity,
         # and the suggested fix is a columns= mapping (the single border crossing).
@@ -638,7 +638,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         @test occursin("Weight", msg)
         @test occursin("case", msg)
@@ -663,7 +663,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         # Auto-detect names the DataFrame column and the case-only model field it shadows.
         @test occursin("Weight", msg)
@@ -711,7 +711,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         msg = sprint(showerror, err)
         @test occursin("weight", msg)
         @test occursin("case", msg)
@@ -735,7 +735,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("totally_absent", sprint(showerror, err))
     end
 
@@ -771,7 +771,7 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormGError
         @test occursin("primary key", lowercase(sprint(showerror, err)))
     end
 

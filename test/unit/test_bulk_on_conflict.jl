@@ -136,7 +136,7 @@ function _cbo_error(on_conflict; kwargs...)
   catch e
     e
   end
-  @test err isa ArgumentError
+  @test err isa PormGError
   return err === nothing ? "" : sprint(showerror, err)
 end
 

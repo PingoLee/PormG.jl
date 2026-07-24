@@ -127,7 +127,7 @@ end
     "row_number" => RowNumber(over=WindowOver(order_by=["resultid"], frame="ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"))
   )
 
-  @test_throws ArgumentError q.list(show_query=:dict)
+  @test_throws PormGError q.list(show_query=:dict)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

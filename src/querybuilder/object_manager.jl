@@ -137,11 +137,11 @@ function up_update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_quer
 
   for k in lookup_keys
     haskey(model.fields, k) ||
-      throw(_argerr("Error in update_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+      throw(UnknownFieldError("Error in update_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   for k in default_keys
     haskey(model.fields, k) ||
-      throw(_argerr("Error in update_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+      throw(UnknownFieldError("Error in update_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   length(unique(lookup_keys)) == length(lookup_keys) ||
     throw(_argerr("Error in update_or_create, duplicate lookup field(s)"))
@@ -184,9 +184,9 @@ function up_filter!(q::SQLObject, filter)
     elseif isa(v, Pair)
       push!(q.filter, _check_filter(v))
     else
-      # ArgumentError (not ErrorException) so filter() misuse matches the values()/order_by()
-      # siblings — this call site was the two-era inconsistency #197 calls out explicitly.
-      throw(_argerr("Invalid filter argument: $(v) (::$(typeof(v))) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
+      # FilterError (a PormGError) so filter() misuse matches the values()/order_by() siblings —
+      # this call site was the two-era inconsistency #197 called out (now typed via #231).
+      throw(FilterError("Invalid filter argument: $(v) (::$(typeof(v))) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
     end
   end
   return q
@@ -194,7 +194,7 @@ end
 
 function up_db!(q::SQLObject, keys)
   if isempty(keys) || length(keys) > 1 || !isa(keys[1], String)
-    throw(ArgumentError("db() expects exactly one String argument (the database key). Received: $(keys)"))
+    throw(QueryBuildError("db() expects exactly one String argument (the database key). Received: $(keys)"))
   end
   q.connect_key = keys[1]
   return q

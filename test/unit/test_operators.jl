@@ -508,7 +508,7 @@ const _E = _OperTestEvent
 
     # --- vector value, UNKNOWN operator: the exact @notin → @nin typo from #98 ---
     e_vec = grab(() -> _D.objects.filter("id__@notin" => [1, 2]))
-    @test e_vec isa ArgumentError
+    @test e_vec isa PormGError
     m_vec = e_vec.msg
     @test occursin("is not a valid operator", m_vec)  # unknown-operator branch
     @test occursin("Did you mean", m_vec)             # nearest-match suggestion offered
@@ -518,7 +518,7 @@ const _E = _OperTestEvent
 
     # --- vector value, KNOWN but shape-incompatible operator (@gte with a vector) ---
     e_known = grab(() -> _D.objects.filter("id__@gte" => [1, 2]))
-    @test e_known isa ArgumentError
+    @test e_known isa PormGError
     m_known = e_known.msg
     @test occursin("not valid with a vector value", m_known)  # distinct from the typo branch
     @test !occursin("Did you mean", m_known)                  # no suggestion for a real operator
@@ -527,7 +527,7 @@ const _E = _OperTestEvent
 
     # --- tuple value, unknown operator: message names the shape and its valid op ---
     e_tup = grab(() -> _D.objects.filter("id__@betwen" => (1, 2)))
-    @test e_tup isa ArgumentError
+    @test e_tup isa PormGError
     m_tup = e_tup.msg
     @test occursin("is not a valid operator", m_tup)
     @test occursin("tuple", m_tup)
@@ -536,7 +536,7 @@ const _E = _OperTestEvent
     # --- subquery value, unknown operator: same treatment, shape = "subquery" ---
     sub = _D.objects.values("id")
     e_sub = grab(() -> _D.objects.filter("id__@notin" => sub))
-    @test e_sub isa ArgumentError
+    @test e_sub isa PormGError
     m_sub = e_sub.msg
     @test occursin("is not a valid operator", m_sub)
     @test occursin("@nin", m_sub)
@@ -546,7 +546,7 @@ const _E = _OperTestEvent
     # Reaches the length(field_path) < 2 branch: the message must name the field
     # and show actionable examples, not treat the field name as a bogus operator.
     e_bare = grab(() -> _D.objects.filter("id" => [1, 2]))
-    @test e_bare isa ArgumentError
+    @test e_bare isa PormGError
     m_bare = e_bare.msg
     @test occursin("was given a vector value but no operator", m_bare)
     @test occursin("id__@in", m_bare)   # actionable example uses the real field name
@@ -555,7 +555,7 @@ const _E = _OperTestEvent
     # @xy is exactly 2 edits from @in/@ne/@gt (the whole word), so the relative
     # threshold must refuse a "did you mean"; the old floor-of-2 threshold would not.
     e_garb = grab(() -> _D.objects.filter("id__@xy" => [1, 2]))
-    @test e_garb isa ArgumentError
+    @test e_garb isa PormGError
     @test occursin("is not a valid operator", e_garb.msg)
     @test !occursin("Did you mean", e_garb.msg)
 
@@ -563,7 +563,7 @@ const _E = _OperTestEvent
     # A valid operator on the right shape, but @range requires exactly 2 bounds; the
     # error must state that (and the count) rather than a generic "invalid operator".
     e_range = grab(() -> _D.objects.filter("id__@range" => [1, 2, 3]))
-    @test e_range isa ArgumentError
+    @test e_range isa PormGError
     @test occursin("requires exactly 2 values", e_range.msg)
     @test occursin("got 3", e_range.msg)
 
@@ -680,7 +680,7 @@ end  # end "PormGsuffix — Operator SQL Generation"
     catch e
       e
     end
-    @test err isa ArgumentError
+    @test err isa PormGError
     @test occursin("requires a DATE/TIMESTAMP field", err.msg)
     @test occursin("surname", err.msg)
   end

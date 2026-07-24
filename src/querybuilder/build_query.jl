@@ -267,7 +267,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
     elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
       push!(instruc._where, _get_filter_query(v, instruc))
     else
-      throw(_argerr("Invalid filter entry: $(v) (::$(typeof(v))) is not a Q, Qor, or operator expression."))
+      throw(FilterError("Invalid filter entry: $(v) (::$(typeof(v))) is not a Q, Qor, or operator expression."))
     end
   end
   return nothing

@@ -202,13 +202,13 @@ end
         # on() requires the first segment of the join path to be a FK or reverse relation.
         # Scalars like `points` (FloatField) cannot be traversed.
         q = M.Result.objects
-        @test_throws ArgumentError q.on("points", "points__@gt" => 0)
+        @test_throws PormGError q.on("points", "points__@gt" => 0)
     end
 
     @testset "on() with no filters and no join_type is rejected" begin
         # An on() call with nothing to contribute is meaningless and is rejected early.
         q = M.Result.objects
-        @test_throws ArgumentError q.on("driverid")
+        @test_throws PormGError q.on("driverid")
     end
 
 end

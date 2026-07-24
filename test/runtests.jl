@@ -98,6 +98,7 @@ end
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")
     @testset "Public Export Surface (#35)" include("unit/test_public_exports.jl")
     @testset "Upgrade Guide Emitter (#216)" include("unit/test_upgrade_guide.jl")
+    @testset "AI Skill Installer (#206)" include("unit/test_install_ai_skills.jl")
     # include("unit/test_migration_planner.jl")
 end
 

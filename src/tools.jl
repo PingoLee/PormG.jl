@@ -102,8 +102,8 @@ function setup(path::String = DB_PATH)
 
     println()
     println(_emsg("\e[34m--- AI Assistant Setup ---\e[0m"))
-    println("PormG can install 'AI skills' (.cursor/skills) to help coding assistants")
-    println("(Cursor and other agents) understand the PormG API in your project.")
+    println("PormG can install 'AI skills' (.github/skills) to help coding assistants")
+    println("(GitHub Copilot, Claude, Cursor, and other agents) understand the PormG API in your project.")
     print("Do you want to install PormG AI skills? (Y/n) [Default Y]: ")
     
     choice = readline() |> strip |> lowercase
@@ -115,29 +115,44 @@ end
 """
     install_ai_skills(target_dir::String = pwd())
 
-Copy PormG AI skill blueprints to the target project's `.cursor/skills` directory.
-This helps AI assistants (Cursor and other agents) provide better PormG code suggestions.
+Copy PormG's AI skill blueprint into the target project's `.github/skills/pormg-usage/`
+directory. This helps AI assistants (GitHub Copilot, Claude, Cursor, and other agents)
+provide accurate PormG code suggestions.
 
-The skill blueprint lives in the PormG package itself under `.cursor/skills/pormg-usage/`.
+The blueprint ships with the PormG package under `.github/skills/pormg-usage/` and is a
+multi-file bundle — `SKILL.md` plus the supporting `reference.md`/`writing.md` it links to.
+The **whole directory** is copied so none of `SKILL.md`'s relative links dangle after install.
 """
 function install_ai_skills(target_dir::String = pwd())
-    # @__DIR__ is src/ — navigate up to package root then into .cursor/skills
-    pkg_root = dirname(@__DIR__)
-    skill_src = joinpath(pkg_root, ".cursor", "skills", "pormg-usage", "SKILL.md")
-
-    target_skill_dir  = joinpath(target_dir, ".cursor", "skills", "pormg-usage")
-    target_skill_file = joinpath(target_skill_dir, "SKILL.md")
+    # Resolve the package root the same way `upgrade_guide` does (works for a
+    # registry install, not just a dev checkout). The blueprint moved from
+    # `.cursor/skills/` to `.github/skills/` — see commit ee2ad67.
+    skill_src_dir    = joinpath(Base.pkgdir(@__MODULE__), ".github", "skills", "pormg-usage")
+    target_skill_dir = joinpath(target_dir, ".github", "skills", "pormg-usage")
 
     try
-        mkpath(target_skill_dir)
-
-        if isfile(skill_src)
-            cp(skill_src, target_skill_file; force=true)
-            println(_emsg("\e[32mPormG AI skill installed → $target_skill_file\e[0m"))
-            println("Your coding assistant now understands PormG's query API, models, and migrations.")
-        else
-            @warn "Could not find PormG skill blueprint" expected_path=skill_src
+        if !isdir(skill_src_dir)
+            @warn "Could not find PormG skill blueprint" expected_path=skill_src_dir
+            return
         end
+
+        # Copy every file in the bundle so sibling links (SKILL.md → reference.md /
+        # writing.md) resolve in the consumer project. Flat bundle only — per-file
+        # (not a whole-dir replace) so any files the consumer added alongside it are
+        # left intact; add a recursive walk here if the bundle ever grows subdirs.
+        files = filter(f -> isfile(joinpath(skill_src_dir, f)), readdir(skill_src_dir))
+        if isempty(files)
+            @warn "PormG skill blueprint has no files to install" source=skill_src_dir
+            return
+        end
+
+        mkpath(target_skill_dir)
+        for f in files
+            cp(joinpath(skill_src_dir, f), joinpath(target_skill_dir, f); force=true)
+        end
+
+        println(_emsg("\e[32mPormG AI skill installed ($(length(files)) files) → $target_skill_dir\e[0m"))
+        println("Your coding assistant now understands PormG's query API, models, migrations, and write path.")
     catch e
         @error "Failed to install AI skills" exception=e
     end

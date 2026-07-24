@@ -157,11 +157,11 @@ M.Result.objects.values("n" => PormG.Functions.Count("resultid"))
 """
 module Functions
   import ..QueryBuilder: Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
-    To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
+    ToChar, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
     Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
     WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
   export Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
-    To_char, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
+    ToChar, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
     Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
     WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 end
@@ -175,7 +175,10 @@ export PoolTimeoutError  # thrown by acquire_connection when the pool is saturat
 export PoolConnectError  # thrown by acquire_connection when a connection can't be opened (#72)
 export pool_stats  # connection-pool health snapshot (#127)
 export with_tx_context, in_transaction_context  # Transaction context helpers
-export setup, install_ai_skills, upgrade_guide  # upgrade_guide: version-scoped UPGRADING.md emitter (#216)
+# setup / install_ai_skills are deliberately NOT exported (#201): maximally generic names for
+# one-off lifecycle helpers — call them qualified (`PormG.setup()`, `PormG.install_ai_skills()`),
+# which is how every doc and README example already shows them.
+export upgrade_guide  # version-scoped UPGRADING.md emitter (#216)
 
 # Fallback stub for the Tachikoma TUI extension.
 # When `using Tachikoma`, PormGTachikomaExt overrides this with the real implementation.

@@ -256,7 +256,7 @@ end
 end
 
 # #64: an M2M where BOTH participating models' PKs are renamed via db_column. The through-table
-# join must target the physical PK columns ("driver_pk"/"sponsor_pk"). `add!` writes the through
+# join must target the physical PK columns ("driver_pk"/"sponsor_pk"). `add` writes the through
 # table regardless of the fix (it uses through-table columns), so the discriminator is the READ:
 # forward/reverse filters join on the parent PK columns and would target a non-existent "code"
 # column without the fix.
@@ -269,7 +269,7 @@ end
         driver_x  = M.M2m_rpk_driver_scratch.objects.create("driverref" => "ham44")
 
         manager = M.M2m_rpk_driver_scratch.sponsors(driver_x)
-        @test manager.add!(sponsor_a, sponsor_b) === nothing
+        @test manager.add(sponsor_a, sponsor_b) === nothing
         @test length(manager.all().list()) == 2            # all() routes through the fixed join
 
         # Forward: driver → sponsors (through-join on "driver_pk", related-join on "sponsor_pk").

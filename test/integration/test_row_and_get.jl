@@ -93,7 +93,7 @@ end
         sponsor_row = M.M2m_sponsor_scratch.objects.get("id" => sponsor[:id])
 
         @test manager.all() isa PormG.QueryBuilder.ObjectHandler
-        @test manager.add!(sponsor_row) === nothing
+        @test manager.add(sponsor_row) === nothing
 
         related = manager.all().list()
         @test length(related) == 1

@@ -31,10 +31,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     if isa(v_copy.field, Union{SQLTypeFunction, SQLTypeF})
       if _is_window_expr(v_copy.field)
         nothing
-      elseif v_copy.field.agregate == false
+      elseif v_copy.field.aggregate == false
         push!(instruc.group, i |> string)
       else
-        instruc.agregate = true
+        instruc.aggregate = true
       end
     elseif isa(v_copy.field, Union{SubqueryObject, ExistsObject})
       # #92: a projected scalar subquery / EXISTS is a per-row expression — neither a groupable
@@ -65,7 +65,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
   # #194 for a precise fail-loud guard), so warn on the combination itself. False positive when the
   # correlation column IS grouped — the message says so. `values` holds the originals (the loop deep-
   # copies), so the SubqueryObject/ExistsObject fields are still inspectable here.
-  if instruc.agregate && !isempty(instruc.group) &&
+  if instruc.aggregate && !isempty(instruc.group) &&
      any(v -> v isa SQLTypeField && isa(v.field, Union{SubqueryObject,ExistsObject}), values)
     @warn(_emsg(
       "Subquery/Exists projected alongside a grouped aggregate: if the inner OuterRef column is not " *
@@ -117,7 +117,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # referenced directly in ORDER BY. Cached join paths created while resolving CTE join_field
     # entries must reuse their resolved SQL selector instead of quoting the raw lookup string.
     for value in object.values
-      if isa(value, SQLTypeFunction) && value.field.agregate == true
+      if isa(value, SQLTypeFunction) && value.field.aggregate == true
         continue
       end
 
@@ -194,7 +194,7 @@ end
 
 function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInstruction)
   if haskey(instruc.tab_field_cache, alias)
-    formatted_value = instruc.tab_field_cache[alias].formater(raw_value)
+    formatted_value = instruc.tab_field_cache[alias].formatter(raw_value)
     return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
   end
 
@@ -205,8 +205,8 @@ function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInst
     if isa(selected_value, SQLTypeField) && isa(selected_value.field, SQLTypeFunction)
       sql_function = selected_value.field
 
-      if sql_function.formater !== nothing
-        formatted_value = sql_function.formater(raw_value)
+      if sql_function.formatter !== nothing
+        formatted_value = sql_function.formatter(raw_value)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       elseif sql_function.function_name == "AVG"
         formatted_value = Models.format_number_sql(raw_value)
@@ -218,13 +218,13 @@ function _resolve_having_filter_value(alias::String, raw_value, instruc::SQLInst
         formatted_value = Models.format_number_sql(raw_value)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       elseif sql_function.function_name in ["MAX", "MIN"] && sql_function.column isa String && haskey(instruc.object.model.fields, sql_function.column)
-        formatted_value = instruc.object.model.fields[sql_function.column].formater(raw_value)
+        formatted_value = instruc.object.model.fields[sql_function.column].formatter(raw_value)
         return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
       end
     end
   end
 
-  formatted_value = IntegerField().formater(raw_value)
+  formatted_value = IntegerField().formatter(raw_value)
   return _sqlite_preserve_native_parameter(raw_value, formatted_value, instruc)
 end
 
@@ -400,7 +400,7 @@ function build(object::SQLObject;
   table_alias === nothing && (table_alias = SQLTbAlias())
   parameters === nothing && (parameters = get_parameter(connection))
   @pormg_debug false
-  instruct = InstrucObject(text="",
+  instruct = InstructionObject(text="",
     object=object,
     table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
     alias=get_alias(table_alias),

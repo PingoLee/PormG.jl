@@ -61,11 +61,11 @@ function _m2m_settings(manager::ManyToManyManager)
 end
 
 function _m2m_format_owner(manager::ManyToManyManager)
-  return manager.owner_model.fields[manager.relation.owner_pk].formater(manager.owner_id)
+  return manager.owner_model.fields[manager.relation.owner_pk].formatter(manager.owner_id)
 end
 
 function _m2m_format_related(manager::ManyToManyManager, related_id)
-  return manager.related_model.fields[manager.relation.related_pk].formater(related_id)
+  return manager.related_model.fields[manager.relation.related_pk].formatter(related_id)
 end
 
 function _m2m_target_ids(manager::ManyToManyManager, targets)::Vector{Any}
@@ -119,13 +119,13 @@ function _m2m_query(manager::ManyToManyManager)
   return q
 end
 
-function add!(manager::ManyToManyManager, targets...)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+function add(manager::ManyToManyManager, targets...)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
   settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_argerr("Error in many-to-many add!, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to insert"))
+  !settings.change_data && throw(_argerr("Error in many-to-many add, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to insert"))
 
   table_name = safe_table_identifier(manager.relation.through_model, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
@@ -165,19 +165,19 @@ function add!(manager::ManyToManyManager, targets...)
     sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
     fetch(settings, sql, parameters)
   else
-    throw(ArgumentError("Unsupported connection type $(typeof(connection)) for many-to-many add!"))
+    throw(ArgumentError("Unsupported connection type $(typeof(connection)) for many-to-many add"))
   end
 
   return nothing
 end
 
-function remove!(manager::ManyToManyManager, targets...)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+function remove(manager::ManyToManyManager, targets...)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
   settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_argerr("Error in many-to-many remove!, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
+  !settings.change_data && throw(_argerr("Error in many-to-many remove, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
 
   table_name = safe_table_identifier(manager.relation.through_model, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
@@ -199,10 +199,10 @@ function remove!(manager::ManyToManyManager, targets...)
   return nothing
 end
 
-function clear!(manager::ManyToManyManager)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+function clear(manager::ManyToManyManager)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_argerr("Error in many-to-many clear!, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
+  !settings.change_data && throw(_argerr("Error in many-to-many clear, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
 
   parameters = get_parameter(connection)
   set_context!(parameters, :where)
@@ -227,8 +227,8 @@ function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
   return Any[row[Symbol(manager.relation.related_column)] for row in DataFrames.eachrow(df)]
 end
 
-function set!(manager::ManyToManyManager, targets...)
-  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add!, remove!, clear!, set!) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
+function set(manager::ManyToManyManager, targets...)
+  _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   desired_ids = Set(_m2m_target_ids(manager, targets))
   settings, _, _ = _m2m_settings(manager)
 
@@ -237,8 +237,8 @@ function set!(manager::ManyToManyManager, targets...)
     to_remove = collect(setdiff(current_ids, desired_ids))
     to_add = collect(setdiff(desired_ids, current_ids))
 
-    !isempty(to_remove) && remove!(manager, to_remove)
-    !isempty(to_add) && add!(manager, to_add)
+    !isempty(to_remove) && remove(manager, to_remove)
+    !isempty(to_add) && add(manager, to_add)
     return (added=length(to_add), removed=length(to_remove))
   end
 end
@@ -246,14 +246,14 @@ end
 function Base.getproperty(manager::ManyToManyManager, sym::Symbol)
   if sym === :all
     return () -> _m2m_query(manager)
-  elseif sym === :add!
-    return (targets...) -> add!(manager, targets...)
-  elseif sym === :remove!
-    return (targets...) -> remove!(manager, targets...)
-  elseif sym === :clear!
-    return () -> clear!(manager)
-  elseif sym === :set!
-    return (targets...) -> set!(manager, targets...)
+  elseif sym === :add
+    return (targets...) -> add(manager, targets...)
+  elseif sym === :remove
+    return (targets...) -> remove(manager, targets...)
+  elseif sym === :clear
+    return () -> clear(manager)
+  elseif sym === :set
+    return (targets...) -> set(manager, targets...)
   else
     return getfield(manager, sym)
   end

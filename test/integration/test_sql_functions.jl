@@ -175,13 +175,13 @@ end
     @test df[1, :full_info] == "Lewis Hamilton (1)"
 end
 
-@testset "Extraction & To_char" begin
-    # Logic: Test explicit Extract and To_char functions.
+@testset "Extraction & ToChar" begin
+    # Logic: Test explicit Extract and ToChar functions.
     # Why: Provides more control over date/time formatting than standard modifiers.
     q = M.Driver.objects
     q.values(
         "extracted_year"  => Extract("dob", "YEAR"),
-        "formatted_date" => To_char("dob", "DD/MM/YYYY")
+        "formatted_date" => ToChar("dob", "DD/MM/YYYY")
     )
     q.filter("driverid" => 1)
     df = q |> DataFrame
@@ -1048,17 +1048,17 @@ end
         end
     end
 
-    @testset "Extract and To_char accept SQLField and F inputs" begin
-        # Scenario: Extract/To_char should be consistent with the other helper constructors
+    @testset "Extract and ToChar accept SQLField and F inputs" begin
+        # Scenario: Extract/ToChar should be consistent with the other helper constructors
         # and accept both SQLField(joined path) and F(date_field) inputs.
         q = M.Result.objects
         q.values(
             "resultid",
             "race_date_raw" => "raceid__date",
             "race_year_from_field" => Extract(PormG.QueryBuilder.SQLField("raceid__date"), "YEAR"),
-            "race_date_fmt_field" => To_char(PormG.QueryBuilder.SQLField("raceid__date"), "YYYY-MM-DD"),
+            "race_date_fmt_field" => ToChar(PormG.QueryBuilder.SQLField("raceid__date"), "YYYY-MM-DD"),
             "race_year_from_f" => Extract(F("raceid__date"), "YEAR"),
-            "race_date_fmt_f" => To_char(F("raceid__date"), "YYYY-MM-DD")
+            "race_date_fmt_f" => ToChar(F("raceid__date"), "YYYY-MM-DD")
         )
         q.order_by("resultid")
         q.limit(10)

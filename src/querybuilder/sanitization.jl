@@ -351,7 +351,7 @@ end
 
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])
-        _validation_error(operation, model, field, "many-to-many relations are not physical columns"; suggestion="use the many-to-many manager add!, remove!, clear!, or set! methods")
+        _validation_error(operation, model, field, "many-to-many relations are not physical columns"; suggestion="use the many-to-many manager add, remove, clear, or set methods")
     end
 
     # 1. Field existence

@@ -6,7 +6,7 @@ instant comparison.
 
 Root cause: SQLite stores datetimes as TEXT and compares them byte-for-byte, but
 PormG's shared formatter (`Models.format_timezone_sql`, wired as the `DateTimeField`
-`.formater`) previously returned any offset-bearing string verbatim. Equivalent
+`.formatter`) previously returned any offset-bearing string verbatim. Equivalent
 instants in different spellings (`Z` vs `+00:00`, `.0`/`.000`/no-subsecond, non-UTC
 offsets) therefore produced *distinct* TEXT that neither compared equal nor ordered
 chronologically on SQLite — while PostgreSQL saw them as the same `timestamptz`.

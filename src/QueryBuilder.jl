@@ -64,7 +64,7 @@ include("querybuilder/ctes.jl")
 # low-level builder used inside the date-bucketing helpers (QUADRIMESTER/QUARTER). Reach it
 # as `PormG.QueryBuilder.OP` if ever needed — it stays defined, just off the public surface.
 export Q, Qor
-export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, Case, Cast, Concat, Extract, To_char, Value, Interval
+export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, Case, Cast, Concat, Extract, ToChar, Value, Interval
 export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim
 export Floor, Ceil, Sqrt, Exp, Ln, Power, Mod

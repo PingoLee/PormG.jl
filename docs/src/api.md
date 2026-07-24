@@ -55,17 +55,22 @@ These methods finalize the query and execute it against the database:
 | `.list(:json)` | `String` | Returns results as a JSON string. |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
+| `.aggregate(alias => Agg(...), ...)` | `NamedTuple` | Whole-queryset aggregation (no `GROUP BY`); returns one named tuple of scalars. See [Aggregation](read/filters_and_aggregates.md). |
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching record or `nothing`. |
+| `.last()` | `PormGRow` or `nothing` | Returns the last matching record; inverts `order_by`, or falls back to primary-key descending when unset. |
+| `.earliest(fields...)` | `PormGRow` | Earliest row ordered by `fields` (ascending; `"-field"` flips); raises `DoesNotExist` when empty. |
+| `.latest(fields...)` | `PormGRow` | Latest row ordered by `fields` (descending; `"-field"` flips); raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises `DoesNotExist` / `MultipleObjectsReturned`. |
 | `.create(key => value, ...)` | `PormGRow` | Inserts a single record and returns it as a row (dot-access + `.save()`). |
 | `.update(key => value, ...)` | — | Updates all matching records. |
+| `.get_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Fetch-or-insert, never updates a match; returns `(row, created)`. See [Get or Create](write/create.md#get-or-create). |
 | `.update_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Row-level upsert: inserts on a fresh lookup or updates `defaults` on conflict; returns `(row, created)`. See [Update or Create](write/create.md#update-or-create). |
 | `.delete()` | — | Deletes all matching records. |
 
 ### `PormGRow` Instance Methods
 
-Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_create()` expose model-aware property access and instance-level persistence:
+Rows returned by `.list()`, `.first()`, `.last()`, `.earliest()`, `.latest()`, `.get()`, `.create()`, `.get_or_create()`, and `.update_or_create()` expose model-aware property access and instance-level persistence:
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
@@ -76,6 +81,7 @@ Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_c
 | `row.relationship` | `ManyToManyManager` | Accesses a many-to-many relationship manager when the model defines one. |
 | `row.save()` | `PormGRow` | Persists fields assigned on the row and clears its dirty state. |
 | `row.save(show_query=:sql)` | `Vector` | Returns planned `UPDATE` inspection payloads without executing or clearing dirty state. |
+| `row.delete()` | `(Int, Dict)` | Deletes this row through the shared deletion collector (cascades like `query.delete()`); returns `(total, per-table counts)`. |
 
 ```julia
 driver = M.Driver.objects.get("driverref" => "hamilton")

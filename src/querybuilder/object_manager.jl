@@ -107,12 +107,12 @@ end
 
 # Coerce a lookup/defaults argument into a Vector{Pair}, tolerating a tuple (positional args),
 # a vector, or a single bare Pair; reject any non-Pair element with an actionable error.
-function _normalize_uoc_pairs(x, what::AbstractString)
+function _normalize_uoc_pairs(x, what::AbstractString; op::AbstractString = "update_or_create")
   items = x isa Pair ? (x,) : x
   out = Pair[]
   for item in items
     item isa Pair ||
-      throw(_argerr("Error in update_or_create, each $what entry must be a `field => value` pair, got $(typeof(item))"))
+      throw(_argerr("Error in $op, each $what entry must be a `field => value` pair, got $(typeof(item))"))
     push!(out, item)
   end
   return out
@@ -130,7 +130,7 @@ function up_update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_quer
   isempty(lookup_pairs) &&
     throw(_argerr("Error in update_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
   isempty(default_pairs) &&
-    throw(_argerr("Error in update_or_create, `defaults` must be non-empty — ON CONFLICT DO UPDATE needs a SET; a no-update get_or_create is a planned follow-up (#30)"))
+    throw(_argerr("Error in update_or_create, `defaults` must be non-empty — ON CONFLICT DO UPDATE needs a SET. For a no-update match-or-insert, use get_or_create(...) instead."))
 
   lookup_keys  = String[string(k) for (k, _) in lookup_pairs]
   default_keys = String[string(k) for (k, _) in default_pairs]
@@ -166,6 +166,49 @@ function up_update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_quer
   set_fields = vcat(default_keys, auto_now_fields)
 
   return _update_or_create(q; target_fields = target_fields, set_fields = set_fields, show_query = show_query)
+end
+
+# Django-style get_or_create (#208, deferred from #30). The no-update sibling of update_or_create:
+# `lookup` pairs identify the row; `defaults` are create-only extras applied ONLY when a row is
+# inserted — never on a hit (that's the whole point of "no update"). So unlike update_or_create,
+# `defaults` is OPTIONAL. Returns `(PormGRow, created::Bool)`. `_get_or_create` does get()-first and
+# only creates on a miss (so non-lookup NOT NULL columns are needed only when actually creating);
+# the create path uses `ON CONFLICT (lookup) DO NOTHING` as its concurrency guard, so the lookup
+# fields must be a unique constraint for it to be race-safe (re-raised as an actionable error
+# otherwise). All validation fires here, before any DB work, so `show_query=:dict` surfaces it.
+function up_get_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query::Symbol = :execute)
+  model = q.model
+  lookup_pairs  = _normalize_uoc_pairs(lookup, "lookup"; op = "get_or_create")
+  default_pairs = _normalize_uoc_pairs(defaults, "defaults"; op = "get_or_create")
+
+  isempty(lookup_pairs) &&
+    throw(_argerr("Error in get_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
+
+  lookup_keys  = String[string(k) for (k, _) in lookup_pairs]
+  default_keys = String[string(k) for (k, _) in default_pairs]
+
+  for k in lookup_keys
+    haskey(model.fields, k) ||
+      throw(_argerr("Error in get_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+  end
+  for k in default_keys
+    haskey(model.fields, k) ||
+      throw(_argerr("Error in get_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+  end
+  length(unique(lookup_keys)) == length(lookup_keys) ||
+    throw(_argerr("Error in get_or_create, duplicate lookup field(s)"))
+  length(unique(default_keys)) == length(default_keys) ||
+    throw(_argerr("Error in get_or_create, duplicate defaults field(s)"))
+  overlap = intersect(Set(lookup_keys), Set(default_keys))
+  isempty(overlap) ||
+    throw(_argerr("Error in get_or_create, field(s) $(join(sort(collect(overlap)), ", ")) appear in both lookup and defaults; put each in one (lookup = match key, defaults = create-only extras applied on insert)"))
+
+  # Merge into the insert map (lookup then defaults; order preserved for deterministic SQL, #97).
+  q.insert = OrderedCollections.OrderedDict{String,Any}()
+  for (k, v) in lookup_pairs;  q.insert[string(k)] = v; end
+  for (k, v) in default_pairs; q.insert[string(k)] = v; end
+
+  return _get_or_create(q; target_fields = lookup_keys, show_query = show_query)
 end
 
 """
@@ -360,6 +403,11 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     # show_query=:sql/:dict/:params return the inspection shape (String/Dict/Vector), same dual
     # contract as :create/:update. `args` = lookup pairs; `defaults=`/`show_query=` via kwargs.
     return (args...; kwargs...) -> up_update_or_create!(q.object, args; kwargs...)
+  elseif sym === :get_or_create
+    # Django-style match-or-insert (#208), no update on a hit. Execute path returns
+    # (row::PormGRow, created::Bool); show_query=:sql/:dict/:params return the inspection shape.
+    # `args` = lookup pairs; `defaults=`/`show_query=` via kwargs.
+    return (args...; kwargs...) -> up_get_or_create!(q.object, args; kwargs...)
   elseif sym === :count
     # count()                         -> COUNT(*)              (total rows)
     # count(distinct=true)            -> distinct rows         (subquery COUNT(*) over SELECT DISTINCT *)
@@ -367,10 +415,27 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     # count("col", distinct=true)     -> COUNT(DISTINCT "col") (distinct values of a column, scalar)
     return (column=nothing; distinct::Bool=false, show_query::Symbol=:execute) ->
       do_count(q; column=column, distinct=distinct, show_query=show_query)
+  elseif sym === :aggregate
+    # Whole-queryset aggregation with NO GROUP BY (#208). aggregate("total" => Sum("points"), …)
+    # returns a single-row NamedTuple of scalars (dot-access r.total). Errors if the queryset
+    # already carries values() grouping columns.
+    return (pairs...; show_query::Symbol=:execute) -> do_aggregate(q; pairs=pairs, show_query=show_query)
   elseif sym === :exists
     return (; show_query=:execute) -> do_exists(q; show_query=show_query)
   elseif sym === :first
     return (; kwargs...) -> first(q; kwargs...)
+  elseif sym === :last
+    # Mirror of first() with inverted ordering (#208); with no order_by set, falls back to
+    # primary-key DESC so last() is always well-defined. Returns a PormGRow or nothing.
+    return (; kwargs...) -> last(q; kwargs...)
+  elseif sym === :earliest
+    # earliest(fields...) — order by the given field(s) ASC, return the first; raises
+    # DoesNotExist on an empty queryset (Django parity, unlike first/last).
+    return (fields...; kwargs...) -> earliest(q, fields...; kwargs...)
+  elseif sym === :latest
+    # latest(fields...) — order by the given field(s) DESC, return the first; raises
+    # DoesNotExist on an empty queryset.
+    return (fields...; kwargs...) -> latest(q, fields...; kwargs...)
   elseif sym === :get
     return (args...; show_query=:execute) -> get(q, args...; show_query=show_query)
   elseif sym === :list

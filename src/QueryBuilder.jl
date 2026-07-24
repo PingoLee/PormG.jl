@@ -18,7 +18,7 @@ import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, tra
 	in_transaction_context,
 	get_settings as get_configuration_settings
 import PormG: @pormg_debug
-import Base: first, get
+import Base: first, last, get
 
 #
 # SQL Sanitization

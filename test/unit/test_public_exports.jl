@@ -115,6 +115,17 @@ const EXPECTED_FUNCTIONS = Set([
         @test hasmethod(first, Tuple{PormG.QueryBuilder.SQLObjectHandler})
     end
 
+    # Same contract for Base.last (#208): last() mirrors first() and is allowed to extend Base.last
+    # ONLY through the typed `last(::SQLObjectHandler; …)` method (nargs==2). A nullary kwargs-only
+    # method would be the same global piracy the #200 guard above forbids for first.
+    @testset "no Base.last type piracy — nullary kwargs method (#208)" begin
+        pormg_nullary_last = filter(methods(last)) do m
+            occursin("PormG", string(parentmodule(m))) && m.nargs == 1
+        end
+        @test isempty(pormg_nullary_last)
+        @test hasmethod(last, Tuple{PormG.QueryBuilder.SQLObjectHandler})
+    end
+
     # `close_pool!` was exported by BOTH Configuration and ConnectionPool as *different*
     # functions, which made `PormG.close_pool!` ambiguous (undefined). The dedup leaves
     # Configuration's full-featured version (pool OR db-name String) as the single one.

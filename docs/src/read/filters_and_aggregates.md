@@ -541,6 +541,26 @@ On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG 
     than let SQLite return nondeterministic rows. Add the exact ordering expression to `values(...)`,
     or drop `distinct()`.
 
+### First, last, earliest, and latest
+
+`first()` and `last()` return a single row (or `nothing`) for the current query. `last()` returns the row `first()` would return under the **reversed** ordering — direction *and* NULL placement invert together. With no `order_by` set, `last()` falls back to **primary-key descending**, so it is always well-defined:
+
+```julia
+standings = M.Driver_standings.objects.filter("raceid" => 1)
+
+standings.order_by("points").first()   # fewest points
+standings.order_by("points").last()    # most points (ORDER BY points DESC, one row)
+
+M.Driver.objects.last()                # highest driverid (pk-descending fallback)
+```
+
+`earliest(fields...)` / `latest(fields...)` order by the field(s) you name (ascending / descending; a leading `-` flips a term, so `latest("dob") == earliest("-dob")`) and return the extreme row. Unlike `first`/`last`, they **raise `DoesNotExist`** on an empty queryset — they are the extreme-row counterpart of `get()`:
+
+```julia
+M.Driver.objects.earliest("dob")   # oldest driver
+M.Driver.objects.latest("dob")     # youngest driver
+```
+
 ---
 
 ## Counting
@@ -615,10 +635,23 @@ You do **not** write `GROUP BY` manually — PormG handles it.
 
 ### Aggregating Without Grouping
 
-When **every** column in `values()` is an aggregate, there are no non-aggregate columns to group by — so PormG emits **no `GROUP BY`** and the query collapses to a single summary row over the whole (optionally filtered) table. This is the equivalent of Django's `.aggregate()`.
+To compute one or more aggregates over the whole (optionally filtered) queryset — with **no `GROUP BY`** — use the `aggregate(...)` terminal. It is Django's `.aggregate()`: pass `"alias" => AggregateFunction(...)` pairs and it returns a single-row **`NamedTuple`** of scalars with dot-access.
 
 ```julia
 # Highest score, lowest score, and number of results for one constructor
+agg = M.Result.objects.filter("constructorid" => 131).aggregate(
+    "max_points"    => Max("points"),
+    "min_points"    => Min("points"),
+    "total_results" => Count("resultid"),
+)
+agg.max_points      # e.g. 25.0
+agg.total_results   # e.g. 412
+```
+
+`aggregate()` computes over the entire queryset, so it **cannot** be combined with `values()` grouping columns — call it on an unprojected (optionally filtered) queryset. For grouped aggregation, use `values(...)` (see [above](#Aggregations-and-Grouping)); PormG also emits **no `GROUP BY`** when *every* projected column is an aggregate, so the equivalent `values()` form returns the same single summary row when you want a `DataFrame`:
+
+```julia
+# Same numbers as a one-row DataFrame, via the values() projection path
 query = M.Result.objects
 query.filter("constructorid" => 131)
 query.values(

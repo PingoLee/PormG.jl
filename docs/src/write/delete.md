@@ -26,6 +26,18 @@ The function returns a tuple containing the total count of deleted rows and a di
 (1, Dict{String, Integer}("just_a_test_deletion" => 1))
 ```
 
+### Deleting a Fetched Row
+
+A `PormGRow` you already have in hand — from `get()`, `first()`, `last()`, or `list()` — can delete itself with `row.delete()`. It is located by its primary key and routed through the **same** deletion collector as `query.delete()`, so cascade / `on_delete` handling is identical. It returns the same `(total, per-table counts)` tuple.
+
+```julia
+status = M.Status.objects.get("statusid" => 200)
+total, counts = status.delete()
+# (1, Dict{String, Integer}("status" => 1))
+```
+
+The row must have had its primary key projected (rows from `get()`/`first()`/`last()`/`list()` always do). The in-memory `row` is not mutated — its field data is stale after the delete.
+
 ### Deletion with Conditions
 
 ```julia

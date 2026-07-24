@@ -896,6 +896,7 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
   sym === :_model && return getfield(row, :_model)
   sym === :_dirty && return getfield(row, :_dirty)
   sym === :save && return (; show_query::Symbol=:execute) -> save(row; show_query=show_query)
+  sym === :delete && return (; show_query::Symbol=:execute) -> delete(row; show_query=show_query)
 
   data = getfield(row, :_data)
   model = getfield(row, :_model)
@@ -990,6 +991,7 @@ end
 function Base.propertynames(row::PormGRow, private::Bool = false)
   cols = collect(keys(getfield(row, :_data)))
   push!(cols, :save)
+  push!(cols, :delete)
   private && append!(cols, (:_data, :_model, :_dirty))
   return Tuple(cols)
 end

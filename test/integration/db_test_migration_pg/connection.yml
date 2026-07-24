@@ -7,7 +7,7 @@
 #
 # `database` is a DEDICATED disposable DB — the edge-case suite DROPs every table in it
 # and auto-creates/drops it — so it must NOT be the shared pormg_teste.
-env: dev
+default_env: dev
 
 dev:
   adapter: "PostgreSQL"

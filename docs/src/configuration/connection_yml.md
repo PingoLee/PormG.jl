@@ -4,7 +4,7 @@ PormG uses a centralized YAML configuration file—typically located at `db/conn
 
 ## Creating `connection.yml`
 
-During standard initialization, `PormG.Configuration.load()` will check for a `connection.yml` in your `DB_PATH`. If it does not exist, PormG provides interactive prompts (in `dev` environments) or throws an error.
+During standard initialization, `PormG.Configuration.load(path)` reads a `connection.yml` from `path` (default `DB_PATH`). If the folder or file is missing it **throws** a `MissingDatabaseConfigurationException` that points you at `PormG.setup(path)` (interactive) or `load(path; scaffold=true)` (writes an editable skeleton) — it no longer silently scaffolds a file and returns.
 
 To scaffold it programmatically, you can run:
 
@@ -18,14 +18,14 @@ Or you can manually create the `connection.yml` file and populate it using the s
 
 ## Adapters & Environments
 
-PormG uses an explicit `env` key at the root of the file to determine which nested configuration maps to the current active environment. The primary supported adapters are `PostgreSQL` and `SQLite`.
+Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or an optional top-level `default_env:` key — see [Multi-environment Routing](#Multi-environment-Routing) below. The primary supported adapters are `PostgreSQL` and `SQLite`.
 
 ### Using PostgreSQL
 
 To use a PostgreSQL database, assign `adapter: PostgreSQL` and configure your credentials.
 
 ```yaml
-env: dev
+default_env: dev
 
 dev:
   adapter: PostgreSQL
@@ -59,7 +59,7 @@ prod:
 When using SQLite, the parameters are simplified. You specify `adapter: SQLite` and pass the path (or file name) of the SQLite database to the `database` property. Missing elements like host, username, or port safely get ignored.
 
 ```yaml
-env: dev
+default_env: dev
 
 dev:
   adapter: SQLite
@@ -135,7 +135,17 @@ SQLite configurations ignore `extensions` with a warning, and `iunaccent_contain
 
 ## Multi-environment Routing
 
-The line `env: dev` instructs PormG to read from the block named `dev`. When you deploy your application (or if running `nitro_server` in another environment), you can change `env: prod` or set the system environment variable `PORMG_ENV=prod` to override the top-level YAML key seamlessly without modifying code.
+PormG selects the active environment block by this precedence — **first match wins**:
+
+1. the `env=` argument to `load(...)` — e.g. `PormG.Configuration.load("db"; env="prod")`;
+2. the `PORMG_ENV` environment variable — e.g. `PORMG_ENV=prod`;
+3. the optional top-level `default_env:` key in this file — e.g. `default_env: prod`;
+4. otherwise `dev`.
+
+The recommended pattern for a server is to let the **host** resolve its own environment and pass it explicitly: a framework (or your `bootstrap`) reads its own env var and calls `load(...; env=…)`, so the same `connection.yml` works unchanged in every environment. `default_env:` is a convenience for scripts and single-environment apps that would rather pin a default in the file than set an env var — omit it and PormG falls back to `dev`.
+
+!!! note "The bare `env:` key is ignored"
+    A top-level `env:` key (as opposed to `default_env:`) does **nothing** — it was renamed to `default_env:`. If a stale config still has `env:`, PormG warns once on load and keeps using the environment resolved above.
 
 ## Pre-connect hooks
 

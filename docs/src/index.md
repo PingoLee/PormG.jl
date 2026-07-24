@@ -75,7 +75,7 @@ This creates a `db/` folder with a `connection.yml` template and a `models.jl` s
 Open `db/connection.yml` and configure your database:
 
 ```yaml
-env: dev
+default_env: dev
 
 dev:
   adapter: PostgreSQL
@@ -93,7 +93,7 @@ dev:
 For SQLite, use:
 
 ```yaml
-env: dev
+default_env: dev
 
 dev:
   adapter: SQLite

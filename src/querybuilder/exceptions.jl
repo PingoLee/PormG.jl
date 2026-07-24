@@ -29,3 +29,13 @@ _argerr(msg::AbstractString) = ArgumentError(_emsg(msg))
 # Exceptions and escape every typed catch.
 _unsupported_conn(op::AbstractString, conn) = error(_emsg(
   "PormG internal error in $(op): unsupported connection type $(typeof(conn)) — expected a PostgreSQL or SQLite connection pool."))
+
+# Standard actionable error for a write blocked by `change_data: false` (#205). Every DML entry
+# point (insert, update, delete, update_or_create, bulk_*, many-to-many add/remove/clear,
+# primary-key allocation) shares this one message so a user hitting any of them gets the same fix —
+# writes are disabled by default (safety-first), which is the common first-`create` trap, and the
+# message must name where to fix it: the `config:` block of the active environment in connection.yml.
+_write_not_allowed(operation::AbstractString, conn_key) = _argerr(
+  "Error in $(operation): the connection \e[4m\e[31m$(conn_key)\e[0m is not allowed to write. " *
+  "Writes are disabled by default — set \e[1mchange_data: true\e[0m under the `config:` block of the active " *
+  "environment in connection.yml to enable creates, updates, and deletes.")

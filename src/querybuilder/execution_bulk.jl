@@ -237,7 +237,7 @@ end
 function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFrame; clone::Bool=true)
   model = objct.object.model
   settings, connection, conn_key = get_settings(objct)
-  !settings.change_data && throw(_argerr("Error in allocate_primary_keys, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_write_not_allowed("allocate_primary_keys", conn_key))
 
   # NOT the #132 zero-copy wrapper: unlike the bulk ops' internal working frames, this
   # frame is RETURNED to the caller, so shared vectors would be user-visible aliasing —
@@ -855,7 +855,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   
 
   # check if is allowed to insert
-  !settings.change_data && throw(_argerr("Error in bulk_insert, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_write_not_allowed("bulk_insert", conn_key))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -985,7 +985,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   !(connection isa PormGPostgres) && throw(ArgumentError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
   # check if is allowed to insert
-  !settings.change_data && throw(_argerr("Error in bulk_copy, the connection \e[4m\e[31m$conn_key\e[0m not allowed to insert"))
+  !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0
@@ -1315,7 +1315,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   settings, connection, conn_key = get_settings(objct)
 
   # check if is allowed to insert
-  !settings.change_data && throw(_argerr("Error in bulk_update, the connection \e[4m\e[31m$conn_key\e[0m not allowed to update"))
+  !settings.change_data && throw(_write_not_allowed("bulk_update", conn_key))
 
   # If no rows then nothing to do
   if size(df_o, 1) == 0

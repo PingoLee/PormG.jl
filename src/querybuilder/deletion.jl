@@ -59,7 +59,7 @@ function delete(objct::SQLObjectHandler;
   settings, connection, conn_key = get_settings(objct, connection=connection)
     
   # check if is allowed to delete
-  !settings.change_data && throw(_argerr("Error in delete, the connection \e[4m\e[31m$conn_key\e[0m not allowed to delete"))
+  !settings.change_data && throw(_write_not_allowed("delete", conn_key))
 
   if objct.object.limit > 0 || objct.object.offset > 0 || !isempty(objct.object.order)
     throw(ArgumentError(

@@ -125,7 +125,7 @@ function add(manager::ManyToManyManager, targets...)
   isempty(target_ids) && return nothing
 
   settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_argerr("Error in many-to-many add, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to insert"))
+  !settings.change_data && throw(_write_not_allowed("many-to-many add", conn_key))
 
   table_name = safe_table_identifier(manager.relation.through_model, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
@@ -177,7 +177,7 @@ function remove(manager::ManyToManyManager, targets...)
   isempty(target_ids) && return nothing
 
   settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_argerr("Error in many-to-many remove, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
+  !settings.change_data && throw(_write_not_allowed("many-to-many remove", conn_key))
 
   table_name = safe_table_identifier(manager.relation.through_model, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
@@ -202,7 +202,7 @@ end
 function clear(manager::ManyToManyManager)
   _m2m_has_extra_fields(manager) && throw(ArgumentError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_argerr("Error in many-to-many clear, the connection \e[4m\e[31m$conn_key\e[0m is not allowed to delete"))
+  !settings.change_data && throw(_write_not_allowed("many-to-many clear", conn_key))
 
   parameters = get_parameter(connection)
   set_context!(parameters, :where)

@@ -91,6 +91,27 @@ const EXPECTED_FUNCTIONS = Set([
         @test PormG.ConnectionPool.fetch === Base.fetch
     end
 
+    # No type piracy on Base.first (#200). PormG extends Base.first only through the typed
+    # `first(::SQLObjectHandler; …)` method (nargs==2 — the function slot plus a PormG-owned
+    # positional arg). A PormG-defined method on Base.first with NO positional argument
+    # (nargs==1, only the function slot) has no PormG type to anchor it → global type piracy.
+    # The curried `first(; kwargs…)` form was exactly that and was removed.
+    #
+    # Why Aqua's piracies check didn't catch it (verified against Aqua 0.8): `Aqua.Piracy.is_pirate`
+    # DOES flag the nullary method, but `hunt(PormG)`/`test_piracies(PormG)` filter methods by
+    # `method.module === PormG` and never recurse into submodules — the method lived in
+    # `PormG.QueryBuilder`, so it was dropped before is_pirate saw it. This explicit guard closes
+    # that submodule blind spot without depending on Aqua internals.
+    @testset "no Base.first type piracy — nullary kwargs method (#200)" begin
+        pormg_nullary_first = filter(methods(first)) do m
+            occursin("PormG", string(parentmodule(m))) && m.nargs == 1
+        end
+        @test isempty(pormg_nullary_first)
+        # …and the legitimate, non-pirating extension is still there (this is the ONLY way
+        # PormG may touch Base.first): a typed method with a PormG positional argument.
+        @test hasmethod(first, Tuple{PormG.QueryBuilder.SQLObjectHandler})
+    end
+
     # `close_pool!` was exported by BOTH Configuration and ConnectionPool as *different*
     # functions, which made `PormG.close_pool!` ambiguous (undefined). The dedup leaves
     # Configuration's full-featured version (pool OR db-name String) as the single one.

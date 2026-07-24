@@ -207,10 +207,41 @@ RETURNING *, (xmax = 0) AS "__pormg_created"
 ### Rules and behavior
 
 - **Lookup → conflict target.** The lookup pair(s) identify the row and become the `ON CONFLICT (...)` columns. A composite key is fully supported — pass several lookup pairs: `update_or_create("year" => 2024, "round" => 8; defaults = [...])`. The target must be backed by a real UNIQUE/PRIMARY KEY constraint in the database (PormG does not require it to be declared on the model — the database is the source of truth; a missing constraint surfaces as the backend's own error).
-- **`defaults` is required** and is the DO UPDATE `SET`. Fields in `defaults` are also merged into the INSERT. `update_or_create` always updates on conflict; a no-update *get-or-create* is a planned follow-up.
+- **`defaults` is required** and is the DO UPDATE `SET`. Fields in `defaults` are also merged into the INSERT. `update_or_create` always updates on conflict; when you want to *keep* an existing row untouched, use [`get_or_create`](#get-or-create) instead.
 - **Lookup and `defaults` must not overlap** — each field is either a match key or an updated value, never both.
 - **`auto_now` fields refresh on the update arm.** Any field with `auto_now = true` is appended to the SET so a conflict updates its timestamp (matching `.save()`/`.update()`); `auto_now_add` fields are create-only and are not refreshed.
 - **Field names are logical.** `db_column` mappings are resolved to the physical column names in the rendered SQL.
+
+## Get or Create
+
+`get_or_create` is the no-update sibling of `update_or_create`: it returns an existing row when the lookup matches, or inserts a new one when it doesn't — and **never modifies a matching row**. It returns the same `(row, created)` tuple, where `row` is a [`PormGRow`](../read/index.md) and `created` is `true` only when a new row was inserted.
+
+```julia
+# First call for this status → inserted.
+row, created = M.Status.objects.get_or_create(
+    "statusid" => 200; defaults = ["status" => "Provisional Classification"])
+# created == true, row.status == "Provisional Classification"
+
+# Second call with the same lookup → the existing row is returned unchanged.
+# The new defaults are IGNORED (get_or_create never updates on a hit).
+row, created = M.Status.objects.get_or_create(
+    "statusid" => 200; defaults = ["status" => "Something Else"])
+# created == false, row.status == "Provisional Classification"  (still the original)
+```
+
+### `get_or_create` vs `update_or_create`
+
+| | On a match | `defaults` |
+|---|---|---|
+| `get_or_create` | returns it **unchanged** | optional — create-only extras used only when inserting |
+| `update_or_create` | **updates** it with `defaults` | required — becomes the `SET` |
+
+### Rules and behavior
+
+- **Lookup → conflict target.** As with `update_or_create`, the lookup pair(s) identify the row and, on the create path, become the `ON CONFLICT (...)` columns. The lookup **must be backed by a real UNIQUE/PRIMARY KEY constraint** so a concurrent insert of the same key is a safe no-op rather than a duplicate-key error. A non-unique lookup raises an actionable error pointing you at `filter(...).first()` + `create(...)`.
+- **`defaults` is optional** — a bare `get_or_create("statusid" => 200)` is a valid pure get-or-create. `defaults` supplies extra columns applied **only** when a row is inserted.
+- **Non-lookup `NOT NULL` columns are needed only on insert.** `get_or_create` runs the `SELECT` first; on a match it returns immediately, so a matching row is returned even if you didn't supply every required column. On a miss the insert must satisfy every `NOT NULL` column (via the lookup, `defaults`, or a model default), exactly like `create`.
+- **Race-safe.** The create path runs `INSERT ... ON CONFLICT (lookup) DO NOTHING`, so if a competing writer inserts the same key first, PormG re-reads the winner and returns `created = false` — no duplicate-key crash.
 
 ## Creating with Relationships
 

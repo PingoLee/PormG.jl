@@ -29,8 +29,12 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.list(:json)` | `String` | Returns results as a JSON string for API responses. |
 | `query \|> DataFrame` | `DataFrame` | Pipe to `DataFrame` for tabular output (recommended for analysis). |
 | `.first()` | `PormGRow` or `nothing` | Returns the first matching row. |
+| `.last()` | `PormGRow` or `nothing` | Returns the last matching row (inverts `order_by`; falls back to primary-key descending when no ordering is set). |
+| `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
+| `.latest(fields...)` | `PormGRow` | Returns the latest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises a typed exception. |
 | `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
+| `.aggregate(pairs...)` | `NamedTuple` | Computes whole-queryset aggregates (no `GROUP BY`) and returns them as a single-row named tuple. |
 | `.exists()` | `Bool` | Returns `true` if at least one row matches. |
 
 ### Choosing an Output Format
@@ -62,7 +66,7 @@ n = query.count()      # => 42
 has_any = query.exists()  # => true
 ```
 
-Rows returned by `.list()`, `.first()`, `.get()`, `.create()`, and `.update_or_create()` are `PormGRow` values. They support property access, indexed access, many-to-many relationship accessors, and dirty tracking for `row.save()`:
+Rows returned by `.list()`, `.first()`, `.last()`, `.earliest()`, `.latest()`, `.get()`, `.create()`, `.get_or_create()`, and `.update_or_create()` are `PormGRow` values. They support property access, indexed access, many-to-many relationship accessors, and dirty tracking for `row.save()` and `row.delete()`:
 
 ```julia
 driver = M.Driver.objects.get("driverref" => "hamilton")

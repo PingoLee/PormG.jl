@@ -401,6 +401,49 @@ function do_count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} =
   end
 end
 
+# Whole-queryset aggregation (#208). Django's aggregate(): compute one or more aggregate scalars
+# over the ENTIRE queryset (no GROUP BY) and return them as a single-row NamedTuple keyed by alias.
+# Built on the same column-form path as do_count() — inject the aggregate projections via values(),
+# read the single row back — but generalized to multiple aggregates and a dot-accessible result.
+function do_aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
+  isempty(pairs) &&
+    throw(_argerr("aggregate() requires at least one \"alias\" => AggregateFunction(...) pair, e.g. aggregate(\"total\" => Sum(\"points\"))."))
+  # aggregate() is whole-queryset only. If the caller already projected grouping columns via
+  # values(), that is a DIFFERENT operation (grouped aggregation) — refuse rather than silently
+  # discard their grouping. Steer them to values(...) + list() for the grouped form.
+  isempty(oq.object.values) ||
+    throw(_argerr("aggregate() computes a single whole-queryset result and cannot combine with values() grouping columns. Use values(...) + list() for grouped aggregation, or call aggregate() on an unprojected queryset."))
+
+  aliases = Symbol[]
+  for p in pairs
+    (p isa Pair && p.first isa AbstractString) ||
+      throw(_argerr("aggregate() arguments must be \"alias\" => AggregateFunction(...) pairs; got $(typeof(p))."))
+    val = p.second
+    (val isa SQLTypeFunction && hasproperty(val, :aggregate) && getproperty(val, :aggregate) === true) ||
+      throw(_argerr("aggregate() value for \"$(p.first)\" must be an aggregate function (Sum/Avg/Count/Max/Min); got $(typeof(val)). For per-row expressions use values(...)."))
+    push!(aliases, Symbol(p.first))
+  end
+
+  cq = deepcopy(oq)
+  cq.object.order = []
+  cq.object.limit = 0
+  cq.object.offset = 0
+  cq.object.distinct = false
+  # Inject the aggregate projections through the shared values() path (column resolution, joins and
+  # dialect rendering stay identical to values(Sum(...))). With ONLY aggregates projected, no
+  # non-aggregate column is present, so the builder emits no GROUP BY (same as do_count).
+  up_values!(cq.object, collect(Any, pairs))
+
+  if show_query !== :execute
+    return query(cq; show_query=show_query)
+  end
+
+  rows = list(cq, Val(:dict))
+  # A SQL aggregate over an empty set still returns one row (COUNT→0, others→NULL); guard anyway.
+  row = isempty(rows) ? Dict{Symbol,Any}() : Base.first(rows)
+  return NamedTuple{Tuple(aliases)}(Tuple(get(row, a, nothing) for a in aliases))
+end
+
 function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   try
     # Resolve settings
@@ -723,6 +766,135 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
   else
     _unsupported_conn("update_or_create()", connection)
   end
+end
+
+# A missing unique constraint on the ON CONFLICT target surfaces as a driver error at execution
+# ("no unique or exclusion constraint matching the ON CONFLICT specification" on PostgreSQL; "ON
+# CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint" on SQLite). Re-raise it as an
+# actionable PormGError — this is the one place a Django user is surprised, because Django's
+# get_or_create does SELECT-then-INSERT and needs no unique constraint (#208).
+function _rethrow_conflict_target_error(e, model::PormGModel, target_fields::Vector{String})
+  msg = sprint(showerror, e)
+  low = lowercase(msg)
+  if occursin("on conflict", low) && (occursin("unique", low) || occursin("exclusion", low) ||
+      occursin("does not match", low) || occursin("no primary key", low))
+    throw(QueryBuildError(
+      "get_or_create on $(model.name) requires a UNIQUE constraint on the lookup field(s) " *
+      "(\e[4m\e[31m$(join(target_fields, ", "))\e[0m) — they are the ON CONFLICT target. Add a unique " *
+      "constraint/index on them, or for non-unique lookups use filter(...).first() then create(...)."))
+  end
+  rethrow(e)
+end
+
+# Django-style get_or_create (#208): match-or-insert with NO update on a hit. This is Django's own
+# algorithm — get() FIRST, and only on a miss build+run the INSERT — so that columns beyond the
+# lookup (NOT NULL fields with no default) are required ONLY when a row is actually created, never
+# on a plain hit. `ON CONFLICT (target) DO NOTHING` on the create path is the concurrency guard: if
+# a competing writer inserts the same key between our SELECT and INSERT, the insert is skipped (no
+# duplicate-key crash) and we re-read the winner. Returns `(PormGRow, created::Bool)`. The lookup
+# must be a UNIQUE constraint for the create path to be safe — `_rethrow_conflict_target_error`
+# turns the missing-constraint driver error into an actionable message.
+function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_query::Symbol = :execute)
+  real_obj = objct isa SQLObjectHandler ? objct.object : objct
+  model = real_obj.model
+  ensure_model_transaction_scope(model)
+
+  settings, connection, conn_key = get_settings(objct)
+  !settings.change_data && throw(_write_not_allowed("get_or_create", conn_key))
+
+  # Capture the raw lookup values BEFORE any INSERT marshalling mutates real_obj.insert.
+  target_values = Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)
+
+  # get() by the conflict target through the fluent builder — dialect-correct binding for free, and
+  # inside a transaction it uses the pinned connection (same pattern as save()).
+  fetch_by_target = () -> begin
+    q = object(model)
+    for f in target_fields
+      q.filter(f => target_values[f])
+    end
+    q.first()
+  end
+
+  # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
+  # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only
+  # when we actually insert. Returns (insert_sql, pk_exist, pk_field).
+  build_insert = (parameters) -> begin
+    set_context!(parameters, :select)
+    quoted_field_columns, param_values, pk_exist, pk_field =
+      _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+    safe_table_name = safe_table_identifier(string(model.name), connection)
+    qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
+    clause  = Dialect.on_conflict_clause(:nothing, qtarget, String[], connection)
+    sql = """
+    INSERT INTO $(safe_table_name) (
+      $(join(quoted_field_columns, ", "))
+    ) VALUES (
+      $(join(param_values, ", "))
+    )
+    $(clause)"""
+    (sql, pk_exist, pk_field)
+  end
+
+  if show_query !== :execute
+    # Honest to what a miss executes: the INSERT + ON CONFLICT DO NOTHING (the get() + read-back are
+    # out-of-band SELECTs). Mirrors _update_or_create's inspect contract.
+    parameters = get_parameter(connection)
+    insert_sql, _, _ = build_insert(parameters)
+    return _show_query_result(show_query, insert_sql, connection, model.name, :insert; parameters = parameters)
+  end
+
+  do_goc = () -> begin
+    # Hit → return the existing row WITHOUT building an INSERT (no NOT NULL columns needed).
+    existing = fetch_by_target()
+    existing !== nothing && return (existing, false)
+
+    # Miss → create, guarded by ON CONFLICT DO NOTHING against a concurrent insert of the same key.
+    parameters = get_parameter(connection)
+    insert_sql, pk_exist, pk_field = build_insert(parameters)
+
+    if connection isa PormGPostgres
+      exec_sql = insert_sql * " RETURNING *;"
+      result = try
+        fetch(settings, exec_sql, parameters)
+      catch e
+        _rethrow_conflict_target_error(e, model, target_fields)
+      end
+      rows = Tables.rowtable(result)
+      if !isempty(rows)
+        dict = _row_to_field_keyed_dict(Base.first(rows), model)
+        pk_exist && _update_sequence(model, connection, pk_field, settings)
+        return (PormGRow(dict, model), true)
+      end
+      # Lost the insert race → the row exists now; return the winner, created == false.
+      raced = fetch_by_target()
+      raced === nothing &&
+        throw(QueryBuildError("get_or_create: ON CONFLICT DO NOTHING skipped the insert but the existing $(model.name) row could not be read back."))
+      return (raced, false)
+
+    elseif connection isa PormGSQLite
+      try
+        fetch(settings, insert_sql, parameters)         # INSERT ... ON CONFLICT DO NOTHING
+      catch e
+        _rethrow_conflict_target_error(e, model, target_fields)
+      end
+      row = fetch_by_target()
+      row === nothing &&
+        throw(QueryBuildError("get_or_create: insert reported success but the $(model.name) row could not be read back."))
+      # Under the serialized write lock (the transaction below) no writer can interleave between the
+      # miss-check and this insert, so a fetched-nothing-then-insert is always a real creation.
+      pk_exist && _update_sequence(model, connection, pk_field, settings)
+      return (row, true)
+    else
+      _unsupported_conn("get_or_create()", connection)
+    end
+  end
+
+  # SQLite: serialize get + insert + read-back so `created` is correct and the create race-guard
+  # holds. PostgreSQL's ON CONFLICT is atomic on its own; running inside an ambient tx is fine.
+  if connection isa PormGSQLite
+    return transaction_connection_for(settings) !== nothing ? do_goc() : run_in_transaction(do_goc, settings)
+  end
+  return do_goc()
 end
 
 function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)
@@ -1554,6 +1726,113 @@ end
 # test/unit/test_public_exports.jl. (`delete`/`inspect_query` keep their curried forms — those
 # functions are package-owned, so a kwargs-only method on them is not piracy.)
 
+# Reverse a single ORDER BY term in place — the reverse of an ORDER BY yields the last row (#208).
+# Flip ASC↔DESC, and any EXPLICIT nulls placement (an unset `nothing` stays default so the
+# renderer keeps its orientation-derived NULLS placement). Non-SQLOrder ordering terms are left
+# as-is (best effort).
+function _invert_order!(o::SQLOrder)
+  o.orientation = o.orientation == "DESC" ? "ASC" : "DESC"
+  # if/elseif, NOT two `&&` statements: sequential flips would swap :first→:last→:first (no-op).
+  if o.nulls === :first
+    o.nulls = :last
+  elseif o.nulls === :last
+    o.nulls = :first
+  end
+  return o
+end
+_invert_order!(o) = o
+
+"""
+    last(objct::SQLObjectHandler; show_query::Symbol = :execute)
+
+Return the last `PormGRow` matching the current query, or `nothing` if no records match.
+
+The mirror of [`first`](@ref): it inverts the query's ordering and takes one row. When an
+`order_by(...)` is set, `last()` returns the row that `first()` would return under the reversed
+ordering. When **no** ordering is set, it falls back to **primary-key descending**, so `last()`
+is always well-defined (matching Django). Like every read terminal, it runs on an internal copy —
+the inverted ordering and `limit(1)` never leak into the caller's handler.
+"""
+function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  # #199: copy-first like first/count/list — the ordering flip and limit(1) apply to the copy only.
+  q = deepcopy(objct)
+  if isempty(q.object.order)
+    # No ordering: fall back to primary-key DESC so last() is meaningful (Django parity).
+    model = q.object.model
+    pk_sym = try
+      Models.get_model_pk_field(model)
+    catch e
+      # get_model_pk_field lives in Models and still throws ArgumentError on a composite pk
+      # (mirrors save()/pk()). Re-home it as an actionable QueryBuildError.
+      e isa ArgumentError || rethrow(e)
+      throw(QueryBuildError("last() with no order_by() needs a single-column primary key to order by, but $(model.name) has none — add an explicit order_by(...)."))
+    end
+    pk_sym === nothing &&
+      throw(QueryBuildError("last() with no order_by() needs a single-column primary key to order by, but $(model.name) has none — add an explicit order_by(...)."))
+    q.order_by("-" * String(pk_sym))
+  else
+    # Reverse the existing ordering; the reversed ORDER BY's first row is the original's last.
+    for o in q.object.order
+      _invert_order!(o)
+    end
+  end
+  q.limit(1)
+  res = list(q, show_query=show_query)
+  if show_query !== :execute
+    return res
+  end
+  return isempty(res) ? nothing : res[1]
+end
+
+# Shared body for earliest()/latest(): apply the (already-oriented) ordering fields, take one row,
+# and raise DoesNotExist on an empty queryset (Django parity — these behave like get(), not first()).
+function _extreme(objct::SQLObjectHandler, order_fields, opname::String; show_query::Symbol)
+  q = deepcopy(objct)
+  q.order_by(order_fields...)
+  q.limit(1)
+  if show_query !== :execute
+    return list(q, show_query=show_query)
+  end
+  rows = list(q)
+  if isempty(rows)
+    model_name = q.object.model.name
+    filter_repr = isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
+    throw(DoesNotExist(model_name, "$(opname): $(filter_repr)"))
+  end
+  return rows[1]
+end
+
+# Flip a single order token's direction for latest() (the ASC↔DESC inverse of what the user wrote):
+# "field" → "-field" (DESC), "-field" → "field" (ASC). Matches Django's latest("-f") == earliest("f").
+_invert_order_token(f::AbstractString) = startswith(f, "-") ? String(f[2:end]) : "-" * String(f)
+_invert_order_token(f) = throw(_argerr("earliest()/latest() fields must be field-name Strings (\"-field\" for the opposite direction); got $(typeof(f))."))
+
+"""
+    earliest(objct::SQLObjectHandler, fields...; show_query = :execute) -> PormGRow
+
+Return the earliest row ordered by `fields` (ascending; a `"-field"` flips that term to
+descending). Requires at least one field and raises `DoesNotExist` when no rows match — the
+extreme-row counterpart of [`get`](@ref), matching Django's `earliest()`.
+"""
+function earliest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execute)
+  isempty(fields) &&
+    throw(_argerr("earliest() requires at least one field to order by, e.g. earliest(\"dob\")."))
+  return _extreme(objct, fields, "earliest"; show_query=show_query)
+end
+
+"""
+    latest(objct::SQLObjectHandler, fields...; show_query = :execute) -> PormGRow
+
+Return the latest row ordered by `fields` (descending; a `"-field"` flips that term to
+ascending). Requires at least one field and raises `DoesNotExist` when no rows match. Django's
+`latest()`; `latest("f") == earliest("-f")`.
+"""
+function latest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execute)
+  isempty(fields) &&
+    throw(_argerr("latest() requires at least one field to order by, e.g. latest(\"dob\")."))
+  return _extreme(objct, _invert_order_token.(fields), "latest"; show_query=show_query)
+end
+
 function _get_filter_repr(filter::SQLTypeOper)::String
   column = filter.column isa SQLTypeField ? filter.column.field : filter.column
   return "$(column) $(filter.operator) $(filter.values)"
@@ -1722,4 +2001,36 @@ function save(row::PormGRow; show_query::Symbol = :execute)
 
   empty!(dirty)
   return row
+end
+
+"""
+    delete(row::PormGRow; show_query=:execute) -> (total::Int, Dict{String,Integer})
+
+Delete this fetched row from its table, cascading through the **same** `DeletionCollector` as
+`Model.objects.filter(...).delete()` — so `on_delete` behaviour (CASCADE / SET_NULL / PROTECT)
+is identical whether you delete one fetched row or a filtered set. Returns the
+`(total_deleted, per-model counts)` tuple of the underlying queryset delete.
+
+The row is located by its primary key, which must have been projected onto the row (it is, for
+rows from `list()`/`first()`/`get()`). The in-memory `row` is not mutated — its data becomes
+stale after the delete.
+"""
+function delete(row::PormGRow; show_query::Symbol = :execute)
+  model = getfield(row, :_model)
+  pk_sym = try
+    Models.get_model_pk_field(model)
+  catch e
+    # get_model_pk_field still throws ArgumentError on a composite pk (mirrors save()/pk()).
+    e isa ArgumentError || rethrow(e)
+    throw(QueryBuildError("delete() requires exactly one primary key field; $(model.name) is not supported."))
+  end
+  pk_sym === nothing &&
+    throw(QueryBuildError("delete() requires exactly one primary key field; $(model.name) is not supported."))
+
+  data = getfield(row, :_data)
+  haskey(data, pk_sym) ||
+    throw(QueryBuildError("Cannot delete() this $(model.name) row: its primary-key column '$(pk_sym)' was not projected. Select it before deleting the row."))
+
+  # Route the single pk through the queryset delete — one collector/cascade path, no drift (#208).
+  return object(model).filter(String(pk_sym) => data[pk_sym]).delete(show_query=show_query)
 end

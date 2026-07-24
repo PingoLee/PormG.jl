@@ -59,7 +59,10 @@ include("querybuilder/ctes.jl")
 #
 # SQLTypeOper Objects (operators from sql)
 #
-export OP
+# `OP` is intentionally internal (#202): not exported and not documented. The string-lookup
+# form `"field__@op" => value` is the public way to build operator predicates; `OP` is a
+# low-level builder used inside the date-bucketing helpers (QUADRIMESTER/QUARTER). Reach it
+# as `PormG.QueryBuilder.OP` if ever needed — it stays defined, just off the public surface.
 export Q, Qor
 export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, Case, Cast, Concat, Extract, To_char, Value, Interval
 export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
@@ -85,10 +88,11 @@ export With
 # end
 
 export object
-export page
-export query
-export update
 export get
+# `page`, `query`, `update` are intentionally NOT exported (#202): they are generic names
+# that pollute scope on a bare `using PormG.QueryBuilder`. The fluent `.page()`/`.update()`
+# methods and explicit `import PormG.QueryBuilder: page`/`query`/`update` are unaffected —
+# export status only governs the bare-`using` dump.
 export PormGRow, pk, DoesNotExist, MultipleObjectsReturned
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys

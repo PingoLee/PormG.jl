@@ -688,6 +688,17 @@ M.Result.objects.values(              # …or qualify without importing
 `bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `Interval` stay at the top level —
 they are query primitives, not part of the function library.
 
+### Functional CTE constructor: `PormG.QueryBuilder.With`
+
+The `With` (CTE) constructor lives in the `PormG.QueryBuilder` submodule and is **not** part
+of the top-level `using PormG` surface. In everyday code prefer the fluent `.with(...)` method
+(see [Subqueries and CTEs](read/subqueries_and_ctes.md)); reach for the free-function form only
+when you want the functional style. Import it explicitly:
+
+```julia
+using PormG.QueryBuilder: With        # or qualify: PormG.QueryBuilder.With(...)
+```
+
 **Aggregate** — `Sum`, `Avg`, `Count`, `Max`, `Min`
 **Conditional** — `Case`, `When`
 **Window** — `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`

@@ -121,4 +121,36 @@ const EXPECTED_FUNCTIONS = Set([
         # Still accepts a db-name String (the convenience the public version adds).
         @test hasmethod(PormG.close_pool!, Tuple{String})
     end
+
+    # #202 — the `PormG.QueryBuilder` submodule surface.
+    #
+    # Decision: `With` (CTE) is documented-via-import — it stays EXPORTED by `PormG.QueryBuilder`
+    # (reach it with `using PormG.QueryBuilder: With`) but is NOT promoted onto the top-level
+    # `using PormG` surface. `OP` (operator) is INTERNAL — unexported and undocumented; the public
+    # way to build operator predicates is the `"field__@op"` string lookup. The generic names
+    # `query`/`update`/`page` were also un-exported so a bare `using PormG.QueryBuilder` stops
+    # dumping them into scope.
+    #
+    # Note: `names(M)` lists a module's EXPORTED symbols; `isdefined(M, s)` is true for any
+    # binding whether exported or not. So a name staying defined-but-unexported is exactly the
+    # prune we want — explicit `import PormG.QueryBuilder: name` still works.
+    @testset "QueryBuilder submodule surface (#202)" begin
+        qb_exports = Set(filter(n -> n !== :QueryBuilder, names(PormG.QueryBuilder)))
+
+        # Un-exported from the submodule (still defined, just not dumped by a bare
+        # `using PormG.QueryBuilder`): the generic names + the internal `OP` builder.
+        for n in (:query, :update, :page, :OP)
+            @test !(n in qb_exports)                # no longer exported
+            @test isdefined(PormG.QueryBuilder, n)  # …but still reachable by explicit import
+        end
+
+        # `With` stays exported by the submodule (the documented functional CTE form).
+        @test :With in qb_exports
+        @test isdefined(PormG.QueryBuilder, :With)
+
+        # Neither is promoted onto the top-level surface (kept off `using PormG`). These are the
+        # load-bearing guards: they fail the moment `With`/`OP` are re-homed at top level.
+        @test !isdefined(PormG, :With)
+        @test !isdefined(PormG, :OP)
+    end
 end

@@ -6,33 +6,34 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 ## How to use
 
-- One `##` entry per breaking change, **newest first**.
-- Each entry records: the PormG **version** it shipped in, what changed, why, the concrete **before → after** code edit, and a **per-app rollout** table.
+- One `##` entry per breaking change, **newest first**. New entries land in **`## Unreleased`** and are stamped with a release number when the maintainer cuts a train (see *Versioning* below).
+- Each entry records: the PormG **version** it shipped in (`Unreleased` until cut), what changed, why, and the concrete **before → after** code edit.
 - An app is done when its code is updated **and** its tests pass against the new PormG.
-- Rename the placeholder app rows (`app-1` … `app-4`) to your real app names once, then reuse them in every entry.
+- **Not for additive features.** This log is only what **forces** an app edit. A new opt-in capability (operator, kwarg, function) requires no change to keep an app working → document it in `docs/`, not here.
+- **Rollout is tracked per app, not per entry:** an app's own PormG dependency pin *is* its state — `PormG.upgrade_guide(from = <that pin>)` derives exactly what it still needs to apply, so there are no per-entry rollout tables to maintain.
 
-### Status legend
+## Versioning (`0.y.z`) — release trains
 
-| Mark | Meaning |
-|------|---------|
-| ✅ | migrated — app updated and green |
-| ⏳ | pending — not yet migrated |
-| — | n/a — app does not use the affected API |
+PormG bumps its version **per release train, not per PR**. Pre-publish, consuming apps
+`dev`/path-dep PormG (they track the git commit, not the registry), so the version number is a
+**migration-checkpoint label** — one bump per *rollout*, not per merged change.
 
-## Versioning (`0.y.z`)
+- **During a train:** every breaking/behavior PR prepends its entry to **`## Unreleased`** below,
+  with `- **Version**: Unreleased` and **no `Project.toml` bump.** `Project.toml` holds the last cut
+  train's version.
+- **Cutting a train** — done when the maintainer is about to roll the changes into a consuming app,
+  via the `/pormg-cut-release` skill: bump the `y` slot **once** in `Project.toml`, rewrite each
+  `Unreleased` entry's `**Version**` to the new number, replace the `## Unreleased` header with
+  `## <version> — <date>`, `git tag` it, and open a fresh empty `## Unreleased`. `z` is reserved for
+  a purely-additive train or a hotfix to a tagged one.
 
-PormG follows `0.y.z` pre-publish: **`y` bumps on any breaking/behavior change**, `z` on
-everything else. Julia's Pkg treats the `y` slot as the major version pre-1.0, so a
-consumer's `compat = "0.y"` accepts `0.y.*` and rejects the next breaking release. Each
-breaking change therefore bumps `version` in `Project.toml` **and** adds one entry here,
-stamped with the version it shipped in.
-
-**Scoping an upgrade by version.** To roll a consuming app from PormG `0.a` to `0.b`, read
-the entries **newest-first from the top and stop when you reach an entry whose `Version` is
-≤ `0.a`** — everything above that line is what changed since your pinned version. Entries
-are version-stamped from **`0.2.0`** onward; entries below the `pre-0.2 history` marker
-predate the versioning policy and are unstamped (treat them as "already shipped before
-`0.2.0`").
+**Scoping an upgrade by version.** To roll a consuming app from PormG `0.a` to the current code, read
+the entries **newest-first from the top** — starting in `## Unreleased` (the uncut changes you get at
+HEAD) — and **stop when you reach an entry whose `Version` is ≤ `0.a`**; everything above that line is
+what changed since your pinned version. `PormG.upgrade_guide(from = v"0.a")` does this for you (its
+default scope includes `## Unreleased`). Entries are version-stamped from **`0.2.0`** onward; entries
+below the `pre-0.2 history` marker predate the versioning policy and are unstamped (treat them as
+"already shipped before `0.2.0`").
 
 ## Applying these in a consuming app
 
@@ -41,28 +42,34 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 (e.g. `~/.julia/dev/PormG/UPGRADING.md`) or from GitHub — and work the entries
 **newest first**:
 
-1. **Scope to this app — and to your version.** Read newest-first and stop at the first entry
-   whose **Version** is ≤ the PormG you are upgrading *from* (see the Versioning section above);
-   everything above that line is what changed. Within each in-range entry's rollout table, skip
-   rows already marked ✅ or —, and work only the ⏳ rows for this app.
+1. **Scope to this app — and to your version.** Run `PormG.upgrade_guide(from = v"<your pinned
+   version>")` (or read newest-first from the top, stopping at the first entry whose **Version** is
+   ≤ your pinned version). Everything above that line is what changed since you pinned.
 2. **Find the call sites.** Run the entry's *"How to find the calls to migrate"* grep/error
    inside the app.
 3. **Apply the `before → after`.** Edit each call site to the ✓ form shown in the entry.
 4. **Verify.** Run the app's own test/integration suite against the upgraded PormG. An entry
    is done for this app only when its code is updated **and** its tests pass.
-5. **Record it.** Flip this app's cell in that entry's rollout table to ✅ (or — if the app
-   never used the affected API), and commit the table update back to PormG so the next app
-   sees accurate state.
+5. **Bump the pin.** Once green, bump this app's PormG dependency to the version you upgraded to —
+   that pin is the app's rollout state, so the next `upgrade_guide` run scopes correctly.
 
 > **Tip — make it discoverable.** Add one line to each app's `AGENTS.md`/`CLAUDE.md`:
-> *"Before bumping the PormG dependency, apply any ⏳ rows in `PormG/UPGRADING.md` for this app."*
+> *"Before bumping the PormG dependency, run `PormG.upgrade_guide(from = v\"<current pin>\")` and apply what it lists."*
 > Then an agent working in that repo will pick up the rollout automatically.
+
+---
+
+## Unreleased — next `0.3.0`
+
+_Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD is running these,
+and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
+consuming app, `/pormg-cut-release` stamps every entry below with `0.3.0`, dates them, and tags it._
 
 ---
 
 ## `connection.yml` env selection: `env:` → `default_env:`; `load()` fails loud on a missing config (#205)
 
-- **Version**: 0.3.1
+- **Version**: Unreleased
 - **PormG ref**: issue #205 ; `src/Configuration.jl`, `src/Generator.jl`,
   `src/querybuilder/{exceptions,execution,execution_bulk,many_to_many,deletion}.jl`,
   `README.md`, `docs/src/{index,configuration/connection_yml,configuration/setup}.md`
@@ -124,26 +131,17 @@ The recommended server pattern is unchanged and preferred: let the host resolve 
 pass it explicitly — `load(...; env=current_env())` — so `connection.yml` is identical across
 environments. `default_env:` is a convenience for scripts/single-env apps.
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | rename `env:` → `default_env:` in each `connection.yml` (or delete); grep the 3 patterns above |
-| app-2 | ⏳ | same |
-| app-3 | ⏳ | same |
-| app-4 | ⏳ | same |
-
 ---
 
 ## Public naming settled — ToChar, formatter, aggregate, M2M `add`/`remove`/`clear`/`set`, setup unexported (#201)
 
-- **Version**: 0.3.0
+- **Version**: Unreleased
 - **PormG ref**: issue #201 ; `src/querybuilder/{functions,types,many_to_many}.jl`, `src/models/fields.jl`,
   `src/PormG.jl` exports, `docs/src/{api,many_to_many,import_django}.md`
 - **Recorded**: 2026-07-24
 - **Severity**: **breaking (renames)** — pre-publish naming pass; every rename is old-name-gone, no aliases.
-  `0.3.0` is the shared stamp for the current pre-publish wave: roll an app forward by applying **all**
-  `0.3.0` entries together.
+  Part of the current `## Unreleased` wave: roll an app forward by applying **all** Unreleased entries
+  together when the train is cut.
 
 ### What changed
 
@@ -171,20 +169,57 @@ rg -n '(^|[^.\w])(setup|install_ai_skills)\('           # bare calls → prefix 
 The first two are safe find-and-replace (whole-word). For the third, only *unqualified* calls need
 the `PormG.` prefix — `PormG.setup()` calls keep working as-is.
 
-### Per-app rollout
+---
 
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | run the three greps; mechanical replace |
-| app-2 | ⏳ | same |
-| app-3 | ⏳ | same |
-| app-4 | ⏳ | same |
+## `PormG.QueryBuilder` export prune — `query`/`update`/`page` no longer dumped; `OP` internal; `With` import-only (#202)
+
+- **Version**: Unreleased
+- **PormG ref**: issue #202 (follow-up to #35) ; `src/QueryBuilder.jl`, `src/documentation/querybuilder.jl`, `docs/src/{api,read/subqueries_and_ctes}.md`
+- **Recorded**: 2026-07-25
+- **Severity**: **breaking (submodule export surface)** — affects only code that does a **bare**
+  `using PormG.QueryBuilder` and relied on the dumped names, or imported `OP`. The top-level
+  `using PormG` surface is unchanged, and the idiomatic `.with()` / `"field__@op"` forms are unchanged.
+
+### What changed
+
+Curating the `#35` export surface one level deeper, inside the `PormG.QueryBuilder` submodule:
+
+- **`query`, `update`, `page` are no longer exported** — a bare `using PormG.QueryBuilder` no longer
+  dumps these three generic names into scope (the exact collision class `#35` removed at top level).
+  They stay **defined**: explicit `import PormG.QueryBuilder: page` / `using PormG.QueryBuilder: update`
+  still work, and the fluent `.page()` / `.update()` methods are unaffected.
+- **`OP` is now internal** — un-exported *and* un-documented. Build operator predicates with the
+  public string form `"field__@op" => value`; `OP` stays reachable as `PormG.QueryBuilder.OP` for the
+  rare function-expression case.
+- **`With` is import-only** — reachable via `using PormG.QueryBuilder: With` (the docs teach this); the
+  idiomatic form is the fluent `.with(name => subquery; join_field=…)`.
+
+### How to find the calls to migrate
+
+```
+rg -n 'using +PormG\.QueryBuilder\s*$' <app>/src     # bare submodule dump that relied on query/update/page
+rg -n '\bOP\(' <app>/src                              # OP used after a bare submodule `using`
+```
+
+### Migrate your app
+
+```julia
+# ✗ before — the bare dump brought query/update/page (+ OP/With) into scope
+using PormG.QueryBuilder
+
+# ✓ after — import exactly the names you use
+using PormG.QueryBuilder: page, With        # (whichever you actually reference)
+q.filter("points__@gte" => 20)              # operator predicates: prefer the string form over OP(...)
+```
+
+Apps that use only the top-level `using PormG` surface, or the fluent `.page()` / `.update()` /
+`.with()` methods, need **no** change.
 
 ---
 
 ## Removed `Base.first` type piracy — curried `first(; kwargs…)` form (#200)
 
-- **Version**: 0.3.0
+- **Version**: Unreleased
 - **PormG ref**: issue #200 ; `src/querybuilder/execution.jl`
 - **Recorded**: 2026-07-24
 - **Severity**: **breaking (method removal)** — but the removed form was undocumented, unexported, and
@@ -226,15 +261,6 @@ Grep each app for a `first` that is piped **with keyword arguments** (bare `|> f
 ```
 rg -n '\|>\s*first\(' <app>/src        # curried first(...) in a pipe — the only form to change
 ```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | optional — likely — (form used nowhere); rewrite any `\|> first(kw)` to `first(q; kw)` |
-| app-2 | ⏳ | optional / likely — |
-| app-3 | ⏳ | optional / likely — |
-| app-4 | ⏳ | optional / likely — |
 
 ---
 
@@ -287,66 +313,6 @@ rg -n '\.(first|get)\(' <app>/src        # then eyeball: is that handler variabl
 ```
 
 One-handler-per-query code (the documented style) is unaffected.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | grep to confirm no handler reuse relies on leaked state, then mark ✅/— |
-| app-2 | ⏳ | same check |
-| app-3 | ⏳ | same check |
-| app-4 | ⏳ | same check |
-
----
-
-## Raw-SQL manual params: `fetch` / `fetch_async` accept a values array (#218)
-
-- **Version**: 0.2.2
-- **PormG ref**: issue #218 (follow-up to #198) ; `src/ConnectionPool.jl` (`fetch` / `fetch_async`),
-  `docs/src/async.md`
-- **Recorded**: 2026-07-23
-- **Severity**: new feature — **additive, non-breaking**. Existing collector / `nothing` / no-param
-  calls are unchanged; a plain array that previously raised `MethodError` now binds.
-
-### What changed
-
-The low-level raw-SQL escape hatch (`fetch` / `fetch_async(settings, sql; params=…)`) now accepts a
-plain values **array or tuple** — the previously internal-only `params` slot was typed
-`Union{Nothing, AbstractPormGParam}` (an ORM collector a user could not construct), so raw SQL had no
-public value-binding path. You write the placeholder your backend uses — `$1, $2, …` on PostgreSQL,
-`?` on SQLite — and PormG performs **no** placeholder translation (the Go `database/sql` / Python
-DB-API / Julia `DBInterface` convention: raw means native). A NULL is `missing`; a bare `nothing` is
-normalized to it. The array bypasses the ORM field formatters (datetime/float/bool coercion), which is
-expected for a raw hatch. Portable queries still belong on the ORM surface.
-
-```julia
-# ✗ before — a user value in raw SQL could only be string-interpolated (a SQL-injection hole)…
-fetch(settings, "SELECT count(*) FROM driver WHERE nationality = '$(nat)'")
-# …or expressed through the ORM surface:
-M.Driver.objects.filter("nationality" => nat).count()
-
-# ✓ after — bind it, with the backend-native placeholder:
-fetch(settings, "SELECT count(*) FROM driver WHERE nationality = \$1", [nat])   # PostgreSQL
-fetch(settings, "SELECT count(*) FROM driver WHERE nationality = ?",  [nat])    # SQLite
-```
-
-### How to find the calls to migrate
-
-Nothing to migrate — additive. **Optional adoption:** grep each app for a raw `fetch` / `fetch_async`
-whose SQL string interpolates a value (a SQL-injection risk) and move the value into the array:
-
-```
-rg -n 'fetch(_async)?\(' <app>/src | rg '\$\('     # raw fetch with $(...) interpolation
-```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | optional — replace interpolated raw `fetch`/`fetch_async` SQL with the values array |
-| app-2 | ⏳ | optional |
-| app-3 | ⏳ | optional |
-| app-4 | ⏳ | optional |
 
 ---
 
@@ -401,15 +367,6 @@ catch e
 If a handler only needs "PormG rejected this call", `e isa Exception` (or the narrower
 `e isa ArgumentError`) now suffices — no string matching required.
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | check for `catch` blocks string-matching PormG throws; most apps have none |
-| app-2 | ⏳ | as above |
-| app-3 | ⏳ | as above |
-| app-4 | ⏳ | as above |
-
 ---
 
 <!-- ───────────────────────── pre-0.2 history (unstamped) ───────────────────────── -->
@@ -461,15 +418,6 @@ visible.
 
 - Nothing required. Optionally adopt `Subquery` where an app worked around the #74 guard with a
   CTE-aggregate join that only needed one scalar per row.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | additive; check for `values()` pairs relying on the old silent drop (unlikely) |
-| app-2 | ⏳ | as above |
-| app-3 | ⏳ | as above |
-| app-4 | ⏳ | as above |
 
 ---
 
@@ -536,15 +484,6 @@ Two things to check at each non-interactive call site:
 - Non-destructive automated migrations need no change — `migrate("db")` now applies them instead of
   silently no-op'ing.
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | check CI/deploy scripts calling `migrate()`; destructive plans now throw `DestructiveMigrationError` |
-| app-2 | ⏳ | as above |
-| app-3 | ⏳ | as above |
-| app-4 | ⏳ | as above |
-
 ---
 
 ## Connect fast-fail (`PoolConnectError`, `fail_fast_on_connect`)
@@ -587,144 +526,6 @@ If a handler means "the database is unreachable / misconfigured", widen it to al
 `PoolConnectError` (or catch both). If it only means "pool is saturated, back off and retry", leave it —
 `PoolConnectError` is intentionally a *different*, non-retryable signal.
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | — | check for `catch PoolTimeoutError` around acquire/fetch; else additive |
-| app-2 | — | — |
-| app-3 | — | — |
-| app-4 | — | — |
-
----
-
-## Pool metrics (`pool_stats`) + leak detection (`leak_detection_threshold`)
-
-- **PormG ref**: issue #127 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`, `src/PormG.jl`
-- **Recorded**: 2026-07-16
-- **Severity**: new feature — **additive, opt-in**. **No action needed**; `pool_stats` is a new exported
-  name, and leak detection is off unless configured.
-
-### What changed
-
-Two observability additions to the connection pool:
-
-- **`pool_stats`** (newly exported) — a health snapshot `(; pool_size, size, in_use, available, ceiling, waiting)`.
-  Call it with a pool object or a connection key: `pool_stats("db")`.
-- **`leak_detection_threshold`** in `connection.yml` (seconds; `0`/absent = off) — warns once when a
-  connection is held past the threshold without release (a likely un-awaited `fetch_async`):
-
-  ```yaml
-  dev:
-    adapter: PostgreSQL
-    database: 'formula1'
-    pool_size: 10
-    leak_detection_threshold: 30
-  ```
-
-  `Configuration.register_connection` accepts the same `leak_detection_threshold` kwarg. Internally, #125's
-  reaping state was generalized into a shared `PoolMonitorState` (leak detection reuses the existing
-  per-slot checkout timestamps) — no behavior change to reaping.
-
-### How to find the calls to migrate
-
-Nothing to grep — purely additive. `pool_stats` is a *new* name; it can only collide if a downstream app
-already defined its own top-level `pool_stats` (unlikely). **Optional adoption:** set
-`leak_detection_threshold` in long-lived services to catch un-released connections early.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | — | optional — set leak_detection_threshold; use pool_stats when debugging saturation |
-| app-2 | — | — |
-| app-3 | — | — |
-| app-4 | — | — |
-
----
-
-## Configurable pool acquire timeout (`pool_timeout`)
-
-- **PormG ref**: issue #126 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`
-- **Recorded**: 2026-07-16
-- **Severity**: new feature — **additive, opt-in**. **No action needed**; zero behavior change unless
-  `pool_timeout` is set.
-
-### What changed
-
-The connection-pool acquire timeout was only reachable as a per-call kwarg
-(`acquire_connection(pool; timeout_seconds=…)`), which normal ORM users never touch. You can now set a
-default per pool in `connection.yml` (seconds; fractional allowed; absent = the historical 30 s):
-
-```yaml
-dev:
-  adapter: PostgreSQL
-  database: 'formula1'
-  pool_size: 10
-  pool_timeout: 5      # give up after 5s waiting for a connection → PoolTimeoutError
-```
-
-Stored on the pool struct and used as the default in `acquire_connection`; an explicit per-call
-`timeout_seconds` still wins. `Configuration.register_connection` accepts the same `pool_timeout` kwarg.
-A value `≤ 0` falls back to the 30 s default. See [Advanced Configuration](docs/src/configuration/advanced.md).
-
-### How to find the calls to migrate
-
-Nothing to grep — purely additive, off by default. **Optional adoption:** set `pool_timeout` in
-`connection.yml` for services that should fail fast rather than block a request when the pool is saturated.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | — | optional — set pool_timeout to fail fast under saturation |
-| app-2 | — | — |
-| app-3 | — | — |
-| app-4 | — | — |
-
----
-
-## Idle-connection reaping + max-lifetime (opt-in)
-
-- **PormG ref**: issue #125 (follow-up to #37) ; `src/ConnectionPool.jl`, `src/Configuration.jl`
-- **Recorded**: 2026-07-16
-- **Severity**: new feature — **additive, opt-in**. **No action needed**; zero behavior change unless
-  `idle_timeout`/`max_lifetime` are set.
-
-### What changed
-
-The pool grows lazily under load (#37) but previously **never shrank** and reused connections
-indefinitely. You can now opt a connection into reaping via `connection.yml` (seconds; `0`/absent = off):
-
-```yaml
-dev:
-  adapter: PostgreSQL
-  database: 'formula1'
-  pool_size: 10
-  idle_timeout: 60      # close overflow conns idle > 60s, back toward pool_size
-  max_lifetime: 1800    # retire conns older than 30 min
-```
-
-A single background sweeper closes **overflow** connections (never the base `pool_size`, never an
-in-use one) that sat idle past `idle_timeout` or exceeded `max_lifetime`; over-age overflow conns are
-also retired on return. Reaping closes + clears the slot in place (append-only — #124's handoff and
-#37's ceiling reasoning are unaffected). `Configuration.register_connection` accepts the same
-`idle_timeout`/`max_lifetime` kwargs. See [Advanced Configuration](docs/src/configuration/advanced.md).
-
-### How to find the calls to migrate
-
-Nothing to grep — purely additive, off by default. **Optional adoption:** for long-lived services or
-DBs/proxies that drop idle connections, set `idle_timeout`/`max_lifetime` in `connection.yml`.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | — | optional — set idle_timeout/max_lifetime for long-lived services |
-| app-2 | — | — |
-| app-3 | — | — |
-| app-4 | — | — |
-
 ---
 
 ## Connection-pool wait is now direct-handoff (event-driven), not a busy-poll
@@ -748,57 +549,6 @@ saturation still throws the same catchable `PoolTimeoutError`.
 No API changed. One **diagnostic** nuance: `PoolTimeoutError.attempts` now counts scan iterations
 (typically `1` on a clean saturated timeout) rather than the old ~`timeout/0.1s` poll count. If you
 log or assert on `attempts`, expect a much smaller number; it remains `>= 1`.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | — | internal pool change; no code edit |
-| app-2 | — | — |
-| app-3 | — | — |
-| app-4 | — | — |
-
----
-
-## Full-control custom joins via `cjoin_on` (#45)
-
-- **PormG ref**: issue #45 ; `src/querybuilder/` (`ctes.jl`, `build_joins.jl`, `build_query.jl`, `build_helpers.jl`, `object_manager.jl`)
-- **Recorded**: 2026-07-16
-- **Severity**: new feature — **additive, non-breaking**. `cjoin`/`on` are unchanged.
-
-### What changed
-
-A new fluent method `cjoin_on` expresses a JOIN whose ON clause is entirely user-defined — arbitrary
-boolean (top-level `OR`), field-to-field comparisons across **both** sides (self-joins), and SQL
-functions in the ON — without raw SQL. `cjoin`/`on` still emit the equi-anchor and only allow
-joined-model-side filters; `cjoin_on` emits **no** anchor.
-
-```julia
-query.cjoin_on("Lap"; alias="b2", join_type="INNER", on=[
-  Qor(
-    F("b2.raceid") == F("raceid"),                # F("b2.col") = joined copy; bare F = base
-    Q(F("b2.driverid") == F("driverid"), F("b2.lap") == F("lap")),
-    F("b2.dt__@year") == F("dt__@year"),          # year() in ON, dialect-aware
-  ),
-])
-```
-
-Renders `INNER JOIN "laps" AS "b2" ON ( … OR … OR … )` with no `main = joined` anchor. See
-[Custom Joins](docs/src/read/custom_joins.md).
-
-### How to find the calls to migrate
-
-Nothing to grep — additive. **Optional adoption:** anywhere you previously reached for raw SQL to
-express a self-join or a multi-condition ON, replace it with `cjoin_on`.
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | optional — replace raw-SQL self-joins with `cjoin_on` |
-| app-2 | ⏳ | optional |
-| app-3 | ⏳ | optional |
-| app-4 | ⏳ | optional |
 
 ---
 
@@ -849,180 +599,6 @@ grep -rn "\.create(" src/ | ...          # then look for `result[:x] = ...` on t
 - Passing the result somewhere typed `::Dict`, or `merge(result, …)` / `collect(result)` /
   `length(result)` / `result == Dict(…)`: convert first with `Dict(pairs(result))`.
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | check for `isa Dict` / Dict-mutation on `create()` results; field access unaffected |
-| app-2 | ⏳ | as above |
-| app-3 | ⏳ | as above |
-| app-4 | ⏳ | as above |
-
----
-
-## Row-level `update_or_create` (Django-style upsert)
-
-- **PormG ref**: issue #30 ; `src/querybuilder/execution.jl`, `src/querybuilder/object_manager.jl`
-- **Recorded**: 2026-07-15
-- **Severity**: new feature — **additive, non-breaking**. No existing API changed; no forced code edit.
-
-### What changed
-
-`M.Model.objects.update_or_create(lookup...; defaults=[...])` performs a single-row upsert built on
-the `ON CONFLICT` renderer from #123. The lookup pair(s) are the conflict target; `defaults` are set
-on conflict and merged into the insert. It returns `(row, created::Bool)`, where `row` is a `PormGRow`
-(dot-access + `.save()`, like `get()`) and `created` distinguishes insert from update (PostgreSQL via
-`RETURNING (xmax = 0)`; SQLite via a pre-check in its serialized write lock).
-
-```julia
-row, created = M.Status.objects.update_or_create(
-    "statusid" => 3; defaults = ["status" => "Accident"])
-```
-
-Requires the lookup columns to be backed by a UNIQUE/PRIMARY KEY constraint in the database.
-`auto_now` fields refresh on the update arm. See [Update or Create](docs/src/write/create.md#update-or-create).
-
-### How to find the calls to migrate
-
-Nothing breaks — purely additive. **Optional adoption:** replace hand-rolled get-then-create/update
-blocks (a `filter(...).exists()` followed by `create()` or `update()`) with a single
-`update_or_create`, which is atomic and race-free.
-
-```
-grep -rn "exists()" src/ | grep -iE "create|update"
-```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | optional — replace get-then-create/update blocks with `update_or_create` |
-| app-2 | ⏳ | optional |
-| app-3 | ⏳ | optional |
-| app-4 | ⏳ | optional |
-
-> **Resolved:** the `create()`/`insert()` → `Dict` vs `PormGRow` inconsistency this note tracked is
-> settled by the entry above (#166) — both now return `PormGRow`.
-
----
-
-## `bulk_insert` conflict handling via `on_conflict=` (ON CONFLICT)
-
-- **PormG ref**: issue #123 ; `src/querybuilder/execution_bulk.jl`, `src/Dialect.jl`
-- **Recorded**: 2026-07-15
-- **Severity**: new feature — **additive, non-breaking**. Default behavior unchanged; no forced code edit.
-
-### What changed
-
-`bulk_insert` accepts an `on_conflict=` keyword that renders an `ON CONFLICT` clause (PostgreSQL
-and SQLite ≥ 3.24, identical syntax), so overlapping batches skip or merge duplicates instead of
-erroring:
-
-```julia
-bulk_insert(M.Status.objects, df, on_conflict = :nothing)                       # ON CONFLICT DO NOTHING
-bulk_insert(M.Status.objects, df,
-    on_conflict = (action = :nothing, target = ["statusid"]))                   # targeted skip
-bulk_insert(M.Status.objects, df,
-    on_conflict = (action = :update, target = ["statusid"], set = ["status"]))  # upsert
-```
-
-With `on_conflict` set, the duplicate-key → sequence-resync retry is skipped (a conflict is
-expected there, not a desync). See [Conflict Handling](docs/src/write/bulk.md).
-
-This exists to delete the raw-SQL workaround: seeding a shared dimension from concurrent workers
-previously required hand-written `LibPQ.execute("INSERT … ON CONFLICT … DO NOTHING")` with manual
-value escaping, bypassing PormG's parameterization and connection routing.
-
-### How to find the calls to migrate
-
-Nothing breaks — purely additive. **Optional adoption:** grep each app for raw conflict-handling
-inserts and replace them with the ORM call:
-
-```
-grep -rn "ON CONFLICT" src/ | grep -i "execute"
-```
-
-Concrete known call site (esus_back `src/auxiliar.jl`, `at_dim_cbo` — seeds the global
-`dash_dim_cbo` dimension from concurrent municípios):
-
-```julia
-# ✗ before — raw LibPQ with hand-built VALUES and manual '' escaping
-valores = join(map(eachrow(df)) do r
-  nome = ismissing(r.no_cbo) ? "null" : "'" * replace(string(r.no_cbo), "'" => "''") * "'"
-  "($(r.id), 0, '$(r.co_cbo)', $nome)"
-end, ", ")
-LibPQ.execute(db, """
-  INSERT INTO dash_dim_cbo (id, cat_cbo_id, co_cbo, no_cbo)
-  VALUES $valores
-  ON CONFLICT (id) DO NOTHING
-""")
-
-# ✓ after — dash_dim_cbo modeled as biM.Dim_CBO; parameterized, pooled, chunked
-df.cat_cbo_id = fill(0, nrow(df))   # was a literal in the raw INSERT
-bulk_insert(biM.Dim_CBO, df, on_conflict = (action = :nothing, target = ["id"]))
-```
-
-(The issue #123 comment sketched `(:nothing, target = ["id"])` — that tuple form is not valid
-Julia; the shipped API is the NamedTuple shown above.)
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| esus_back | ⏳ | `src/auxiliar.jl` `at_dim_cbo` — apply the before → after above (needs `dash_dim_cbo` modeled) |
-| app-2 | — | no raw ON CONFLICT inserts known |
-| app-3 | — | no raw ON CONFLICT inserts known |
-| app-4 | — | no raw ON CONFLICT inserts known |
-
----
-
-## Composite uniqueness (`unique_together`) via `Models.UniqueConstraint`
-
-- **PormG ref**: issue #19 ; `src/Models.jl`, `src/migrations/planner.jl`, `src/migrations/importers.jl`
-- **Recorded**: 2026-07-14
-- **Severity**: new feature — **additive, non-breaking**. No existing API changed; no forced code edit.
-
-### What changed
-
-Models can now declare multi-column uniqueness (Django's `Meta.unique_together`) with a
-model-level `constraints=` list of named `Models.UniqueConstraint` objects:
-
-```julia
-Constructor_engine = Models.Model("constructor_engines",
-  id = Models.IDField(),
-  constructorid = Models.ForeignKey(Constructor, pk_field="constructorid", on_delete="CASCADE"),
-  year = Models.IntegerField(),
-  engine_manufacturer = Models.CharField(max_length=50),
-  constraints = [
-    Models.UniqueConstraint(fields=("constructorid", "year"), name="uniq_constructor_year"),
-  ],
-)
-```
-
-At migration time each constraint becomes a `CREATE UNIQUE INDEX` (identical on PostgreSQL and
-SQLite). The Django importer now maps `Meta.unique_together` to this form automatically (resolving
-the FK `_id` suffix). See [Composite Uniqueness](docs/src/models.md).
-
-**Limitation (this release):** a constraint is materialized when its table is first created (same
-lifecycle as the automatic many-to-many index). Adding/removing a constraint on an
-already-migrated table is not yet diffed by `makemigrations` — deferred to a follow-up.
-
-### How to find the calls to migrate
-
-Nothing to grep — no API changed. This is purely additive. **Optional adoption:** if an app has a
-natural composite key currently enforced only in application code (or a Django model with
-`unique_together` that was imported before this feature), declare it with `UniqueConstraint` and
-create the table (or add the unique index by hand on the existing table).
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | optional — review models for composite keys to enforce |
-| app-2 | ⏳ | optional |
-| app-3 | ⏳ | optional |
-| app-4 | ⏳ | optional |
-
 ---
 
 ## Connection errors inside `run_in_transaction` now propagate (no silent statement retry)
@@ -1070,15 +646,6 @@ for attempt in 1:3
   end
 end
 ```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | action needed only if the app saw mid-transaction reconnects |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
 
 ---
 
@@ -1136,15 +703,6 @@ that previously missed on SQLite:
 @assert M.Thing.objects.filter("col" => "2020-01-01T10:00:00Z").exists()  # a known stored instant
 ```
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
-
 ---
 
 ## `distinct().order_by()` — the sort key must be in the projection (raises otherwise)
@@ -1185,15 +743,6 @@ M.Driver.objects.values("nationality", "surname").distinct().order_by("surname")
 # ✓ … or drop distinct() if you meant "one row per nationality, ordered by an aggregate"
 M.Driver.objects.values("nationality", "n" => Count("driverid")).order_by("n").list()
 ```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
 
 ---
 
@@ -1241,15 +790,6 @@ of your data; the zero-copy wrapper reads your live column vectors **during** th
 Don't mutate the DataFrame from another task while a bulk op is executing on it (this
 was never supported — it just happened to be masked by the default deepcopy).
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
-
 ---
 
 ## `bulk_update(match_on=)` — pairs removed; `columns=` is the single df→field mapping point
@@ -1291,15 +831,6 @@ bulk_update(query, df,
 Bare-name calls (`match_on = ["id"]` with an `id` DataFrame column, or relying on the
 primary-key fallback) need no change.
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
-
 ---
 
 ## `SQLOrder` orientation is now whitelisted — only `"ASC"`/`"DESC"` (case-insensitive) construct and render
@@ -1334,15 +865,6 @@ query.order_by(SQLOrder(SQLField("points", "points"); orientation = dir))
 query.order_by(SQLOrder(SQLField("points", "points");
     orientation = lowercase(dir) == "desc" ? "DESC" : "ASC"))
 ```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
 
 ---
 
@@ -1379,15 +901,6 @@ catch e
     e isa PormG.PoolTimeoutError || rethrow()
     back_off()
 ```
-
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
 
 ---
 
@@ -1426,15 +939,6 @@ M.Driver.objects.values("surname", "nationality").order_by(
 ).list()
 ```
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
-
 ---
 
 ## `bulk_copy` — field formatters now applied; `""` and `missing` no longer collapse to NULL
@@ -1469,25 +973,18 @@ bulk_copy(M.Driver.objects, df)   # row 1 code → '' (empty string), row 2 code
 df[!, :code] = map(x -> !ismissing(x) && x == "" ? missing : x, df[!, :code])
 ```
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
-
 ---
 
 ## Template for new entries
 
 <!--
-Copy the block below to the top of the log (under the legend) for each new breaking change.
+Copy the block below into the `## Unreleased` section at the top of the log for each new
+breaking/behavior change. Do NOT bump `Project.toml` — the version moves once, at cut time
+(the `/pormg-cut-release` skill rewrites `Version: Unreleased` → the release number).
 
 ## `<api>` — <one-line summary of the change>
 
-- **Version**: <0.y.0 — the release this shipped in; bump `Project.toml` in the same change>
+- **Version**: Unreleased
 - **PormG ref**: <issue / PR / commit> ; <src file>
 - **Recorded**: <YYYY-MM-DD>
 - **Severity**: breaking | behavior change | deprecation
@@ -1506,12 +1003,4 @@ Copy the block below to the top of the log (under the legend) for each new break
 ...
 ```
 
-### Per-app rollout
-
-| App | Status | Notes |
-|-----|--------|-------|
-| app-1 | ⏳ | |
-| app-2 | ⏳ | |
-| app-3 | ⏳ | |
-| app-4 | ⏳ | |
 -->

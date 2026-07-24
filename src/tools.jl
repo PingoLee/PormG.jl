@@ -167,6 +167,12 @@ end
 # policy still sees them, while one already on ≥ 0.2.0 does not.
 const _UNSTAMPED_VERSION = v"0.2.0-"
 
+# Entries under the `## Unreleased` heading carry `- **Version**: Unreleased` — changes merged but
+# not yet cut into a release train (the release-train model). They sort ABOVE every real version so
+# a consumer dev'ing PormG at HEAD sees the uncut work they are actually running; the maintainer's
+# `/pormg-cut-release` command later rewrites `Unreleased` to the assigned release number.
+const _UNRELEASED_VERSION = v"1000000.0.0"
+
 const _UpgradeEntry = @NamedTuple{version::VersionNumber, title::String, body::String}
 
 _asver(v::VersionNumber) = v
@@ -214,7 +220,9 @@ function _parse_upgrading(text::AbstractString)
         (title_m === nothing || !occursin(r"(?m)^-[ \t]+\*\*Recorded\*\*:", block)) && continue
 
         ver_m = match(r"(?m)^-[ \t]+\*\*Version\*\*:[ \t]*(\S+)", block)
-        version = ver_m === nothing ? _UNSTAMPED_VERSION : VersionNumber(ver_m[1])
+        version = ver_m === nothing        ? _UNSTAMPED_VERSION  :
+                  ver_m[1] == "Unreleased" ? _UNRELEASED_VERSION :
+                                             VersionNumber(ver_m[1])
 
         # Trim the internal per-app rollout table (which of PormG's own apps adopted it) —
         # noise for a consuming app, which only needs the porting work.
@@ -230,12 +238,15 @@ function _parse_upgrading(text::AbstractString)
 end
 
 """
-    upgrade_guide([io::IO = stdout]; from, to = pkgversion(PormG), structured = false)
+    upgrade_guide([io::IO = stdout]; from, to = <current code>, structured = false)
 
 Print the `UPGRADING.md` entries a consuming app must work through to move from PormG
-version `from` up to `to` (default: the installed version). Reads the `UPGRADING.md`
-shipped with the *resolved* PormG install, so the scope is accurate against the version
-your app actually depends on — not a latest-on-GitHub copy that may not match.
+version `from` up to `to`. The default `to` covers the **current code** — every released
+entry **plus** the uncut `## Unreleased` changes the install is running (release-train model),
+so a consumer dev'ing PormG at HEAD sees work that has not been stamped with a release number
+yet. Pass `to = pkgversion(PormG)` to scope to the installed *release* only. Reads the
+`UPGRADING.md` shipped with the *resolved* PormG install, so the scope is accurate against the
+version your app actually depends on — not a latest-on-GitHub copy that may not match.
 
 Entries print newest-first; each keeps its "How to find the calls to migrate" grep and its
 `before → after`, with the PormG-internal per-app rollout table trimmed off.
@@ -257,7 +268,7 @@ julia> PormG.upgrade_guide(from = "0.2", to = "0.3")
 julia> entries = PormG.upgrade_guide(from = v"0.1", structured = true);
 ```
 """
-function upgrade_guide(io::IO = stdout; from = nothing, to = pkgversion(@__MODULE__),
+function upgrade_guide(io::IO = stdout; from = nothing, to = _UNRELEASED_VERSION,
                        structured::Bool = false)
     from === nothing && throw(ArgumentError(
         "upgrade_guide requires `from` — the PormG version your app currently depends on, " *

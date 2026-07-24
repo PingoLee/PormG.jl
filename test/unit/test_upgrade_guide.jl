@@ -52,7 +52,7 @@ using PormG
 
     # ── parser hygiene: the template block must never leak as an entry ──────────
     @testset "no bogus entries from the template block" begin
-        all_entries = PormG.upgrade_guide(from = v"0.0.0", to = v"999.0.0", structured = true)
+        all_entries = PormG.upgrade_guide(from = v"0.0.0", to = PormG._UNRELEASED_VERSION, structured = true)
         @test !isempty(all_entries)
         @test !any(e -> occursin("Template", e.title), all_entries)  # template heading dropped
         @test !any(e -> occursin("<api>", e.title), all_entries)     # placeholder never parsed
@@ -109,14 +109,42 @@ using PormG
         @test isempty(PormG.upgrade_guide(from = v"9.9.9", to = v"0.2.0", structured = true))
     end
 
-    # ── default `to` resolves to the installed version (no `nothing` path) ──────
-    @testset "default to = installed version" begin
+    # ── default `to` reaches the uncut `## Unreleased` work (release-train model) ─
+    @testset "default `to` covers the current code" begin
         installed = pkgversion(PormG)
         @test installed isa VersionNumber                           # resolves, not `nothing`
-        scoped = PormG.upgrade_guide(from = v"0.1.0", structured = true)  # to defaults to installed
-        @test !isempty(scoped)
-        @test all(e -> e.version <= installed, scoped)
-        # From the installed version itself there is nothing newer to port.
-        @test isempty(PormG.upgrade_guide(from = installed, structured = true))
+        # The default scope is never NARROWER than the installed release: it also reaches any
+        # `## Unreleased` entries (merged but not yet cut), so a consumer dev'ing PormG at HEAD
+        # sees what they are actually running.
+        default_scope   = PormG.upgrade_guide(from = v"0.1.0", structured = true)
+        installed_scope = PormG.upgrade_guide(from = v"0.1.0", to = installed, structured = true)
+        @test length(default_scope) >= length(installed_scope)
+        @test all(e -> e.version <= installed, installed_scope)     # explicit release scope excludes uncut
+    end
+
+    # ── the `## Unreleased` sentinel: exercised on hand-fed text so the test does NOT depend on
+    #    the live file's transient Unreleased state (which empties whenever a train is cut). ────
+    @testset "`## Unreleased` entries parse as the sentinel and sort newest" begin
+        text = "# UPGRADING (fixture)\n\n---\n\n" *
+               "## A brand new breaking change (#9001)\n\n" *
+               "- **Version**: Unreleased\n- **Recorded**: 2026-01-01\n\n" *
+               "Body prose that must survive.\n\n" *
+               "### Per-app rollout\n| App | Status |\n\n---\n\n" *
+               "## An older shipped change (#9000)\n\n" *
+               "- **Version**: 0.2.0\n- **Recorded**: 2025-01-01\n\n" *
+               "Old body.\n"
+        parsed = PormG._parse_upgrading(text)
+        u = findfirst(e -> occursin("(#9001)", e.title), parsed)
+        s = findfirst(e -> occursin("(#9000)", e.title), parsed)
+        @test u !== nothing && s !== nothing
+        @test parsed[u].version == PormG._UNRELEASED_VERSION        # "Unreleased" → sentinel
+        @test parsed[s].version == v"0.2.0"
+        @test u < s                                                 # sorts above every stamped entry
+        @test !occursin("Per-app rollout", parsed[u].body)          # internal table still trimmed
+        # Mirrors upgrade_guide's window: the default (current code) includes it; a real target excludes it.
+        @test any(e -> occursin("(#9001)", e.title),
+                  filter(e -> v"0.1.0" < e.version <= PormG._UNRELEASED_VERSION, parsed))
+        @test !any(e -> occursin("(#9001)", e.title),
+                   filter(e -> v"0.1.0" < e.version <= v"0.2.0", parsed))
     end
 end

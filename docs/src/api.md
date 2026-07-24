@@ -526,6 +526,16 @@ task = fetch_async(settings, "SELECT count(*) FROM driver")
 result = await_result(task)   # returns rows and releases the pooled connection
 ```
 
+Bind user values with a plain array — write the backend-native placeholder (`$1, $2` on
+PostgreSQL, `?` on SQLite); PormG does no translation, and a NULL is `missing`:
+
+```julia
+# PostgreSQL
+task = fetch_async(settings, "SELECT count(*) FROM driver WHERE nationality = \$1", ["Brazilian"])
+n    = await_result(task)
+# SQLite: the same call with "... = ?" and the same ["Brazilian"] array
+```
+
 !!! warning "An un-awaited `FetchTask` leaks its pool connection"
     `fetch_async` checks its connection out synchronously; only `await_result` returns it.
     Always await every task you start.
@@ -654,7 +664,8 @@ scope — the SQL function constructors are *not* among them (see
 `setup`, `install_ai_skills`, `upgrade_guide`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
 
 !!! note "`fetch` extends `Base.fetch`"
-    The low-level `fetch(settings, sql; params=…)` escape hatch is a method of
+    The low-level `fetch(settings, sql; params=[...])` escape hatch (values bound with
+    backend-native placeholders — see [Async & Concurrency](async.md)) is a method of
     `Base.fetch`, so it is always in scope (no import, no qualification) and does not
     shadow Base. Prefer the fluent terminals (`list()`, `DataFrame`, `count()`) for
     application code.

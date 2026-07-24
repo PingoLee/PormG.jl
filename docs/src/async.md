@@ -80,10 +80,28 @@ result = await_result(task)                                   # rows; releases t
 
 `await_result` is idempotent — a second call returns the cached result without touching the pool.
 
-This hatch runs the SQL string **as you supply it**, so reserve it for static, trusted statements — schema introspection, a fixed `COUNT(*)`, a maintenance command. It is not a parameterized-query path: the `params` keyword takes a parameter collector the ORM builds internally, not a plain vector of values you pass in. Any query that carries user-supplied values belongs on the ORM surface — wrap `list()` / `count()` / `filter(...)` in a task as shown above — which binds parameters, post-processes rows, and manages the connection for you.
+### Binding values — a manual-params array
+
+The hatch **does** bind parameters: pass a plain values array (or tuple) and write the placeholder your backend uses. PormG performs **no** placeholder translation — you write `$1, $2, …` on PostgreSQL and `?` on SQLite — the same low-level convention as Go's `database/sql`, Python's DB-API, and Julia's `DBInterface`:
+
+```julia
+# PostgreSQL — numbered placeholders
+task = fetch_async(settings, "SELECT count(*) FROM driver WHERE nationality = \$1", ["Brazilian"])
+n    = await_result(task)
+
+# SQLite — positional placeholders (same values array, backend-native marker)
+rows = fetch(settings, "SELECT * FROM driver WHERE nationality = ?", ["Brazilian"])
+```
+
+The driver binds each value as **data**, so a user value can never change the statement's structure. Write a NULL as `missing` (a bare `nothing` is normalized to it). The array bypasses the ORM's field formatters (datetime canonicalization, float precision, `bool`→`int`), which is expected for a raw hatch — pre-format any such values yourself.
+
+Because the placeholder style is backend-native, a manual-params string is **not portable** across backends. For portable queries — and for row post-processing and connection management — prefer the ORM surface (`list()` / `count()` / `filter(...)` wrapped in a task, as above). Reach for the values-array hatch only for static SQL you own that the ORM can't express.
 
 !!! danger "Never interpolate user input into the SQL string"
-    `fetch_async(settings, "... $uservalue ...")` is a SQL-injection hole. The raw-SQL hatch has no value-binding on the public surface by design; if you need user values, use the ORM query surface, which parameterizes every value.
+    `fetch_async(settings, "... $uservalue ...")` is a SQL-injection hole. Pass user values as the
+    `params` **array** instead — `fetch_async(settings, "... = \$1", [uservalue])` on PostgreSQL,
+    `"... = ?"` with `[uservalue]` on SQLite — so the driver binds them as data. Never build the SQL
+    string from user input, even with the values-array path available.
 
 !!! warning "An un-awaited `FetchTask` holds a pool connection"
     `fetch_async` checks its connection out *synchronously*; only `await_result` (or the owning transaction's cleanup) returns it. Always await every task you start — including fire-and-forget writes. The opt-in [`leak_detection_threshold`](configuration/advanced.md) logs a warning when a connection is held suspiciously long, which almost always means an un-awaited `FetchTask`.

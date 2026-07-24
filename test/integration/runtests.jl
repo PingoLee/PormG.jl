@@ -50,6 +50,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Transactions"                 begin include("test_transactions.jl")       end
     @testset "Async Task Concurrency (#198)" begin include("test_async_tasks.jl")       end
     @testset "Connection Pool (#37)"        begin include("test_connection_pool.jl")    end
+    @testset "Manual Params raw SQL (#218)" begin include("test_manual_params.jl")       end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end

@@ -1,19 +1,24 @@
 name: Documentation
 
 on:
+  # Builds the docs and, on a push to main, deploys /dev. Release tags are handled
+  # by DocumentationRelease.yml — a push trigger's paths filter applies to tags too,
+  # so tags can't be exempted within this same block.
   push:
     branches:
       - main
-    tags: '*'
-    # Only runs if files in these folders/files change
+    # Only rebuild when something that affects the docs changes. `src/**` is included
+    # so docstring edits rebuild the site and checkdocs = :exports catches breakage.
     paths:
       - 'docs/**'
       - 'README.md'
+      - 'src/**'
   pull_request:
-    # Same filter for Pull Requests
+    # Same filter for Pull Requests (build-only; no deploy).
     paths:
       - 'docs/**'
       - 'README.md'
+      - 'src/**'
 
 jobs:
   build:
@@ -23,22 +28,11 @@ jobs:
       statuses: write
     runs-on: ubuntu-latest
     steps:
+      # checkout must precede the local composite action so it is on disk.
       - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: ./.github/actions/build-docs
         with:
-          version: '1'
-      - uses: julia-actions/cache@v2
-      - name: Configure doc environment
-        working-directory: ${{ github.workspace }}
-        run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
-      - name: Build docs
-        working-directory: ${{ github.workspace }}
-        run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
-      - name: Deploy docs
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-        working-directory: ${{ github.workspace }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token automático do GitHub
-          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
-          DOCS_DEPLOY: 'true'
-        run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
+          # Deploy /dev only on a push to main; PRs build without secrets.
+          deploy: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          documenter-key: ${{ secrets.DOCUMENTER_KEY }}

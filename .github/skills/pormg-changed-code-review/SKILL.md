@@ -68,7 +68,7 @@ git diff -- . ':(exclude)src' ':(exclude)test'
 # unstaged review (default)
 git diff -- src
 git diff -- test
-git diff -- docs ext .cursor db
+git diff -- docs ext .github db
 ```
 
 For staged review, add `--staged` (e.g. `git diff --staged -- src`). For all local changes, use `git diff HEAD -- src`.
@@ -127,7 +127,7 @@ Flag these **green-theater smells** explicitly, and propose the assertion that w
 
 ### Other folders
 
-In the final pass, review `docs`, `ext`, `.github`, `.cursor`, `db`, and any remaining changed paths for:
+In the final pass, review `docs`, `ext`, `.github`, `db`, and any remaining changed paths for:
 
 - docs that promise unsupported behavior
 - workflow or CI changes that hide failures or leak secrets

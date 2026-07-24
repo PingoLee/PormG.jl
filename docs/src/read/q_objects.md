@@ -297,10 +297,14 @@ df = M.Driver.objects.filter("nationality__@in" => nationalities) |> DataFrame
 | Grouped boolean logic | `Q(a, Qor(b, c))` |
 | Dynamic conditions from user input | `Q()` + `push!` |
 | Set membership (`IN`) | `"field__@in" => [values]` |
-| NOT operator | `"field__@ne"` or `"field__@nin"` |
+| NOT equal / NOT in set | `"field__@ne"` or `"field__@nin"` |
+| NOT a pattern / range match | `"field__@ncontains"`, `"field__@nstartswith"`, `"field__@nrange"`, … (see [Filters and Aggregates](filters_and_aggregates.md#Negating-Pattern-and-Range-Lookups)) |
 
 !!! warning
-    PormG does **not** define `|` or `&` operators between Q objects. Use `Qor(...)` for OR logic and `Q(...)` or multiple `filter()` arguments for AND logic.
+    PormG does **not** define `|` or `&` operators between Q objects, nor a `.exclude()` / `~Q`
+    group-negation. Use `Qor(...)` for OR logic and `Q(...)` or multiple `filter()` arguments for AND
+    logic; negate **per field** with the `@ne` / `@nin` / `@n…` pattern-and-range suffixes. This keeps
+    the emitted SQL predictable — PormG is inspired by Django, not a port of it.
 
 ---
 

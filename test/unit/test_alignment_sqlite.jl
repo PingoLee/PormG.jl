@@ -899,6 +899,53 @@ end
     @test contains(insp[:sql_text], "NOT") || contains(insp[:sql_text], "<>")
 end
 
+@testset "Alignment Verification - Negated Pattern/Range Operators SQLite (#207)" begin
+    # Exercise the SQLite render path for the #207 negated twins (test_operators.jl
+    # gates the PostgreSQL shapes via a PG mock). "NOT LIKE" contains "LIKE" and
+    # "NOT BETWEEN" contains "BETWEEN", so each assertion checks the "NOT " prefix.
+
+    # ncontains → NOT LIKE '%val%'
+    insp_nc = M.Result.objects.filter("driverid__surname__@ncontains" => "Sen") |> inspect_query
+    @test contains(insp_nc[:sql_text], "NOT LIKE")
+    @test "%Sen%" in insp_nc[:parameter_buckets][:where]
+
+    # nicontains → pormg_lower(col) NOT LIKE pormg_lower(?)  (Unicode case-fold UDF, #78)
+    insp_nic = M.Result.objects.filter("driverid__surname__@nicontains" => "sen") |> inspect_query
+    @test contains(insp_nic[:sql_text], "pormg_lower")
+    @test contains(insp_nic[:sql_text], "NOT LIKE")
+    @test "%sen%" in insp_nic[:parameter_buckets][:where]
+
+    # nstartswith → NOT LIKE 'val%'
+    insp_nsw = M.Result.objects.filter("driverid__surname__@nstartswith" => "Ham") |> inspect_query
+    @test contains(insp_nsw[:sql_text], "NOT LIKE")
+    @test "Ham%" in insp_nsw[:parameter_buckets][:where]
+
+    # nendswith → NOT LIKE '%val'
+    insp_new = M.Result.objects.filter("driverid__surname__@nendswith" => "ton") |> inspect_query
+    @test contains(insp_new[:sql_text], "NOT LIKE")
+    @test "%ton" in insp_new[:parameter_buckets][:where]
+
+    # nrange → NOT BETWEEN ? AND ?  (positional params preserved in order)
+    insp_nr = M.Result.objects.filter("positionorder__@nrange" => [1, 3]) |> inspect_query
+    @test contains(insp_nr[:sql_text], "NOT BETWEEN")
+    @test insp_nr[:parameter_buckets][:where] == [1, 3]
+
+    # niunaccent_* are PostgreSQL-only — the SQLite renderer must throw *its* PostgreSQL-required
+    # error, NOT the AbstractType "value must be a String" fallback (which would signal a
+    # mis-dispatch). Assert the cause so a wrong-error regression can't masquerade as a pass.
+    for (path, val) in [("driverid__surname__@niunaccent_contains", "sen"),
+                        ("driverid__surname__@niunaccent_exact", "senna")]
+      err_pg = try
+        M.Result.objects.filter(path => val) |> inspect_query
+        nothing
+      catch e
+        e
+      end
+      @test err_pg !== nothing
+      @test occursin("requires PostgreSQL", sprint(showerror, err_pg))
+    end
+end
+
 @testset "Alignment Verification - Boolean Field Filters" begin
     # Test filtering on an explicit BooleanField
     # Passing true/false to BooleanField demonstrates the parameterisation layer's 

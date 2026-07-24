@@ -1227,6 +1227,83 @@ function iendswith(conn::PormGAbstractType, column::String, value)
   return nothing
 end
 
+# ------------------------------------------------------------------------------
+# #207: negated pattern lookups — the NOT-LIKE / NOT-ILIKE / <> twins of the
+# renderers above. The value is decorated with the same wildcards by
+# _apply_like_wildcards (parameters.jl); only the operator differs here. `col NOT
+# LIKE …` / `<>` yield UNKNOWN (row excluded) for NULL columns — consistent with
+# @ne / @nin. The unaccent twins stay PostgreSQL-only, mirroring their positive form.
+# ------------------------------------------------------------------------------
+
+function ncontains(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
+end
+function ncontains(conn::PormGSQLite, column::String, value::String)::String
+  return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
+end
+function ncontains(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function nicontains(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
+end
+function nicontains(conn::PormGSQLite, column::String, value::String)::String
+  # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors icontains.
+  return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
+end
+function nicontains(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function niunaccent_contains(conn::PormGPostgres, column::String, value::String)::String
+  return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
+end
+function niunaccent_contains(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+  return nothing
+end
+function niunaccent_contains(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function niunaccent_exact(conn::PormGPostgres, column::String, value::String)::String
+  return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
+end
+function niunaccent_exact(conn::PormGSQLite, column::String, value::String)
+  throw(ArgumentError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+  return nothing
+end
+function niunaccent_exact(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function nstartswith(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
+end
+function nstartswith(conn::PormGSQLite, column::String, value::String)::String
+  return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
+end
+function nstartswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
+function nendswith(conn::PormGPostgres, column::String, value::String)::String
+  return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
+end
+function nendswith(conn::PormGSQLite, column::String, value::String)::String
+  return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
+end
+function nendswith(conn::PormGAbstractType, column::String, value)
+  throw(ArgumentError("The value must be a String"))
+  return nothing
+end
+
 # ==============================================================================
 # MIGRATION HISTORY TABLE DDL
 # DDL for the pormg_migrations table that tracks applied migrations.

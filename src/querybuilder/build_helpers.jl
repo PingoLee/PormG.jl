@@ -239,9 +239,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Mis
   if suffix in ["in", "nin"]
     @pormg_debug false
     return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
-  elseif suffix == "range"
+  elseif suffix in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
     if length(x.second) != 2
-      throw(_argerr("Error in filter, 'range' operator requires exactly 2 values, got $(length(x.second))"))
+      throw(_argerr("Error in filter, '$(suffix)' operator requires exactly 2 values, got $(length(x.second))"))
     end
     return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   elseif suffix in ("has_any_keys", "has_keys")
@@ -253,7 +253,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Mis
     # parse time so OperObject.values stays a String (no downstream type-union change).
     return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    _raise_invalid_filter_operator(x.first, "vector", ["in", "nin", "range", "has_any_keys", "has_keys", "jcontains"])
+    _raise_invalid_filter_operator(x.first, "vector", ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
   end
 end
 # #27: JSONB document containment (@>) with a Dict / NamedTuple RHS — serialize at parse time so
@@ -267,10 +267,10 @@ function _get_pair_to_oper(x::Pair{Vector{String},<:NamedTuple})
   return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
-  if x.first[end] == "range"
+  if x.first[end] in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
     return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    _raise_invalid_filter_operator(x.first, "tuple", ["range"])
+    _raise_invalid_filter_operator(x.first, "tuple", ["range", "nrange"])
   end
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Date})
@@ -476,6 +476,7 @@ end
 function _check_if_field_is_a_operator(field::String)
   common_operators = ["exact", "iexact", "contains", "icontains", "iunaccent_contains", "iunaccent_exact", "in", "gt", "gte", "lt", "lte",
     "startswith", "istartswith", "endswith", "iendswith", "range", "date",
+    "ncontains", "nicontains", "niunaccent_contains", "niunaccent_exact", "nstartswith", "nendswith", "nrange",  # #207
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
     "hour", "minute", "second", "isnull", "regex", "iregex"]
   if field in common_operators
@@ -1136,8 +1137,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
     if v.operator in ["ISNULL"]
       return getfield(QueryBuilder, Symbol(v.operator))(_get_filter_query(v.column, instruc), v.values)
-    elseif v.operator == "BETWEEN"
-      # Handle BETWEEN with two parameters
+    elseif v.operator in ("BETWEEN", "NOT BETWEEN")
+      # Handle (NOT) BETWEEN with two parameters. #207: `nrange` renders NOT BETWEEN — the operator
+      # string carries "BETWEEN"/"NOT BETWEEN" so both branches emit it verbatim.
       column_sql = _get_filter_query(v.column, instruc)
       field_name = ""
       if isa(v.column, SQLTypeField)
@@ -1150,17 +1152,18 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
         formatter = instruc.object.model.fields[field_name].formatter
         p1 = add_parameter!(instruc, formatter(v.values[1]))
         p2 = add_parameter!(instruc, formatter(v.values[2]))
-        return string(column_sql, " BETWEEN ", p1, " AND ", p2)
+        return string(column_sql, " ", v.operator, " ", p1, " AND ", p2)
       else
         p1 = add_parameter!(instruc, v.values[1])
         p2 = add_parameter!(instruc, v.values[2])
-        return string(column_sql, " BETWEEN ", p1, " AND ", p2)
+        return string(column_sql, " ", v.operator, " ", p1, " AND ", p2)
       end
     elseif haskey(instruc.object.model.fields, v.column.field)
       placeholders = nothing
       try
         # Determine if this is a LIKE-based operator and which wildcard pattern to use
-        is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
+        is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
+                                    "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
         placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formatter(v.values), contains=is_like_op, operator=v.operator)
       catch e
         @pormg_debug false
@@ -1172,11 +1175,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       end
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @pormg_debug false
-      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
+      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
+                                  "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
       placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formatter(v.values), contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
-      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
+      is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith",
+                                  "ncontains", "nicontains", "niunaccent_contains", "nstartswith", "nendswith"]
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
@@ -1204,7 +1209,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # Internal invariant: add_parameter! only ever returns a String or a Vector of placeholders.
       error(_emsg("PormG internal error rendering $(v.operator): parameter placeholders must be a String or a Vector, got $(typeof(placeholders))."))
     end
-  elseif v.operator in ["contains", "icontains", "iunaccent_contains", "iunaccent_exact", "startswith", "endswith"]
+  elseif v.operator in ["contains", "icontains", "iunaccent_contains", "iunaccent_exact", "startswith", "endswith",
+                        "ncontains", "nicontains", "niunaccent_contains", "niunaccent_exact", "nstartswith", "nendswith"]
     @pormg_debug false
     return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholders)
   else

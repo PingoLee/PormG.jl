@@ -60,6 +60,57 @@ PormG bump, point an agent (or yourself) at this file — read it from the dev'd
 
 ---
 
+## Raw-SQL manual params: `fetch` / `fetch_async` accept a values array (#218)
+
+- **Version**: 0.2.2
+- **PormG ref**: issue #218 (follow-up to #198) ; `src/ConnectionPool.jl` (`fetch` / `fetch_async`),
+  `docs/src/async.md`
+- **Recorded**: 2026-07-23
+- **Severity**: new feature — **additive, non-breaking**. Existing collector / `nothing` / no-param
+  calls are unchanged; a plain array that previously raised `MethodError` now binds.
+
+### What changed
+
+The low-level raw-SQL escape hatch (`fetch` / `fetch_async(settings, sql; params=…)`) now accepts a
+plain values **array or tuple** — the previously internal-only `params` slot was typed
+`Union{Nothing, AbstractPormGParam}` (an ORM collector a user could not construct), so raw SQL had no
+public value-binding path. You write the placeholder your backend uses — `$1, $2, …` on PostgreSQL,
+`?` on SQLite — and PormG performs **no** placeholder translation (the Go `database/sql` / Python
+DB-API / Julia `DBInterface` convention: raw means native). A NULL is `missing`; a bare `nothing` is
+normalized to it. The array bypasses the ORM field formatters (datetime/float/bool coercion), which is
+expected for a raw hatch. Portable queries still belong on the ORM surface.
+
+```julia
+# ✗ before — a user value in raw SQL could only be string-interpolated (a SQL-injection hole)…
+fetch(settings, "SELECT count(*) FROM driver WHERE nationality = '$(nat)'")
+# …or expressed through the ORM surface:
+M.Driver.objects.filter("nationality" => nat).count()
+
+# ✓ after — bind it, with the backend-native placeholder:
+fetch(settings, "SELECT count(*) FROM driver WHERE nationality = \$1", [nat])   # PostgreSQL
+fetch(settings, "SELECT count(*) FROM driver WHERE nationality = ?",  [nat])    # SQLite
+```
+
+### How to find the calls to migrate
+
+Nothing to migrate — additive. **Optional adoption:** grep each app for a raw `fetch` / `fetch_async`
+whose SQL string interpolates a value (a SQL-injection risk) and move the value into the array:
+
+```
+rg -n 'fetch(_async)?\(' <app>/src | rg '\$\('     # raw fetch with $(...) interpolation
+```
+
+### Per-app rollout
+
+| App | Status | Notes |
+|-----|--------|-------|
+| app-1 | ⏳ | optional — replace interpolated raw `fetch`/`fetch_async` SQL with the values array |
+| app-2 | ⏳ | optional |
+| app-3 | ⏳ | optional |
+| app-4 | ⏳ | optional |
+
+---
+
 ## Typed exceptions across the query surface — raw-`String` throws are now `ArgumentError`/`ErrorException` (#197)
 
 - **Version**: 0.2.0

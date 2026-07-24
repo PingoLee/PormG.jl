@@ -27,6 +27,20 @@ import PormG.Configuration: get_tx_connection, get_tx_pool, with_tx_context, tra
 
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 
+# #218: a raw-SQL manual-params array/tuple the caller binds with backend-native placeholders
+# ($1,$2 on PostgreSQL, ? on SQLite). PormG performs NO placeholder translation — the caller
+# writes the dialect's own marker. Disjoint from AbstractPormGParam (the ORM's internal collector),
+# so admitting it in the fetch/fetch_async param slot never collides with the collector methods.
+# `String <: AbstractString`, not `AbstractVector`, so the SQL argument is never swallowed.
+const ManualParams = Union{AbstractVector, Tuple}
+
+# Normalize a manual-params array before binding. A raw array bypasses every ORM `format_*_sql`
+# formatter by design, so a bare `nothing` would reach the driver un-normalized (LibPQ/SQLite treat
+# it differently from `missing`). Map `nothing`→`missing` so a NULL binds predictably on both
+# backends; every non-null value is passed through byte-for-byte (this is a RAW hatch — no coercion).
+# Returns a fresh `Any[]` (never mutates the caller's array) and is idempotent under the fetch retry.
+_normalize_manual_params(params::ManualParams) = Any[v === nothing ? missing : v for v in params]
+
 # A pool starts at `pool_size` connections and may grow lazily (on demand) up to
 # `pool_size * POOL_EXPANSION_FACTOR` before acquisition fails with a PoolTimeoutError (#37).
 # The base stays small (idle footprint) while the ceiling gives async fan-out real headroom.
@@ -1298,8 +1312,16 @@ orders = await_result(task2)
 """
 function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
-  params::Union{Nothing, AbstractPormGParam} = nothing,
+  params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
   ignore_tx::Bool = false)
+
+  # #218: this is the single funnel every fetch/fetch_async path reaches (delegates and the
+  # sync `fetch` — including its reconnect retry — all land here), so normalize manual-params
+  # NULLs once, here. Guarded to ManualParams: ORM collectors (AbstractPormGParam) and the
+  # `nothing` sentinel are untouched (collectors already ran nothing→missing via format_*_sql).
+  if params isa ManualParams
+    params = _normalize_manual_params(params)
+  end
 
   # Check for transaction context first
   tx_conn = ignore_tx ? nothing : get_tx_connection()
@@ -1344,9 +1366,9 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     end
   end
 end
-fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::PormGSettings, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
     fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String; params=nothing, ignore_tx=false) -> Tables.rowtable
@@ -1356,9 +1378,11 @@ Internally uses async execution but immediately awaits the result.
 """
 function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
-  params::Union{Nothing, AbstractPormGParam} = nothing,
+  params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
   ignore_tx::Bool = false)
   @pormg_debug false
+  # Manual-params NULL normalization happens in the fetch_async funnel this delegates to (#218) —
+  # `fetch` only forwards params, never inspects their values.
 
   # Use async-first approach: start async query then await
   fetch_task = fetch_async(connection, sql; conn=conn, params=params, ignore_tx=ignore_tx)
@@ -1387,9 +1411,9 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     throw(root)
   end
 end
-fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::PormGSettings, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::AbstractPormGParam; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)

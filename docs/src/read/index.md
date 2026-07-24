@@ -75,6 +75,26 @@ driver.save()
 
 For framework integrations that require plain dictionaries, use `.list(:dict)`. For tabular analysis, pipe the query to `DataFrame`.
 
+!!! warning "No lazy FK traversal — project related columns up front"
+    PormG never lazily loads a related row. Accessing a ForeignKey you did not
+    project (`row.driverid`, or traversing further with `row.driverid.forename`)
+    raises an `ArgumentError`. Project what you need up front with `values(...)`,
+    then read it off the row by its key:
+
+    ```julia
+    # ✗ raises: driverid was not projected, and PormG won't lazily load it
+    row = M.Result.objects.values("resultid", "points").first()
+    driver_name = row.driverid.forename
+
+    # ✓ project the related column, then read it
+    row = M.Result.objects.values("resultid", "driverid__forename").first()
+    driver_name = row[:driverid__forename]
+
+    # ✓ or project the raw foreign-key value
+    row = M.Result.objects.values("resultid", "driverid").first()
+    driver_id = row[:driverid]
+    ```
+
 ---
 
 ## Query Styles

@@ -105,7 +105,15 @@ end
 
     standings = M.Driver_standings.objects.values("driverstandingsid").limit(1).first()
     @test standings isa PormGRow
-    @test_throws ArgumentError standings.driverId
+    # Accessing an un-projected ForeignKey (`driverid`) triggers the lazy-FK refusal.
+    # Lock not just the error TYPE but the guidance: it must steer to up-front
+    # `values("fk__field")` projection and never re-suggest `.on(...)` (which throws
+    # its own error and does not project columns — issue #204).
+    err = try; standings.driverid; nothing; catch e; e; end
+    @test err isa ArgumentError
+    @test occursin("values(", err.msg)   # steers to projection
+    @test occursin("__", err.msg)        # via the __ lookup
+    @test !occursin(".on(", err.msg)     # never re-suggests the on() dead end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

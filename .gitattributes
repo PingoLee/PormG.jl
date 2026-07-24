@@ -10,3 +10,7 @@
 # Shell scripts must stay LF: a CRLF `#!/usr/bin/env bash\r` shebang / `set -euo\r` breaks
 # under bash on a Windows checkout (autocrlf=true would otherwise rewrite LF -> CRLF).
 *.sh text eol=lf
+# Markdown stays LF: `upgrade_guide` parses UPGRADING.md with a `(?m)^---$` block separator
+# that a `---\r` line (CRLF checkout) never matches — see the parser's own CRLF normalization
+# in src/tools.jl. The parser tolerates CRLF regardless; pinning LF keeps the repo consistent.
+*.md text eol=lf

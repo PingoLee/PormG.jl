@@ -168,7 +168,23 @@ function _read_upgrading_entries()
     path = joinpath(Base.pkgdir(@__MODULE__), "UPGRADING.md")
     isfile(path) || throw(ArgumentError(
         "UPGRADING.md not found next to the installed PormG (looked in $(dirname(path)))."))
-    text = read(path, String)
+    return _parse_upgrading(read(path, String))
+end
+
+"""
+    _parse_upgrading(text::AbstractString) -> Vector{_UpgradeEntry}
+
+Parse raw `UPGRADING.md` text into change entries, newest-first (see `_read_upgrading_entries`).
+Split out so the parser can be exercised on hand-fed text — the CRLF-robustness regression in
+particular — without touching the on-disk file.
+
+Line endings are normalized to `\\n` up front: a Windows checkout can store `UPGRADING.md`
+with `\\r\\n` (only `*.jl`/`*.sh` are pinned to `eol=lf`), and the `(?m)^---[ \\t]*\$` block
+separator never matches a `---\\r` line — without this the whole file collapses into a single
+bogus entry and every scoped lookup comes back empty.
+"""
+function _parse_upgrading(text::AbstractString)
+    text = replace(text, "\r\n" => "\n", "\r" => "\n")
 
     # Drop the "## Template for new entries" section: its body is an HTML comment holding a
     # fake `## …` heading and a `- **Version**:` placeholder that would parse as a bogus entry.

@@ -60,6 +60,26 @@ using PormG
         @test all(e -> !occursin('\n', e.title) && !isempty(e.body), all_entries)
     end
 
+    # ── CRLF robustness: a Windows checkout stores UPGRADING.md with \r\n (only *.jl /
+    #    *.sh are pinned to eol=lf), and the `(?m)^---$` block separator never matches a
+    #    `---\r` line — collapsing the whole file into one bogus entry, so every scoped
+    #    lookup comes back empty. This regressed on Windows CI since #216 landed. Exercised
+    #    on every platform by feeding CRLF text straight to the parser (Linux CI never
+    #    checks the file out as CRLF, so it can't catch this via the on-disk path).
+    @testset "parser tolerates CRLF line endings (Windows checkout)" begin
+        path = joinpath(pkgdir(PormG), "UPGRADING.md")
+        lf   = replace(read(path, String), "\r\n" => "\n")   # normalize whatever is on disk
+        crlf = replace(lf, "\n" => "\r\n")
+
+        from_lf   = PormG._parse_upgrading(lf)
+        from_crlf = PormG._parse_upgrading(crlf)
+
+        @test !isempty(from_crlf)
+        @test from_crlf == from_lf   # identical parse regardless of line endings (version/title/body)
+        # The concrete CI symptom: the stamped 0.2.0/#197 entry must survive the block split.
+        @test any(e -> occursin("(#197)", e.title) && e.version == v"0.2.0", from_crlf)
+    end
+
     # ── human output: header + entry, internal rollout table trimmed off ────────
     @testset "printed guide: header, entry, no per-app rollout" begin
         out = sprint(io -> PormG.upgrade_guide(io; from = v"0.1.0", to = v"0.2.0"))

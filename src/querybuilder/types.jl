@@ -914,8 +914,11 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
 
   if haskey(model.fields, String(normalized)) && model.fields[String(normalized)] isa Models.sForeignKey
     throw(ArgumentError(
-      "$(model.name).$(normalized) is a ForeignKey. Lazy FK traversal is not supported in PormG. " *
-      "Use `.on(\"$(normalized)\")` in your query to eagerly join the related table."
+      "$(model.name).$(normalized) is a ForeignKey that this row didn't project; " *
+      "PormG does not support lazy FK access (`row.$(normalized)`). " *
+      "Project it up front in `values(...)`: add `\"$(normalized)\"` for the raw key value, " *
+      "or `\"$(normalized)__<field>\"` for a column from the related table — " *
+      "then read it as `row[:$(normalized)]` or `row[:$(normalized)__<field>]`."
     ))
   end
 

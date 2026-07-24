@@ -111,24 +111,73 @@ df = query |> DataFrame
 
 ---
 
+## Handler Mutation Model
+
+Every query handler follows four rules. They are where PormG deliberately differs from
+Django's clone-per-call querysets, so they are worth internalizing once:
+
+1. **`Model.objects` returns a fresh handler on every access.** Two mentions of
+   `M.Driver.objects` are two independent queries — state never leaks between them.
+2. **Chain methods mutate the handler in place** and return that same handler (not a
+   copy). Assigning a chain to a second variable aliases the same query.
+3. **`.copy()` is the branching escape hatch** — deep-copy a base query, then extend
+   each copy independently (example below).
+4. **Terminal methods never mutate the handler.** `count`, `exists`, `list`, `first`,
+   `get`, and the `show_query`/`inspect_query` inspection paths all execute on an
+   internal copy of the handler. A handler stays reusable after any read terminal —
+   `q.first()` does not leave a `limit(1)` behind, inline filters passed to
+   `q.get("field" => v)` do not persist, and `q.update(...)` after `q.first()` is valid.
+
+### Re-call semantics: which methods accumulate
+
+Calling the same chain method twice is not always the same operation. The semantics
+follow Django: `filter` accumulates, while `values`/`order_by` replace their previous
+call (Django documents this as "each `order_by()` call will clear any previous ordering").
+
+```julia
+q = M.Result.objects
+q.filter("raceid__year" => 2019)
+q.filter("positionorder" => 1)           # accumulates: year = 2019 AND positionorder = 1
+
+q.values("driverid__surname")
+q.values("driverid__surname", "points")  # replaces: only surname + points are selected
+
+q.order_by("points")
+q.order_by("-points")                    # replaces: ORDER BY points DESC only
+```
+
+### Branching with `.copy()`
+
+```julia
+base_query = M.Result.objects.filter("positionorder" => 1)
+
+# Reuse for different projections — each copy evolves independently
+winners_by_driver = base_query.copy().values("driverid__surname", "wins" => Count("resultid"))
+winners_by_team   = base_query.copy().values("constructorid__name", "wins" => Count("resultid"))
+```
+
+---
+
 ## Chainable Methods Reference
 
-These methods modify the query builder and return the handler for further chaining:
+These methods modify the query builder and return the handler for further chaining. The
+**On re-call** column states what a second call of the same method does (see the
+[handler mutation model](#Handler-Mutation-Model) above):
 
-| Method | Description |
-| :--- | :--- |
-| `.filter(key => value, ...)` | Add WHERE conditions. Multiple pairs are ANDed. |
-| `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. |
-| `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. |
-| `.limit(n)` | Limit the number of returned rows. |
-| `.offset(n)` | Skip the first `n` rows. |
-| `.page(n)` | Convenience for pagination (requires `.limit()` to be set first). |
-| `.distinct()` | Add `SELECT DISTINCT` to the query. |
-| `.db("key")` | Route the query to a different connection pool. |
-| `.with("name" => subquery)` | Attach a Common Table Expression (CTE). |
-| `.cjoin("field" => "Model")` | Add a custom join at query time. |
-| `.on("path", key => value)` | Add predicates to the ON clause of an existing join. |
-| `.copy()` | Deep-copy the query object for reuse. |
+| Method | Description | On re-call |
+| :--- | :--- | :--- |
+| `.filter(key => value, ...)` | Add WHERE conditions. Multiple pairs are ANDed. | **Accumulates** (ANDed) |
+| `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. | **Replaces** previous call |
+| `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | **Replaces** previous call |
+| `.limit(n)` | Limit the number of returned rows. | Last value wins |
+| `.offset(n)` | Skip the first `n` rows. | Last value wins |
+| `.page(n)` | Convenience for pagination (requires `.limit()` to be set first). | Last value wins |
+| `.distinct()` | Add `SELECT DISTINCT` to the query. | Last value wins |
+| `.db("key")` | Route the query to a different connection pool. | Last value wins |
+| `.with("name" => subquery)` | Attach a Common Table Expression (CTE). | Adds another CTE |
+| `.cjoin("field" => "Model")` | Add a custom join at query time. | Adds another join |
+| `.on("path", key => value)` | Add predicates to the ON clause of an existing join. | Adds more predicates |
+| `.copy()` | Deep-copy the query object for reuse. | — |
 
 ---
 
@@ -182,16 +231,6 @@ nationalities = M.Driver.objects.values("nationality").distinct().list()
 
     # ✓ … or drop distinct() if you meant "one row per nationality, ordered by an aggregate"
     ```
-
-### Copying a Query for Reuse
-
-```julia
-base_query = M.Result.objects.filter("positionorder" => 1)
-
-# Reuse for different projections
-winners_by_driver = base_query.copy().values("driverid__surname", "wins" => Count("resultid"))
-winners_by_team   = base_query.copy().values("constructorid__name", "wins" => Count("resultid"))
-```
 
 ---
 

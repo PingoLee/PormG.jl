@@ -16,6 +16,12 @@ function _up_values(str::String)
   end
 end
 
+"""
+  up_values!(q::SQLObject, values)
+
+Set the query projection. Each `.values(...)` call **replaces** the previous one
+(last-call-wins, Django parity, #199) — unlike `.filter(...)`, which accumulates.
+"""
 function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []
@@ -251,6 +257,13 @@ function _query_select(array::Vector{SQLTypeField}, connection)
 end
 
 
+"""
+  order_by!(q::SQLObject, values)
+
+Set the query ordering. Each `.order_by(...)` call **replaces** the previous one
+(last-call-wins, matching Django's "each order_by() call clears previous ordering",
+#199) — unlike `.filter(...)`, which accumulates.
+"""
 function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} where N)
   q.order = [] # every call of order_by, reset the order
   for v in values
@@ -403,6 +416,10 @@ end
 Apply filters to the query. Chainable method that returns the query object.
 
 Usage: `query.filter("field" => value)`
+
+Repeated calls **accumulate**: each `.filter(...)` appends its conditions (ANDed) to
+those already on the handler — unlike `.values(...)`/`.order_by(...)`, which replace
+their previous call (Django parity, #199).
 
 See [Read documentation](read/index.md) for detailed filter syntax and examples.
 """ ChainCaller(up_filter!, q)

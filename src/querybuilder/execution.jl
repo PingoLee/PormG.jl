@@ -1527,32 +1527,22 @@ list(objct::SQLObjectHandler; kwargs...) = list(objct, Val(:row); kwargs...)
 
 Return the first `PormGRow` matching the current query, or `nothing` if no records match.
 
-**Mutates the handler**: calls `objct.limit(1)` on the handler before executing. This is
-permanent — the `limit(1)` persists on the object after the call returns (last-call
-semantics, consistent with all other fluent methods such as `filter`, `order_by`, etc.).
-
-Because the limit is mutated into the handler, chaining `.first()` followed by `.update()`
-on the **same handler** will raise an `ArgumentError` ("UPDATE with LIMIT/OFFSET is not
-supported"). Obtain a fresh handler or call `.update()` before `.first()` if both
-operations are needed.
+Like every read terminal (`count`, `exists`, `list`, `get`), `first` executes on an
+internal copy of the handler — the `limit(1)` it needs is applied to that copy, never
+to `objct`. The handler is reusable afterwards, including for `.update()`:
 
 ```julia
 q = M.Driver.objects
 q.filter("nationality" => "British")
-driver = q.first()           # q now has limit=1
-
-# Wrong — throws because limit=1 was set by first()
-# q.update("nationality" => "English")
-
-# Correct — create a separate handler for the update
-u = M.Driver.objects
-u.filter("nationality" => "British")
-u.update("nationality" => "English")
+driver = q.first()                      # q is unchanged — no limit leaks in
+q.update("nationality" => "English")    # still valid on the same handler
 ```
 """
 function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
-  objct.limit(1)
-  res = list(objct, show_query=show_query)
+  # #199: copy-first like count/exists/list — limit(1) must not leak into the caller's handler
+  q = deepcopy(objct)
+  q.limit(1)
+  res = list(q, show_query=show_query)
   if show_query !== :execute
     return res
   end
@@ -1589,11 +1579,16 @@ driver = M.Driver.objects.filter("driverref" => "hamilton").get()
 
 Raises `DoesNotExist` when no rows match and `MultipleObjectsReturned` when more
 than one row matches.
+
+Like every read terminal, `get` executes on an internal copy of the handler: inline
+filters do **not** persist on `objct`, so the handler can be reused afterwards with
+its original filter list intact.
 """
 function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
-  !isempty(filters) && up_filter!(objct.object, filters)
-
+  # #199: copy-first — inline filters and the limit(2) probe apply to the copy only,
+  # so they never leak into the caller's handler.
   q = deepcopy(objct)
+  !isempty(filters) && up_filter!(q.object, filters)
   q = q.limit(2)
 
   if show_query !== :execute
@@ -1601,8 +1596,8 @@ function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
   end
 
   rows = list(q)
-  model_name = objct.object.model.name
-  filter_repr = isempty(objct.object.filter) ? "(none)" : join(_get_filter_repr.(objct.object.filter), ", ")
+  model_name = q.object.model.name
+  filter_repr = isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
 
   isempty(rows) && throw(DoesNotExist(model_name, filter_repr))
   length(rows) > 1 && throw(MultipleObjectsReturned(model_name, length(rows), filter_repr))

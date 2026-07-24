@@ -28,6 +28,7 @@ include("common_bulk_scratch_setup.jl")
     # ── Phase 2: Behavioral Tests (reads, filters, expressions) ──────
     @testset "Selection and Filters"        begin include("test_selection.jl")          end # TODO: split this into multiple files (selection, filters, expressions)
     @testset "PormGRow and get()"           begin include("test_row_and_get.jl")        end
+    @testset "Handler Semantics (#199)"     begin include("test_handler_semantics.jl")  end
     @testset "PormGRow Mutation"            begin include("test_row_mutation.jl")       end
     @testset "Field-name Case Preservation" begin include("test_field_name_case_db.jl") end
     @testset "db_column Authoritative"       begin include("test_db_column_db.jl")       end

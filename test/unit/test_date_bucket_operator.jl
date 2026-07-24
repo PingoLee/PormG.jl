@@ -4,7 +4,7 @@ Unit tests for the `__@yyyy_mm` date-bucket filter operator.
 `field__@yyyy_mm` is the month-bucket operator: it renders the column through
 `to_char(col, 'YYYY-MM')` and binds the comparison value after normalising it via
 `Models.format_yyyy_mm` (constants.jl: "yyyy_mm" => "Y_M";
-functions.jl: `Y_M(x) = To_char(x, "YYYY-MM", formater = Models.format_yyyy_mm)`).
+functions.jl: `Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)`).
 
 Why a dedicated file?
   - `test_operators.jl` covers the comparison / string / null suffixes but not the

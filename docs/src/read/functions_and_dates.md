@@ -265,14 +265,14 @@ query.values(
 )
 ```
 
-### `To_char` — Format as String
+### `ToChar` — Format as String
 
 ```julia
-using PormG.Functions: To_char
+using PormG.Functions: ToChar
 
 query = M.Race.objects
 query.values(
-    "formatted_date" => To_char("date", "YYYY-MM")
+    "formatted_date" => ToChar("date", "YYYY-MM")
 )
 ```
 

@@ -810,7 +810,7 @@ end
 
 _projection_is_aggregate(v)::Bool =
   v isa SQLTypeField && v.field isa SQLTypeFunction &&
-  hasproperty(v.field, :agregate) && getproperty(v.field, :agregate) === true
+  hasproperty(v.field, :aggregate) && getproperty(v.field, :aggregate) === true
 
 # Soft heads-up: a non-aggregate scalar subquery with no LIMIT may match >1 row and error at the DB.
 function _warn_if_possible_multirow(handler::SQLObjectHandler)
@@ -911,7 +911,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     print(io, "\n")
   end
 
-  if instruction.agregate && !isempty(instruction.group)
+  if instruction.aggregate && !isempty(instruction.group)
     print(io, "GROUP BY ", join(instruction.group, ", "), " \n")
   end
 
@@ -1023,7 +1023,7 @@ function _json_numeric_rhs(value)
 end
 
 # #27: render a comparison against a JSON path lookup (e.g. `payload__driver`). The RHS binds
-# dialect-aware — NOT through the JSON field's formater (which would reject a plain string like
+# dialect-aware — NOT through the JSON field's formatter (which would reject a plain string like
 # "hamilton"):
 #   - PostgreSQL `#>>` always yields TEXT, so equality binds text and `<`/`>` cast the LHS
 #     `::numeric`.
@@ -1094,7 +1094,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
   # #27: comparison against a JSON path lookup (payload__key). Resolving `column` above populated
   # json_lookup_cache; the dedicated branch binds the RHS as plain text (the generic path would run
-  # the JSON formater on the RHS and throw on plain strings) and applies the PG numeric cast for </>.
+  # the JSON formatter on the RHS and throw on plain strings) and applies the PG numeric cast for </>.
   if isa(v.column, SQLTypeField) && v.column._as !== nothing && haskey(instruc.json_lookup_cache, v.column._as)
     return _render_json_lookup_comparison(v, column, instruc)
   end
@@ -1107,14 +1107,14 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # Case/When and other SQL function expressions as filter RHS
     placeholders = _get_filter_query(v.values, instruc)
     return string(column, " ", v.operator, " ", placeholders)
-  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formater !== nothing
+  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
-    placeholders = add_parameter!(instruc, v.column.field.formater(v.values))
+    placeholders = add_parameter!(instruc, v.column.field.formatter(v.values))
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.field.function_name])(v.values))
     # value = getfield(Models, PormGTypeField[v.column.field.function_name])(v.values)
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
-    # Function with formater
+    # Function with formatter
     @pormg_debug false
     placeholders = add_parameter!(instruc, getfield(Models, PormGTypeField[v.column.function_name])(v.values))
   elseif isa(v.values, SQLObjectHandler)
@@ -1147,9 +1147,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       end
 
       if field_name != "" && haskey(instruc.object.model.fields, field_name)
-        formater = instruc.object.model.fields[field_name].formater
-        p1 = add_parameter!(instruc, formater(v.values[1]))
-        p2 = add_parameter!(instruc, formater(v.values[2]))
+        formatter = instruc.object.model.fields[field_name].formatter
+        p1 = add_parameter!(instruc, formatter(v.values[1]))
+        p2 = add_parameter!(instruc, formatter(v.values[2]))
         return string(column_sql, " BETWEEN ", p1, " AND ", p2)
       else
         p1 = add_parameter!(instruc, v.values[1])
@@ -1161,7 +1161,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       try
         # Determine if this is a LIKE-based operator and which wildcard pattern to use
         is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
-        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formater(v.values), contains=is_like_op, operator=v.operator)
+        placeholders = add_parameter!(instruc, instruc.object.model.fields[v.column.field].formatter(v.values), contains=is_like_op, operator=v.operator)
       catch e
         @pormg_debug false
         if contains(string(e), "The date") && contains(string(e), "is invalid")
@@ -1173,7 +1173,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif haskey(instruc.tab_field_cache, v.column._as) # Check cache first
       @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]
-      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formater(v.values), contains=is_like_op, operator=v.operator)
+      placeholders = add_parameter!(instruc, instruc.tab_field_cache[v.column._as].formatter(v.values), contains=is_like_op, operator=v.operator)
     elseif isa(v.column, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in ["contains", "icontains", "iunaccent_contains", "startswith", "endswith"]

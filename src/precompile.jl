@@ -155,7 +155,7 @@ if ccall(:jl_generating_output, Cint, ()) == 1
       Base.precompile(Tuple{getfield(QB, Symbol("#100#101"))})                    # 0.12 s
     isdefined(QB, Symbol("#9#10")) &&
       Base.precompile(Tuple{getfield(QB, Symbol("#9#10")), QB.SQLTypeQ})          # 0.09 s
-    Base.precompile(Tuple{typeof(QB._get_filter_query), QB.QorObject, QB.InstrucObject})  # 0.11 s
+    Base.precompile(Tuple{typeof(QB._get_filter_query), QB.QorObject, QB.InstructionObject})  # 0.11 s
     Base.precompile(Tuple{typeof(QB.deepcopy), QB.QObject})                       # 0.08 s
     Base.precompile(Tuple{QB.ChainCaller{typeof(QB.order_by!), QB.ObjectHandler}, String, Vararg{String}})  # 0.04 s
     Base.precompile(Tuple{typeof(QB.F), String})                                  # 0.01 s
@@ -163,8 +163,8 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     Base.precompile(Tuple{typeof(QB._get_join_filters), QB.SQLObjectQuery, String})       # 0.005 s
     Base.precompile(Tuple{typeof(QB._get_join_type_override), QB.SQLObjectQuery, String}) # 0.005 s
     # add_parameter! bodyfunction forms (snoop run 2 — 0.05s combined)
-    let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.InstrucObject, Int64,))) catch; missing end
-      ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.InstrucObject, Int64,))
+    let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.InstructionObject, Int64,))) catch; missing end
+      ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.InstructionObject, Int64,))
     end
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.SQLiteParameterizedQuery, Float64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.SQLiteParameterizedQuery, Float64,))

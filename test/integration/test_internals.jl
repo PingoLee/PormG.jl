@@ -106,7 +106,7 @@ end
   query.filter("date" => test_date)
   instruc = PormG.QueryBuilder.build(query.object)
 
-  # The formater should have converted Date to String for the DB driver if needed,
+  # The formatter should have converted Date to String for the DB driver if needed,
   # or kept it as Date if the driver handles it. Check ISO-like output.
   @test string(instruc.parameters.parameters[1]) == "2023-10-22"
 

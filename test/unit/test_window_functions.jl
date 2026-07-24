@@ -221,9 +221,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Window-only with plain fields: GROUP BY must NOT be emitted
 #
-# When there is no aggregate (instruc.agregate stays false), GROUP BY must be
+# When there is no aggregate (instruc.aggregate stays false), GROUP BY must be
 # suppressed entirely — even if instruc.group has entries from plain fields.
-# This verifies the guard condition `agregate && !isempty(group)`.
+# This verifies the guard condition `aggregate && !isempty(group)`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Window-only with multiple plain fields: no GROUP BY" begin
   q = WindowPgResult.objects.values(

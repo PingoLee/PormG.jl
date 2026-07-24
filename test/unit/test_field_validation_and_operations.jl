@@ -2097,16 +2097,16 @@ end
         @test 1 in insp[:parameters]
 
         wrapped_avg = QB.Round(QB.Sum("points") / QB.Count("id"), 1)
-        @test wrapped_avg.agregate === true
+        @test wrapped_avg.aggregate === true
     end
 
-    @testset "Extract and To_char preserve helper surface consistency" begin
+    @testset "Extract and ToChar preserve helper surface consistency" begin
         # These helpers should accept the same advanced field wrappers as the rest of the
         # SQL helper family: direct SQLField objects and F expressions.
         @test hasmethod(QB.Extract, Tuple{QB.SQLField, String})
         @test hasmethod(QB.Extract, Tuple{QB.FExpression, String})
-        @test hasmethod(QB.To_char, Tuple{QB.SQLField, String})
-        @test hasmethod(QB.To_char, Tuple{QB.FExpression, String})
+        @test hasmethod(QB.ToChar, Tuple{QB.SQLField, String})
+        @test hasmethod(QB.ToChar, Tuple{QB.FExpression, String})
 
         DateHelperModel = Models.Model_Type(
             name = "date_helper_model",
@@ -2122,8 +2122,8 @@ end
         q.values(
             "year_from_sqlfield" => QB.Extract(QB.SQLField("created_at"), "YEAR"),
             "year_from_f" => QB.Extract(QB.F("created_at"), "YEAR"),
-            "text_from_sqlfield" => QB.To_char(QB.SQLField("created_at"), "YYYY-MM-DD"),
-            "text_from_f" => QB.To_char(QB.F("created_at"), "YYYY-MM-DD")
+            "text_from_sqlfield" => QB.ToChar(QB.SQLField("created_at"), "YYYY-MM-DD"),
+            "text_from_f" => QB.ToChar(QB.F("created_at"), "YYYY-MM-DD")
         )
 
         insp = inspect_query(q)

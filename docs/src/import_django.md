@@ -238,6 +238,16 @@ user_type = models.CharField(
 4. **Metaclass Options**: Model Meta options are not converted
 5. **Methods**: Model methods are not converted (only fields)
 
+## API Naming Differences from Django
+
+PormG is **inspired by** Django, not a port — where an API is genuinely different, it also gets its own name rather than borrowing Django's. The one you will notice first when migrating:
+
+| Django | PormG | Why it's not just a rename |
+| :--- | :--- | :--- |
+| `Model.objects.bulk_create(objs, batch_size=…, ignore_conflicts=…)` | `bulk_insert(query, df; chunk_size=…, on_conflict=…)` | PormG's bulk API is **DataFrame-first**: it inserts rows from a `DataFrame` (with optional `"df_col" => "model_field"` mapping) instead of a list of model instances, and it does not materialize/return created instances. Conflict handling is the explicit `on_conflict=` kwarg (`:nothing`, or `(action = :update, target = […], set = […])` for upserts) rather than Django's `ignore_conflicts`/`update_conflicts` booleans. |
+
+`bulk_insert` sits beside its siblings `bulk_update` and `bulk_copy` — see [Bulk Operations](write/bulk.md) for the full API.
+
 ## Datetime Interoperability Contract
 
 When PormG writes into tables that are also managed by Django, timezone semantics need to be explicit.

@@ -53,7 +53,7 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   # ─────────────────────────────────────────────────────────────────────────────
   # Equality lookup — the core `payload__key => value` shape on both dialects
   # PG extracts via `#>>` (text[] path), SQLite via `json_extract` (JSONPath); the RHS binds as a
-  # single plain-text parameter (NOT through the JSON formater, which would reject "hamilton").
+  # single plain-text parameter (NOT through the JSON formatter, which would reject "hamilton").
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "equality: payload__nome => value (both dialects)" begin
     mkq() = (q = JL.Json_scratch.objects; q.filter("payload__nome" => "hamilton"); q.values("id"); q)

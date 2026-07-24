@@ -130,7 +130,7 @@ end
     @testset "HAVING with Aggregate Arithmetic (Sum/Count)" begin
         # Logic: Find constructors where (Sum of points / Count of results) > 5.
         # Why: Validates that FObject arithmetic (Sum / Count) produces a valid
-        # FExpression with agregate=true, correctly promoted to HAVING.
+        # FExpression with aggregate=true, correctly promoted to HAVING.
 
         q = M.Result.objects.values(
             "constructorid__name",

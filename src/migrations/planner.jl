@@ -332,7 +332,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
               # :db_column never alters the live schema by itself — the column identity is
               # already proven equal by the matched (column-keyed) field, and the introspected
               # side carries db_column=nothing (#50).
-              attr in [:blank, :on_delete, :related_name, :verbose_name, :editable, :how, :formater, :db_column] && continue
+              attr in [:blank, :on_delete, :related_name, :verbose_name, :editable, :how, :formatter, :db_column] && continue
               push!(colect_not_equal, attr)
             end
           end
@@ -575,9 +575,9 @@ function _colect_numbered_fields(colect::Vector{Symbol})
 end
 function _get_temporary_default_value(field::PormGField, settings::PormGSettings)
   if field |> typeof == Models.sDateTimeField
-    return field.formater(now(), settings.time_zone) |> field.formater
+    return field.formatter(now(), settings.time_zone) |> field.formatter
   elseif field |> typeof == Models.sDateField
-    return field.formater(today())    
+    return field.formatter(today())    
   else
     return nothing
   end

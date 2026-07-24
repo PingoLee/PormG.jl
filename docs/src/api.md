@@ -310,7 +310,7 @@ df = M.Result.objects.values(
 | `Least(args...)` | Minimum of values | `Least("points", Value(100))` |
 | `Cast("field", type)` | Type casting | `Cast("points", "INTEGER")` |
 | `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
-| `To_char("field", fmt)` | Format to string | `To_char("dob", "YYYY-MM")` |
+| `ToChar("field", fmt)` | Format to string | `ToChar("dob", "YYYY-MM")` |
 
 ### Case Expressions
 
@@ -661,7 +661,13 @@ scope — the SQL function constructors are *not* among them (see
 `pool_stats`, `PoolTimeoutError`, `PoolConnectError`
 
 ### Utilities & lifecycle
-`setup`, `install_ai_skills`, `upgrade_guide`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
+`upgrade_guide`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
+
+!!! note "`setup` and `install_ai_skills` are qualified-call-only"
+    The one-off lifecycle helpers `PormG.setup()` (interactive project wizard) and
+    `PormG.install_ai_skills()` are deliberately **not exported** — their generic names
+    would otherwise land in every `using PormG` namespace. Call them qualified, exactly
+    as shown throughout these docs.
 
 !!! note "`fetch` extends `Base.fetch`"
     The low-level `fetch(settings, sql; params=[...])` escape hatch (values bound with
@@ -704,7 +710,7 @@ using PormG.QueryBuilder: With        # or qualify: PormG.QueryBuilder.With(...)
 **Window** — `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`
 **String** — `Concat`, `Lower`, `Upper`, `Length`, `Replace`, `Trim`, `LTrim`, `RTrim`
 **Math** — `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
-**Type / value** — `Cast`, `Extract`, `To_char`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
+**Type / value** — `Cast`, `Extract`, `ToChar`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
 
 ### Result-shape contract for `list()`
 

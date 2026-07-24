@@ -68,7 +68,7 @@ end
 #
 # SQLInstruction Objects (instructions to build a query)
 #
-@kwdef mutable struct InstrucObject <: SQLInstruction
+@kwdef mutable struct InstructionObject <: SQLInstruction
   text::String # text to be used in the query
   table_alias::SQLTableAlias
   alias::String
@@ -76,7 +76,7 @@ end
   select::Vector{SQLTypeField} = Array{SQLTypeField,1}(undef, 60)
   join::Vector{String} = []  # values to be used in join query
   _where::Vector{String} = []  # values to be used in where query
-  agregate::Bool = false
+  aggregate::Bool = false
   group::Vector{String} = []  # values to be used in group query
   having::Vector{String} = [] # values to be used in having query
   order::Vector{String} = [] # values to be used in order query  
@@ -87,7 +87,7 @@ end
   tab_field_cache::Dict{String,PormGField} = sizehint!(Dict{String,PormGField}(), 12) # cache to be used in join query
   # #27: records each resolved JSON-lookup path (e.g. "payload__driver") → (JSON base field,
   # validated key segments). Set when the JSON-path gate renders an extraction; read by the
-  # filter-render branch to bind the RHS as plain text (not through the JSON formater) and to
+  # filter-render branch to bind the RHS as plain text (not through the JSON formatter) and to
   # reject containment operators on a nested key path.
   json_lookup_cache::Dict{String,Tuple{PormGField,Vector{String}}} = Dict{String,Tuple{PormGField,Vector{String}}}()
   connection::ConnType = nothing
@@ -435,7 +435,7 @@ query.values("price", "discounted_price" => F("price") * 0.9)
   operand::Union{String,Integer,Float64,SQLTypeF,SQLTypeFunction,Dates.Period,Dates.CompoundPeriod,Interval,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
-  agregate::Bool = false
+  aggregate::Bool = false
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
@@ -456,7 +456,7 @@ function Base.deepcopy(f::FExpression)
       operand=deepcopy(f.operand),
       function_name=f.function_name,
       column=deepcopy(f.column),
-      agregate=f.agregate,
+      aggregate=f.aggregate,
       _as=f._as,
       kwargs=deepcopy(f.kwargs)
     )
@@ -468,8 +468,8 @@ end
 
 # Arithmetic operations for F expressions
 # Aggregate propagation helper: result is aggregate if any operand is aggregate
-_is_agg(f::FExpression) = f.agregate
-_is_agg(f::SQLTypeFunction) = f.agregate
+_is_agg(f::FExpression) = f.aggregate
+_is_agg(f::SQLTypeFunction) = f.aggregate
 _is_agg(::Any) = false
 
 function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
@@ -479,7 +479,7 @@ function Base.:+(f::FExpression, operand::Union{Integer,Float64,String,FExpressi
     operand=operand,
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
-    agregate=f.agregate || _is_agg(operand)
+    aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
@@ -490,7 +490,7 @@ function Base.:-(f::FExpression, operand::Union{Integer,Float64,String,FExpressi
     operand=operand,
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
-    agregate=f.agregate || _is_agg(operand)
+    aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
@@ -501,7 +501,7 @@ function Base.:*(f::FExpression, operand::Union{Integer,Float64,String,FExpressi
     operand=operand,
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
-    agregate=f.agregate || _is_agg(operand)
+    aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
@@ -512,7 +512,7 @@ function Base.:/(f::FExpression, operand::Union{Integer,Float64,String,FExpressi
     operand=operand,
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
-    agregate=f.agregate || _is_agg(operand)
+    aggregate=f.aggregate || _is_agg(operand)
   )
 end
 
@@ -520,7 +520,7 @@ end
 # + (Month(1) + Day(15)), + Interval("01:30:00"), etc. Only + and - are meaningful — multiplying
 # or dividing a date field by a duration is nonsense (`Day(30) * 2` is resolved by Julia's own
 # Period arithmetic before it ever reaches an FExpression). A duration is never an aggregate, so
-# `agregate` propagates from `f` unchanged.
+# `aggregate` propagates from `f` unchanged.
 function Base.:+(f::FExpression, operand::_DurationOperand)
   return FExpression(
     field_name=f.operation === nothing ? f.field_name : f,
@@ -528,7 +528,7 @@ function Base.:+(f::FExpression, operand::_DurationOperand)
     operand=operand,
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
-    agregate=f.agregate
+    aggregate=f.aggregate
   )
 end
 
@@ -539,7 +539,7 @@ function Base.:-(f::FExpression, operand::_DurationOperand)
     operand=operand,
     function_name="F",
     column=f.operation === nothing ? (f.field_name isa String ? f.field_name : "") : "",
-    agregate=f.agregate
+    aggregate=f.aggregate
   )
 end
 
@@ -554,7 +554,7 @@ function Base.:(==)(f::FExpression, operand::Union{Integer,Float64,String,Dates.
     f.operand = operand
     return f
   else
-    return FExpression(field_name=f, operation="=", operand=operand, function_name="F", column="", agregate=f.agregate)
+    return FExpression(field_name=f, operation="=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
 function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
@@ -563,7 +563,7 @@ function Base.:(!=)(f::FExpression, operand::Union{Integer,Float64,String,Dates.
     f.operand = operand
     return f
   else
-    return FExpression(field_name=f, operation="!=", operand=operand, function_name="F", column="", agregate=f.agregate)
+    return FExpression(field_name=f, operation="!=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
 function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Date,Dates.DateTime,FExpression})
@@ -572,7 +572,7 @@ function Base.:>(f::FExpression, operand::Union{Integer,Float64,String,Dates.Dat
     f.operand = operand
     return f
   else
-    return FExpression(field_name=f, operation=">", operand=operand, function_name="F", column="", agregate=f.agregate)
+    return FExpression(field_name=f, operation=">", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
 
@@ -582,7 +582,7 @@ function Base.:<(f::FExpression, operand::Union{Integer,Float64,String,Dates.Dat
     f.operand = operand
     return f
   else
-    return FExpression(field_name=f, operation="<", operand=operand, function_name="F", column="", agregate=f.agregate)
+    return FExpression(field_name=f, operation="<", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
 
@@ -592,7 +592,7 @@ function Base.:>=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Da
     f.operand = operand
     return f
   else
-    return FExpression(field_name=f, operation=">=", operand=operand, function_name="F", column="", agregate=f.agregate)
+    return FExpression(field_name=f, operation=">=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
 
@@ -602,7 +602,7 @@ function Base.:<=(f::FExpression, operand::Union{Integer,Float64,String,Dates.Da
     f.operand = operand
     return f
   else
-    return FExpression(field_name=f, operation="<=", operand=operand, function_name="F", column="", agregate=f.agregate)
+    return FExpression(field_name=f, operation="<=", operand=operand, function_name="F", column="", aggregate=f.aggregate)
   end
 end
 # function Base.:>(f::FExpression, operand::Union{Integer, Float64, String, Dates.Date, Dates.DateTime, FExpression})
@@ -629,7 +629,7 @@ function Base.:+(operand::Union{Integer,Float64}, f::FExpression)
     operand=operand,
     function_name="F",
     column=f.field_name,
-    agregate=f.agregate
+    aggregate=f.aggregate
   )
 end
 
@@ -640,7 +640,7 @@ function Base.:*(operand::Union{Integer,Float64}, f::FExpression)
     operand=operand,
     function_name="F",
     column=f.field_name,
-    agregate=f.agregate
+    aggregate=f.aggregate
   )
 end
 
@@ -661,8 +661,8 @@ Base.deepcopy(x::OuterRefObject) = OuterRefObject(field_name=x.field_name)
 @kwdef mutable struct FObject <: SQLTypeFunction
   function_name::String
   column::Union{String,SQLTypeField,SQLTypeText,N,Vector{N},Vector{T},SQLTypeOper,SQLTypeQ,SQLTypeQor,SQLTypeF} where {N<:SQLTypeFunction,T}
-  agregate::Bool = false
-  formater::Union{Nothing,Function} = nothing # function to format the value
+  aggregate::Bool = false
+  formatter::Union{Nothing,Function} = nothing # function to format the value
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
@@ -670,8 +670,8 @@ function Base.deepcopy(f::FObject)
   return FObject(
     function_name=f.function_name,
     column=deepcopy(f.column),
-    agregate=f.agregate,
-    formater=f.formater,
+    aggregate=f.aggregate,
+    formatter=f.formatter,
     _as=f._as,
     kwargs=deepcopy(f.kwargs)
   )
@@ -694,8 +694,8 @@ end
   function_name::String
   column::WindowColumnPart = nothing
   over::WindowSpec
-  agregate::Bool = false
-  formater::Union{Nothing,Function} = nothing
+  aggregate::Bool = false
+  formatter::Union{Nothing,Function} = nothing
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
@@ -704,8 +704,8 @@ function Base.deepcopy(f::WindowFunction)
     function_name=f.function_name,
     column=deepcopy(f.column),
     over=deepcopy(f.over),
-    agregate=f.agregate,
-    formater=f.formater,
+    aggregate=f.aggregate,
+    formatter=f.formatter,
     _as=f._as,
     kwargs=deepcopy(f.kwargs)
   )
@@ -719,49 +719,49 @@ _is_window_expr(values::Vector) = any(_is_window_expr, values)
 _is_window_expr(::Any) = false
 
 function Base.:+(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
 function Base.:-(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
 function Base.:*(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
 function Base.:/(f::WindowFunction, operand::Union{Integer,Float64,String,FExpression,SQLTypeFunction})
-  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", agregate=_is_agg(operand))
+  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", aggregate=_is_agg(operand))
 end
 
 function Base.:+(operand::Union{Integer,Float64}, f::WindowFunction)
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=false)
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=false)
 end
 
 function Base.:*(operand::Union{Integer,Float64}, f::WindowFunction)
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=false)
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=false)
 end
 
 # Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
 # Enable expressions like Sum("points") / Count("resultid")
 function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+  return FExpression(field_name=f, operation="-", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 function Base.:*(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 function Base.:/(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
-  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", agregate=f.agregate || _is_agg(operand))
+  return FExpression(field_name=f, operation="/", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 
 
 # Commutative: scalar op FObject
 function Base.:+(operand::Union{Integer,Float64}, f::FObject)
-  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", agregate=f.agregate)
+  return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 
 function Base.:*(operand::Union{Integer,Float64}, f::FObject)
-  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", agregate=f.agregate)
+  return FExpression(field_name=f, operation="*", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 
 
@@ -771,7 +771,7 @@ end
 const BitwiseExpression = Union{FExpression,WindowFunction,FObject}
 const BitwiseOperand = Union{Integer,FExpression,WindowFunction,FObject}
 
-_bitwise_is_agg(f::BitwiseExpression) = f.agregate
+_bitwise_is_agg(f::BitwiseExpression) = f.aggregate
 _bitwise_is_agg(::Integer) = false
 
 function _build_bitwise_expr(left, op::String, right)
@@ -781,7 +781,7 @@ function _build_bitwise_expr(left, op::String, right)
     operand=right,
     function_name="F",
     column=left isa FExpression && left.operation === nothing ? (left.field_name isa String ? left.field_name : "") : "",
-    agregate=_bitwise_is_agg(left) || _bitwise_is_agg(right)
+    aggregate=_bitwise_is_agg(left) || _bitwise_is_agg(right)
   )
 end
 
@@ -792,7 +792,7 @@ function _build_bitwise_unary(expr, op::String)
     operand=nothing,
     function_name="F",
     column="",
-    agregate=_bitwise_is_agg(expr)
+    aggregate=_bitwise_is_agg(expr)
   )
 end
 
@@ -825,7 +825,7 @@ function Base.:<<(a::Integer, b::BitwiseExpression)
     operand=b,
     function_name="F",
     column="",
-    agregate=_bitwise_is_agg(b)
+    aggregate=_bitwise_is_agg(b)
   )
 end
 
@@ -839,7 +839,7 @@ function Base.:>>(a::Integer, b::BitwiseExpression)
     operand=b,
     function_name="F",
     column="",
-    agregate=_bitwise_is_agg(b)
+    aggregate=_bitwise_is_agg(b)
   )
 end
 

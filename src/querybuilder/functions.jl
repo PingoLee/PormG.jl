@@ -1,17 +1,17 @@
 
 """
-  Q(x...)
+    Q(x...)
 
-  Create a `QObject` with the given filters.
-  Ex.:
-  ```julia
-  a = object("tb_user")
-  a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
-  ```
+Create a `QObject` with the given filters.
 
-  Arguments:
-  - `x`: A list of key-value pairs or Qor(x...) or Q(x...) objects.
+# Arguments
+- `x...`: key-value pairs, `Qor(x...)`, or `Q(x...)` objects.
 
+# Example
+```julia
+a = object("tb_user")
+a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
+```
 """
 function Q(x...)
   colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(_argerr("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
@@ -20,19 +20,18 @@ end
 
 
 """
-  Qor(x...)
+    Qor(x...)
 
-  Create a `QorObject` from the given arguments. The `QorObject` represents a disjunction of `SQLTypeQ` or `SQLTypeQor` objects.
+Create a `QorObject` from the given arguments. The `QorObject` represents a disjunction of `SQLTypeQ` or `SQLTypeQor` objects.
 
-  Ex.:
-  ```julia
-  a = object("tb_user")
-  a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
-  ```
+# Arguments
+- `x...`: A variable number of arguments. Each argument can be either a `SQLTypeQ` or `SQLTypeQor` object, or a `Pair` object.
 
-  # Arguments
-  - `x...`: A variable number of arguments. Each argument can be either a `SQLTypeQ` or `SQLTypeQor` object, or a `Pair` object.
-
+# Example
+```julia
+a = object("tb_user")
+a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
+```
 """
 function Qor(x...)
   colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? v : throw(_argerr("Invalid argument: $(v); please use a pair (key => value).")) for v in x]
@@ -50,10 +49,10 @@ end
 Computes the sum of all values in the column.
 """
 function Sum(x; distinct::Bool = false)
-  return FObject(function_name = "SUM", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "SUM", column = x, aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end  
 function Avg(x; distinct::Bool = false)
-  return FObject(function_name = "AVG", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "AVG", column = x, aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 """
   Count(x; distinct::Bool = false)
@@ -74,13 +73,13 @@ df = query |> DataFrame
 ```
 """
 function Count(x; distinct::Bool = false)
-  return FObject(function_name = "COUNT", column = x, agregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
+  return FObject(function_name = "COUNT", column = x, aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 function Max(x)
-  return FObject(function_name = "MAX", column = x, agregate = true)
+  return FObject(function_name = "MAX", column = x, aggregate = true)
 end
 function Min(x)
-  return FObject(function_name = "MIN", column = x, agregate = true)
+  return FObject(function_name = "MIN", column = x, aggregate = true)
 end
 
 function _window_part_vector(value, part_name::String)::Vector{WindowPartitionPart}
@@ -186,14 +185,14 @@ Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 
 Extracts a component (YEAR, MONTH, DAY, etc.) from a date/time column.
 """
-function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, part::String; formater::Union{Nothing, Function, PormGField} = nothing)
-  isa(formater, PormGField) && (formater = formater.formater)
-  return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part))
+function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, part::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+  isa(formatter, PormGField) && (formatter = formatter.formatter)
+  return FObject(function_name = "EXTRACT", column = x, formatter = formatter, kwargs = Dict{String, Any}("part" => part))
 end
 
-function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, part::String, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
-  isa(formater, PormGField) && (formater = formater.formater)
-  return FObject(function_name = "EXTRACT", column = x, formater = formater, kwargs = Dict{String, Any}("part" => part, "format" => format))
+function Extract(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, part::String, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+  isa(formatter, PormGField) && (formatter = formatter.formatter)
+  return FObject(function_name = "EXTRACT", column = x, formatter = formatter, kwargs = Dict{String, Any}("part" => part, "format" => format))
 end
 # Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
 # When(..., otherwise=x) is a complete standalone expression. When used inside Case([...]),
@@ -228,9 +227,9 @@ function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::
   end  
   return FObject(function_name = "CASE", column = conditions, kwargs = Dict{String, Any}("else" => default, "output_field" => output_field)) 
 end
-function To_char(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, format::String; formater::Union{Nothing, Function, PormGField} = nothing)
-  isa(formater, PormGField) && (formater = formater.formater)
-  return FObject(function_name = "EXTRACT_DATE", column = x, formater = formater, kwargs = Dict{String, Any}("format" => format))
+function ToChar(x::Union{String, SQLTypeField, SQLTypeFunction, SQLTypeF, Vector{String}}, format::String; formatter::Union{Nothing, Function, PormGField} = nothing)
+  isa(formatter, PormGField) && (formatter = formatter.formatter)
+  return FObject(function_name = "EXTRACT_DATE", column = x, formatter = formatter, kwargs = Dict{String, Any}("format" => format))
 end
 
 
@@ -299,7 +298,7 @@ end
 Returns the length of a string.
 """
 function Length(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "LENGTH", column = x, formater = Models.format_number_sql)
+  return FObject(function_name = "LENGTH", column = x, formatter = Models.format_number_sql)
 end
 
 """
@@ -308,7 +307,7 @@ end
 Returns the absolute value of a number.
 """
 function Abs(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "ABS", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
+  return FObject(function_name = "ABS", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -317,7 +316,7 @@ end
 Rounds a number to the specified precision.
 """
 function Round(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF}, precision::Integer = 0)
-  return FObject(function_name = "ROUND", column = x, agregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formater = Models.format_number_sql)
+  return FObject(function_name = "ROUND", column = x, aggregate = _is_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 
 """
@@ -376,7 +375,7 @@ end
 Returns the largest integer less than or equal to a number.
 """
 function Floor(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "FLOOR", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
+  return FObject(function_name = "FLOOR", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -385,7 +384,7 @@ end
 Returns the smallest integer greater than or equal to a number.
 """
 function Ceil(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "CEIL", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
+  return FObject(function_name = "CEIL", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 
@@ -396,7 +395,7 @@ end
 Returns the square root of a number.
 """
 function Sqrt(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "SQRT", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
+  return FObject(function_name = "SQRT", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -405,7 +404,7 @@ end
 Returns the exponential value (e^x) of a number.
 """
 function Exp(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "EXP", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
+  return FObject(function_name = "EXP", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -414,7 +413,7 @@ end
 Returns the natural logarithm of a number.
 """
 function Ln(x::Union{String, SQLTypeField, SQLTypeText, SQLTypeFunction, SQLTypeF})
-  return FObject(function_name = "LN", column = x, agregate = _is_agg(x), formater = Models.format_number_sql)
+  return FObject(function_name = "LN", column = x, aggregate = _is_agg(x), formatter = Models.format_number_sql)
 end
 
 """
@@ -423,7 +422,7 @@ end
 Returns `base` raised to the power of `exponent`.
 """
 function Power(x, y)
-  return FObject(function_name = "POWER", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formater = Models.format_number_sql)
+  return FObject(function_name = "POWER", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formatter = Models.format_number_sql)
 end
 
 """
@@ -432,15 +431,15 @@ end
 Returns the remainder (modulo) of a division.
 """
 function Mod(x, y)
-  return FObject(function_name = "MOD", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formater = Models.format_number_sql)
+  return FObject(function_name = "MOD", column = [isa(x, String) ? SQLField(x) : x, isa(y, String) ? SQLField(y) : y], formatter = Models.format_number_sql)
 end
 
 
-MONTH(x) = Extract(x, "MONTH", formater = Models.format_number_sql)
-YEAR(x) = Extract(x, "YEAR", formater = Models.format_number_sql)
-DAY(x) = Extract(x, "DAY", formater = Models.format_number_sql)
-Y_M(x) = To_char(x, "YYYY-MM", formater = Models.format_yyyy_mm)
-DATE(x) = To_char(x, "YYYY-MM-DD", formater = Models.format_date_sql)
+MONTH(x) = Extract(x, "MONTH", formatter = Models.format_number_sql)
+YEAR(x) = Extract(x, "YEAR", formatter = Models.format_number_sql)
+DAY(x) = Extract(x, "DAY", formatter = Models.format_number_sql)
+Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
+DATE(x) = ToChar(x, "YYYY-MM-DD", formatter = Models.format_date_sql)
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),

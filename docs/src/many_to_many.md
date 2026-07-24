@@ -85,7 +85,7 @@ This pattern matches Django exactly and keeps your model definitions clean and r
 ### Relationship Mutator Limitations on Custom Through Tables
 
 !!! warning
-    **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add!`, `remove!`, `clear!`, and `set!`) are disabled and will raise an `ArgumentError`.
+    **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add`, `remove`, `clear`, and `set`) are disabled and will raise an `ArgumentError`.
 
 This constraint prevents silent failures or incomplete rows, as PormG cannot determine appropriate values to insert for your custom fields. 
 
@@ -106,13 +106,21 @@ M2m_membership_scratch.objects.filter(
 ).delete()
 ```
 
-If the custom intermediate model *only* contains the two foreign keys (and no extra columns), mutator methods like `add!` and `remove!` are fully supported.
+If the custom intermediate model *only* contains the two foreign keys (and no extra columns), mutator methods like `add` and `remove` are fully supported.
 
 ---
 
 ## The ManyToMany Manager API
 
 When you access a `ManyToManyField` on a fetched `PormGRow`, PormG returns a **ManyToManyManager**. This manager provides methods to query, add, remove, and sync relationships.
+
+!!! note "Why `add`/`remove`/`clear`/`set` carry no `!`"
+    Julia's `!` suffix conventionally marks a function that mutates a **Julia argument**.
+    The manager mutators mutate the database through-table instead — and they are only ever
+    reached as manager methods (`driver.sponsors.add(...)`), never as free functions in your
+    namespace. That makes them the same kind of surface as the bang-free fluent terminals
+    (`q.update(...)`, `q.delete()`), and matches Django's `add`/`remove`/`clear`/`set`.
+    (Renamed from `add!`/`remove!`/`clear!`/`set!` in 0.3.0 — see `UPGRADING.md`.)
 
 ### Model-level vs instance-level access
 
@@ -149,49 +157,49 @@ sponsors_df = driver.sponsors.all() |> DataFrame
 brazilian_sponsors = driver.sponsors.all().filter("country__name" => "Brazil") |> DataFrame
 ```
 
-### `.add!(targets...)` — Adding relationships
+### `.add(targets...)` — Adding relationships
 
-You can link new items to the relationship using `.add!`. It accepts integers (primary keys), dictionaries, named tuples, or actual model instances.
+You can link new items to the relationship using `.add`. It accepts integers (primary keys), dictionaries, named tuples, or actual model instances.
 
 ```julia
 # By primary key
-driver.sponsors.add!(1)
+driver.sponsors.add(1)
 
 # Multiple at once
-driver.sponsors.add!(2, 3)
+driver.sponsors.add(2, 3)
 
 # By dictionary (must contain the primary key)
-driver.sponsors.add!(Dict(:id => 4))
+driver.sponsors.add(Dict(:id => 4))
 ```
 
-### `.remove!(targets...)` — Removing relationships
+### `.remove(targets...)` — Removing relationships
 
-Unlink specific items from the relationship. It takes the exact same arguments as `.add!`.
+Unlink specific items from the relationship. It takes the exact same arguments as `.add`.
 
 ```julia
 # Remove sponsor with ID 2
-driver.sponsors.remove!(2)
+driver.sponsors.remove(2)
 ```
 
-### `.set!(targets...)` — Syncing relationships
+### `.set(targets...)` — Syncing relationships
 
-`.set!` compares the IDs you provide with the IDs currently in the database. It will automatically `add!` any missing ones and `remove!` any extra ones, all wrapped in a **transaction**.
+`.set` compares the IDs you provide with the IDs currently in the database. It will automatically `add` any missing ones and `remove` any extra ones, all wrapped in a **transaction**.
 
 ```julia
 # Ensure the driver is linked ONLY to sponsors 1, 4, and 5.
 # If they were linked to 2, it will be removed.
 # If they weren't linked to 4, it will be added.
-changes = driver.sponsors.set!(1, 4, 5)
+changes = driver.sponsors.set(1, 4, 5)
 
 println("Added: $(changes.added), Removed: $(changes.removed)")
 ```
 
-### `.clear!()` — Removing all relationships
+### `.clear()` — Removing all relationships
 
 Unlinks everything.
 
 ```julia
-driver.sponsors.clear!()
+driver.sponsors.clear()
 ```
 
 ---

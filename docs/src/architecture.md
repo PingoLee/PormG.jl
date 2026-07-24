@@ -6,7 +6,7 @@ point at the real definitions so you can jump in and read the body.
 !!! note "Type naming"
     The **abstract** types are `SQLObject`, `SQLObjectHandler`, `SQLInstruction`; the **concrete**
     ones you actually hold are `SQLObjectQuery` (the query state), `ObjectHandler` (the chainable
-    wrapper), and `InstrucObject` (the per-query SQL builder).
+    wrapper), and `InstructionObject` (the per-query SQL builder).
 
 ## Layers (who depends on whom)
 
@@ -21,7 +21,7 @@ flowchart TD
 
   subgraph QB["QueryBuilder — src/querybuilder/"]
     Q["query() — execution.jl"]
-    B["build() → InstrucObject<br/>build_query.jl"]
+    B["build() → InstructionObject<br/>build_query.jl"]
     J["_build_row_join (joins)<br/>build_joins.jl"]
     P["parameters.jl<br/>$1.. (PG) / ? buckets (SQLite)"]
     F["functions.jl / operators.jl / ctes.jl"]
@@ -75,7 +75,7 @@ sequenceDiagram
   EX->>EX: query() — resolve settings + param collector
   EX->>BQ: build(object)
   BQ->>BQ: get_select_query / get_filter_query<br/>_build_row_join / order / build_cte_clause
-  Note over BQ: fills an InstrucObject:<br/>SQL text + ordered parameters
+  Note over BQ: fills an InstructionObject:<br/>SQL text + ordered parameters
   BQ-->>EX: SQL string + parameters
   EX->>CP: fetch(conn, sql, params)
   CP->>CP: fetch_async() → acquire_connection (under lock)

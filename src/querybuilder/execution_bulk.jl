@@ -413,16 +413,16 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       return true, f_meta.default
     elseif f_meta.type == "TIMESTAMPTZ"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formater(now(TimeZone(settings.time_zone)))
+        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
         return true, value
       elseif operation == :update && f_meta.auto_now
-        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formater(now(TimeZone(settings.time_zone)))
+        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
         return true, value
       end
     elseif f_meta.type == "DATE"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
         # NOTE: `today()` is returned as a bare `Date` object without calling
-        # `f_meta.formater` here. The DATE formatter (`format_date_sql`) only
+        # `f_meta.formatter` here. The DATE formatter (`format_date_sql`) only
         # converts Date → String and does not transform the value (no time_zone
         # argument), unlike the TIMESTAMPTZ formatter which returns a ZonedDateTime.
         # Sanitization handles both `Date` objects and date strings correctly, so
@@ -904,7 +904,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           validate_field_data(model, field, row[mapping[field]], "bulk_insert"; allow_primary_key = true)
         end
 
-        param_placeholders = [add_parameter!(parameters, model.fields[field].formater(row[mapping[field]])) for field in fields_df]
+        param_placeholders = [add_parameter!(parameters, model.fields[field].formatter(row[mapping[field]])) for field in fields_df]
         # param_placeholders = add_parameter!(parameters, values)
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index, django_prefix)
@@ -1033,7 +1033,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           row_index = i + offset - 1
           try
             validate_field_data(model, field, value, "bulk_copy"; allow_primary_key = true)
-            model.fields[field].formater(value)
+            model.fields[field].formatter(value)
           catch e
             throw(ErrorException("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
           end
@@ -1078,7 +1078,7 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
       continue
     end
     try
-      model.fields[field].formater(row[col_name])
+      model.fields[field].formatter(row[col_name])
     catch e
       throw(_argerr("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
     end
@@ -1401,7 +1401,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
             validate_field_data(model, field, row[mapping[field]], "bulk_update"; allow_primary_key = false)
         end
 
-        param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formater(row[mapping[field]])) for field in joined_columns]
+        param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formatter(row[mapping[field]])) for field in joined_columns]
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index, settings.django_prefix !== nothing)
         throw(ErrorException("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))

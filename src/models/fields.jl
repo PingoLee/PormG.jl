@@ -11,7 +11,7 @@ struct sIDField <: PormGField
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
   generated::Bool  # New field to indicate GENERATED ... AS IDENTITY
   generated_always::Bool # New field to indicate GENERATED ALWAYS AS IDENTITY
 end
@@ -138,7 +138,7 @@ mutable struct sForeignKey <: PormGField
   how::Union{String, Nothing}  # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
   related_name::Union{String, Nothing}
   type::String
-  formater::Function
+  formatter::Function
   db_constraint::Bool
   initially_deferred::Bool
 end
@@ -378,7 +378,7 @@ mutable struct sManyToManyField <: PormGField
   source_field::Union{String, Nothing}
   target_field::Union{String, Nothing}
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -454,7 +454,7 @@ mutable struct sOneToOneField <: PormGField
   how::Union{String, Nothing}  # INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN used in _build_row_join
   related_name::Union{String, Nothing}
   type::String
-  formater::Function
+  formatter::Function
   db_constraint::Bool
   initially_deferred::Bool
 end
@@ -686,7 +686,7 @@ mutable struct sAutoField <: PormGField
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -792,7 +792,7 @@ mutable struct sCharField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
   choices::Union{NTuple{N, Tuple{AbstractString, AbstractString}}, Nothing} where N
 end
 
@@ -1055,7 +1055,7 @@ mutable struct sIntegerField <: PormGField
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -1180,7 +1180,7 @@ mutable struct sPositiveSmallIntegerField <: PormGField
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 # Upper bound of a signed 2-byte integer; matches Django's PositiveSmallIntegerField range (0..32767).
@@ -1289,7 +1289,7 @@ mutable struct sPositiveIntegerField <: PormGField
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 # Upper bound of a signed 4-byte integer; matches Django's PositiveIntegerField range (0..2147483647).
@@ -1398,7 +1398,7 @@ mutable struct sBigIntegerField <: PormGField
   default::Union{Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -1532,7 +1532,7 @@ mutable struct sBooleanField <: PormGField
   default::Union{Bool, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 
@@ -1633,7 +1633,7 @@ mutable struct sDateField <: PormGField
   auto_now::Bool
   auto_now_add::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -1781,7 +1781,7 @@ mutable struct sDateTimeField <: PormGField
   auto_now::Bool
   auto_now_add::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -1918,7 +1918,7 @@ mutable struct sDecimalField <: PormGField
   max_digits::Int
   decimal_places::Int
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -2043,7 +2043,7 @@ mutable struct sEmailField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -2146,7 +2146,7 @@ mutable struct sPasswordField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
   max_length::Int  # Length of stored hash (Django uses VARCHAR(128))
   auto_hash::Bool  # Accepted for Django compat; PormG performs no hashing
 end
@@ -2270,7 +2270,7 @@ mutable struct sFloatField <: PormGField
   default::Union{Float64, String, Int64, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -2366,7 +2366,7 @@ mutable struct sImageField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -2512,7 +2512,7 @@ mutable struct sTextField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -2606,7 +2606,7 @@ mutable struct sTimeField <: PormGField
   default::Union{Time, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 function TimeField(; kwargs...)
@@ -2668,7 +2668,7 @@ mutable struct sBinaryField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
   max_length::Union{Int, Nothing}
 end
 
@@ -2745,7 +2745,7 @@ mutable struct sDurationField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 function DurationField(; kwargs...)
@@ -2811,7 +2811,7 @@ mutable struct sUUIDField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
   auto_add::Bool
 end
 
@@ -2919,7 +2919,7 @@ mutable struct sURLField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -3017,7 +3017,7 @@ mutable struct sSlugField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """
@@ -3116,7 +3116,7 @@ mutable struct sJSONField <: PormGField
   default::Union{String, Nothing}
   editable::Bool
   type::String
-  formater::Function
+  formatter::Function
 end
 
 """

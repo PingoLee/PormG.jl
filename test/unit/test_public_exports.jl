@@ -28,8 +28,8 @@ const EXPECTED_TOPLEVEL = Set([
     :run_in_transaction, :atomic, :with_savepoint, :with_tx_context, :in_transaction_context,
     # Locking
     :with_advisory_lock,
-    # Utilities & lifecycle
-    :setup, :install_ai_skills, :upgrade_guide, :tui, :register_ignore_tables!,
+    # Utilities & lifecycle (#201: setup / install_ai_skills are qualified-call-only, not exported)
+    :upgrade_guide, :tui, :register_ignore_tables!,
     Symbol("@import_models"), Symbol("@models_module"), Symbol("@pormg_debug"),
 ])
 
@@ -40,7 +40,7 @@ const EXPECTED_FUNCTIONS = Set([
     :WindowOver, :WindowSpec, :Rank, :DenseRank, :RowNumber, :Lag, :Lead, :FirstValue, :LastValue, :NthValue,
     :Concat, :Lower, :Upper, :Length, :Replace, :Trim, :LTrim, :RTrim,
     :Abs, :Round, :Floor, :Ceil, :Sqrt, :Exp, :Ln, :Power, :Mod,
-    :Cast, :Extract, :To_char, :Value, :Coalesce, :Greatest, :Least, :NullIf,
+    :Cast, :Extract, :ToChar, :Value, :Coalesce, :Greatest, :Least, :NullIf,
 ])
 
 @testset "Public export surface (#35)" begin

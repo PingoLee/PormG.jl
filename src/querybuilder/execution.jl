@@ -229,7 +229,7 @@ function query(q::SQLObjectHandler;
     print(io, "\n")
   end
   
-  if instruction.agregate && !isempty(instruction.group)
+  if instruction.aggregate && !isempty(instruction.group)
     print(io, "GROUP BY ")
     for (i, g) in enumerate(instruction.group)
       i > 1 && print(io, ", ")
@@ -366,7 +366,7 @@ function do_count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} =
   body = """FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
-    $(instruction.agregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")
+    $(instruction.aggregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")
     """
   if distinct || q.object.distinct
     # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite. To count the rows a
@@ -433,7 +433,7 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
-    $(instruction.agregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")
+    $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")
     $limit_clause
     $offset_clause
     """
@@ -485,11 +485,11 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
       if model.fields[field].default !== nothing
         real_obj.insert[field] = model.fields[field].default
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        real_obj.insert[field] = model.fields[field].formater(now(TimeZone(settings.time_zone)))
+        real_obj.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        real_obj.insert[field] = model.fields[field].formater(today())
+        real_obj.insert[field] = model.fields[field].formatter(today())
       elseif model.fields[field].type == "UUID" && model.fields[field].auto_add
-        real_obj.insert[field] = model.fields[field].formater(UUIDs.uuid4())
+        real_obj.insert[field] = model.fields[field].formatter(UUIDs.uuid4())
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else
@@ -519,7 +519,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
   for field in keys(real_obj.insert)
     # Validation checks
     validate_field_data(model, field, real_obj.insert[field], "insert"; allow_primary_key = true)
-    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in create(); use $(model.name).$(field)(source_id).add!(target_id) after creating the source row"))
+    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in create(); use $(model.name).$(field)(source_id).add(target_id) after creating the source row"))
 
     # check if the field is a primary key
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
@@ -528,7 +528,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     push!(quoted_field_columns, quote_identifier(Models.field_db_column(model.fields[field], field), connection))
 
     # Format and add value to parameters
-    push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formater))
+    push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formatter))
 
   end
 
@@ -699,7 +699,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
       tp = get_parameter(connection)
       set_context!(tp, :where)
       for f in target_fields
-        add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formater)
+        add_parameter!(tp, real_obj.insert[f] |> model.fields[f].formatter)
       end
       tp
     end
@@ -1159,7 +1159,7 @@ function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{St
     print(io, "\n")
   end
 
-  if instruction.agregate && !isempty(instruction.group)
+  if instruction.aggregate && !isempty(instruction.group)
     print(io, "GROUP BY ")
     for (i, g) in enumerate(instruction.group)
       i > 1 && print(io, ", ")
@@ -1213,7 +1213,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     ))
   end
 
-  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.agregate, real_obj.values)
+  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, real_obj.values)
     throw(ArgumentError(
       "Cannot call update() on a query with group_by() / annotate aggregations. " *
       "GROUP BY collapses rows, making the UPDATE target ambiguous. " *
@@ -1233,9 +1233,9 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   for field in fields
     if !haskey(objct.insert, field)
       if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(now(TimeZone(settings.time_zone)))
+        objct.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formater(today())
+        objct.insert[field] = model.fields[field].formatter(today())
       end
     end
   end
@@ -1247,7 +1247,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   for field in keys(objct.insert)    
     # Validation checks
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
-    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add!, remove!, clear!, or set! methods"))
+    Models.is_many_to_many_field(model.fields[field]) && throw(ArgumentError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
     
     quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
@@ -1255,7 +1255,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
-      formatted_value = objct.insert[field] |> model.fields[field].formater
+      formatted_value = objct.insert[field] |> model.fields[field].formatter
       placeholder = add_parameter!(parameters, formatted_value)
       push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
     end

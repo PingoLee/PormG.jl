@@ -78,7 +78,7 @@ function delete(objct::SQLObjectHandler;
     ))
   end
 
-  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.agregate, objct.object.values)
+  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, objct.object.values)
     throw(ArgumentError(
       "Cannot call delete() on a query with group_by() / annotate aggregations. " *
       "GROUP BY collapses rows, making cascade counting and constraint handling " *
@@ -502,7 +502,7 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   pk_field == DIRECT_DELETE_KEY_SENTINEL && throw(ArgumentError("Cannot update field on keyless model $(model.name); define a primary key"))
   _query = keys[:objct]
   parameters = get_parameter(connection)
-  value_sql = value === nothing ? "NULL" : model.fields[field].formater(value)
+  value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
   # SET column and outer WHERE key both target the physical column (db_column) — #50.
   sql = "UPDATE $(model.name |> lowercase) SET \"$(Models.model_column(model, field))\" = $(value_sql) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
   if show_query !== :execute

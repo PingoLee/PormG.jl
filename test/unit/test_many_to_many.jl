@@ -114,10 +114,10 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BUG-2 regression: add! must return `nothing` consistently regardless of whether
+# BUG-2 regression: add must return `nothing` consistently regardless of whether
 # the targets list is empty or non-empty.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "add! return type consistency (BUG-2)" begin
+@testset "add return type consistency (BUG-2)" begin
   # Construct a mock manager for Driver_championship (auto-through, no extra fields)
   rel = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
   manager = PormG.QueryBuilder.ManyToManyManager(
@@ -127,15 +127,15 @@ end
     1,
   )
 
-  # Empty add! must return nothing (was returning 0 before the fix)
-  result_empty = PormG.QueryBuilder.add!(manager)
+  # Empty add must return nothing (was returning 0 before the fix)
+  result_empty = PormG.QueryBuilder.add(manager)
   @test result_empty === nothing
   @test result_empty isa Nothing
 
-  # A non-empty add! also returns nothing (consistent return type).
+  # A non-empty add also returns nothing (consistent return type).
   # We cannot actually execute the INSERT on a mock connection, but we verify the
   # early-return path of the empty branch so both branches share the same type.
-  result_empty_vec = PormG.QueryBuilder.add!(manager, Integer[])
+  result_empty_vec = PormG.QueryBuilder.add(manager, Integer[])
   @test result_empty_vec === nothing
 end
 

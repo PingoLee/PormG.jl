@@ -85,6 +85,47 @@ adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
 
 @info "🚀 Starting PormG integration tests" folder = PORMG_DB_FOLDER adapter = adapter_name
 
+# ── Quiet the integration-suite log noise ────────────────────────────────────
+# The migration-heavy integration tests emit dozens of *expected* log lines — migration-plan
+# progress (@info), the "migration plan has been saved — review before applying" @warn (fires
+# once per makemigrations, ~40×/run), "No tables found", empty-DataFrame bulk warnings — that
+# bury the actual test results. Route logging through a filter that:
+#   • drops @info / @debug (all the migration progress chatter), and
+#   • drops the known, high-volume, EXPECTED migration/introspection warnings,
+# while keeping @error and any UNEXPECTED @warn so real problems still surface.
+#
+# Tests that assert on logs install their own logger via `@test_logs` / `with_logger(...)` for
+# their own scope, which overrides this global logger — so they are unaffected. Set
+# `PORMG_TEST_VERBOSE=1` to keep the full, unfiltered log stream (e.g. when debugging).
+import Logging
+
+struct QuietIntegrationLogger <: Logging.AbstractLogger
+    sink::Logging.AbstractLogger
+end
+
+# Substrings of expected, repetitive warnings the migration-heavy suite emits by the dozens.
+const _EXPECTED_LOG_NOISE = (
+    "The migration plan has been saved",   # migrations/planner.jl — one per makemigrations
+    "No tables found in the database",     # migrations/introspection.jl, importers.jl
+    "the DataFrame is empty",              # bulk_insert / bulk_update / bulk_copy empty-DF guards
+)
+
+Logging.min_enabled_level(l::QuietIntegrationLogger) = Logging.min_enabled_level(l.sink)
+Logging.shouldlog(l::QuietIntegrationLogger, args...) = Logging.shouldlog(l.sink, args...)
+Logging.catch_exceptions(l::QuietIntegrationLogger) = Logging.catch_exceptions(l.sink)
+function Logging.handle_message(l::QuietIntegrationLogger, level, message, args...; kwargs...)
+    # Drop the known expected warnings; @info/@debug are already filtered by the sink's Warn floor.
+    if level == Logging.Warn && any(p -> occursin(p, string(message)), _EXPECTED_LOG_NOISE)
+        return nothing
+    end
+    return Logging.handle_message(l.sink, level, message, args...; kwargs...)
+end
+
+if get(ENV, "PORMG_TEST_VERBOSE", "0") ∉ ("1", "true")
+    # Sink at :Warn drops @info/@debug natively; the wrapper drops the expected-noise warnings.
+    Logging.global_logger(QuietIntegrationLogger(Logging.ConsoleLogger(stderr, Logging.Warn)))
+end
+
 
 # $env:PORMG_DB="db_sl"; 
 # export PORMG_DB=db_sl

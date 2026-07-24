@@ -29,7 +29,7 @@ macro pormg_debug(ex)
 end
 export @pormg_debug
 
-import DataFrames, OrderedCollections, Dates, Logging, Millboard, YAML
+import DataFrames, OrderedCollections, Dates, Logging, YAML
 
 # NOTE: LibPQ and SQLite are weak dependencies (Project.toml `[weakdeps]`). Core never
 # names a concrete driver type; all driver work goes through the backend generics in
@@ -92,8 +92,6 @@ function get_constraints_check end
 
 include("Generator.jl")
 using .Generator
-
-import Inflector
 
 include("Configuration.jl")
 using .Configuration

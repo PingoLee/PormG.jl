@@ -55,8 +55,18 @@ outside this skill.
 6. **Commit** (respect the commit gate — show the diff, get explicit approval):
    `chore(release): cut <new>` with the entry titles in the body.
 
-7. **Tag** (confirm first — tagging/pushing is a separate outward step):
-   `git tag <new>` (annotated, message = the release title). Push the tag with the branch/PR.
+7. **Tag** (confirm first — tagging/pushing is a separate outward step). Tag the commit on `main`
+   that carries the new `Project.toml` version — the merge commit of the release PR, not the branch
+   commit:
+   `git tag -a v<new> <sha> -m "PormG v<new>"` + the entry titles in the body, then
+   `git push origin v<new>` (a plain `git push` does **not** carry tags).
+
+   The **`v` prefix is required**: once PormG is registered in General, `JuliaRegistries/TagBot`
+   (already wired in `.github/workflows/TagBot.yml`) takes over tagging and emits `vX.Y.Z`. Matching
+   it now keeps one continuous series instead of two parallel ones. Pre-publish, TagBot never fires —
+   nothing comments as `JuliaTagBot` — so tags are manual until then. Tag history starts at `v0.3.0`;
+   earlier versions are deliberately untagged (per-PR bumps, and `0.3.0`–`0.3.3` were burned and
+   reclaimed before the release-train policy landed).
 
 8. **Roll it out.** The reason you cut: work each consuming app through the newly-stamped entries
    (`PormG.upgrade_guide(from = v"<app's pinned version>")`), then bump that app's PormG dependency

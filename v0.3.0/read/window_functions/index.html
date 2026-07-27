@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Window Functions · PormG.jl: Django-like ORM for Julia</title><meta name="title" content="Window Functions · PormG.jl: Django-like ORM for Julia"/><meta property="og:title" content="Window Functions · PormG.jl: Django-like ORM for Julia"/><meta property="twitter:title" content="Window Functions · PormG.jl: Django-like ORM for Julia"/><meta name="description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="twitter:description" content="Documentation for PormG.jl: Django-like ORM for Julia."/><meta property="og:url" content="https://pingolee.github.io/PormG.jl/read/window_functions/"/><meta property="twitter:url" content="https://pingolee.github.io/PormG.jl/read/window_functions/"/><link rel="canonical" href="https://pingolee.github.io/PormG.jl/read/window_functions/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">PormG.jl: Django-like ORM for Julia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><a class="tocitem" href="../../models/">Models</a></li><li><a class="tocitem" href="../../fields/">Fields</a></li><li><a class="tocitem" href="../../schema_conventions/">Schema Conventions</a></li><li><a class="tocitem" href="../../many_to_many/">Many-to-Many</a></li><li><span class="tocitem">Configuration</span><ul><li><a class="tocitem" href="../../configuration/">Overview</a></li><li><a class="tocitem" href="../../configuration/setup/">Setup</a></li><li><a class="tocitem" href="../../configuration/connection_yml/">Connection YML</a></li><li><a class="tocitem" href="../../configuration/server/">Server Patterns</a></li><li><a class="tocitem" href="../../configuration/dynamic/">Dynamic &amp; Multi-Tenancy</a></li><li><a class="tocitem" href="../../configuration/advanced/">Advanced</a></li></ul></li><li><span class="tocitem">Migrations</span><ul><li><a class="tocitem" href="../../migrations/">Overview</a></li><li><a class="tocitem" href="../../migrations/workflow/">Workflow</a></li><li><a class="tocitem" href="../../migrations/stability/">Format Stability</a></li><li><a class="tocitem" href="../../migrations/advanced/">Advanced</a></li></ul></li><li><span class="tocitem">Writing</span><ul><li><a class="tocitem" href="../../write/">Overview</a></li><li><a class="tocitem" href="../../write/create/">Creating Records</a></li><li><a class="tocitem" href="../../write/update/">Updating Records</a></li><li><a class="tocitem" href="../../write/delete/">Deleting Records</a></li><li><a class="tocitem" href="../../write/bulk/">Bulk Insert, Copy, and Update</a></li><li><a class="tocitem" href="../../write/transaction/">Transactions</a></li></ul></li><li><span class="tocitem">Reading</span><ul><li><a class="tocitem" href="../">Overview</a></li><li><a class="tocitem" href="../values_and_joins/">Values and Joins</a></li><li><a class="tocitem" href="../custom_joins/">Custom Joins</a></li><li><a class="tocitem" href="../filters_and_aggregates/">Filters and Aggregates</a></li><li><a class="tocitem" href="../functions_and_dates/">Functions and Dates</a></li><li><a class="tocitem" href="../subqueries_and_ctes/">Subqueries and CTEs</a></li><li><a class="tocitem" href="../field_expressions/">Field Expressions</a></li><li class="is-active"><a class="tocitem" href>Window Functions</a><ul class="internal"><li><a class="tocitem" href="#Core-Concepts"><span>Core Concepts</span></a></li><li><a class="tocitem" href="#Quick-Start"><span>Quick Start</span></a></li><li><a class="tocitem" href="#WindowOver-—-Defining-the-Frame"><span>WindowOver — Defining the Frame</span></a></li><li><a class="tocitem" href="#Ranking-Functions"><span>Ranking Functions</span></a></li><li><a class="tocitem" href="#Offset-Functions-—-Lag-and-Lead"><span>Offset Functions — <code>Lag</code> and <code>Lead</code></span></a></li><li><a class="tocitem" href="#Value-Functions-—-FirstValue,-LastValue,-NthValue"><span>Value Functions — <code>FirstValue</code>, <code>LastValue</code>, <code>NthValue</code></span></a></li><li><a class="tocitem" href="#Arithmetic-on-Window-Results"><span>Arithmetic on Window Results</span></a></li><li><a class="tocitem" href="#Mixing-with-Aggregates"><span>Mixing with Aggregates</span></a></li><li><a class="tocitem" href="#Ordering-Results-by-a-Window-Alias"><span>Ordering Results by a Window Alias</span></a></li><li><a class="tocitem" href="#SQLite-Support"><span>SQLite Support</span></a></li><li><a class="tocitem" href="#Function-Reference"><span>Function Reference</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li></ul></li><li><a class="tocitem" href="../q_objects/">Q Objects</a></li></ul></li><li><a class="tocitem" href="../../import_django/">Import from Django</a></li><li><a class="tocitem" href="../../postgres/">PostgreSQL Guide</a></li><li><a class="tocitem" href="../../async/">Async &amp; Concurrency</a></li><li><a class="tocitem" href="../../architecture/">Architecture</a></li><li><a class="tocitem" href="../../advisory_lock/">Advisory Locks</a></li><li><a class="tocitem" href="../../extending/">Extending PormG</a></li><li><a class="tocitem" href="../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Reading</a></li><li class="is-active"><a href>Window Functions</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Window Functions</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/PingoLee/PormG.jl/blob/main/docs/src/read/window_functions.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Window-Functions"><a class="docs-heading-anchor" href="#Window-Functions">Window Functions</a><a id="Window-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Window-Functions" title="Permalink"></a></h1><p>Window functions compute values over a sliding frame of rows without collapsing them the way <code>GROUP BY</code> aggregates do. Each row keeps its identity in the result while gaining an extra computed column derived from its surrounding rows.</p><div class="admonition is-info" id="Note-316eae8de729df15"><header class="admonition-header">Note<a class="admonition-anchor" href="#Note-316eae8de729df15" title="Permalink"></a></header><div class="admonition-body"><p><strong>For Django users:</strong> PormG&#39;s <code>WindowOver</code> / <code>Rank</code> / <code>Lag</code> / … mirror Django&#39;s <code>Window(expression, partition_by=..., order_by=...)</code> API. The main difference is that PormG passes the <code>WindowSpec</code> directly to the function constructor rather than wrapping it in a separate <code>Window()</code> call.</p></div></div><hr/><h2 id="Core-Concepts"><a class="docs-heading-anchor" href="#Core-Concepts">Core Concepts</a><a id="Core-Concepts-1"></a><a class="docs-heading-anchor-permalink" href="#Core-Concepts" title="Permalink"></a></h2><table><tr><th style="text-align: left">Concept</th><th style="text-align: left">What It Does</th></tr><tr><td style="text-align: left"><code>WindowOver(partition_by=..., order_by=...)</code></td><td style="text-align: left">Defines the window frame — which rows each call can see</td></tr><tr><td style="text-align: left">Window function call (<code>Rank(over=...)</code>)</td><td style="text-align: left">Performs the computation over that frame</td></tr><tr><td style="text-align: left">No <code>GROUP BY</code> collapse</td><td style="text-align: left">Every input row appears in the result, each with its computed window value</td></tr></table><hr/><h2 id="Quick-Start"><a class="docs-heading-anchor" href="#Quick-Start">Quick Start</a><a id="Quick-Start-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start" title="Permalink"></a></h2><p>The goal: for every 1991 race, assign each driver a rank based on their points — 1st place gets rank 1, 2nd place gets rank 2, and so on. Crucially, the ranking <strong>restarts for each race</strong> (not across all 1991 races combined).</p><pre><code class="language-julia hljs">using PormG
+using PormG.Functions: WindowOver, Rank
+
+query = M.Driver_standings.objects
+query.filter(
+    &quot;raceid__@in&quot; =&gt; [305, 306],  # only two races
+    &quot;points__@gt&quot;  =&gt; 0,       # skip drivers who have not scored yet
+)
+query.values(
+    &quot;raceid&quot;,
+    &quot;driverid__surname&quot;,
+    &quot;points&quot;,
+    &quot;race_rank&quot; =&gt; Rank(over=WindowOver(
+        partition_by=[&quot;raceid&quot;],   # restart the ranking for each race
+        order_by=[&quot;-points&quot;]       # highest points = rank 1
+    ))
+)
+query.order_by(&quot;raceid&quot;, &quot;race_rank&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result:</p><pre><code class="nohighlight hljs">15×4 DataFrame
+ Row │ raceid  driverid__surname  points   race_rank
+     │ Int64   String             Float64  Int64
+─────┼───────────────────────────────────────────────
+   1 │    305  Senna                 10.0          1
+   2 │    305  Prost                  6.0          2
+   3 │    305  Piquet                 4.0          3
+   4 │    305  Modena                 3.0          4
+   5 │    305  Nakajima               2.0          5
+   6 │    305  Suzuki                 1.0          6
+   7 │    306  Senna                 20.0          1
+   8 │    306  Prost                  9.0          2
+   9 │    306  Piquet                 6.0          3
+  10 │    306  Patrese                6.0          3
+  11 │    306  Berger                 4.0          5
+  12 │    306  Modena                 3.0          6
+  13 │    306  Nakajima               2.0          7
+  14 │    306  Suzuki                 1.0          8
+  15 │    306  Alesi                  1.0          8</code></pre><p><strong>Why does <code>raceid=305</code> show ranks 1, 2, 3 …?</strong></p><ul><li><code>partition_by=[&quot;raceid&quot;]</code> tells the window function to treat each distinct <code>raceid</code> as a separate group. <code>Rank()</code> counts from 1 inside each group and <strong>never looks outside it</strong>.</li><li><code>order_by=[&quot;-points&quot;]</code> sorts rows within each group by <code>points</code> descending (the <code>-</code> prefix means DESC). So the driver with the most points in race 305 gets rank 1, the next gets rank 2, and so on.</li><li>The final <code>query.order_by(&quot;raceid&quot;, &quot;race_rank&quot;)</code> is just the output sort — it has no effect on how ranks are computed.</li></ul><p>The three pieces together:</p><table><tr><th style="text-align: left">Piece</th><th style="text-align: left">What you write</th><th style="text-align: left">What SQL generates</th><th style="text-align: left">Effect</th></tr><tr><td style="text-align: left">Window frame</td><td style="text-align: left"><code>WindowOver(partition_by=[&quot;raceid&quot;], order_by=[&quot;-points&quot;])</code></td><td style="text-align: left"><code>OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC)</code></td><td style="text-align: left">defines the per-race, points-descending frame</td></tr><tr><td style="text-align: left">Function</td><td style="text-align: left"><code>Rank(over=...)</code></td><td style="text-align: left"><code>RANK() OVER (...)</code></td><td style="text-align: left">assigns 1, 2, 3 … with gaps on ties</td></tr><tr><td style="text-align: left">Alias</td><td style="text-align: left"><code>&quot;race_rank&quot; =&gt; Rank(...)</code></td><td style="text-align: left"><code>... as race_rank</code></td><td style="text-align: left">names the new column</td></tr></table><p><strong>What about ties?</strong> <code>Rank</code> leaves a gap: in race 306 above, Piquet and Patrese both scored <code>6.0</code> and both receive rank <strong>3</strong>. The next driver (Berger, <code>4.0</code>) gets rank <strong>5</strong> — rank 4 is skipped to account for the two drivers tied at 3. The same happens at the bottom: Suzuki and Alesi both score <code>1.0</code> and share rank <strong>8</strong>. Use <code>DenseRank</code> to avoid these gaps (Berger would get rank 4, not 5).</p><p>Generated SQL:</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;raceid&quot; as raceid,
+    &quot;Tb_1&quot;.&quot;surname&quot; as driverid__surname,
+    &quot;Tb&quot;.&quot;points&quot; as points,
+    RANK() OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC) as race_rank
+FROM &quot;driver_standings&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; IN (?, ?)
+  AND &quot;Tb&quot;.&quot;points&quot; &gt; ?
+ORDER BY &quot;raceid&quot; ASC,
+  &quot;race_rank&quot; ASC</code></pre><div class="admonition is-info" id="Note-d60d6a5eb426553"><header class="admonition-header">Note<a class="admonition-anchor" href="#Note-d60d6a5eb426553" title="Permalink"></a></header><div class="admonition-body"><p><code>?</code> placeholders are SQLite syntax. On PostgreSQL the same query uses <code>$1</code>, <code>$2</code>, <code>$3</code>.</p></div></div><hr/><h2 id="WindowOver-—-Defining-the-Frame"><a class="docs-heading-anchor" href="#WindowOver-—-Defining-the-Frame">WindowOver — Defining the Frame</a><a id="WindowOver-—-Defining-the-Frame-1"></a><a class="docs-heading-anchor-permalink" href="#WindowOver-—-Defining-the-Frame" title="Permalink"></a></h2><p><code>WindowOver</code> builds a <code>WindowSpec</code> that every window function accepts via its <code>over</code> keyword. It controls two things:</p><ul><li><strong><code>partition_by</code></strong> — which column(s) split the rows into independent groups. The window function resets and recomputes from scratch inside each group.</li><li><strong><code>order_by</code></strong> — how rows are sorted <em>within</em> each group before the function runs. This determines which row is &quot;first&quot;, &quot;previous&quot;, etc.</li></ul><h3 id="Example-1-—-partition-only"><a class="docs-heading-anchor" href="#Example-1-—-partition-only">Example 1 — partition only</a><a id="Example-1-—-partition-only-1"></a><a class="docs-heading-anchor-permalink" href="#Example-1-—-partition-only" title="Permalink"></a></h3><p>Rank drivers within their constructor by race points. <code>constructorid</code> lives in the <code>result</code> table (not <code>driver_standings</code>), so this example uses <code>M.Result.objects</code>. Each constructor is an independent group; the ranking never crosses constructor boundaries.</p><pre><code class="language-julia hljs">using PormG.Functions: Rank, WindowOver
+
+# Each constructor is a separate window — ranks restart per constructor
+spec = WindowOver(partition_by=[&quot;constructorid&quot;], order_by=[&quot;-points&quot;])
+
+query = M.Result.objects
+query.filter(&quot;raceid&quot; =&gt; 306)
+query.values(
+    &quot;constructorid&quot;,
+    &quot;driverid__surname&quot;,
+    &quot;points&quot;,
+    &quot;constructor_rank&quot; =&gt; Rank(over=spec)
+)
+query.order_by(&quot;constructorid&quot;, &quot;constructor_rank&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result (truncated):</p><pre><code class="nohighlight hljs">34×4 DataFrame
+ Row │ constructorid  driverid__surname  points   constructor_rank
+     │ Int64          String             Float64  Int64
+─────┼──────────────────────────────────────────────────────────────
+   1 │             1  Senna                 10.0                 1
+   2 │             1  Berger                 4.0                 2
+   3 │             3  Patrese                6.0                 1
+   4 │             3  Mansell                0.0                 2
+   5 │             6  Prost                  3.0                 1
+   6 │             6  Alesi                  1.0                 2
+   7 │            17  Gachot                 0.0                 1
+   8 │            17  de Cesaris             0.0                 1
+   ⋮ │      ⋮              ⋮                ⋮            ⋮</code></pre><p>Three things to notice:</p><ul><li><strong>Ranks restart per constructor.</strong> McLaren (id 1): Senna → rank 1, Berger → rank 2. Williams (id 3): Patrese → rank 1, Mansell → rank 2. Ferrari (id 6): Prost → rank 1, Alesi → rank 2. Each constructor is its own independent group.</li><li><strong>Zeros tie at rank 1.</strong> Jordan (id 17): both Gachot and de Cesaris scored 0.0 — identical values, so <code>Rank</code> gives both rank 1. This is the same gap behaviour as the Quick Start example.</li><li><strong>No <code>points__@gt</code> filter here.</strong> Unlike the Quick Start, this example keeps all finishers including 0-point entries, which is why most constructors show two drivers at rank 1.</li></ul><h3 id="Example-2-—-order-only-(no-partition)"><a class="docs-heading-anchor" href="#Example-2-—-order-only-(no-partition)">Example 2 — order only (no partition)</a><a id="Example-2-—-order-only-(no-partition)-1"></a><a class="docs-heading-anchor-permalink" href="#Example-2-—-order-only-(no-partition)" title="Permalink"></a></h3><p>When there is no <code>partition_by</code>, all rows form a single group. <code>Lag</code> reaches back one row within that group — here, the previous lap for the same driver.</p><pre><code class="language-julia hljs">using PormG.Functions: Lag, WindowOver
+
+# All laps in one window, ordered by lap number
+spec = WindowOver(order_by=[&quot;lap&quot;])
+
+query = M.Lap_times.objects
+query.filter(&quot;raceid&quot; =&gt; 841, &quot;driverid&quot; =&gt; 1, &quot;lap__@lte&quot; =&gt; 8)
+query.values(
+    &quot;lap&quot;,
+    &quot;milliseconds&quot;,
+    &quot;prev_ms&quot; =&gt; Lag(&quot;milliseconds&quot;, over=spec)
+)
+query.order_by(&quot;lap&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result:</p><pre><code class="nohighlight hljs">8×3 DataFrame
+ Row │ lap    milliseconds  prev_ms
+     │ Int64  Int64         Int64?
+─────┼──────────────────────────────
+   1 │     1        100573  missing
+   2 │     2         93774   100573
+   3 │     3         92900    93774
+   4 │     4         92582    92900
+   5 │     5         92471    92582
+   6 │     6         92434    92471
+   7 │     7         92447    92434
+   8 │     8         92310    92447</code></pre><p>Row by row: <code>prev_ms</code> on each row holds the <code>milliseconds</code> value from the row <em>above</em> it. Lap 1 has no previous row, so <code>prev_ms</code> is <code>missing</code> (SQL <code>NULL</code>). From lap 2 onward, <code>prev_ms</code> is exactly the previous lap&#39;s time — useful for computing lap-over-lap deltas (see <a href="#Arithmetic-on-Window-Results">Arithmetic on Window Results</a>).</p><p>Generated SQL (SQLite):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;lap&quot; as lap,
+    &quot;Tb&quot;.&quot;milliseconds&quot; as milliseconds,
+    LAG(&quot;Tb&quot;.&quot;milliseconds&quot;, ?) OVER (ORDER BY &quot;Tb&quot;.&quot;lap&quot; ASC) as prev_ms
+FROM &quot;lap_times&quot; as &quot;Tb&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = ?
+  AND &quot;Tb&quot;.&quot;driverid&quot; = ?
+  AND &quot;Tb&quot;.&quot;lap&quot; &lt;= ?
+ORDER BY &quot;lap&quot; ASC</code></pre><p>The <code>?</code> for the <code>LAG</code> offset is the default <code>1</code> — one row back. There is no <code>PARTITION BY</code> clause, so the entire filtered result set is one window.</p><h3 id="Example-3-—-global-frame-(broadcast-a-value-to-every-row)"><a class="docs-heading-anchor" href="#Example-3-—-global-frame-(broadcast-a-value-to-every-row)">Example 3 — global frame (broadcast a value to every row)</a><a id="Example-3-—-global-frame-(broadcast-a-value-to-every-row)-1"></a><a class="docs-heading-anchor-permalink" href="#Example-3-—-global-frame-(broadcast-a-value-to-every-row)" title="Permalink"></a></h3><p>No <code>partition_by</code>. The window covers the <strong>entire result set</strong> as one group. <code>FirstValue</code> ordered by <code>positionorder</code> always picks the race winner&#39;s points and repeats it on every output row — no self-join needed.</p><pre><code class="language-julia hljs">using PormG.Functions: FirstValue, WindowOver
+
+query = M.Result.objects
+query.filter(&quot;raceid&quot; =&gt; 306, &quot;positionorder__@lte&quot; =&gt; 8)
+query.values(
+    &quot;driverid__surname&quot;,
+    &quot;positionorder&quot;,
+    &quot;points&quot;,
+    # Broadcast winner&#39;s points to every row for inline comparison
+    &quot;winner_pts&quot; =&gt; FirstValue(&quot;points&quot;, over=WindowOver(order_by=[&quot;positionorder&quot;]))
+)
+query.order_by(&quot;positionorder&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result:</p><pre><code class="nohighlight hljs">8×4 DataFrame
+ Row │ driverid__surname  positionorder  points   winner_pts
+     │ String             Int64          Float64  Float64
+─────┼───────────────────────────────────────────────────────
+   1 │ Senna                          1     10.0        10.0
+   2 │ Patrese                        2      6.0        10.0
+   3 │ Berger                         3      4.0        10.0
+   4 │ Prost                          4      3.0        10.0
+   5 │ Piquet                         5      2.0        10.0
+   6 │ Alesi                          6      1.0        10.0
+   7 │ Moreno                         7      0.0        10.0
+   8 │ Morbidelli                     8      0.0        10.0</code></pre><p><code>winner_pts</code> is <code>10.0</code> on every row — Senna&#39;s score. The window has no <code>PARTITION BY</code>, so all 8 rows form one group and <code>FirstValue</code> always sees the same first row (position 1).</p><p>Generated SQL (SQLite):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb_1&quot;.&quot;surname&quot; as driverid__surname,
+    &quot;Tb&quot;.&quot;positionorder&quot; as positionorder,
+    &quot;Tb&quot;.&quot;points&quot; as points,
+    FIRST_VALUE(&quot;Tb&quot;.&quot;points&quot;) OVER (ORDER BY &quot;Tb&quot;.&quot;positionorder&quot; ASC) as winner_pts
+FROM &quot;result&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = ?
+  AND &quot;Tb&quot;.&quot;positionorder&quot; &lt;= ?
+ORDER BY &quot;positionorder&quot; ASC</code></pre><p>Notice: <strong>no <code>PARTITION BY</code></strong> in the <code>OVER</code> clause. That is the global-frame pattern.</p><div class="admonition is-success" id="Tip-cb13fd38bc48e05f"><header class="admonition-header">Tip<a class="admonition-anchor" href="#Tip-cb13fd38bc48e05f" title="Permalink"></a></header><div class="admonition-body"><p>The primary use for a fully empty frame (<code>WindowOver()</code>) is <strong>aggregate window functions</strong> such as <code>SUM(...) OVER ()</code> or <code>AVG(...) OVER ()</code> — broadcasting a total or average to every row. These are not yet implemented in PormG. Use a CTE to achieve the same result for now.</p></div></div><h3 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h3><pre><code class="language-julia hljs"># restart per race, highest points first
+WindowOver(partition_by=[&quot;raceid&quot;],        order_by=[&quot;-points&quot;])
+
+# restart per constructor, highest points first
+WindowOver(partition_by=[&quot;constructorid&quot;], order_by=[&quot;-points&quot;])
+
+# all laps in sequence, no partitioning
+WindowOver(order_by=[&quot;lap&quot;])
+
+# all rows, no order — one global frame
+WindowOver()</code></pre><h3 id="order_by-Convention"><a class="docs-heading-anchor" href="#order_by-Convention"><code>order_by</code> Convention</a><a id="order_by-Convention-1"></a><a class="docs-heading-anchor-permalink" href="#order_by-Convention" title="Permalink"></a></h3><p>Follow the same <code>&quot;-field&quot;</code> → <code>DESC</code> convention used everywhere in PormG:</p><table><tr><th style="text-align: left">Expression</th><th style="text-align: left">SQL</th></tr><tr><td style="text-align: left"><code>order_by=[&quot;points&quot;]</code></td><td style="text-align: left"><code>ORDER BY &quot;Tb&quot;.&quot;points&quot; ASC</code></td></tr><tr><td style="text-align: left"><code>order_by=[&quot;-points&quot;]</code></td><td style="text-align: left"><code>ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC</code></td></tr><tr><td style="text-align: left"><code>order_by=[&quot;-points&quot;, &quot;driverid&quot;]</code></td><td style="text-align: left"><code>ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC, &quot;Tb&quot;.&quot;driverid&quot; ASC</code></td></tr></table><h3 id="Frame-Specifications-(PostgreSQL-only)"><a class="docs-heading-anchor" href="#Frame-Specifications-(PostgreSQL-only)">Frame Specifications (PostgreSQL only)</a><a id="Frame-Specifications-(PostgreSQL-only)-1"></a><a class="docs-heading-anchor-permalink" href="#Frame-Specifications-(PostgreSQL-only)" title="Permalink"></a></h3><p>Explicit frames are needed when the SQL default frame is wrong for your use case. The most common trap: <strong><code>LastValue</code> with <code>ORDER BY</code> but no explicit frame.</strong></p><p>SQL&#39;s default frame is <code>RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</code> — it includes only rows up to and including the current one. For <code>LastValue</code>, that means &quot;the last row I can see is the current row,&quot; so it silently returns the current row&#39;s own value instead of the partition&#39;s actual last row.</p><pre><code class="language-julia hljs">using PormG.Functions: LastValue, WindowOver
+
+# Default frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+# LastValue sees only up to the current row → returns each row&#39;s own points
+spec_default = WindowOver(
+    partition_by=[&quot;constructorid&quot;],
+    order_by=[&quot;positionorder&quot;]
+)
+
+# Full frame: every row in the partition is visible
+# LastValue now correctly returns the last-placed driver&#39;s points on every row
+spec_full = WindowOver(
+    partition_by=[&quot;constructorid&quot;],
+    order_by=[&quot;positionorder&quot;],
+    frame=&quot;ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING&quot;  # PostgreSQL only
+)
+
+query = M.Result.objects
+query.filter(&quot;raceid&quot; =&gt; 841, &quot;constructorid__@in&quot; =&gt; [1, 3])
+query.values(
+    &quot;constructorid&quot;,
+    &quot;driverid__surname&quot;,
+    &quot;positionorder&quot;,
+    &quot;points&quot;,
+    &quot;last_default&quot; =&gt; LastValue(&quot;points&quot;, over=spec_default),
+    &quot;last_full&quot;    =&gt; LastValue(&quot;points&quot;, over=spec_full)
+)
+query.order_by(&quot;constructorid&quot;, &quot;positionorder&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result (PostgreSQL):</p><pre><code class="nohighlight hljs">4×6 DataFrame
+ Row │ constructorid  driverid__surname  positionorder  points    last_default  last_full
+     │ Int64?         String?            Int32?         Float64?  Float64?      Float64?
+─────┼────────────────────────────────────────────────────────────────────────────────────
+   1 │             1  Hamilton                       2      18.0          18.0        8.0
+   2 │             1  Button                         6       8.0           8.0        8.0
+   3 │             3  Barrichello                   16       0.0           0.0        0.0
+   4 │             3  Maldonado                     20       0.0           0.0        0.0</code></pre><p>For McLaren (constructor 1): <code>last_default</code> mirrors each driver&#39;s own <code>points</code> — Hamilton sees <code>18.0</code> because the default frame only reaches as far as the current row; Button sees <code>8.0</code> for the same reason. <code>last_full</code> correctly broadcasts <code>8.0</code> (Button&#39;s points — the last row in the partition) to both McLaren rows. For Williams (constructor 3) both drivers scored <code>0.0</code>, so the frame choice makes no visible difference here.</p><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;constructorid&quot; as constructorid,
+    &quot;Tb_1&quot;.&quot;surname&quot; as driverid__surname,
+    &quot;Tb&quot;.&quot;positionorder&quot; as positionorder,
+    &quot;Tb&quot;.&quot;points&quot; as points,
+    LAST_VALUE(&quot;Tb&quot;.&quot;points&quot;) OVER (
+        PARTITION BY &quot;Tb&quot;.&quot;constructorid&quot;
+        ORDER BY &quot;Tb&quot;.&quot;positionorder&quot; ASC
+    ) as last_default,
+    LAST_VALUE(&quot;Tb&quot;.&quot;points&quot;) OVER (
+        PARTITION BY &quot;Tb&quot;.&quot;constructorid&quot;
+        ORDER BY &quot;Tb&quot;.&quot;positionorder&quot; ASC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) as last_full
+FROM &quot;result&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = $1
+  AND &quot;Tb&quot;.&quot;constructorid&quot; = ANY($2)
+ORDER BY &quot;constructorid&quot; ASC, &quot;positionorder&quot; ASC</code></pre><div class="admonition is-warning" id="Warning-4f468e7ca0d8e23d"><header class="admonition-header">Warning<a class="admonition-anchor" href="#Warning-4f468e7ca0d8e23d" title="Permalink"></a></header><div class="admonition-body"><p>Explicit frame strings are PostgreSQL-only. Passing <code>frame=</code> on a SQLite connection throws <code>ArgumentError</code> with a helpful message.</p></div></div><p><strong>Frame unit — <code>ROWS</code> vs <code>RANGE</code></strong></p><p>The first keyword controls what &quot;distance&quot; means:</p><table><tr><th style="text-align: left">Unit</th><th style="text-align: left">Counts by</th><th style="text-align: left">When to use</th></tr><tr><td style="text-align: left"><code>ROWS</code></td><td style="text-align: left">Physical row position</td><td style="text-align: left">Almost always — predictable, index-friendly</td></tr><tr><td style="text-align: left"><code>RANGE</code></td><td style="text-align: left">Logical value of the <code>ORDER BY</code> column</td><td style="text-align: left">Ties get the same frame boundary; slower and rarely needed</td></tr></table><p>SQL defaults to <code>RANGE</code> when <code>ORDER BY</code> is present and no frame is specified. That is almost never what you want for <code>LastValue</code> or moving windows — use <code>ROWS</code> explicitly.</p><p><strong>Common frame strings:</strong></p><table><tr><th style="text-align: left">Frame string</th><th style="text-align: left">Use case</th></tr><tr><td style="text-align: left"><code>&quot;ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW&quot;</code></td><td style="text-align: left"><strong>Cumulative total up to here.</strong> The SQL default when <code>ORDER BY</code> is present — also the right choice for running sums/counts once aggregate-over-window is supported.</td></tr><tr><td style="text-align: left"><code>&quot;ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING&quot;</code></td><td style="text-align: left"><strong>Whole partition visible.</strong> Required for <code>LastValue</code> to return the actual last row rather than the current row.</td></tr><tr><td style="text-align: left"><code>&quot;ROWS BETWEEN 2 PRECEDING AND CURRENT ROW&quot;</code></td><td style="text-align: left"><strong>3-row moving window</strong> (current + 2 before). Change <code>2</code> for wider windows.</td></tr><tr><td style="text-align: left"><code>&quot;ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING&quot;</code></td><td style="text-align: left"><strong>Centred window</strong> — one row on each side of the current row. Useful for smoothing.</td></tr><tr><td style="text-align: left"><code>&quot;ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING&quot;</code></td><td style="text-align: left"><strong>Remaining rows</strong> — from here to the end of the partition.</td></tr></table><hr/><h2 id="Ranking-Functions"><a class="docs-heading-anchor" href="#Ranking-Functions">Ranking Functions</a><a id="Ranking-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Ranking-Functions" title="Permalink"></a></h2><p>These functions assign a rank or row number to each row. They take no column argument — only a <code>WindowSpec</code>.</p><table><tr><th style="text-align: left">Function</th><th style="text-align: left">SQL</th><th style="text-align: left">Behaviour</th></tr><tr><td style="text-align: left"><code>Rank(over=...)</code></td><td style="text-align: left"><code>RANK() OVER (...)</code></td><td style="text-align: left">Leaves gaps after ties (1, 1, 3, …)</td></tr><tr><td style="text-align: left"><code>DenseRank(over=...)</code></td><td style="text-align: left"><code>DENSE_RANK() OVER (...)</code></td><td style="text-align: left">No gaps after ties (1, 1, 2, …)</td></tr><tr><td style="text-align: left"><code>RowNumber(over=...)</code></td><td style="text-align: left"><code>ROW_NUMBER() OVER (...)</code></td><td style="text-align: left">Unique sequential number per row</td></tr></table><pre><code class="language-julia hljs">using PormG.Functions: Rank, DenseRank, RowNumber, WindowOver
+
+# Race 306 has two tie groups: Piquet/Patrese (6.0) and Suzuki/Alesi (1.0)
+spec = WindowOver(partition_by=[&quot;raceid&quot;], order_by=[&quot;-points&quot;])
+
+query = M.Driver_standings.objects
+query.filter(&quot;raceid&quot; =&gt; 306, &quot;points__@gt&quot; =&gt; 0)
+query.values(
+    &quot;driverid__surname&quot;,
+    &quot;points&quot;,
+    &quot;rank&quot;       =&gt; Rank(over=spec),
+    &quot;dense_rank&quot; =&gt; DenseRank(over=spec),
+    &quot;row_number&quot; =&gt; RowNumber(over=spec)
+)
+query.order_by(&quot;rank&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result:</p><pre><code class="nohighlight hljs">9×5 DataFrame
+ Row │ driverid__surname  points   rank   dense_rank  row_number
+     │ String             Float64  Int64  Int64       Int64
+─────┼─────────────────────────────────────────────────────────────
+   1 │ Senna                 20.0      1           1           1
+   2 │ Prost                  9.0      2           2           2
+   3 │ Piquet                 6.0      3           3           3
+   4 │ Patrese                6.0      3           3           4   ← tie: same rank &amp; dense_rank, unique row_number
+   5 │ Berger                 4.0      5           4           5   ← rank skips 4; dense_rank does not
+   6 │ Modena                 3.0      6           5           6
+   7 │ Nakajima               2.0      7           6           7
+   8 │ Suzuki                 1.0      8           7           8
+   9 │ Alesi                  1.0      8           7           9   ← tie: same rank &amp; dense_rank, unique row_number</code></pre><p>The three tie-handling strategies are now clearly visible:</p><table><tr><th style="text-align: left">Rows</th><th style="text-align: left">Situation</th><th style="text-align: left"><code>Rank</code></th><th style="text-align: left"><code>DenseRank</code></th><th style="text-align: left"><code>RowNumber</code></th></tr><tr><td style="text-align: left">Piquet / Patrese</td><td style="text-align: left">Tied at <code>6.0</code></td><td style="text-align: left">both <code>3</code></td><td style="text-align: left">both <code>3</code></td><td style="text-align: left"><code>3</code> / <code>4</code></td></tr><tr><td style="text-align: left">Berger</td><td style="text-align: left">First after the tie</td><td style="text-align: left"><code>5</code> — skips 4</td><td style="text-align: left"><code>4</code> — no skip</td><td style="text-align: left"><code>5</code></td></tr><tr><td style="text-align: left">Suzuki / Alesi</td><td style="text-align: left">Tied at <code>1.0</code></td><td style="text-align: left">both <code>8</code></td><td style="text-align: left">both <code>7</code></td><td style="text-align: left"><code>8</code> / <code>9</code></td></tr></table><ul><li><strong><code>Rank</code></strong> — shared rank, then a gap. The gap size equals the number of tied rows (two drivers tied at rank 3 → next rank is 5).</li><li><strong><code>DenseRank</code></strong> — shared rank, no gap. Berger gets rank 4, not 5.</li><li><strong><code>RowNumber</code></strong> — always unique, even for ties. The ordering between tied rows (<code>Piquet=3</code> vs <code>Patrese=4</code>) is <strong>non-deterministic</strong> unless you add a tiebreaker column to the window <code>order_by</code>.</li></ul><div class="admonition is-success" id="Tip-3ca2c4c4378fb310"><header class="admonition-header">Tip<a class="admonition-anchor" href="#Tip-3ca2c4c4378fb310" title="Permalink"></a></header><div class="admonition-body"><p>To make <code>RowNumber</code> deterministic for tied rows, add a unique column as a secondary sort: <code>WindowOver(partition_by=[&quot;raceid&quot;], order_by=[&quot;-points&quot;, &quot;driverid&quot;])</code>.</p></div></div><p>Generated SQL (SQLite):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb_1&quot;.&quot;surname&quot; as driverid__surname,
+    &quot;Tb&quot;.&quot;points&quot; as points,
+    RANK()       OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC) as rank,
+    DENSE_RANK() OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC) as dense_rank,
+    ROW_NUMBER() OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC) as row_number
+FROM &quot;driver_standings&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = ?
+  AND &quot;Tb&quot;.&quot;points&quot; &gt; ?
+ORDER BY &quot;rank&quot; ASC</code></pre><hr/><h2 id="Offset-Functions-—-Lag-and-Lead"><a class="docs-heading-anchor" href="#Offset-Functions-—-Lag-and-Lead">Offset Functions — <code>Lag</code> and <code>Lead</code></a><a id="Offset-Functions-—-Lag-and-Lead-1"></a><a class="docs-heading-anchor-permalink" href="#Offset-Functions-—-Lag-and-Lead" title="Permalink"></a></h2><p><code>Lag</code> reads from a previous row; <code>Lead</code> reads from a following row. Both accept a column reference, an optional <code>offset</code> (default <code>1</code>), and an optional <code>default</code> value returned when no such row exists.</p><pre><code class="language-julia hljs">using PormG.Functions: Lag, Lead, WindowOver
+
+query = M.Lap_times.objects
+query.filter(&quot;raceid&quot; =&gt; 841, &quot;driverid&quot; =&gt; 1)
+query.values(
+    &quot;lap&quot;,
+    &quot;milliseconds&quot;,
+    # Previous lap time (offset=1, default 0 for the first lap)
+    &quot;prev_ms&quot;  =&gt; Lag(&quot;milliseconds&quot;,  offset=1, default=0,
+                      over=WindowOver(order_by=[&quot;lap&quot;])),
+    # Next lap time (default 0 for the final lap)
+    &quot;next_ms&quot;  =&gt; Lead(&quot;milliseconds&quot;, offset=1, default=0,
+                       over=WindowOver(order_by=[&quot;lap&quot;]))
+)
+query.order_by(&quot;lap&quot;)
+df = query |&gt; DataFrame</code></pre><p>Result (PostgreSQL, 58 laps — truncated):</p><pre><code class="nohighlight hljs">58×4 DataFrame
+ Row │ lap     milliseconds  prev_ms  next_ms
+     │ Int32?  Int32?        Int64?   Int64?
+─────┼────────────────────────────────────────
+   1 │      1        100573        0    93774   ← no previous lap → default 0; next lap is lap 2
+   2 │      2         93774   100573    92900   ← prev = lap 1 time; next = lap 3 time
+   3 │      3         92900    93774    92582
+  ⋮  │   ⋮          ⋮           ⋮        ⋮
+  56 │     56         91813    91766    92184
+  57 │     57         92184    91813    94576
+  58 │     58         94576    92184        0   ← no next lap → default 0; prev = lap 57 time
+                               52 rows omitted</code></pre><p><code>prev_ms</code> on row 2 (<code>100573</code>) matches <code>milliseconds</code> on row 1 — <code>Lag</code> looks back one row. <code>next_ms</code> on row 2 (<code>92900</code>) matches <code>milliseconds</code> on row 3 — <code>Lead</code> looks forward one row. Row 1 has no previous row and row 58 has no next row; both return <code>0</code> because <code>default=0</code> was specified. Without a <code>default</code>, those positions would return <code>missing</code>.</p><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;lap&quot; as lap,
+    &quot;Tb&quot;.&quot;milliseconds&quot; as milliseconds,
+    LAG(&quot;Tb&quot;.&quot;milliseconds&quot;,  $1::integer, $2::bigint) OVER (ORDER BY &quot;Tb&quot;.&quot;lap&quot; ASC) as prev_ms,
+    LEAD(&quot;Tb&quot;.&quot;milliseconds&quot;, $3::integer, $4::bigint) OVER (ORDER BY &quot;Tb&quot;.&quot;lap&quot; ASC) as next_ms
+FROM &quot;lap_times&quot; as &quot;Tb&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = $5
+  AND &quot;Tb&quot;.&quot;driverid&quot; = $6
+ORDER BY &quot;lap&quot; ASC</code></pre><div class="admonition is-success" id="Tip-832079a67d47fe92"><header class="admonition-header">Tip<a class="admonition-anchor" href="#Tip-832079a67d47fe92" title="Permalink"></a></header><div class="admonition-body"><p>The <code>offset</code> and <code>default</code> values are <strong>parameterized</strong> — <code>$1</code>/<code>$3</code> are the offsets (<code>1</code>), <code>$2</code>/<code>$4</code> are the defaults (<code>0</code>). They are never interpolated raw into the SQL string. The <code>::integer</code> and <code>::bigint</code> casts are PostgreSQL type-inference artefacts; SQLite omits them.</p></div></div><hr/><h2 id="Value-Functions-—-FirstValue,-LastValue,-NthValue"><a class="docs-heading-anchor" href="#Value-Functions-—-FirstValue,-LastValue,-NthValue">Value Functions — <code>FirstValue</code>, <code>LastValue</code>, <code>NthValue</code></a><a id="Value-Functions-—-FirstValue,-LastValue,-NthValue-1"></a><a class="docs-heading-anchor-permalink" href="#Value-Functions-—-FirstValue,-LastValue,-NthValue" title="Permalink"></a></h2><p>These functions return the value of a column at a specific position within the window frame.</p><pre><code class="language-julia hljs">using PormG.Functions: FirstValue, LastValue, NthValue, WindowOver
+
+spec = WindowOver(partition_by=[&quot;raceid&quot;], order_by=[&quot;positionorder&quot;])
+
+query = M.Result.objects
+query.filter(&quot;raceid&quot; =&gt; 841)
+query.values(
+    &quot;raceid&quot;,
+    &quot;driverid&quot;,
+    &quot;positionorder&quot;,
+    # First finisher&#39;s points in this race
+    &quot;winner_pts&quot;   =&gt; FirstValue(&quot;points&quot;, over=spec),
+    # Last finisher&#39;s points (subject to default-frame trap — see below)
+    &quot;last_pts&quot;     =&gt; LastValue(&quot;points&quot;,  over=spec),
+    # Points of whoever finished second
+    &quot;second_pts&quot;   =&gt; NthValue(&quot;points&quot;, 2, over=spec)
+).limit(10)
+df = query |&gt; DataFrame</code></pre><p>Result (PostgreSQL, first 10 of 24 finishers):</p><pre><code class="nohighlight hljs">10×6 DataFrame
+ Row │ raceid  driverid  positionorder  winner_pts  last_pts  second_pts
+     │ Int64?  Int64?    Int32?         Float64?    Float64?  Float64?
+─────┼───────────────────────────────────────────────────────────────────
+   1 │    841        20              1        25.0      25.0   missing
+   2 │    841         1              2        25.0      18.0      18.0
+   3 │    841       808              3        25.0      15.0      18.0
+   4 │    841         4              4        25.0      12.0      18.0
+   5 │    841        17              5        25.0      10.0      18.0
+   6 │    841        18              6        25.0       8.0      18.0
+   7 │    841        13              7        25.0       6.0      18.0
+   8 │    841        67              8        25.0       4.0      18.0
+   9 │    841        16              9        25.0       2.0      18.0
+  10 │    841       814             10        25.0       1.0      18.0</code></pre><p>Three behaviours are visible at once:</p><p><strong><code>winner_pts</code> (<code>FirstValue</code>)</strong> — <code>25.0</code> on every row. The first row in the partition (position 1) scored 25 points; <code>FirstValue</code> always picks that value and broadcasts it to every row in the partition, regardless of where the frame ends.</p><p><strong><code>last_pts</code> (<code>LastValue</code>)</strong> — decreasing row by row: <code>25.0</code>, <code>18.0</code>, <code>15.0</code>, <code>12.0</code>, … This looks wrong but it is the SQL default. Without an explicit <code>frame=</code>, SQL uses <code>RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</code> — the frame only reaches up to and including the <em>current</em> row. At each row, the &quot;last&quot; value the function can see is the current row&#39;s own <code>points</code>, so it just echoes that value. To get the true last finisher&#39;s points broadcast to every row, pass <code>frame=&quot;ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING&quot;</code> — see <a href="#Frame-Specifications-(PostgreSQL-only)">Frame Specifications</a> for a side-by-side comparison.</p><p><strong><code>second_pts</code> (<code>NthValue(2)</code>)</strong> — <code>missing</code> on row 1, then <code>18.0</code> for all remaining rows. When processing row 1 the frame contains only one row (position 1), so there is no 2nd element — SQL returns <code>NULL</code>. Once row 2 enters the frame (position 2, driver 1, 18 points), <code>NthValue</code> finds that element and returns <code>18.0</code>. From row 3 onward the 2nd element never changes, so <code>second_pts</code> stays at <code>18.0</code> for every remaining row.</p><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;raceid&quot; as raceid,
+    &quot;Tb&quot;.&quot;driverid&quot; as driverid,
+    &quot;Tb&quot;.&quot;positionorder&quot; as positionorder,
+    FIRST_VALUE(&quot;Tb&quot;.&quot;points&quot;) OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;positionorder&quot; ASC) as winner_pts,
+    LAST_VALUE(&quot;Tb&quot;.&quot;points&quot;)  OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;positionorder&quot; ASC) as last_pts,
+    NTH_VALUE(&quot;Tb&quot;.&quot;points&quot;, 2) OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;positionorder&quot; ASC) as second_pts
+FROM &quot;result&quot; as &quot;Tb&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = $1</code></pre><div class="admonition is-info" id="Note-fac9fa24b9eb6ec8"><header class="admonition-header">Note<a class="admonition-anchor" href="#Note-fac9fa24b9eb6ec8" title="Permalink"></a></header><div class="admonition-body"><p>The <code>n</code> argument in <code>NthValue</code> is rendered as a <strong>SQL literal integer</strong> — notice <code>NTH_VALUE(..., 2)</code> above, not <code>NTH_VALUE(..., $2)</code>. PostgreSQL and SQLite do not accept a placeholder in that position.</p></div></div><hr/><h2 id="Arithmetic-on-Window-Results"><a class="docs-heading-anchor" href="#Arithmetic-on-Window-Results">Arithmetic on Window Results</a><a id="Arithmetic-on-Window-Results-1"></a><a class="docs-heading-anchor-permalink" href="#Arithmetic-on-Window-Results" title="Permalink"></a></h2><p>Window function results support the same arithmetic operators as <code>F()</code> expressions:</p><pre><code class="language-julia hljs">using PormG.Functions: RowNumber, Lag, WindowOver
+
+spec = WindowOver(order_by=[&quot;lap&quot;])
+
+query = M.Lap_times.objects
+query.filter(&quot;raceid&quot; =&gt; 841, &quot;driverid&quot; =&gt; 1)
+query.values(
+    &quot;lap&quot;,
+    &quot;milliseconds&quot;,
+    # Convert to 0-based index
+    &quot;zero_based&quot; =&gt; RowNumber(over=spec) - 1,
+    # Lap-over-lap delta: positive → this lap was faster than the previous one
+    &quot;delta_ms&quot;   =&gt; Lag(&quot;milliseconds&quot;, over=spec) - F(&quot;milliseconds&quot;)
+)
+df = query |&gt; DataFrame</code></pre><p>Result (PostgreSQL, 58 laps — truncated):</p><pre><code class="nohighlight hljs">58×4 DataFrame
+ Row │ lap     milliseconds  zero_based  delta_ms
+     │ Int32?  Int32?        Int64?      Int32?
+─────┼────────────────────────────────────────────
+   1 │      1        100573           0   missing   ← lap 1: no previous row, Lag returns NULL
+   2 │      2         93774           1      6799   ← 100573 - 93774 = 6799 ms gained vs lap 1
+   3 │      3         92900           2       874   ← 93774 - 92900 = 874 ms gained
+  ⋮  │   ⋮          ⋮            ⋮          ⋮
+  56 │     56         91813          55       -47   ← 47 ms lost vs lap 55
+  57 │     57         92184          56      -371   ← slowing
+  58 │     58         94576          57     -2392   ← final lap: driver backs off after the line
+                     52 rows omitted</code></pre><p><code>milliseconds</code> is the raw lap time in milliseconds — having it visible makes <code>delta_ms</code> immediately verifiable: row 2 gives <code>100573 − 93774 = 6799</code>, which matches the column exactly. <code>zero_based</code> starts at 0 because <code>ROW_NUMBER()</code> starts at 1 and we subtract 1. <code>delta_ms</code> is <code>prev_lap_time − current_lap_time</code>: positive means the current lap was faster (shorter), negative means it was slower.</p><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;lap&quot; as lap,
+    &quot;Tb&quot;.&quot;milliseconds&quot; as milliseconds,
+    (ROW_NUMBER() OVER (ORDER BY &quot;Tb&quot;.&quot;lap&quot; ASC) - $1::bigint) as zero_based,
+    (LAG(&quot;Tb&quot;.&quot;milliseconds&quot;, $2::integer) OVER (ORDER BY &quot;Tb&quot;.&quot;lap&quot; ASC) - &quot;Tb&quot;.&quot;milliseconds&quot;) as delta_ms
+FROM &quot;lap_times&quot; as &quot;Tb&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; = $3
+  AND &quot;Tb&quot;.&quot;driverid&quot; = $4</code></pre><p>The arithmetic is pushed inside the <code>SELECT</code> expression — <code>(ROW_NUMBER() OVER (...) - $1::bigint)</code> — so the subtraction happens in the database, not in Julia. The <code>::bigint</code> and <code>::integer</code> casts are PostgreSQL type-inference artefacts; on SQLite the same query omits them.</p><p>Supported operators: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></p><hr/><h2 id="Mixing-with-Aggregates"><a class="docs-heading-anchor" href="#Mixing-with-Aggregates">Mixing with Aggregates</a><a id="Mixing-with-Aggregates-1"></a><a class="docs-heading-anchor-permalink" href="#Mixing-with-Aggregates" title="Permalink"></a></h2><p>Window functions and aggregate functions can coexist in the same <code>values()</code> call. PormG correctly includes plain fields in <code>GROUP BY</code> while keeping window function aliases out of it.</p><pre><code class="language-julia hljs">using PormG.Functions: Count, Rank, WindowOver
+
+# Per constructor: total results count + within-constructor ranking by points
+query = M.Result.objects.filter(&quot;driverid__@in&quot; =&gt; [846, 817], &quot;points__@gt&quot; =&gt; 0).values(
+    &quot;constructorid&quot;,
+    &quot;driverid__surname&quot;,
+    &quot;points&quot;,
+    &quot;total_results&quot; =&gt; Count(&quot;resultid&quot;),                          # aggregate
+    &quot;pts_rank&quot;      =&gt; Rank(over=WindowOver(                       # window
+        partition_by=[&quot;constructorid&quot;],
+        order_by=[&quot;-points&quot;]
+    ))
+).filter(&quot;total_results__@gt&quot; =&gt; 8)
+df = query |&gt; DataFrame</code></pre><p>Result (PostgreSQL):</p><pre><code class="nohighlight hljs">8×5 DataFrame
+ Row │ constructorid  driverid__surname  points    total_results  pts_rank
+     │ Int64?         String?            Float64?  Int64?         Int64?
+─────┼─────────────────────────────────────────────────────────────────────
+   1 │             1  Norris                 18.0             11         1   ← McLaren: highest pts value in this partition
+   2 │             1  Norris                 10.0             12         2
+   3 │             1  Norris                  6.0             13         3
+   4 │             1  Norris                  4.0             10         4
+   5 │             1  Norris                  2.0              9         5   ← lowest that cleared the HAVING &gt; 8 threshold
+   6 │             9  Ricciardo              15.0             16         1   ← constructor 9: pts_rank resets to 1
+   7 │             9  Ricciardo              12.0             17         2
+   8 │             9  Ricciardo              10.0             10         3</code></pre><p>Each <code>(constructorid, driverid__surname, points)</code> combination is one group after <code>GROUP BY 1, 2, 3</code>. <code>total_results</code> counts how many race entries produced that exact points value. The <code>HAVING</code> clause (generated by the second <code>.filter(&quot;total_results__@gt&quot; =&gt; 8)</code>) drops groups where that points value was scored 8 or fewer times. <code>pts_rank</code> is then computed inside each constructor&#39;s partition over the surviving rows — notice it resets from 5 back to 1 when the constructor changes at row 6.</p><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;constructorid&quot; as constructorid,
+    &quot;Tb_1&quot;.&quot;surname&quot; as driverid__surname,
+    &quot;Tb&quot;.&quot;points&quot; as points,
+    COUNT(&quot;Tb&quot;.&quot;resultid&quot;) as total_results,
+    RANK() OVER (PARTITION BY &quot;Tb&quot;.&quot;constructorid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC) as pts_rank
+FROM &quot;result&quot; as &quot;Tb&quot;
+  INNER JOIN &quot;driver&quot; AS &quot;Tb_1&quot; ON &quot;Tb&quot;.&quot;driverid&quot; = &quot;Tb_1&quot;.&quot;driverid&quot;
+WHERE &quot;Tb&quot;.&quot;driverid&quot; = ANY($1)
+  AND &quot;Tb&quot;.&quot;points&quot; &gt; $2
+GROUP BY 1, 2, 3
+HAVING COUNT(&quot;Tb&quot;.&quot;resultid&quot;) &gt; $3</code></pre><p>The second <code>.filter()</code> call after <code>.values()</code> targets a <code>Count</code> alias, so PormG promotes it to a <code>HAVING</code> clause rather than a <code>WHERE</code> clause.</p><div class="admonition is-warning" id="Warning-710c2d96a9f53224"><header class="admonition-header">Warning<a class="admonition-anchor" href="#Warning-710c2d96a9f53224" title="Permalink"></a></header><div class="admonition-body"><p><strong>Semantic trap:</strong> if the window <code>PARTITION BY</code> key matches the <code>GROUP BY</code> key exactly, each partition holds exactly one row after grouping — making <code>RANK()</code> always return <code>1</code>. Choose a partition key that differs from the grouping key, or use a subquery / CTE to apply the window after aggregation.</p></div></div><hr/><h2 id="Ordering-Results-by-a-Window-Alias"><a class="docs-heading-anchor" href="#Ordering-Results-by-a-Window-Alias">Ordering Results by a Window Alias</a><a id="Ordering-Results-by-a-Window-Alias-1"></a><a class="docs-heading-anchor-permalink" href="#Ordering-Results-by-a-Window-Alias" title="Permalink"></a></h2><p>Pass a window alias to <code>order_by()</code> exactly as you would any other alias:</p><pre><code class="language-julia hljs">query = M.Driver_standings.objects.filter(&quot;raceid__@lt&quot; =&gt; 3, &quot;points__@gt&quot; =&gt; 0).values(
+    &quot;raceid&quot;,
+    &quot;driverid&quot;,
+    &quot;points&quot;,
+    &quot;race_rank&quot; =&gt; Rank(over=WindowOver(partition_by=[&quot;raceid&quot;], order_by=[&quot;-points&quot;]))
+)
+query.order_by(&quot;driverid&quot;, &quot;race_rank&quot;)  # ← window alias used in ORDER BY
+df = query |&gt; DataFrame</code></pre><p>Result (PostgreSQL):</p><pre><code class="nohighlight hljs">19×4 DataFrame
+ Row │ raceid  driverid  points    race_rank
+     │ Int64?  Int64?    Float64?  Int64?
+─────┼───────────────────────────────────────
+   1 │      2         1       1.0         10
+   2 │      2         2       4.0          5
+   3 │      1         3       3.0          6
+   4 │      2         3       3.5          7
+   5 │      2         4       4.0          5
+   6 │      1         4       4.0          5
+   7 │      1         7       1.0          8
+   8 │      2         7       1.0         10
+   9 │      1        10       5.0          4
+  10 │      2        10       8.0          4
+  11 │      1        15       6.0          3
+  12 │      2        15       8.5          3
+  13 │      2        17       1.5          9
+  14 │      1        18      10.0          1
+  15 │      2        18      15.0          1
+  16 │      2        22      10.0          2
+  17 │      1        22       8.0          2
+  18 │      1        67       2.0          7
+  19 │      2        67       2.0          8</code></pre><p>The rows are sorted by <code>driverid</code> then <code>race_rank</code> — the window alias works as a plain sort key. Ranks are computed per <code>raceid</code> (partition restarts between races 1 and 2), and comparing the same driver across races shows the cumulative nature of <code>driver_standings</code>: driver 18 (Hamilton/Schumacher) holds rank 1 in both races but with different raw points (<code>10.0</code> in race 1, <code>15.0</code> in race 2).</p><p>Generated SQL (PostgreSQL):</p><pre><code class="language-sql hljs">SELECT
+    &quot;Tb&quot;.&quot;raceid&quot; as raceid,
+    &quot;Tb&quot;.&quot;driverid&quot; as driverid,
+    &quot;Tb&quot;.&quot;points&quot; as points,
+    RANK() OVER (PARTITION BY &quot;Tb&quot;.&quot;raceid&quot; ORDER BY &quot;Tb&quot;.&quot;points&quot; DESC) as race_rank
+FROM &quot;driver_standings&quot; as &quot;Tb&quot;
+WHERE &quot;Tb&quot;.&quot;raceid&quot; &lt; $1
+  AND &quot;Tb&quot;.&quot;points&quot; &gt; $2
+ORDER BY &quot;driverid&quot; ASC,
+  &quot;race_rank&quot; ASC</code></pre><p>PormG quotes the alias in <code>ORDER BY</code> and never adds it to <code>GROUP BY</code>.</p><hr/><h2 id="SQLite-Support"><a class="docs-heading-anchor" href="#SQLite-Support">SQLite Support</a><a id="SQLite-Support-1"></a><a class="docs-heading-anchor-permalink" href="#SQLite-Support" title="Permalink"></a></h2><p>All window functions work on SQLite <strong>3.25.0 and later</strong> (released 2018-09-15). PormG checks the SQLite library version at query time and throws a clear <code>ArgumentError</code> if the library is too old.</p><pre><code class="language-julia hljs"># SQLite version check happens automatically — you do not need to call it yourself.
+# If the library is too old, you will see:
+# ArgumentError: SQLite window functions require SQLite &gt;= 3.25.0; current SQLite library is 3.24.0.</code></pre><p>The only SQLite limitation is <strong>explicit frame specifications</strong> (<code>frame=</code> argument). These are PostgreSQL-only for now.</p><hr/><h2 id="Function-Reference"><a class="docs-heading-anchor" href="#Function-Reference">Function Reference</a><a id="Function-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#Function-Reference" title="Permalink"></a></h2><table><tr><th style="text-align: left">Function</th><th style="text-align: left">Arguments</th><th style="text-align: left">SQL</th></tr><tr><td style="text-align: left"><code>Rank(; over)</code></td><td style="text-align: left">—</td><td style="text-align: left"><code>RANK() OVER (...)</code></td></tr><tr><td style="text-align: left"><code>DenseRank(; over)</code></td><td style="text-align: left">—</td><td style="text-align: left"><code>DENSE_RANK() OVER (...)</code></td></tr><tr><td style="text-align: left"><code>RowNumber(; over)</code></td><td style="text-align: left">—</td><td style="text-align: left"><code>ROW_NUMBER() OVER (...)</code></td></tr><tr><td style="text-align: left"><code>Lag(col; offset=1, default=nothing, over)</code></td><td style="text-align: left">column, offset, default</td><td style="text-align: left"><code>LAG(col, offset, default) OVER (...)</code></td></tr><tr><td style="text-align: left"><code>Lead(col; offset=1, default=nothing, over)</code></td><td style="text-align: left">column, offset, default</td><td style="text-align: left"><code>LEAD(col, offset, default) OVER (...)</code></td></tr><tr><td style="text-align: left"><code>FirstValue(col; over)</code></td><td style="text-align: left">column</td><td style="text-align: left"><code>FIRST_VALUE(col) OVER (...)</code></td></tr><tr><td style="text-align: left"><code>LastValue(col; over)</code></td><td style="text-align: left">column</td><td style="text-align: left"><code>LAST_VALUE(col) OVER (...)</code></td></tr><tr><td style="text-align: left"><code>NthValue(col, n; over)</code></td><td style="text-align: left">column, integer n</td><td style="text-align: left"><code>NTH_VALUE(col, n) OVER (...)</code></td></tr></table><h3 id="Current-Limitations"><a class="docs-heading-anchor" href="#Current-Limitations">Current Limitations</a><a id="Current-Limitations-1"></a><a class="docs-heading-anchor-permalink" href="#Current-Limitations" title="Permalink"></a></h3><ul><li><strong>Aggregate-over-window</strong> (<code>SUM(...) OVER (...)</code>) is not yet implemented. Use a CTE to aggregate first, then apply the window in the outer query.</li><li><strong>Named <code>WINDOW</code> clauses</strong> (<code>WINDOW w AS (...)</code>) are not supported. Each function carries its own inline <code>OVER</code>.</li><li><strong>SQLite explicit frame specs</strong> throw <code>ArgumentError</code>. Use PostgreSQL for frame-bound queries.</li></ul><hr/><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><strong><a href="../field_expressions/">Field Expressions</a></strong> — <code>F()</code> arithmetic that composes with window results.</li><li><strong><a href="../subqueries_and_ctes/">Subqueries and CTEs</a></strong> — Wrap aggregated CTEs and apply window functions in the outer query.</li><li><strong><a href="../filters_and_aggregates/">Filters and Aggregates</a></strong> — Aggregate functions and <code>HAVING</code> clause details.</li></ul><script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+    startOnLoad: true,
+    theme: "neutral"
+});
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../field_expressions/">« Field Expressions</a><a class="docs-footer-nextpage" href="../q_objects/">Q Objects »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 27 July 2026 20:00">Monday 27 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

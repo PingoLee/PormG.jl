@@ -24,16 +24,32 @@ const TAXONOMY_TYPES = (
     PormG.QueryBuildError, PormG.UnsafeMutationError, PormG.InvalidValueError,
     PormG.PermissionError, PormG.UnsupportedConnectionError,
     PormG.DoesNotExist, PormG.MultipleObjectsReturned,
+    # #239 completion: schema, configuration and migration errors, plus the four
+    # pre-existing standalone types reparented under the taxonomy.
+    PormG.FieldValidationError, PormG.ModelDefinitionError,
+    PormG.InvalidConfigurationError, PormG.InvalidMigrationError,
+    PormG.PoolTimeoutError, PormG.PoolConnectError,
+    PormG.Configuration.MissingDatabaseConfigurationException,
+    PormG.Migrations.DestructiveMigrationError,
 )
 
-@testset "Error taxonomy (#231)" begin
+# The abstract mid-nodes. Each groups its concrete leaves so `catch <node>` has no holes.
+const TAXONOMY_ABSTRACT = (
+    PormG.FieldAccessError, PormG.ConfigurationError, PormG.MigrationError,
+)
+
+@testset "Error taxonomy (#231, #239)" begin
 
     @testset "root and hierarchy" begin
         @test PormG.PormGError <: Exception
-        @test PormG.FieldAccessError <: PormG.PormGError
         # every concrete subtype is under the root
         for T in TAXONOMY_TYPES
             @test T <: PormG.PormGError
+        end
+        # every abstract mid-node is under the root too
+        for T in TAXONOMY_ABSTRACT
+            @test T <: PormG.PormGError
+            @test isabstracttype(T)
         end
         # the field-access mid-node groups the two field-lookup errors, so
         # `catch FieldAccessError` catches both "no such field" and "no lazy traversal".
@@ -44,18 +60,42 @@ const TAXONOMY_TYPES = (
         @test PormG.MultipleObjectsReturned <: PormG.PormGError
     end
 
+    @testset "mid-nodes have no holes (#239)" begin
+        # ConfigurationError / MigrationError are abstract precisely so the pre-existing
+        # standalone types sit INSIDE the bucket rather than beside it. A user who writes
+        # `catch ConfigurationError` must not miss a missing connection.yml — that class of
+        # surprise is what this taxonomy exists to remove. Concrete buckets would have made
+        # these subtypings impossible ("can only subtype abstract types").
+        @test PormG.InvalidConfigurationError <: PormG.ConfigurationError
+        @test PormG.Configuration.MissingDatabaseConfigurationException <: PormG.ConfigurationError
+        @test PormG.InvalidMigrationError <: PormG.MigrationError
+        @test PormG.Migrations.DestructiveMigrationError <: PormG.MigrationError
+
+        # Reparented from bare `Exception` (#239) so `catch PormGError` covers the pool too.
+        @test PormG.PoolTimeoutError <: PormG.PormGError
+        @test PormG.PoolConnectError <: PormG.PormGError
+
+        # …and the buckets stay disjoint: a config error is not a migration error.
+        @test !(PormG.InvalidConfigurationError <: PormG.MigrationError)
+        @test !(PormG.InvalidMigrationError <: PormG.ConfigurationError)
+    end
+
     @testset "clean break — NOT <: ArgumentError" begin
         # The whole point of #231: callers stop catching ArgumentError. Pin the clean break
         # so a future accidental `PormGError <: ArgumentError` fails loudly here.
         for T in TAXONOMY_TYPES
             @test !(T <: ArgumentError)
         end
+        for T in TAXONOMY_ABSTRACT
+            @test !(T <: ArgumentError)
+        end
         @test !(PormG.PormGError <: ArgumentError)
-        @test !(PormG.FieldAccessError <: ArgumentError)
     end
 
     @testset "exported bare after `using PormG`" begin
-        # Each name resolves unqualified (exported) and points at the QueryBuilder binding.
+        # Each name resolves unqualified (exported) and points at the same binding. Since #239
+        # the types are defined in `Kernel`, and `QueryBuilder` imports them from `PormG` — so
+        # this also pins that there is exactly ONE set of types, not a shadowed second copy.
         @test PormGError === PormG.PormGError
         @test FieldAccessError === PormG.FieldAccessError
         @test UnknownFieldError === PormG.UnknownFieldError
@@ -66,6 +106,16 @@ const TAXONOMY_TYPES = (
         @test InvalidValueError === PormG.InvalidValueError
         @test PermissionError === PormG.PermissionError
         @test UnsupportedConnectionError === PormG.UnsupportedConnectionError
+        @test FieldValidationError === PormG.FieldValidationError
+        @test ModelDefinitionError === PormG.ModelDefinitionError
+        @test ConfigurationError === PormG.ConfigurationError
+        @test InvalidConfigurationError === PormG.InvalidConfigurationError
+        @test MigrationError === PormG.MigrationError
+        @test InvalidMigrationError === PormG.InvalidMigrationError
+
+        # QueryBuilder must see the SAME objects it imported, not redefinitions.
+        @test QB.QueryBuildError === PormG.QueryBuildError
+        @test QB.DoesNotExist === PormG.DoesNotExist
     end
 
     # A model with no connection is enough — every assertion below fires at

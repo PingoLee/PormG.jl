@@ -636,7 +636,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | `SQLTypeCTE` | Common Table Expression type. |
 | `PormGModel` | Base for model types. |
 | `PormGField` | Base for field type definitions. |
-| `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every query-builder misuse raises a subtype (see [Error taxonomy](#error-taxonomy)); `catch PormGError` catches them all. |
+| `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every PormG misuse — querying, model definition, configuration, migrations, the pool — raises a subtype (see [Error taxonomy](#error-taxonomy)); `catch PormGError` catches them all. |
 
 ---
 
@@ -653,11 +653,17 @@ scope — the SQL function constructors are *not* among them (see
 `PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`
 
 ### Error taxonomy
-Every query-builder misuse raises a subtype of `PormGError` (`<: Exception`) so callers can
-`catch` a **type** instead of matching on a message string. Catch `PormGError` for any
-query-builder failure, or a specific subtype for a specific reaction (#231):
+Every PormG misuse raises a subtype of `PormGError` (`<: Exception`) so callers can `catch` a
+**type** instead of matching on a message string. Catch `PormGError` for any PormG failure, or a
+specific subtype for a specific reaction (#231, completed in #239):
 
-`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `PermissionError`, `UnsupportedConnectionError`
+`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `PermissionError`, `UnsupportedConnectionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`
+
+!!! warning "These are not `ArgumentError`s"
+    The subtypes are deliberately **not** `<: ArgumentError`. A `catch ArgumentError` block around a
+    PormG call will not match — catch `PormGError` (or a specific subtype) instead.
+
+**Querying**
 
 | Type | Raised when |
 | :--- | :--- |
@@ -667,10 +673,36 @@ query-builder failure, or a specific subtype for a specific reaction (#231):
 | `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). |
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter (or another unsafe shape). |
-| `InvalidValueError` | A value failed coercion/type validation, an identifier failed the safety check, or an interval/duration could not be parsed. |
+| `InvalidValueError` | A **value** failed coercion/type validation on insert/update, an identifier failed the safety check, or an interval/duration could not be parsed. |
 | `PermissionError` | The connection is not permitted to insert/update/delete (`change_data=false`). |
-| `UnsupportedConnectionError` | A connection is neither PostgreSQL nor SQLite, or a model is not bound to a connection. |
-| `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. Both are `<: PormGError`. |
+| `UnsupportedConnectionError` | A connection is neither PostgreSQL nor SQLite, a model is not bound to a connection, or a lookup requires a backend this connection is not. |
+| `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. |
+
+**Defining models**
+
+| Type | Raised when |
+| :--- | :--- |
+| `FieldValidationError` | A field constructor got an invalid argument — a kwarg of the wrong type, an out-of-range `max_length`, a `default` that violates the field's own contract, or a field type that cannot be a primary key. |
+| `ModelDefinitionError` | A model/schema definition is invalid — more than one primary key, a duplicate `related_name`, an illegal field name, a `UniqueConstraint` naming an unknown field, or an unresolvable `ForeignKey` target. |
+
+`FieldValidationError` fires while *defining* a model; `InvalidValueError` fires while coercing a
+*value* on the insert/update path. That is the distinction between the two.
+
+**Configuration and migrations**
+
+| Type | Raised when |
+| :--- | :--- |
+| `ConfigurationError` *(abstract)* | Umbrella for connection-configuration failures — `catch` it to get both cases below. |
+| `InvalidConfigurationError` | Configuration is present but unusable — unsupported adapter, unknown connection key, malformed `extensions`, or an attempt to overwrite a static connection. |
+| `MissingDatabaseConfigurationException` | No configuration folder / `connection.yml`, or the selected environment has no matching block. |
+| `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get both cases below. |
+| `InvalidMigrationError` | A duplicate index name in a plan, an invalid answer to an interactive `makemigrations` prompt, or an unimplemented `migrate_to(version)` path. |
+| `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`. |
+| `PoolTimeoutError` / `PoolConnectError` | The pool is saturated / a physical connection could not be opened. |
+
+The two abstract umbrellas exist so the buckets have **no holes**: `catch ConfigurationError` also
+catches a missing `connection.yml`, and `catch MigrationError` also catches a refused destructive
+migration.
 
 ```julia
 try
@@ -678,6 +710,19 @@ try
 catch e
     e isa PormG.UnsafeMutationError && @warn "add a filter before update()"
     e isa PormG.PermissionError    && @warn "this connection is read-only"
+    rethrow(e)
+end
+```
+
+Reacting to a whole category — the umbrellas make one `catch` enough:
+
+```julia
+try
+    PormG.Configuration.load("db_2")
+    PormG.Migrations.migrate("db_2")
+catch e
+    e isa PormG.ConfigurationError && @error "check connection.yml" exception=e
+    e isa PormG.MigrationError     && @error "migration refused"    exception=e
     rethrow(e)
 end
 ```

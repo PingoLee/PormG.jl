@@ -108,8 +108,12 @@ Raised when a migration containing destructive operations (DROP TABLE, DROP COLU
 **non-interactive** context (no TTY, or `interactive=false`) without `destructive=true`. Failing loudly
 here means CI, `Pkg.test`, and deploy scripts break with an actionable message instead of hanging on
 `readline()` or silently skipping the migration.
+
+Reparented from `Exception` to `MigrationError <: PormGError` (#239). Catching
+`DestructiveMigrationError` specifically is unaffected; it is merely ALSO catchable as
+`MigrationError` / `PormGError`. It keeps its own `showerror` (a more specific method wins).
 """
-struct DestructiveMigrationError <: Exception
+struct DestructiveMigrationError <: MigrationError
   msg::String
   statements::Vector{String}
 end

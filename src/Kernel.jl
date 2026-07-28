@@ -124,6 +124,14 @@ even when the process itself is attached to a color terminal.
 _emsg(io::IO, msg::AbstractString) = _emsg(msg; color = get(io, :color, false))
 
 #═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Error taxonomy
+#
+# Must follow `_emsg` above — every subtype's inner constructor calls it.
+#═══════════════════════════════════════════════════════════════════════════════
+
+include("exceptions.jl")
+
+#═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Constants
 #═══════════════════════════════════════════════════════════════════════════════
 
@@ -145,7 +153,18 @@ export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLit
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
        SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE,
-       PormGModel, PormGField, Migration, PormGError
+       PormGModel, PormGField, Migration
+
+# Error taxonomy (#231, #239) — root, the query-builder subtypes, and the schema/config/migration
+# subtypes. `PormGError` first so `catch PormGError` is the one name a caller has to remember.
+export PormGError,
+       FieldAccessError, UnknownFieldError, LazyTraversalError,
+       FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError,
+       PermissionError, UnsupportedConnectionError,
+       DoesNotExist, MultipleObjectsReturned,
+       FieldValidationError, ModelDefinitionError,
+       ConfigurationError, InvalidConfigurationError,
+       MigrationError, InvalidMigrationError
 
 # Shared state / generics
 export config, get_constraints_pk, get_constraints_unique, get_constraints_check

@@ -156,7 +156,8 @@ The bullets below are permanent baselines, not an exhaustive list — Review Met
 - Flag docs or examples that regress to generic domains instead of Formula 1 scenarios
 - When a new subsystem file appears in `src/` that is not yet listed in `general.instructions.md`, flag it as an architecture-checkpoint gap
 - Flag any reintroduction of silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")` before quoting) — the correct contract is fail-closed: `_validate_identifier` throws on invalid input and never silently rewrites identifiers
-- Flag raw ANSI escape codes (`\e[`) embedded in `throw(...)` / `error(...)` messages — these must route through `_argerr` / `_emsg` (`src/querybuilder/exceptions.jl`) so color degrades off-TTY; `@info`/`@warn`/`@error` logging may keep ANSI
+- Flag raw ANSI escape codes (`\e[`) embedded in `throw(...)` / `error(...)` messages — these must route through a taxonomy subtype's constructor or `_emsg` (both in `src/exceptions.jl` / `src/Kernel.jl`) so color degrades off-TTY; `@info`/`@warn`/`@error` logging may keep ANSI
+- Flag any new `throw(ArgumentError(...))` in `src/` — since #239 every PormG domain error is a `PormGError` subtype. `ArgumentError` is correct **only** for Julia-level API misuse (a missing kwarg, a missing path), not for a field, model, config, query, or migration problem
 
 ## After Reporting Findings
 

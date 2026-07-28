@@ -20,7 +20,8 @@ import PormG.Configuration: get_settings
 using Logging
 
 import PormG: @pormg_debug
-import PormG: _emsg  # shared TTY-aware error/log-message strip helper (tools.jl)
+import PormG: _emsg  # shared TTY-aware error/log-message strip helper (Kernel)
+import PormG: MigrationError, InvalidMigrationError  # semantic error taxonomy (#239); defined in Kernel
 
 import PormG: Models, Migration, Dialect
 import PormG.Models: format_model_name

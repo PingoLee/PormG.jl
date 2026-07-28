@@ -2,6 +2,7 @@ module Configuration
 
 import YAML, Logging
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
+import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: Generator
 import PormG: @pormg_debug
@@ -72,7 +73,11 @@ const TEST  = "test"
 # yaml. Typed so callers can `catch e; e isa MissingDatabaseConfigurationException`. Previously the
 # "no matching block" path referenced this name without defining it, so it threw an `UndefVarError`
 # instead of the intended message.
-struct MissingDatabaseConfigurationException <: Exception
+#
+# Reparented from `Exception` to `ConfigurationError <: PormGError` (#239): catching the specific
+# type still works, it is merely ALSO catchable as `ConfigurationError` / `PormGError`. It keeps
+# its own `showerror` below (a more specific method wins over the taxonomy's shared one).
+struct MissingDatabaseConfigurationException <: ConfigurationError
   msg::String
 end
 Base.showerror(io::IO, e::MissingDatabaseConfigurationException) =

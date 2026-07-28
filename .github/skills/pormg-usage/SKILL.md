@@ -385,7 +385,12 @@ df = M.Driver.objects.filter("driverref" => "hamilton").
     values("Surname" => "surname", "localização" => "nationality") |> DataFrame
 ```
 
-Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases with spaces or punctuation throw `ArgumentError` at query-build time — they are never silently mangled.
+Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases with spaces or punctuation throw `InvalidValueError` (a `PormGError`) when the query is **rendered** — on `list()`, `inspect_query`, or `show_query=:sql`, not at `values(...)` time. They are never silently mangled.
+
+!!! warning "Do not catch `ArgumentError` around PormG calls"
+    PormG raises typed `PormGError` subtypes, and they are deliberately **not** `<: ArgumentError`.
+    `catch ArgumentError` will not match. Catch `PormGError` for any PormG failure, or a specific
+    subtype (`InvalidValueError`, `UnknownFieldError`, `UnsafeMutationError`, …) to react precisely.
 
 ---
 

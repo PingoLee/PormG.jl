@@ -7,6 +7,7 @@ import Logging
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: @pormg_debug
+import PormG: PormGError  # semantic error taxonomy (#239); the pool errors are reparented under it
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
@@ -53,8 +54,11 @@ Thrown by `acquire_connection` when no connection becomes available within the r
 i.e. the pool is saturated at its ceiling (`pool_size * POOL_EXPANSION_FACTOR`). It is a catchable
 `Exception` (apps can e.g. translate it to a 503 / back off and retry). Remedy: raise `pool_size` in
 `connection.yml`.
+
+Reparented from `Exception` to `PormGError` (#239), so `catch PormGError` covers connection
+saturation too. Catching `PoolTimeoutError` specifically is unaffected.
 """
-struct PoolTimeoutError <: Exception
+struct PoolTimeoutError <: PormGError
   adapter::String        # "PostgreSQL" | "SQLite"
   pool_size::Int
   max_size::Int
@@ -75,8 +79,11 @@ connection string (wrong password, missing role/database, an unopenable SQLite p
 `PoolTimeoutError` (a healthy pool that is merely saturated): the remedy here is to fix credentials /
 host / database, not to raise `pool_size` (#72). Carries the underlying driver exception (`cause`) and a
 redacted connection string; catchable so apps can translate it distinctly (e.g. a 500, not a 503-retry).
+
+Reparented from `Exception` to `PormGError` (#239), so `catch PormGError` covers connection failures
+too. Catching `PoolConnectError` specifically is unaffected.
 """
-struct PoolConnectError <: Exception
+struct PoolConnectError <: PormGError
   adapter::String        # "PostgreSQL" | "SQLite"
   cause                  # underlying driver exception (untyped: a driver may throw a non-Exception)
   connection::String     # redacted connection string

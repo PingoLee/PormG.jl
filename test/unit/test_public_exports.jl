@@ -23,6 +23,11 @@ const EXPECTED_TOPLEVEL = Set([
     # Semantic error taxonomy (#231): PormGError root + query-builder subtypes
     :PormGError, :FieldAccessError, :UnknownFieldError, :LazyTraversalError, :FilterError,
     :QueryBuildError, :UnsafeMutationError, :InvalidValueError, :PermissionError, :UnsupportedConnectionError,
+    # Taxonomy completion (#239): schema, configuration and migration errors. ConfigurationError
+    # and MigrationError are abstract umbrellas (like FieldAccessError).
+    :FieldValidationError, :ModelDefinitionError,
+    :ConfigurationError, :InvalidConfigurationError,
+    :MigrationError, :InvalidMigrationError,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
     # Async API

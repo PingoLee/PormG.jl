@@ -104,10 +104,10 @@ include("QueryBuilder.jl")
 # Query primitives only. The SQL function constructors are NOT imported into PormG — they
 # live solely in `PormG.Functions` (below). There is intentionally no `PormG.Sum`: the
 # function library has exactly one home, reached via `using PormG.Functions` / `PormG.Functions.X`.
-import .QueryBuilder: object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
-# Semantic error taxonomy concrete subtypes (#231); the abstract `PormGError` root is defined
-# above in this module. Bridge the QueryBuilder-defined subtypes up so `using PormG` exposes them.
-import .QueryBuilder: FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
+import .QueryBuilder: object, get, PormGRow, pk, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+# The error taxonomy needs no bridge line: since #239 every subtype (including `DoesNotExist` /
+# `MultipleObjectsReturned`) is defined in `Kernel` and already bound here by `using .Kernel` above.
+# QueryBuilder imports the same names from `PormG`, so both modules see one set of types.
 
 """
     PormG.Functions
@@ -142,6 +142,12 @@ end
 export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 # Semantic error taxonomy (#231): catch `PormGError` for any query-builder misuse, or a specific subtype.
 export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
+# Schema / configuration / migration errors (#239). These complete the taxonomy: `catch PormGError`
+# now covers field-constructor and model-definition mistakes, connection config, and the migration
+# engine — not just the query builder.
+export FieldValidationError, ModelDefinitionError,
+  ConfigurationError, InvalidConfigurationError,   # ConfigurationError is the abstract umbrella
+  MigrationError, InvalidMigrationError            # MigrationError likewise
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)

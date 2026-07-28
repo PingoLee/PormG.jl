@@ -7,7 +7,12 @@ import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_sym
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
-import PormG: PormGError  # root of the semantic error taxonomy (#231); concrete subtypes in querybuilder/exceptions.jl
+# Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
+# `Kernel` (layer 1) so every subsystem can reach them; only the throw funnels (`_argerr`,
+# `_unsupported_conn`, `_write_not_allowed`) still live in `querybuilder/exceptions.jl`.
+import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
+  QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError,
+  DoesNotExist, MultipleObjectsReturned
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)

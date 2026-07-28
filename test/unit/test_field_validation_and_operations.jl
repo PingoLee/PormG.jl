@@ -68,11 +68,11 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
 
     @testset "Constructor Hardening" begin
         # Decimal places > max_digits should fail at construction
-        @test_throws ArgumentError Models.DecimalField(max_digits=5, decimal_places=6)
+        @test_throws PormG.FieldValidationError Models.DecimalField(max_digits=5, decimal_places=6)
         
         # primary_key=true should fail at construction for both
-        @test_throws ArgumentError Models.DecimalField(primary_key=true)
-        @test_throws ArgumentError Models.FloatField(primary_key=true)
+        @test_throws PormG.FieldValidationError Models.DecimalField(primary_key=true)
+        @test_throws PormG.FieldValidationError Models.FloatField(primary_key=true)
         
         # FloatField default should now use format2float64 logic (more robust)
         f_field = Models.FloatField(default="123.45")

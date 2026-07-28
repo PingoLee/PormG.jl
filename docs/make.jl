@@ -25,10 +25,12 @@ makedocs(
     
     pages = [
         "Home" => "index.md",
-        "Models" => "models.md",
-        "Fields" => "fields.md",
-        "Schema Conventions" => "schema_conventions.md",
-        "Many-to-Many" => "many_to_many.md",
+        "Data Modeling" => [
+            "Models" => "models.md",
+            "Fields" => "fields.md",
+            "Schema Conventions" => "schema_conventions.md",
+            "Many-to-Many" => "many_to_many.md",
+        ],
         "Configuration" => [
             "Overview" => "configuration/index.md",
             "Setup" => "configuration/setup.md",
@@ -36,7 +38,7 @@ makedocs(
             "Server Patterns" => "configuration/server.md",
             "Dynamic & Multi-Tenancy" => "configuration/dynamic.md",
             "Advanced" => "configuration/advanced.md",
-        ],        
+        ],
         "Migrations" => [
             "Overview" => "migrations/index.md",
             "Workflow" => "migrations/workflow.md",
@@ -62,14 +64,17 @@ makedocs(
             "Window Functions" => "read/window_functions.md",
             "Q Objects" => "read/q_objects.md",
         ],
-        "Import from Django" => "import_django.md",
-
-        "PostgreSQL Guide" => "postgres.md",
-        "Async & Concurrency" => "async.md",
-        "Architecture" => "architecture.md",
-        "Advisory Locks" => "advisory_lock.md",
-        "Extending PormG" => "extending.md",
-        "Contributing" => "contributing.md",
+        "Guides" => [
+            "PostgreSQL Guide" => "postgres.md",
+            "Async & Concurrency" => "async.md",
+            "Advisory Locks" => "advisory_lock.md",
+            "Import from Django" => "import_django.md",
+        ],
+        "Internals" => [
+            "Architecture" => "architecture.md",
+            "Extending PormG" => "extending.md",
+            "Contributing" => "contributing.md",
+        ],
         "API" => "api.md"
     ],
     
@@ -81,6 +86,12 @@ makedocs(
         # Canonical: Defines the official URL for Google to avoid duplicate content
         canonical = "https://pingolee.github.io/PormG.jl",
         
+        # collapselevel = 1: every top-level section (Configuration, Migrations, Reading, ...)
+        # renders as a collapsed, chevron-toggled group instead of dumping all ~30 child pages
+        # into the sidebar at once. Documenter auto-expands the section containing the current
+        # page, so navigation stays one click deep.
+        collapselevel = 1,
+
         assets = String[],
         size_threshold = 600 * 1024, # api.md is one comprehensive auto-generated page (~340 KiB); headroom for growth
     ),

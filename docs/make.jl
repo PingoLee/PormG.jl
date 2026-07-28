@@ -12,6 +12,7 @@ makedocs(
     
     modules = [
         PormG,
+        PormG.Kernel,
         PormG.Functions,
         PormG.QueryBuilder,
         PormG.Models,

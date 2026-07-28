@@ -769,6 +769,7 @@ The following section contains auto-generated documentation from docstrings in t
 ```@autodocs
 Modules = [
     PormG,
+    PormG.Kernel,
     PormG.Functions,
     PormG.QueryBuilder,
     PormG.Models,

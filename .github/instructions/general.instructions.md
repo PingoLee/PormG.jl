@@ -58,10 +58,15 @@ Cross-cutting changes: public-API skill + the most specific subsystem skill. Rev
 
 The subsystem map below is also the review **architecture checkpoint**: when a new subsystem file appears in `src/` that is not listed here, flag it and add it.
 
+**Layering (enforced by include order in `src/PormG.jl`).** `Kernel` is layer 1 and imports nothing from `PormG`; `Backend.jl` is layer 2 (behavior `PormG` must own — see below); the submodules are layer 3; `tools.jl` is layer 4. Shared vocabulary — an abstract type, a constant, an exception type — belongs in `Kernel`, **not** part-way down the chain, or the submodules included before it cannot name it. That is not hypothetical: the #231 error taxonomy was defined at include step 11, which is why `Models`/`Configuration`/`Dialect` could not use a single one of its types (#239).
+
+`Backend.jl` stays in `PormG` on purpose. The weakdep extensions define `PormG.backend_execute(…) = …`, and Julia only accepts a qualified method definition on the module that *owns* the binding — moving those generics into `Kernel` breaks every extension method, and it fails at `using LibPQ` / `using SQLite`, not at `using PormG`, so precompiling the package does not catch it. **Kernel holds the nouns; `PormG` keeps the verbs.**
+
 | Path | Role |
 |------|------|
-| `src/PormG.jl` | Package root (config, models, QueryBuilder, dialects, migrations) |
-| `src/Configuration.jl`, `src/constants.jl` | Config, `DB_PATH`, `PORMG_ENV`, transactions |
+| `src/PormG.jl` | Package root — include chain and the public `export` surface |
+| `src/Kernel.jl`, `src/constants.jl` | Layer 1: shared vocabulary — abstract types, constants, `PormGError` root, `_emsg`, `config`. Imports nothing from `PormG` |
+| `src/Configuration.jl` | Config, `DB_PATH`, `PORMG_ENV`, transactions |
 | `src/ConnectionPool.jl` | `fetch`, pool lock, transaction context (driver-agnostic; untyped connection storage) |
 | `src/Backend.jl`, `ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl` | Backend interface: `backend_*` generics + friendly fallbacks; driver bodies live in the weakdep extensions (`LibPQ`/`SQLite`). Core never names a concrete driver type |
 | `src/Models.jl`, `src/models/` | Models and fields |

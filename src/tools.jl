@@ -1,33 +1,10 @@
 
-"""
-    _emsg(msg; color = (Base.have_color === true))
-
-TTY-aware error-message colorizer. Many PormG error strings embed ANSI SGR codes
-(`\\e[31m…\\e[0m`) to highlight the offending token in the REPL. Those codes are
-helpful on a color terminal but leak as raw `\\e[..m` noise into non-TTY sinks
-(CI output, file logs, `sprint(showerror, e)`, structured logging).
-
-`_emsg` keeps the codes when `color` is true and strips every `\\e[..m` sequence
-otherwise. The default tracks `Base.have_color` — the same flag Julia consults to
-colorize its own error displays, so it honors the `--color` flag and `NO_COLOR`.
-The `color` keyword exists so tests can exercise both branches deterministically.
-
-This is the single shared definition; `QueryBuilder` (`_argerr`) and `Models` both
-import it rather than re-embedding the strip logic.
-"""
-_emsg(msg::AbstractString; color::Bool = (Base.have_color === true)) =
-  color ? String(msg) : replace(msg, r"\e\[[0-9;]*m" => "")
-
-"""
-    _emsg(io, msg)
-
-IO-aware variant of [`_emsg`](@ref) for use inside `show` / `print(io, …)` methods:
-it keeps ANSI only when the destination stream advertises color via its `:color`
-IOContext property. This is the correct signal for rendered output, because a
-non-color buffer (`sprint`, `repr`, a captured string, a file) must stay ANSI-free
-even when the process itself is attached to a color terminal.
-"""
-_emsg(io::IO, msg::AbstractString) = _emsg(msg; color = get(io, :color, false))
+# User-facing lifecycle helpers: `setup`, `install_ai_skills`, `upgrade_guide`. Included last in
+# PormG.jl — this file consumes the layers above and nothing depends on it.
+#
+# `_emsg` used to live here, which forced this file to be included before Models/QueryBuilder even
+# though nothing else in it is infrastructure. It now lives in `Kernel`, next to the `PormGError`
+# root — the error types whose constructors call it need it available from layer 1.
 
 """
     setup(path::String = DB_PATH)

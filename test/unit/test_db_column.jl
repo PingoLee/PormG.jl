@@ -394,10 +394,10 @@ end
     @test rfk(r65_orphan_b.fields["ref"], "ref", "r65_orphan_b", mod; strict=false) === nothing
     @test r65_orphan_b.fields["ref"].to == "R65NoSuch"
     @test r65_orphan_b.fields["ref"].pk_field === nothing
-    #  strict: throws ArgumentError naming the target, the field, and the model — and does NOT write back
+    #  strict: throws ModelDefinitionError naming the target, the field, and the model — and does NOT write back
     #  (the message must still name the originally-declared string, so the throw precedes the write-back).
     err = try; rfk(r65_orphan_s.fields["ref"], "ref", "r65_orphan_s", mod; strict=true); nothing; catch e; e; end
-    @test err isa ArgumentError
+    @test err isa PormG.ModelDefinitionError
     @test occursin("R65NoSuch", err.msg) && occursin("field ref", err.msg) && occursin("model r65_orphan_s", err.msg)
     @test r65_orphan_s.fields["ref"].to == "R65NoSuch"                   # strict throw did NOT mutate the field
   end

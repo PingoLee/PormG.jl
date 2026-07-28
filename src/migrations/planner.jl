@@ -215,7 +215,7 @@ function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migrat
     index_name = c.name === nothing ? "$(table)_$(join(cols, "_"))_uniq" : c.name
     # The step label (and thus the plan slot) keys on index_name; a collision — same explicit
     # name, or two constraints deriving the same name — would silently overwrite. Fail loudly.
-    index_name in seen && throw(ArgumentError(
+    index_name in seen && throw(InvalidMigrationError(
       "Duplicate unique-constraint index name '$(index_name)' on table '$(table)'; " *
       "give each UniqueConstraint a distinct name"))
     push!(seen, index_name)
@@ -437,7 +437,7 @@ function _resolve_table_fields(
           response_idx = parse(Int, response)
           old_field_sym = colect_numbered[response_idx]          
         catch e
-          throw(ArgumentError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
+          throw(InvalidMigrationError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
         end
         old_field_name = old_field_sym |> string
         new_field = current_model.fields[current_fields_map[field_name]]
@@ -665,7 +665,7 @@ for (model_name, model) in current_schema
               res_idx = parse(Int, response)
               old_model_name = dict_rename[res_idx]
             catch
-              throw(ArgumentError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
+              throw(InvalidMigrationError("Invalid choice \"$(response)\" — enter one of the listed option numbers; please try makemigrations again"))
             end
             # first i need to alter the fields from old table named in postgres
             _alter_table_fields(conn, migration_plan, old_model_name, futher_processing[:drop_table][old_model_name]["model"], current_schema, settings, interactive=interactive)

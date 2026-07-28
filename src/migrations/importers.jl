@@ -49,7 +49,7 @@ function import_models_from_sqlite(db::String = "db";
   # output folder comes from the resolved connection's settings — never a hardcoded path.
   settings = Configuration.get_settings(db)
   conn = settings.connections
-  conn isa PormGSQLite || throw(ArgumentError(
+  conn isa PormGSQLite || throw(UnsupportedConnectionError(
     "Connection '$(db)' is not a SQLite connection (got $(typeof(conn))). Use import_models_from_postgres for PostgreSQL."))
   model_path = settings.db_def_folder
 
@@ -550,7 +550,7 @@ function parse_choices(choices_str::AbstractString)
           value = strip(values[2])
           choices = (choices..., (key, value))
       else
-          throw(ArgumentError("Invalid choices format"))
+          throw(InvalidMigrationError("Invalid choices format"))
       end
   end
   return choices

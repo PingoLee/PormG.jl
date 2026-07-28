@@ -63,8 +63,8 @@ end
         end
 
         @testset "Construction rejects invalid default" begin
-            @test_throws ArgumentError Models.UUIDField(default="not-a-uuid")
-            @test_throws ArgumentError Models.UUIDField(default="12345")
+            @test_throws PormG.FieldValidationError Models.UUIDField(default="not-a-uuid")
+            @test_throws PormG.FieldValidationError Models.UUIDField(default="12345")
         end
 
         @testset "format_uuid_sql" begin
@@ -83,9 +83,9 @@ end
             @test Models.format_uuid_sql(missing) === missing
 
             # Invalid format
-            @test_throws ArgumentError Models.format_uuid_sql("not-a-uuid")
-            @test_throws ArgumentError Models.format_uuid_sql("550e8400-e29b-41d4-a716")
-            @test_throws ArgumentError Models.format_uuid_sql(42)
+            @test_throws PormG.InvalidValueError Models.format_uuid_sql("not-a-uuid")
+            @test_throws PormG.InvalidValueError Models.format_uuid_sql("550e8400-e29b-41d4-a716")
+            @test_throws PormG.InvalidValueError Models.format_uuid_sql(42)
         end
 
         @testset "validate_field_data with UUIDField" begin
@@ -220,7 +220,7 @@ end
         end
 
         @testset "Construction rejects invalid default" begin
-            @test_throws ArgumentError Models.JSONField(default="{invalid json")
+            @test_throws PormG.FieldValidationError Models.JSONField(default="{invalid json")
         end
 
         @testset "format_json_sql" begin
@@ -248,10 +248,10 @@ end
             @test Models.format_json_sql(missing) === missing
 
             # Invalid JSON string
-            @test_throws ArgumentError Models.format_json_sql("{invalid}")
+            @test_throws PormG.InvalidValueError Models.format_json_sql("{invalid}")
 
             # Unsupported type
-            @test_throws ArgumentError Models.format_json_sql(r"regex")
+            @test_throws PormG.InvalidValueError Models.format_json_sql(r"regex")
         end
 
         @testset "validate_field_data with JSONField" begin

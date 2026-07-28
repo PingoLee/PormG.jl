@@ -121,13 +121,13 @@ end
 
   # Renderer guards (PR 2 will call it directly, so they must hold without the
   # bulk_insert normalization in front).
-  @test_throws ArgumentError PormG.Dialect.on_conflict_clause(:merge, ["\"id\""], String[], MockPgConflict())
-  @test_throws ArgumentError PormG.Dialect.on_conflict_clause(:update, String[], ["\"co_cbo\""], MockPgConflict())
-  @test_throws ArgumentError PormG.Dialect.on_conflict_clause(:update, ["\"id\""], String[], MockPgConflict())
+  @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:merge, ["\"id\""], String[], MockPgConflict())
+  @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:update, String[], ["\"co_cbo\""], MockPgConflict())
+  @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:update, ["\"id\""], String[], MockPgConflict())
 end
 
 # Runs bulk_insert with :dict (validation fires before any DB call) and hands
-# back the ArgumentError message for assertion.
+# back the QueryBuildError message for assertion.
 function _cbo_error(on_conflict; kwargs...)
   err = try
     PormG.QueryBuilder.bulk_insert(ConflictCbo, CBO_DF_123;

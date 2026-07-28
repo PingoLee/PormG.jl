@@ -5,7 +5,7 @@ Unit coverage for the schema importers' connection-key resolution contract.
 symmetric with `import_models_from_postgres`, instead of a connection object. This file
 pins the resulting contract:
 
-  - a missing/unregistered key fails closed with a clear `ArgumentError` (no silent
+  - a missing/unregistered key fails closed with a clear `InvalidConfigurationError` (no silent
     `MODEL_PATH` fallback, and no confusing downstream `MethodError`),
   - a key bound to a non-SQLite connection is rejected explicitly by the dialect guard,
   - the generated model file lands in the *resolved connection's* `db_def_folder` — the
@@ -30,12 +30,12 @@ end
 @testset "Schema importers — connection key resolution" begin
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 1. An unregistered key fails closed: get_settings raises a clear ArgumentError
+  # 1. An unregistered key fails closed: get_settings raises a clear InvalidConfigurationError
   #    rather than returning nothing (which previously deferred the failure into a
   #    confusing MethodError on `settings === nothing`).
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "unregistered key throws ArgumentError" begin
-    @test_throws ArgumentError PormG.Migrations.import_models_from_sqlite("totally_unregistered_importer_key_xyz")
+  @testset "unregistered key throws InvalidConfigurationError" begin
+    @test_throws PormG.InvalidConfigurationError PormG.Migrations.import_models_from_sqlite("totally_unregistered_importer_key_xyz")
   end
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ end
       db_def_folder = mktempdir(),
     )
     try
-      @test_throws ArgumentError PormG.Migrations.import_models_from_sqlite(key)
+      @test_throws PormG.UnsupportedConnectionError PormG.Migrations.import_models_from_sqlite(key)
     finally
       delete!(PormG.config, key)
     end

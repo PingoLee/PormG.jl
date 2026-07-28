@@ -6,7 +6,16 @@ using UUIDs
 import JSON
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
-import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
+import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
+# Semantic error taxonomy (#239). Models raises TWO different categories, and the split is by
+# *when* the failure happens, not by which file the helper lives in:
+#   ModelDefinitionError — defining a model/schema (Model, add_field!, UniqueConstraint,
+#                          set_models, FK/M2M resolution).
+#   InvalidValueError    — coercing a VALUE (the format_*_sql family), reached from
+#                          querybuilder/sanitization.jl on the insert/update path.
+#   FieldValidationError — `validate_default`, which despite living here is called only from
+#                          field constructors in src/models/fields.jl to check a `default=` kwarg.
+import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
 using Printf
@@ -145,7 +154,7 @@ function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
   elseif length(fields) == 0
     return nothing  
   else
-    throw(ArgumentError("The model $(model.name) has more than one primary key field: $(join(fields, ", "))"))
+    throw(ModelDefinitionError("The model $(model.name) has more than one primary key field: $(join(fields, ", "))"))
   end
 end
 
@@ -237,7 +246,7 @@ function set_models(_module::Module, path::String)::Nothing
             @info("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
           end
           if haskey(field_to.related_objects, field.related_name)
-            throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
+            throw(ModelDefinitionError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
           else
             field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, get_model_name(model, settings), get_model_pk_field(model) |> Symbol)
           end
@@ -248,7 +257,7 @@ function set_models(_module::Module, path::String)::Nothing
             field_to.related_objects[model_name |> string] = (field_name |> Symbol, field.pk_field |> Symbol, model_name |> Symbol, get_model_pk_field(model) |> Symbol)
           else
             if haskey(field_to.related_objects, field.related_name)
-              throw(ArgumentError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
+              throw(ModelDefinitionError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
             else
               field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model_name, get_model_pk_field(model) |> Symbol)
             end
@@ -399,7 +408,7 @@ function format_fild_name(name::String)::String
   name[1] == '_' && (name = name[2:end])
   isempty(name) && return name
   if occursin(r"__|@|^_", name)
-    throw(ArgumentError("The field name $name contains __ or @ or starts with _; this is not allowed"))
+    throw(ModelDefinitionError("The field name $name contains __ or @ or starts with _; this is not allowed"))
   end
   return name
 end
@@ -488,7 +497,7 @@ function resolve_fk_target!(field, field_name::AbstractString,
                             model_name::AbstractString, lookup::Module; strict::Bool)::Union{PormGModel, Nothing}
   resolved = _resolve_target_model(field.to, lookup)
   if resolved === nothing
-    strict && throw(ArgumentError("The model $(field.to) in the field $field_name in the model $model_name is not defined"))
+    strict && throw(ModelDefinitionError("The model $(field.to) in the field $field_name in the model $model_name is not defined"))
     @debug "makemigrations: FK target $(field.to) of field $field_name in model $model_name is not a model binding in the models module; leaving as a string"
     return nothing
   end
@@ -539,13 +548,13 @@ struct UniqueConstraint
 end
 function UniqueConstraint(; fields, name::Union{AbstractString, Nothing} = nothing)
   cols = _normalize_constraint_fields(fields)
-  isempty(cols) && throw(ArgumentError("UniqueConstraint requires at least one field"))
+  isempty(cols) && throw(ModelDefinitionError("UniqueConstraint requires at least one field"))
   length(unique(cols)) == length(cols) ||
-    throw(ArgumentError("UniqueConstraint has duplicate fields: $(cols)"))
+    throw(ModelDefinitionError("UniqueConstraint has duplicate fields: $(cols)"))
   # A blank name would render as an empty (invalid) index identifier; require nothing (auto-derive)
   # or a real name.
   name !== nothing && isempty(strip(name)) &&
-    throw(ArgumentError("UniqueConstraint name must be non-empty (pass name=nothing to auto-derive)"))
+    throw(ModelDefinitionError("UniqueConstraint name must be non-empty (pass name=nothing to auto-derive)"))
   return UniqueConstraint(cols, name === nothing ? nothing : String(name))
 end
 
@@ -558,7 +567,7 @@ function _normalize_constraint_fields(f)::Vector{String}
   out = String[]
   for x in f
     (x isa Symbol || x isa AbstractString) ||
-      throw(ArgumentError("UniqueConstraint fields must be Symbol or String, got $(typeof(x))"))
+      throw(ModelDefinitionError("UniqueConstraint fields must be Symbol or String, got $(typeof(x))"))
     push!(out, format_fild_name(String(x)))
   end
   return out
@@ -572,7 +581,7 @@ function _as_constraint_vector(cs)::Vector{UniqueConstraint}
   out = UniqueConstraint[]
   for c in cs
     c isa UniqueConstraint ||
-      throw(ArgumentError("`constraints` must contain UniqueConstraint objects, got $(typeof(c))"))
+      throw(ModelDefinitionError("`constraints` must contain UniqueConstraint objects, got $(typeof(c))"))
     push!(out, c)
   end
   return out
@@ -589,17 +598,17 @@ function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
   seen_names = Set{String}()
   for c in list
     for fname in c.fields
-      haskey(model.fields, fname) || throw(ArgumentError(
+      haskey(model.fields, fname) || throw(ModelDefinitionError(
         "UniqueConstraint references unknown field '$(fname)' on model '$(model.name)'. " *
         "Declared fields: $(sort(collect(keys(model.fields))))"))
-      is_many_to_many_field(model.fields[fname]) && throw(ArgumentError(
+      is_many_to_many_field(model.fields[fname]) && throw(ModelDefinitionError(
         "UniqueConstraint field '$(fname)' on model '$(model.name)' is a ManyToManyField; " *
         "composite uniqueness must reference concrete columns"))
     end
     # Two constraints sharing an explicit name collide into one index (the plan keys on the name);
     # reject it here for a clear, early error instead of a silent drop at planning time.
     if c.name !== nothing
-      c.name in seen_names && throw(ArgumentError(
+      c.name in seen_names && throw(ModelDefinitionError(
         "Duplicate UniqueConstraint name '$(c.name)' on model '$(model.name)'; " *
         "constraint names must be unique within a model"))
       push!(seen_names, c.name)
@@ -619,7 +628,7 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   for (field_name, field) in pairs(fields)
     field_name = field[1] |> String |> format_fild_name
     if !(field[2] isa PormGField)
-      throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
+      throw(ModelDefinitionError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
     fields_dict[field_name] = field[2]
     !is_many_to_many_field(field[2]) && push!(field_names, field_name)
@@ -648,7 +657,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
     @pormg_debug false
     field_name = field_name |> String |> format_fild_name
     if !(field isa PormGField)
-      throw(ArgumentError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
+      throw(ModelDefinitionError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
     fields_dict[field_name] = field
     !is_many_to_many_field(field) && push!(field_names, field_name)
@@ -657,7 +666,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
 end
 function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
-  throw(ArgumentError(_emsg("You need to add fields to the model, example: $example_usage")))
+  throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
 end
 function Model(; constraints = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
@@ -680,13 +689,13 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
   if is_many_to_many_field(field)
     ensure_model_initialized(model)
     if model._module === nothing
-      throw(ArgumentError(
+      throw(ModelDefinitionError(
         "ManyToManyField $(model.name).$(field_name) requires the model to be registered via " *
         "set_models() or @import_models before add_field! can register reverse accessors."
       ))
     end
     if model.connect_key === nothing || !haskey(config, model.connect_key)
-      throw(ArgumentError(
+      throw(ModelDefinitionError(
         "ManyToManyField $(model.name).$(field_name) requires a database connection. " *
         "Call set_models() with a configured connection before add_field!."
       ))
@@ -741,7 +750,7 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   # depwarn — that surfaces under CI's depwarn-enabled `Pkg.test` run and trips the #70
   # render-failure test's "healthy model → no warn" assertion.
   for (field_name, field) in sort(collect(model.fields); by = first)
-    occursin(r"__|@|^_", field_name) && throw(ArgumentError("The field name $field_name in the model $model contains __ or @ or starts with _"))
+    occursin(r"__|@|^_", field_name) && throw(ModelDefinitionError("The field name $field_name in the model $model contains __ or @ or starts with _"))
     db_field_name::String = field_name  # real column name, before reserved-word prefixing — diagnostics must show this one
     field_name in contants_julia && (field_name = "_$field_name")
     struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol
@@ -908,7 +917,7 @@ function _duration_to_nanoseconds(value::Period)::Int64
     return Int64(Dates.value(value))
   end
 
-  throw(ArgumentError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals."))
+  throw(InvalidValueError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals."))
 end
 
 function _duration_to_nanoseconds(value::Dates.CompoundPeriod)::Int64
@@ -921,7 +930,7 @@ end
 
 function _duration_from_seconds_string(value::AbstractString)::String
   match_result = match(r"^([+-]?)(\d+)(?:\.(\d+))?$", value)
-  match_result === nothing && throw(ArgumentError("The duration $value is invalid"))
+  match_result === nothing && throw(InvalidValueError("The duration $value is invalid"))
 
   sign, seconds_str, fraction = match_result.captures
   fraction = fraction === nothing ? "" : ".$(rstrip(fraction, '0'))"
@@ -931,7 +940,7 @@ end
 
 function _normalize_duration_string(value::AbstractString)::String
   stripped = strip(value)
-  isempty(stripped) && throw(ArgumentError("The duration cannot be empty"))
+  isempty(stripped) && throw(InvalidValueError("The duration cannot be empty"))
 
   if (match_result = match(r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$", stripped)) !== nothing
     sign, hours, minutes, seconds, fraction = match_result.captures
@@ -947,7 +956,7 @@ function _normalize_duration_string(value::AbstractString)::String
     return _duration_from_seconds_string(stripped)
   end
 
-  throw(ArgumentError("The duration $value is invalid. Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or SS(.sss)."))
+  throw(InvalidValueError("The duration $value is invalid. Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or SS(.sss)."))
 end
 
 function _duration_nanoseconds_to_string(total_nanoseconds::Int64)::String
@@ -983,7 +992,7 @@ function format_duration_sql(value::Dates.CompoundPeriod)
 end
 
 function format_duration_sql(value)
-  throw(ArgumentError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format"))
+  throw(InvalidValueError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format"))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1002,12 +1011,12 @@ end
 
 function format_uuid_sql(value::AbstractString)
   s = strip(string(value))
-  occursin(_UUID_REGEX, s) || throw(ArgumentError("Invalid UUID format: '$s'. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+  occursin(_UUID_REGEX, s) || throw(InvalidValueError("Invalid UUID format: '$s'. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
   return lowercase(s)
 end
 
 function format_uuid_sql(value)
-  throw(ArgumentError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+  throw(InvalidValueError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1022,7 +1031,7 @@ function format_json_sql(value::AbstractString)
   try
     JSON.parse(value)
   catch e
-    throw(ArgumentError("Invalid JSON string: $(sprint(showerror, e))"))
+    throw(InvalidValueError("Invalid JSON string: $(sprint(showerror, e))"))
   end
   return value
 end
@@ -1036,7 +1045,7 @@ function format_json_sql(value::Union{Bool, Integer, AbstractFloat})
 end
 
 function format_json_sql(value)
-  throw(ArgumentError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
+  throw(InvalidValueError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
 end
 
 function format_number_sql(value::Bool)
@@ -1057,10 +1066,10 @@ function format_number_sql(value::Union{Float16, Float32, Float64}) # TODO: @spr
 end
 function format_number_sql(value::AbstractString)
   value = value |> string |> strip
-  isempty(value) && throw(ArgumentError("The value is empty and cannot be used as a number"))
+  isempty(value) && throw(InvalidValueError("The value is empty and cannot be used as a number"))
 
   if occursin(r"^[+-]?\d+,\d+$", value)
-    throw(ArgumentError("Does you want to use ',' as decimal separator? Please use '.' instead."))
+    throw(InvalidValueError("Does you want to use ',' as decimal separator? Please use '.' instead."))
   end
 
   # try integer first
@@ -1068,10 +1077,10 @@ function format_number_sql(value::AbstractString)
     return value
   # then float
   elseif (f = tryparse(Float64, value)) !== nothing
-    isfinite(f) || throw(ArgumentError("Non-finite numeric values are not supported. Please use a finite numeric value instead."))
+    isfinite(f) || throw(InvalidValueError("Non-finite numeric values are not supported. Please use a finite numeric value instead."))
     return value
   else
-    throw(ArgumentError("The value '$value' is not a valid number"))
+    throw(InvalidValueError("The value '$value' is not a valid number"))
   end
 end
 function format_number_sql(value::AbstractArray)
@@ -1095,7 +1104,7 @@ end
 
 function format_bool_sql(value::Integer)
     if value in [0, 1] == false
-        throw(ArgumentError("The value must be 0, 1, true or false"))
+        throw(InvalidValueError("The value must be 0, 1, true or false"))
     end
     return value == 1 ? true : false
 end
@@ -1128,14 +1137,14 @@ function format_date_sql(value::AbstractString)
         Date(value)
         return value
     catch e
-        throw(ArgumentError("The date $value is invalid: $(sprint(showerror, e))"))
+        throw(InvalidValueError("The date $value is invalid: $(sprint(showerror, e))"))
     end
   else
-    throw(ArgumentError("The date $value is invalid"))
+    throw(InvalidValueError("The date $value is invalid"))
   end  
 end
 function format_date_sql(value)
-  throw(ArgumentError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD"))
+  throw(InvalidValueError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD"))
 end
 
 
@@ -1175,7 +1184,7 @@ function format_yyyy_mm(value::String)
   if occursin(r"^\d{4}-\d{2}$", value)
     return value
   else
-    throw(ArgumentError("The value $value is invalid, it must be in the format YYYY-MM"))
+    throw(InvalidValueError("The value $value is invalid, it must be in the format YYYY-MM"))
   end  
 end
 function format_yyyy_mm(value::Integer)
@@ -1184,11 +1193,11 @@ function format_yyyy_mm(value::Integer)
     # Format as YYYY-MM
     return string(value[1:4], "-", value[5:6])
   else
-    throw(ArgumentError("The value $value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM"))
+    throw(InvalidValueError("The value $value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM"))
   end
 end
 function format_yyyy_mm(value)
-  throw(ArgumentError("The value must be a String or Integer in the format YYYY-MM or YYYYMM"))
+  throw(InvalidValueError("The value must be a String or Integer in the format YYYY-MM or YYYYMM"))
 end    
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -1327,7 +1336,7 @@ function _resolve_model_reference(_module::Module, model_ref::String)::PormGMode
       format_model_name(model.name) == target_name && return model
     end
   end
-  throw(ArgumentError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
+  throw(ModelDefinitionError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
 end
 
 _resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::PormGModel)::PormGModel = model_ref
@@ -1340,7 +1349,7 @@ function _resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, 
       return model
     end
   end
-  throw(ArgumentError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
+  throw(ModelDefinitionError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
 end
 
 function _many_to_many_table_name(source_model::PormGModel, field_name::String, field::sManyToManyField, settings::PormGSettings)::String
@@ -1362,8 +1371,8 @@ function _infer_through_field(through_model::PormGModel, target_model::PormGMode
   end
 
   length(matches) == 1 && return matches[1]
-  isempty(matches) && throw(ArgumentError("The explicit through model $(through_model.name) has no foreign key to $(target_model.name) for the many-to-many $(role) side"))
-  throw(ArgumentError("The explicit through model $(through_model.name) has multiple foreign keys to $(target_model.name); set $(role)_field explicitly"))
+  isempty(matches) && throw(ModelDefinitionError("The explicit through model $(through_model.name) has no foreign key to $(target_model.name) for the many-to-many $(role) side"))
+  throw(ModelDefinitionError("The explicit through model $(through_model.name) has multiple foreign keys to $(target_model.name); set $(role)_field explicitly"))
 end
 
 function _relation_from_many_to_many(
@@ -1379,8 +1388,8 @@ function _relation_from_many_to_many(
 )
   owner_pk_sym = get_model_pk_field(owner_model)
   related_pk_sym = get_model_pk_field(related_model)
-  owner_pk_sym === nothing && throw(ArgumentError("ManyToManyField $(owner_model.name).$(field_name) requires the source model to define a single primary key"))
-  related_pk_sym === nothing && throw(ArgumentError("ManyToManyField $(owner_model.name).$(field_name) requires the target model to define a single primary key"))
+  owner_pk_sym === nothing && throw(ModelDefinitionError("ManyToManyField $(owner_model.name).$(field_name) requires the source model to define a single primary key"))
+  related_pk_sym === nothing && throw(ModelDefinitionError("ManyToManyField $(owner_model.name).$(field_name) requires the target model to define a single primary key"))
 
   owner_pk = String(owner_pk_sym)
   related_pk = String(related_pk_sym)
@@ -1396,7 +1405,7 @@ function _relation_from_many_to_many(
     elseif model_map !== nothing
       _resolve_model_reference(model_map, field.through)
     else
-      throw(ArgumentError("Cannot resolve explicit through model $(field.through) for $(owner_model.name).$(field_name)"))
+      throw(ModelDefinitionError("Cannot resolve explicit through model $(field.through) for $(owner_model.name).$(field_name)"))
     end
 
     through_model_name = through_model.name
@@ -1470,7 +1479,7 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
   _cache_many_to_many_relation!(model, field_name, relation)
 
   reverse_accessor = relation.inverse_accessor
-  haskey(related_model.related_objects, reverse_accessor) && throw(ArgumentError("The related_name $(reverse_accessor) in the model $(model.name) is already defined"))
+  haskey(related_model.related_objects, reverse_accessor) && throw(ModelDefinitionError("The related_name $(reverse_accessor) in the model $(model.name) is already defined"))
   related_model.related_objects[reverse_accessor] = _reverse_many_to_many_relation(relation, reverse_accessor)
   field.related_name === nothing && (field.related_name = reverse_accessor)
   return nothing
@@ -1489,7 +1498,7 @@ function get_many_to_many_relation(model::PormGModel, accessor::String)::ManyToM
   elseif haskey(model.related_objects, accessor) && model.related_objects[accessor] isa ManyToManyRelation
     return model.related_objects[accessor]::ManyToManyRelation
   end
-  throw(ArgumentError("The accessor $(accessor) is not a ManyToMany relation on model $(model.name)"))
+  throw(ModelDefinitionError("The accessor $(accessor) is not a ManyToMany relation on model $(model.name)"))
 end
 
 function strip_many_to_many_fields(model::PormGModel)::PormGModel
@@ -1550,7 +1559,7 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
         if existing_auto === nothing ||
            get(existing_auto, "owner_column", nothing) != relation.owner_column ||
            get(existing_auto, "related_column", nothing) != relation.related_column
-          throw(ArgumentError(
+          throw(ModelDefinitionError(
             "Auto-generated through table $(relation.through_model) for $(source_model.name).$(field_name) " *
             "collides with an existing model or another ManyToManyField. " *
             "Define an explicit `through=` model or override `db_table=` to disambiguate."))
@@ -1618,7 +1627,7 @@ function validate_default(default, expected_type::Type, field_name::String, conv
       return converter(default)
     catch e
       @pormg_debug false
-      throw(ArgumentError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
+      throw(FieldValidationError("Invalid default value for $field_name. Expected type: $expected_type, got: $(typeof(default)). Please provide a value of type $expected_type."))
     end
   end
 end
@@ -1639,7 +1648,7 @@ function validate_timezone(value::String, format::String)
     # cannot denote a real instant, so treat it as invalid (Z has no digits and is skipped).
     local off = match(r"[+-](\d{2}):(\d{2})$", s)
     if off !== nothing && (parse(Int, off[1]) > 23 || parse(Int, off[2]) > 59)
-      throw(ArgumentError("Invalid UTC offset (out of range) in datetime value: $value"))
+      throw(InvalidValueError("Invalid UTC offset (out of range) in datetime value: $value"))
     end
     # Offset-bearing: pad sub-seconds to exactly 3 digits (normalize_sqlite_datetime_string),
     # then parse — the `zzzz` token consumes both `Z` and `±HH:MM`.
@@ -1647,14 +1656,14 @@ function validate_timezone(value::String, format::String)
       zdt = ZonedDateTime(normalize_sqlite_datetime_string(s), _DATETIME_DATEFORMAT)
       return _canonicalize_datetime_utc(zdt)
     catch
-      throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
+      throw(InvalidValueError("Invalid timezone format. Expected format: $format, got: $value"))
     end
   else
     # Naive (no offset) is assumed UTC; Julia's default ISO parser handles `.s`/no-subsecond.
     try
       return _canonicalize_datetime_utc(ZonedDateTime(DateTime(s), _DATETIME_UTC_TZ))
     catch
-      throw(ArgumentError("Invalid timezone format. Expected format: $format, got: $value"))
+      throw(InvalidValueError("Invalid timezone format. Expected format: $format, got: $value"))
     end
   end
 end

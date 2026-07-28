@@ -76,15 +76,15 @@ const _Ev = _YmTestEvent
   # =========================================================================
   # 3. Reject malformed values (the accept/reject contract)
   # =========================================================================
-  @testset "Malformed bucket values throw ArgumentError" begin
+  @testset "Malformed bucket values throw InvalidValueError" begin
     # 4-digit string (year only) — missing the month component.
-    @test_throws ArgumentError _Ev.objects.filter("happened__@yyyy_mm" => "2025").list(show_query=:dict)
+    @test_throws PormG.InvalidValueError _Ev.objects.filter("happened__@yyyy_mm" => "2025").list(show_query=:dict)
     # Bare 6-digit *string* is NOT accepted (only the dashed string or a 6-digit Integer).
-    @test_throws ArgumentError _Ev.objects.filter("happened__@yyyy_mm" => "202501").list(show_query=:dict)
+    @test_throws PormG.InvalidValueError _Ev.objects.filter("happened__@yyyy_mm" => "202501").list(show_query=:dict)
     # 4-digit integer is not a YYYYMM bucket.
-    @test_throws ArgumentError format_yyyy_mm(2025)
+    @test_throws PormG.InvalidValueError format_yyyy_mm(2025)
     # Non String/Integer value.
-    @test_throws ArgumentError format_yyyy_mm(2025.0)
+    @test_throws PormG.InvalidValueError format_yyyy_mm(2025.0)
   end
 
   # =========================================================================

@@ -44,7 +44,7 @@ end
     @test PormG.Configuration._configured_extensions(settings) == ["unaccent"]
 
     settings.db_config_settings = Dict{String, Any}("extensions" => Dict("name" => "unaccent"))
-    @test_throws ArgumentError PormG.Configuration._configured_extensions(settings)
+    @test_throws PormG.InvalidConfigurationError PormG.Configuration._configured_extensions(settings)
 end
 
 @testset "Explicit env reload keeps Settings synchronized" begin

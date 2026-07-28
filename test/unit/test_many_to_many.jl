@@ -105,7 +105,7 @@ end
     surname = Models.CharField(),
   )
 
-  @test_throws ArgumentError Models.add_field!(
+  @test_throws PormG.ModelDefinitionError Models.add_field!(
     orphan,
     :drivers,
     Models.ManyToManyField(target, related_name="teams"),
@@ -143,12 +143,12 @@ module BadBindingModule
   import PormG
   import PormG.Models
   # Intentionally define the expected through-table name as a non-PormGModel
-  # so _m2m_model_from_binding raises ArgumentError ("not a PormG model").
+  # so _m2m_model_from_binding raises QueryBuildError ("not a PormG model").
   const drivers_championships_drivers = 42   # Integer, not PormGModel
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BUG-3 regression: _m2m_has_extra_fields must only swallow ArgumentError (binding
+# BUG-3 regression: _m2m_has_extra_fields must only swallow QueryBuildError (binding
 # not found); any other exception should propagate so the caller cannot silently
 # proceed with a through model that has extra fields.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ end
 
   # The auto-generated through model for Driver_championship.drivers is
   # "driver_championships_drivers". Since BadBindingModule doesn't have it as a
-  # PormGModel, _m2m_model_from_binding should raise ArgumentError which is caught
+  # PormGModel, _m2m_model_from_binding should raise QueryBuildError which is caught
   # → returns false (no extra fields).
   rel = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
   fake_owner = Models.Model_Type(
@@ -173,7 +173,7 @@ end
   )
   manager_bad = PormG.QueryBuilder.ManyToManyManager(fake_owner, M2M.Driver, rel, 1)
 
-  # ArgumentError is silently caught → returns false (through model "not found" is expected)
+  # QueryBuildError is silently caught → returns false (through model "not found" is expected)
   @test PormG.QueryBuilder._m2m_has_extra_fields(manager_bad) == false
 
   # A manager with _module = nothing should also return false safely

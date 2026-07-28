@@ -175,14 +175,14 @@ end
 function ensure_model_transaction_scope(model::PormGModel)
   tx_pool = get_tx_pool()
   tx_pool === nothing && return
-  model.connect_key === nothing && throw(ArgumentError("Model $(model.name) is not bound to a database connection key"))
+  model.connect_key === nothing && throw(InvalidConfigurationError("Model $(model.name) is not bound to a database connection key"))
   settings = get_settings(model.connect_key)
   if tx_pool === settings.connections
     return
   end
   active_key = connection_key_for_pool(tx_pool)
   active_desc = active_key === nothing ? "unknown transaction" : active_key
-  throw(ArgumentError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
+  throw(InvalidConfigurationError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
 end
 
 function transaction_connection_for(settings::PormGSettings)
@@ -379,7 +379,7 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
 
   else
     adapter = settings.db_config_settings["adapter"]
-    throw(ArgumentError("Unsupported adapter: $(adapter)"))
+    throw(InvalidConfigurationError("Unsupported adapter: $(adapter)"))
   end
 
   # Opt the pool into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured.
@@ -424,7 +424,7 @@ function _configured_extensions(settings::PormGSettings)::Vector{String}
   elseif raw isa AbstractVector
     raw
   else
-    throw(ArgumentError("The 'extensions' setting must be a string or a list of strings"))
+    throw(InvalidConfigurationError("The 'extensions' setting must be a string or a list of strings"))
   end
 
   normalized = String[]
@@ -484,7 +484,7 @@ function _install_configured_extensions!(settings::PormGSettings)::Nothing
       _install_postgres_extension!(settings, "unaccent")
       _install_immutable_unaccent!(settings)
     else
-      throw(ArgumentError("Unsupported PostgreSQL extension '$(extension)'. Supported extensions: unaccent"))
+      throw(InvalidConfigurationError("Unsupported PostgreSQL extension '$(extension)'. Supported extensions: unaccent"))
     end
   end
 
@@ -493,7 +493,7 @@ end
 
 function _install_postgres_extension!(settings::PormGSettings, extension::String)::Nothing
   safe_extensions = Set(["unaccent"])
-  extension in safe_extensions || throw(ArgumentError("Unsupported PostgreSQL extension '$(extension)'"))
+  extension in safe_extensions || throw(InvalidConfigurationError("Unsupported PostgreSQL extension '$(extension)'"))
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   sql = "CREATE EXTENSION IF NOT EXISTS $(extension) WITH SCHEMA public;"
@@ -501,7 +501,7 @@ function _install_postgres_extension!(settings::PormGSettings, extension::String
   try
     CP.fetch(settings, sql)
   catch e
-    throw(ArgumentError(
+    throw(InvalidConfigurationError(
       "Could not install PostgreSQL extension '$(extension)' for $(settings.db_def_folder). " *
       "Run this once as the database owner: $(sql) Original error: $(sprint(showerror, e))"
     ))
@@ -524,7 +524,7 @@ function _install_immutable_unaccent!(settings::PormGSettings)::Nothing
   try
     CP.fetch(settings, sql)
   catch e
-    throw(ArgumentError(
+    throw(InvalidConfigurationError(
       "Could not create helper function public.immutable_unaccent for $(settings.db_def_folder). " *
       "Run this once as the database owner: $(sql) Original error: $(sprint(showerror, e))"
     ))
@@ -536,7 +536,7 @@ end
 function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME) 
 
-  endswith(db_settings_file, ".yml") || throw(ArgumentError("Unknown configuration file type at $(db_settings_file) — expecting a .yml file"))
+  endswith(db_settings_file, ".yml") || throw(InvalidConfigurationError("Unknown configuration file type at $(db_settings_file) — expecting a .yml file"))
   db_conn_data::Dict = open(db_settings_file) do io
     YAML.load(io)
   end
@@ -676,7 +676,7 @@ function get_settings(key::String)
     end
   end
 
-  haskey(config, key) || throw(ArgumentError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
+  haskey(config, key) || throw(InvalidConfigurationError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
   return config[key]  
 end
 
@@ -689,7 +689,7 @@ Useful for multi-tenant applications or connecting to dynamic data sources.
 function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
-    throw(ArgumentError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
+    throw(InvalidConfigurationError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
   end
 
   # Default acquire timeout (#126); <= 0 falls back to DEFAULT_POOL_TIMEOUT (shared with _build_connection_pool!).
@@ -698,7 +698,7 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   if haskey(config, key)
     existing = config[key]
     if existing.db_def_folder != "dynamic_connection"
-      throw(ArgumentError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(existing.db_def_folder)'."))
+      throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(existing.db_def_folder)'."))
     end
     
     @warn "Dynamic connection '$(key)' already exists. Closing old pool before re-registering."
@@ -730,7 +730,7 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   elseif adapter == "SQLite"
     settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
   else
-    throw(ArgumentError("Unsupported adapter: $adapter"))
+    throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
   end
 
   # Opt into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured. No-ops when 0.

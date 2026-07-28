@@ -77,11 +77,11 @@ end
   @test Models.UniqueConstraint(fields = :solo).fields == ["solo"]
 
   # Duplicate fields are rejected.
-  @test_throws ArgumentError Models.UniqueConstraint(fields = ("a", "a"))
+  @test_throws PormG.ModelDefinitionError Models.UniqueConstraint(fields = ("a", "a"))
 
   # A blank name would render as an empty (invalid) index identifier — rejected.
-  @test_throws ArgumentError Models.UniqueConstraint(fields = ("a", "b"), name = "")
-  @test_throws ArgumentError Models.UniqueConstraint(fields = ("a", "b"), name = "   ")
+  @test_throws PormG.ModelDefinitionError Models.UniqueConstraint(fields = ("a", "b"), name = "")
+  @test_throws PormG.ModelDefinitionError Models.UniqueConstraint(fields = ("a", "b"), name = "   ")
 
   # Applied to a model → validated + stashed in cache (the M2M metadata mechanism).
   m = Models.Model("widgets",
@@ -110,7 +110,7 @@ end
   @test noname.cache["unique_constraints"]["constraints"][1].fields == ["a", "b"]
 
   # Referencing an unknown field is rejected, naming the offender.
-  @test_throws ArgumentError Models.Model("bad_unknown",
+  @test_throws PormG.ModelDefinitionError Models.Model("bad_unknown",
     id = Models.IDField(),
     a = Models.IntegerField(),
     constraints = [Models.UniqueConstraint(fields = ("a", "nope"))],
@@ -118,14 +118,14 @@ end
 
   # Referencing a ManyToManyField (no concrete column) is rejected.
   Tag = Models.Model("uc_tags", id = Models.IDField(), label = Models.CharField())
-  @test_throws ArgumentError Models.Model("bad_m2m",
+  @test_throws PormG.ModelDefinitionError Models.Model("bad_m2m",
     id = Models.IDField(),
     tags = Models.ManyToManyField(Tag),
     constraints = [Models.UniqueConstraint(fields = ("tags",))],
   )
 
   # Two constraints sharing an explicit name collide into one index — rejected at construction.
-  @test_throws ArgumentError Models.Model("bad_dupname",
+  @test_throws PormG.ModelDefinitionError Models.Model("bad_dupname",
     id = Models.IDField(),
     a = Models.IntegerField(),
     b = Models.IntegerField(),
@@ -153,7 +153,7 @@ end
   current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
     :collide => Dict{Symbol, Union{Bool, PormGModel}}(:model => module_collide, :exist => false),
   )
-  @test_throws ArgumentError Migrations.get_migration_plan(
+  @test_throws PormG.InvalidMigrationError Migrations.get_migration_plan(
     PormGModel[], current_schema, UCMockPostgres(), settings, interactive = false)
 end
 

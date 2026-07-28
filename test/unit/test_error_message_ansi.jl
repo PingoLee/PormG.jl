@@ -73,7 +73,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "no ANSI leak in real thrown messages" begin
     raise_model = () -> try
-        PormG.Models.Model("drivers")   # no fields → example-usage ArgumentError
+        PormG.Models.Model("drivers")   # no fields → example-usage ModelDefinitionError
         nothing
     catch e
         e
@@ -82,7 +82,7 @@ end
     # Color OFF: thrown message and its showerror rendering are ANSI-free.
     _with_have_color(false) do
         err = raise_model()
-        @test err isa ArgumentError
+        @test err isa PormG.ModelDefinitionError
         @test !occursin("\e[", err.msg)
         @test !occursin("\e[", sprint(showerror, err))
     end
@@ -90,7 +90,7 @@ end
     # Color ON: the same site keeps its escape codes for the REPL.
     _with_have_color(true) do
         err = raise_model()
-        @test err isa ArgumentError
+        @test err isa PormG.ModelDefinitionError
         @test occursin("\e[", err.msg)
     end
 end

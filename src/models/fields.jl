@@ -2771,8 +2771,20 @@ function DurationField(; kwargs...)
 
   # Validate verbose_name
   !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  # Validate default
-  default = default === nothing ? nothing : format_duration_sql(default)
+  # Validate default. `format_duration_sql` raises InvalidValueError — correct on the insert/update
+  # path, but here the caller's mistake is the `default=` kwarg at model-definition time. Re-raise as
+  # FieldValidationError so every field constructor reports the same category (#239), matching the
+  # UUIDField/JSONField string-default paths and validate_default's converter branch.
+  default = if default === nothing
+    nothing
+  else
+    try
+      format_duration_sql(default)
+    catch e
+      e isa InvalidValueError || rethrow(e)
+      throw(FieldValidationError("Invalid default value for DurationField: $(e.msg)"))
+    end
+  end
   # Validate other parameters
   !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
   !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
@@ -2882,7 +2894,16 @@ function UUIDField(; kwargs...)
   # Validate UUID format for string defaults (validate_default won't invoke the
   # converter when the value already matches Union{String, Nothing})
   if default isa AbstractString
-    default = format_uuid_sql(default)
+    # `format_uuid_sql` raises InvalidValueError — correct on the insert/update path, but here the
+    # caller's mistake is the `default=` kwarg at model-definition time. Re-raise as
+    # FieldValidationError so every field constructor reports the same category (#239);
+    # validate_default (the `else` branch) already does this for non-String defaults.
+    default = try
+      format_uuid_sql(default)
+    catch e
+      e isa InvalidValueError || rethrow(e)
+      throw(FieldValidationError("Invalid default value for UUIDField: $(e.msg)"))
+    end
   else
     default = validate_default(default, Union{String, Nothing}, "UUIDField", x -> format_uuid_sql(x))
   end
@@ -3184,7 +3205,16 @@ function JSONField(; kwargs...)
   # Validate JSON format for string defaults (validate_default won't invoke the
   # converter when the value already matches Union{String, Nothing})
   if default isa AbstractString
-    default = format_json_sql(default)
+    # `format_json_sql` raises InvalidValueError — correct on the insert/update path, but here the
+    # caller's mistake is the `default=` kwarg at model-definition time. Re-raise as
+    # FieldValidationError so every field constructor reports the same category (#239);
+    # validate_default (the `else` branch) already does this for non-String defaults.
+    default = try
+      format_json_sql(default)
+    catch e
+      e isa InvalidValueError || rethrow(e)
+      throw(FieldValidationError("Invalid default value for JSONField: $(e.msg)"))
+    end
   else
     default = validate_default(default, Union{String, Nothing}, "JSONField", x -> format_json_sql(x))
   end

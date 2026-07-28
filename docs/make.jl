@@ -69,6 +69,7 @@ makedocs(
             "Async & Concurrency" => "async.md",
             "Advisory Locks" => "advisory_lock.md",
             "Import from Django" => "import_django.md",
+            "Upgrading PormG" => "upgrading.md",
         ],
         "Internals" => [
             "Architecture" => "architecture.md",

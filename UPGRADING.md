@@ -4,58 +4,31 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 > ⚠️ **Not database migrations.** This file is about migrating **app source code** to keep up with the PormG API. It is unrelated to the `makemigrations` / `migrate` schema engine that manages your database tables.
 
-## How to use
+> 🚀 **Upgrading an app? Don't read this file top to bottom.** Run
+> `PormG.upgrade_guide(from = v"<your pinned version>")` — it renders only the entries newer than
+> your pin, newest-first. The full how-to (versioning model, the apply recipe, driving it with an AI
+> agent) lives in the docs: **[Upgrading PormG](https://pingolee.github.io/PormG.jl/dev/upgrading/)**.
+> This file is the change log those tools read; the sections below are the rules for *writing* an
+> entry.
 
-- One `##` entry per breaking change, **newest first**. New entries land in **`## Unreleased`** and are stamped with a release number when the maintainer cuts a train (see *Versioning* below).
-- Each entry records: the PormG **version** it shipped in (`Unreleased` until cut), what changed, why, and the concrete **before → after** code edit.
-- An app is done when its code is updated **and** its tests pass against the new PormG.
-- **Not for additive features.** This log is only what **forces** an app edit. A new opt-in capability (operator, kwarg, function) requires no change to keep an app working → document it in `docs/`, not here.
-- **Rollout is tracked per app, not per entry:** an app's own PormG dependency pin *is* its state — `PormG.upgrade_guide(from = <that pin>)` derives exactly what it still needs to apply, so there are no per-entry rollout tables to maintain.
+## Writing an entry
 
-## Versioning (`0.y.z`) — release trains
-
-PormG bumps its version **per release train, not per PR**. Pre-publish, consuming apps
-`dev`/path-dep PormG (they track the git commit, not the registry), so the version number is a
-**migration-checkpoint label** — one bump per *rollout*, not per merged change.
-
-- **During a train:** every breaking/behavior PR prepends its entry to **`## Unreleased`** below,
-  with `- **Version**: Unreleased` and **no `Project.toml` bump.** `Project.toml` holds the last cut
-  train's version.
-- **Cutting a train** — done when the maintainer is about to roll the changes into a consuming app,
-  via the `/pormg-cut-release` skill: bump the `y` slot **once** in `Project.toml`, rewrite each
-  `Unreleased` entry's `**Version**` to the new number, replace the `## Unreleased` header with
-  `## <version> — <date>`, `git tag` it, and open a fresh empty `## Unreleased`. `z` is reserved for
-  a purely-additive train or a hotfix to a tagged one.
-
-**Scoping an upgrade by version.** To roll a consuming app from PormG `0.a` to the current code, read
-the entries **newest-first from the top** — starting in `## Unreleased` (the uncut changes you get at
-HEAD) — and **stop when you reach an entry whose `Version` is ≤ `0.a`**; everything above that line is
-what changed since your pinned version. `PormG.upgrade_guide(from = v"0.a")` does this for you (its
-default scope includes `## Unreleased`). Entries are version-stamped from **`0.2.0`** onward; entries
-below the `pre-0.2 history` marker predate the versioning policy and are unstamped (treat them as
-"already shipped before `0.2.0`").
-
-## Applying these in a consuming app
-
-This file is the **source of truth, kept in the PormG repo**. To fix a dependent app after a
-PormG bump, point an agent (or yourself) at this file — read it from the dev'd source
-(e.g. `~/.julia/dev/PormG/UPGRADING.md`) or from GitHub — and work the entries
-**newest first**:
-
-1. **Scope to this app — and to your version.** Run `PormG.upgrade_guide(from = v"<your pinned
-   version>")` (or read newest-first from the top, stopping at the first entry whose **Version** is
-   ≤ your pinned version). Everything above that line is what changed since you pinned.
-2. **Find the call sites.** Run the entry's *"How to find the calls to migrate"* grep/error
-   inside the app.
-3. **Apply the `before → after`.** Edit each call site to the ✓ form shown in the entry.
-4. **Verify.** Run the app's own test/integration suite against the upgraded PormG. An entry
-   is done for this app only when its code is updated **and** its tests pass.
-5. **Bump the pin.** Once green, bump this app's PormG dependency to the version you upgraded to —
-   that pin is the app's rollout state, so the next `upgrade_guide` run scopes correctly.
-
-> **Tip — make it discoverable.** Add one line to each app's `AGENTS.md`/`CLAUDE.md`:
-> *"Before bumping the PormG dependency, run `PormG.upgrade_guide(from = v\"<current pin>\")` and apply what it lists."*
-> Then an agent working in that repo will pick up the rollout automatically.
+- One `##` entry per breaking change, **newest first**. New entries land in **`## Unreleased`** with
+  `- **Version**: Unreleased` and **no `Project.toml` bump**; the maintainer stamps them with a
+  release number when cutting a train (`/pormg-cut-release`).
+- Each entry records: the PormG **version** it shipped in, what changed, why, a *"How to find the
+  calls to migrate"* grep, and the concrete **before → after** code edit.
+- **Not for additive features.** This log is only what **forces** an app edit. A new opt-in
+  capability (operator, kwarg, function) requires no change to keep an app working → document it in
+  `docs/`, not here.
+- **No per-entry rollout tables.** An app's own PormG dependency pin *is* its rollout state, and
+  `upgrade_guide(from = <that pin>)` derives what it still needs — so there is nothing to maintain
+  per app.
+- **Keep the prose version-neutral.** Write *"part of the `0.3.x` pre-publish wave"*, never *"part of
+  the current `## Unreleased` wave"* — stamping rewrites the `- **Version**:` bullet, not the body,
+  so self-referential prose ships stale (this bit #201).
+- Entries are version-stamped from **`0.2.0`** onward; those below the `pre-0.2 history` marker
+  predate the versioning policy and are unstamped (treat them as already shipped before `0.2.0`).
 
 ---
 

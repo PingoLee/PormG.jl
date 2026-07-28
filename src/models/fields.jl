@@ -1,3 +1,17 @@
+# ── Field-validation throw funnel (#239) ────────────────────────────────────
+# Every failure in this file is one category: the caller got a field CONSTRUCTOR argument wrong —
+# a kwarg of the wrong type, an out-of-range `max_length`, a `default` that violates the field's
+# own contract, a malformed `choices`, or a field type that cannot serve as a primary key. So a
+# call site changes only `ArgumentError(` → `_fielderr(` and lands on `FieldValidationError`
+# (mirrors `_argerr` in querybuilder/exceptions.jl). The subtype's constructor applies `_emsg`, so
+# messages degrade correctly off-TTY without a second wrap.
+#
+# NOT for value coercion: `Models.format_*_sql` raises `InvalidValueError`, because there the
+# caller is inserting a bad *value* rather than defining a bad *field*. Where a constructor calls
+# one of those helpers on a `default=` (UUIDField/JSONField/DurationField), it re-raises as
+# FieldValidationError so the whole constructor surface reports one category.
+_fielderr(msg::AbstractString) = FieldValidationError(msg)
+
 
 struct sIDField <: PormGField
   verbose_name::Union{String, Nothing}
@@ -100,18 +114,18 @@ function IDField(; kwargs...)
   generated_always = get(kwargs, :generated_always, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate other parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(auto_increment isa Bool) && throw(ArgumentError("The 'auto_increment' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(generated isa Bool) && throw(ArgumentError("The 'generated' must be a Boolean"))
-  !(generated_always isa Bool) && throw(ArgumentError("The 'generated_always' must be a Boolean"))
+  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
+  !(auto_increment isa Bool) && throw(_fielderr("The 'auto_increment' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(generated isa Bool) && throw(_fielderr("The 'generated' must be a Boolean"))
+  !(generated_always isa Bool) && throw(_fielderr("The 'generated_always' must be a Boolean"))
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "IDField", format2int64)
   # Return the field instance
@@ -278,33 +292,33 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   db_constraint = get(kwargs, :db_constraint, true)
 
   # Validate 'to' parameter
-  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
 
   # Validate boolean parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
-  !(initially_deferred isa Bool) && throw(ArgumentError("The 'initially_deferred' must be a Boolean"))
+  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(deferrable isa Bool) && throw(_fielderr("The 'deferrable' must be a Boolean"))
+  !(initially_deferred isa Bool) && throw(_fielderr("The 'initially_deferred' must be a Boolean"))
 
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
 
   # Validate optional string parameters
   !(pk_field isa Union{Nothing, AbstractString, Symbol}) &&
-    throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
+    throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
   on_delete = _get_on_delete_mode(on_delete)
-  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
-  !(how isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'how' must be a String or nothing"))
-  !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
-  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
+  !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  !(db_constraint isa Bool) && throw(_fielderr("The 'db_constraint' must be a Boolean"))
 
   # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint 
@@ -355,14 +369,14 @@ function _get_on_delete_mode(on_delete::AbstractString)
   elseif contains(on_delete, "PROTECT")
     return PROTECT
   else
-    throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
+    throw(_fielderr("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
   end
 end
 function _get_on_delete_mode(on_delete::Function)
   # check if the function is one of the valid functions
   check_function = on_delete |> string |> uppercase
   if !(check_function in ["CASCADE", "RESTRICT", "SET_NULL", "SET_DEFAULT", "SET", "DO_NOTHING", "PROTECT"])
-    throw(ArgumentError("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
+    throw(_fielderr("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
   end
   return on_delete
 end
@@ -413,13 +427,13 @@ function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
   source_field = get(kwargs, :source_field, nothing)
   target_field = get(kwargs, :target_field, nothing)
 
-  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  !(through isa Union{Nothing, String, PormGModel}) && throw(ArgumentError("The 'through' parameter must be a String, PormGModel, or nothing"))
-  !(related_name isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
-  !(db_table isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'db_table' must be a String or nothing"))
-  !(source_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'source_field' must be a String, Symbol, or nothing"))
-  !(target_field isa Union{Nothing, AbstractString, Symbol}) && throw(ArgumentError("The 'target_field' must be a String, Symbol, or nothing"))
+  !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  !(through isa Union{Nothing, String, PormGModel}) && throw(_fielderr("The 'through' parameter must be a String, PormGModel, or nothing"))
+  !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  !(db_table isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'db_table' must be a String or nothing"))
+  !(source_field isa Union{Nothing, AbstractString, Symbol}) && throw(_fielderr("The 'source_field' must be a String, Symbol, or nothing"))
+  !(target_field isa Union{Nothing, AbstractString, Symbol}) && throw(_fielderr("The 'target_field' must be a String, Symbol, or nothing"))
 
   return sManyToManyField(
     verbose_name,
@@ -615,31 +629,31 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   db_constraint = get(kwargs, :db_constraint, true)
 
   # Validate 'to' parameter
-  !(to isa Union{String, PormGModel}) && throw(ArgumentError("The 'to' parameter must be a String or PormGModel"))
+  !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
 
   # Validate boolean parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(deferrable isa Bool) && throw(ArgumentError("The 'deferrable' must be a Boolean"))
-  !(initially_deferred isa Bool) && throw(ArgumentError("The 'initially_deferred' must be a Boolean"))
+  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(deferrable isa Bool) && throw(_fielderr("The 'deferrable' must be a Boolean"))
+  !(initially_deferred isa Bool) && throw(_fielderr("The 'initially_deferred' must be a Boolean"))
 
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
 
   # Validate optional string parameters
-  !(pk_field isa Union{Nothing, String, Symbol}) && throw(ArgumentError("The 'pk_field' must be a String, Symbol, or nothing"))
-  !(on_update isa Union{Nothing, AbstractString}) && throw(ArgumentError("The 'on_update' must be a String or nothing"))
-  !(how isa Union{Nothing, String}) && throw(ArgumentError("The 'how' must be a String or nothing"))
-  !(related_name isa Union{Nothing, String}) && throw(ArgumentError("The 'related_name' must be a String or nothing"))
-  !(db_constraint isa Bool) && throw(ArgumentError("The 'db_constraint' must be a Boolean"))
+  !(pk_field isa Union{Nothing, String, Symbol}) && throw(_fielderr("The 'pk_field' must be a String, Symbol, or nothing"))
+  !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
+  !(how isa Union{Nothing, String}) && throw(_fielderr("The 'how' must be a String or nothing"))
+  !(related_name isa Union{Nothing, String}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
+  !(db_constraint isa Bool) && throw(_fielderr("The 'db_constraint' must be a Boolean"))
 
   # Resolve on_delete using similar logic as ForeignKey
   on_delete = _get_on_delete_mode(on_delete)
@@ -763,16 +777,16 @@ function AutoField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate other parameters
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(auto_increment isa Bool) && throw(ArgumentError("The 'auto_increment' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
+  !(auto_increment isa Bool) && throw(_fielderr("The 'auto_increment' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
   # Return the field instance
@@ -810,7 +824,7 @@ function parse_choices(choices_str::String)
       value = strip(values[2]) |> string
       choices = (choices..., (key, value))
     else
-      throw(ArgumentError("Invalid choices format"))
+      throw(_fielderr("Invalid choices format"))
     end
   end
   return choices
@@ -998,45 +1012,45 @@ function CharField(; kwargs...)
   choices = get(kwargs, :choices, nothing)
   editable = get(kwargs, :editable, true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
+  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
-  max_length > 255 && throw(ArgumentError("The max_length must be less than or equal to 255"))
-  max_length < 1 && throw(ArgumentError("The max_length must be greater than 1"))
+  max_length isa Int || throw(_fielderr("The max_length must be an integer"))
+  max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
+  max_length < 1 && throw(_fielderr("The max_length must be greater than 1"))
   default isa Int && (default = string(default))
   if !(default isa Nothing) && !(default isa AbstractString) 
-    throw(ArgumentError("The default value must be a string, but got $(default) ($(typeof(default)))"))
+    throw(_fielderr("The default value must be a string, but got $(default) ($(typeof(default)))"))
   end
   if !(default isa Nothing) && length(default) > max_length
-    throw(ArgumentError("The default value exceeds the max_length, but got $(length(default)) and max_length is $(max_length)"))
+    throw(_fielderr("The default value exceeds the max_length, but got $(length(default)) and max_length is $(max_length)"))
   end
-  !(unique isa Bool) && throw(ArgumentError("The unique must be a boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The blank must be a boolean"))
-  !(null isa Bool) && throw(ArgumentError("The null must be a boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The db_index must be a boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The db_column must be a string or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The editable must be a boolean"))  
+  !(unique isa Bool) && throw(_fielderr("The unique must be a boolean"))
+  !(blank isa Bool) && throw(_fielderr("The blank must be a boolean"))
+  !(null isa Bool) && throw(_fielderr("The null must be a boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The db_index must be a boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The db_column must be a string or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The editable must be a boolean"))  
   if choices isa AbstractString
     choices = parse_choices(choices)
   elseif !(choices isa Union{Nothing, NTuple{N, Tuple{AbstractString, AbstractString}} where N })
     println(choices)
     println(choices |> typeof)
-    throw(ArgumentError("The 'choices' must be a String or Tuple{Tuple{String,String}}, but got $(choices) ($(typeof(choices)))"))
+    throw(_fielderr("The 'choices' must be a String or Tuple{Tuple{String,String}}, but got $(choices) ($(typeof(choices)))"))
   end
   if choices !== nothing
     for choice in choices
       if !(choice[1] isa AbstractString)
-        throw(ArgumentError("Choice values must be strings"))
+        throw(_fielderr("Choice values must be strings"))
       end
       if count_just_strings(choice[1]) > max_length
-        throw(ArgumentError("Choices cannot exceed max_length"))
+        throw(_fielderr("Choices cannot exceed max_length"))
       end
     end
     if default !== nothing
       valid_defaults = choices isa Vector{String} ? return_just_strings(choices) : [return_just_strings(c[1]) for c in choices]
       if !(default in valid_defaults)
-        throw(ArgumentError("The default value must be one of the choices"))
+        throw(_fielderr("The default value must be one of the choices"))
       end
     end
   end
@@ -1141,18 +1155,18 @@ function IntegerField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
 
   # Validate default using validate_default
   default = validate_default(default, Union{Int64, Nothing}, "IntegerField", format2int64)
   
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Booleadn"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sIntegerField(
     verbose_name,
@@ -1247,21 +1261,21 @@ function PositiveSmallIntegerField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
 
   # Validate default using validate_default, then enforce the non-negative range
   default = validate_default(default, Union{Int64, Nothing}, "PositiveSmallIntegerField", format2int64)
   if default !== nothing && !(0 <= default <= POSITIVE_SMALL_INTEGER_MAX)
-    throw(ArgumentError("The default value for PositiveSmallIntegerField must be between 0 and $(POSITIVE_SMALL_INTEGER_MAX), got: $default"))
+    throw(_fielderr("The default value for PositiveSmallIntegerField must be between 0 and $(POSITIVE_SMALL_INTEGER_MAX), got: $default"))
   end
 
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sPositiveSmallIntegerField(
     verbose_name,
@@ -1356,21 +1370,21 @@ function PositiveIntegerField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
 
   # Validate default using validate_default, then enforce the non-negative range
   default = validate_default(default, Union{Int64, Nothing}, "PositiveIntegerField", format2int64)
   if default !== nothing && !(0 <= default <= POSITIVE_INTEGER_MAX)
-    throw(ArgumentError("The default value for PositiveIntegerField must be between 0 and $(POSITIVE_INTEGER_MAX), got: $default"))
+    throw(_fielderr("The default value for PositiveIntegerField must be between 0 and $(POSITIVE_INTEGER_MAX), got: $default"))
   end
 
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sPositiveIntegerField(
     verbose_name,
@@ -1493,18 +1507,18 @@ function BigIntegerField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
 
   # Validate default using validate_default
   default = validate_default(default, Union{Int64, Nothing}, "BigIntegerField", format2int64)
   
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sBigIntegerField(
     verbose_name,
@@ -1594,16 +1608,16 @@ function BooleanField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Bool, Nothing}, "BooleanField", x -> parse(Bool, string(x)))
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBooleanField(
     verbose_name,
@@ -1738,18 +1752,18 @@ function DateField(; kwargs...)
   auto_now_add = get(kwargs, :auto_now_add, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Date, Nothing}, "DateField", format_date_sql)
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
-  !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(auto_now isa Bool) && throw(_fielderr("The 'auto_now' must be a Boolean"))
+  !(auto_now_add isa Bool) && throw(_fielderr("The 'auto_now_add' must be a Boolean"))
   # Return the field instance
   return sDateField(
     verbose_name,
@@ -1866,26 +1880,26 @@ function DateTimeField(; kwargs...)
         end
       end
     else
-      throw(ArgumentError("Invalid default value for DateTimeField. Expected a DateTime, ZonedDateTime, or parseable datetime string."))
+      throw(_fielderr("Invalid default value for DateTimeField. Expected a DateTime, ZonedDateTime, or parseable datetime string."))
     end
   end
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{ZonedDateTime, DateTime, Nothing}, "DateTimeField", normalize_datetime_default)
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(auto_now isa Bool) && throw(ArgumentError("The 'auto_now' must be a Boolean"))
-  !(auto_now_add isa Bool) && throw(ArgumentError("The 'auto_now_add' must be a Boolean"))
-  !(type isa String) && throw(ArgumentError("The 'type' must be a String"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(auto_now isa Bool) && throw(_fielderr("The 'auto_now' must be a Boolean"))
+  !(auto_now_add isa Bool) && throw(_fielderr("The 'auto_now_add' must be a Boolean"))
+  !(type isa String) && throw(_fielderr("The 'type' must be a String"))
   if type != "TIMESTAMPTZ" && type != "TIMESTAMP"
-    throw(ArgumentError("The 'type' must be either 'TIMESTAMPTZ' or 'TIMESTAMP'"))
+    throw(_fielderr("The 'type' must be either 'TIMESTAMPTZ' or 'TIMESTAMP'"))
   end
   # Return the field instance
   return sDateTimeField(
@@ -1991,11 +2005,11 @@ function DecimalField(; kwargs...)
 
   # Validate primary_key rejection for Decimal (Best practice)
   if primary_key === true
-    throw(ArgumentError("DecimalField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
+    throw(_fielderr("DecimalField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
   end
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   
   # Validate default using validate_default
   default = validate_default(default, Union{Float64, Nothing}, "DecimalField", format2float64)
@@ -2004,16 +2018,16 @@ function DecimalField(; kwargs...)
   
   # Validate scale vs precision
   if decimal_places > max_digits
-    throw(ArgumentError("DecimalField 'decimal_places' ($decimal_places) cannot be greater than 'max_digits' ($max_digits)"))
+    throw(_fielderr("DecimalField 'decimal_places' ($decimal_places) cannot be greater than 'max_digits' ($max_digits)"))
   end
 
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sDecimalField(
     verbose_name,
@@ -2103,16 +2117,16 @@ function EmailField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{String, Nothing}, "EmailField", x -> parse(String, x))
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sEmailField(
     verbose_name,
@@ -2231,15 +2245,15 @@ function PasswordField(; kwargs...)
   db_column = get(kwargs, :db_column, nothing)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate other parameters
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(max_length isa Int) && throw(ArgumentError("The 'max_length' must be an Integer"))
-  max_length < 64 && throw(ArgumentError("The 'max_length' must be at least 64 to store password hashes"))
-  !(auto_hash isa Bool) && throw(ArgumentError("The 'auto_hash' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(max_length isa Int) && throw(_fielderr("The 'max_length' must be an Integer"))
+  max_length < 64 && throw(_fielderr("The 'max_length' must be at least 64 to store password hashes"))
+  !(auto_hash isa Bool) && throw(_fielderr("The 'auto_hash' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
   
   # Return the field instance
   return sPasswordField(
@@ -2323,22 +2337,22 @@ function FloatField(; kwargs...)
 
   # Validate primary_key rejection for Float (Best practice)
   if primary_key === true
-    throw(ArgumentError("FloatField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
+    throw(_fielderr("FloatField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
   end
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The verbose_name must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   
   # Validate default using validate_default
   default = validate_default(default, Union{Float64, Nothing}, "FloatField", format2float64)
   
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' parameter must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sFloatField(
     verbose_name,
@@ -2426,16 +2440,16 @@ function ImageField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{String, Nothing}, "ImageField", x -> parse(String, x))
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sImageField(
     verbose_name,
@@ -2477,14 +2491,14 @@ function FileField(; kwargs...)
   default      = get(kwargs, :default, nothing)
   editable     = get(kwargs, :editable, true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   default = validate_default(default, Union{String, Nothing}, "FileField", x -> parse(String, x))
-  !(unique   isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank    isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null     isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique   isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank    isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null     isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   return sImageField(
     verbose_name,
@@ -2569,16 +2583,16 @@ function TextField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{String, Nothing}, "TextField", x -> parse(String, x))
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTextField(
     verbose_name,
@@ -2631,16 +2645,16 @@ function TimeField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Time, Nothing}, "TimeField", x -> Time(x))
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTimeField(
     verbose_name,
@@ -2695,7 +2709,7 @@ function BinaryField(; kwargs...)
   max_length = get(kwargs, :max_length, nothing)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", x -> Base64.decode(x))
   if max_length isa AbstractString
@@ -2706,17 +2720,17 @@ function BinaryField(; kwargs...)
     end
   end
   if !(max_length isa Union{Nothing, Int})
-    throw(ArgumentError("The 'max_length' must be an integer or nothing"))
+    throw(_fielderr("The 'max_length' must be an integer or nothing"))
   elseif max_length isa Int && max_length <= 0
-    throw(ArgumentError("The 'max_length' must be a positive integer"))
+    throw(_fielderr("The 'max_length' must be a positive integer"))
   end
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBinaryField(
     verbose_name,
@@ -2770,7 +2784,7 @@ function DurationField(; kwargs...)
   editable = get(kwargs, :editable, false)
 
   # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default. `format_duration_sql` raises InvalidValueError — correct on the insert/update
   # path, but here the caller's mistake is the `default=` kwarg at model-definition time. Re-raise as
   # FieldValidationError so every field constructor reports the same category (#239), matching the
@@ -2786,12 +2800,12 @@ function DurationField(; kwargs...)
     end
   end
   # Validate other parameters
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sDurationField(
     verbose_name,
@@ -2881,15 +2895,15 @@ function UUIDField(; kwargs...)
   editable = get(kwargs, :editable, true)
   auto_add = get(kwargs, :auto_add, false)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  !(primary_key isa Bool) && throw(ArgumentError("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
-  !(auto_add isa Bool) && throw(ArgumentError("The 'auto_add' must be a Boolean"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  !(auto_add isa Bool) && throw(_fielderr("The 'auto_add' must be a Boolean"))
 
   # Validate UUID format for string defaults (validate_default won't invoke the
   # converter when the value already matches Union{String, Nothing})
@@ -2993,16 +3007,16 @@ function URLField(; kwargs...)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
-  max_length < 1 && throw(ArgumentError("The max_length must be greater than 0"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  max_length isa Int || throw(_fielderr("The max_length must be an integer"))
+  max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   default = validate_default(default, Union{String, Nothing}, "URLField", x -> string(x))
 
@@ -3092,17 +3106,17 @@ function SlugField(; kwargs...)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
-  max_length isa Int || throw(ArgumentError("The max_length must be an integer"))
-  max_length > 255 && throw(ArgumentError("The max_length must be less than or equal to 255"))
-  max_length < 1 && throw(ArgumentError("The max_length must be greater than 0"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  max_length isa Int || throw(_fielderr("The max_length must be an integer"))
+  max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
+  max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   default = validate_default(default, Union{String, Nothing}, "SlugField", x -> string(x))
 
@@ -3194,13 +3208,13 @@ function JSONField(; kwargs...)
   default = get(kwargs, :default, nothing)
   editable = get(kwargs, :editable, true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(ArgumentError("The 'verbose_name' must be a String or nothing"))
-  !(unique isa Bool) && throw(ArgumentError("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(ArgumentError("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(ArgumentError("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(ArgumentError("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(ArgumentError("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(ArgumentError("The 'editable' must be a Boolean"))
+  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
+  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
+  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
+  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
+  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
+  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   # Validate JSON format for string defaults (validate_default won't invoke the
   # converter when the value already matches Union{String, Nothing})

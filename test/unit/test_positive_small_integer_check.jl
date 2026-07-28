@@ -83,8 +83,8 @@ end
   @testset "constructor enforces the non-negative range" begin
     @test Models.PositiveIntegerField(default=0).default == 0
     @test Models.PositiveIntegerField(default=2147483647).default == 2147483647
-    @test_throws ArgumentError Models.PositiveIntegerField(default=-1)
-    @test_throws ArgumentError Models.PositiveIntegerField(default=2147483648)
+    @test_throws PormG.FieldValidationError Models.PositiveIntegerField(default=-1)
+    @test_throws PormG.FieldValidationError Models.PositiveIntegerField(default=2147483648)
   end
 
   # ───────────────────────────────────────────────────────────────────────────

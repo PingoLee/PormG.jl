@@ -135,8 +135,8 @@ end
         end
 
         @testset "Construction rejects invalid max_length" begin
-            @test_throws ArgumentError Models.URLField(max_length=0)
-            @test_throws ArgumentError Models.URLField(max_length=-1)
+            @test_throws PormG.FieldValidationError Models.URLField(max_length=0)
+            @test_throws PormG.FieldValidationError Models.URLField(max_length=-1)
         end
 
         @testset "validate_field_data with URLField" begin
@@ -179,8 +179,8 @@ end
         end
 
         @testset "Construction rejects invalid max_length" begin
-            @test_throws ArgumentError Models.SlugField(max_length=0)
-            @test_throws ArgumentError Models.SlugField(max_length=256)
+            @test_throws PormG.FieldValidationError Models.SlugField(max_length=0)
+            @test_throws PormG.FieldValidationError Models.SlugField(max_length=256)
         end
 
         @testset "validate_field_data with SlugField" begin

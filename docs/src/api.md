@@ -698,7 +698,7 @@ end
 `pool_stats`, `PoolTimeoutError`, `PoolConnectError`
 
 ### Utilities & lifecycle
-`upgrade_guide`, `tui`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
+`upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
 
 !!! note "`setup` and `install_ai_skills` are qualified-call-only"
     The one-off lifecycle helpers `PormG.setup()` (interactive project wizard) and

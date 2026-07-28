@@ -32,7 +32,7 @@ const EXPECTED_TOPLEVEL = Set([
     # Locking
     :with_advisory_lock,
     # Utilities & lifecycle (#201: setup / install_ai_skills are qualified-call-only, not exported)
-    :upgrade_guide, :tui, :register_ignore_tables!,
+    :upgrade_guide, :register_ignore_tables!,
     Symbol("@import_models"), Symbol("@models_module"), Symbol("@pormg_debug"),
 ])
 

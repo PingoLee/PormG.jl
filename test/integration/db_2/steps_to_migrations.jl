@@ -6,7 +6,6 @@
 # and the configuration in test/integration/db_2/connection.yml.
 # ==============================================================================
 
-# using Tachikoma
 using Pkg
 Pkg.activate(".")
 

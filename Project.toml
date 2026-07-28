@@ -60,8 +60,6 @@ Test = "1"
 TimeZones = "1"
 UUIDs = "1"
 YAML = "0.4"
-# 1.12 floor is deliberate — @import_models/set_models world-age handling relies on 1.12
-# semantics; the 1.10 LTS is not targeted (#211).
 julia = "1.12"
 
 [extras]

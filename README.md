@@ -30,7 +30,7 @@ Full documentation, tutorials, and API reference:
 
 ## Requirements
 
-- Julia **1.12** or newer — the 1.12 floor is deliberate: the hot-reload model-loading machinery (`@import_models`) relies on Julia 1.12 world-age semantics, so the 1.10 LTS is not supported
+- Julia **1.12** or newer — the 1.12 floor is deliberate: the hot-reload model-loading machinery (`@import_models` / `set_models`) relies on Julia 1.12 world-age semantics, so the 1.10 LTS is not targeted ([#211](https://github.com/PingoLee/PormG.jl/issues/211))
 - A SQL driver for your backend — [`LibPQ`](https://github.com/JuliaDatabases/LibPQ.jl) (PostgreSQL) or [`SQLite`](https://github.com/JuliaDatabases/SQLite.jl)
 
 ## Installation

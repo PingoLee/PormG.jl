@@ -3,7 +3,7 @@ Unit coverage for the PostgreSQL-only JSONB containment/overlap operators (#27):
 `__@jcontains` (@>), `__@has_key` (?), `__@has_any_keys` (?|), `__@has_keys` (?&).
 
 These are PostgreSQL-only (SQLite has no equivalent): the SQLite renderer throws a friendly
-ArgumentError, mirroring the `iunaccent_*` precedent. The RHS binds per operator — a jsonb
+UnsupportedConnectionError, mirroring the `iunaccent_*` precedent. The RHS binds per operator — a jsonb
 document (`::jsonb`) for @>, a text key for ?, a text[] key array for ?|/?&. LibPQ binds `\$N`
 placeholders, so a literal `?`/`?|`/`?&` in the SQL is the operator, not a bind marker.
 
@@ -84,7 +84,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
     # a raw JSON string is passed through VERBATIM (validated, not re-canonicalized) — whitespace kept
     @test _pg(mk("{ \"a\" : 1 }"))[:parameters]        == ["{ \"a\" : 1 }"]
     # an invalid JSON string is rejected at build time (format_json_sql validates)
-    @test_throws ArgumentError _pg(mk("not json"))
+    @test_throws PormG.InvalidValueError _pg(mk("not json"))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
       q = JO.Json_op_scratch.objects
       q.filter("payload__@$(suffix)" => val)
       q.values("id")
-      # message-match so an unrelated ArgumentError can't masquerade as the PG-only guard
+      # message-match so an unrelated error can't masquerade as the PG-only guard
       @test_throws "requires PostgreSQL" inspect_query(q; connection = _JO_SL)
     end
   end

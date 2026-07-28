@@ -12,7 +12,10 @@ import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLitePar
 # `_unsupported_conn`, `_write_not_allowed`) still live in `querybuilder/exceptions.jl`.
 import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
   QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError,
-  DoesNotExist, MultipleObjectsReturned
+  DoesNotExist, MultipleObjectsReturned,
+  # Not thrown here — CAUGHT here: last()/save()/delete() convert Models' composite-pk failure
+  # into an actionable QueryBuildError (#239).
+  ModelDefinitionError
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)

@@ -116,13 +116,13 @@ if _UNACCENT_ADAPTER == "PostgreSQL"
 elseif _UNACCENT_ADAPTER == "SQLite"
     # ─────────────────────────────────────────────────────────────────────────────
     # iunaccent_contains is unsupported on SQLite and must fail loudly
-    # The lookup requires the PostgreSQL unaccent extension; on SQLite the dialect
-    # raises a clear ArgumentError rather than silently producing wrong SQL.
+    # The lookup requires the PostgreSQL unaccent extension; on SQLite the dialect raises a
+    # clear UnsupportedConnectionError (#239) rather than silently producing wrong SQL.
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "iunaccent_contains rejected on SQLite" begin
         conn = PormG.config[PORMG_DB_FOLDER].connections
-        @test_throws ArgumentError PormG.Dialect.iunaccent_contains(conn, "surname", "raikkonen")
-        @test_throws ArgumentError PormG.Dialect.iunaccent_exact(conn, "surname", "raikkonen")
+        @test_throws PormG.UnsupportedConnectionError PormG.Dialect.iunaccent_contains(conn, "surname", "raikkonen")
+        @test_throws PormG.UnsupportedConnectionError PormG.Dialect.iunaccent_exact(conn, "surname", "raikkonen")
     end
 
 else

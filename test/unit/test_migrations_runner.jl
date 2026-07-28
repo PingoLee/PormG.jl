@@ -406,14 +406,14 @@ using Dates
     # mark_applied must never fabricate a checksum. A manually-reconciled migration
     # has to carry a *verifiable* digest, so the caller must supply either the real
     # `sql_content` (from which the checksum is computed) or an explicit `checksum`.
-    # Supplying neither is refused with an ArgumentError — a made-up digest can never
+    # Supplying neither is refused with an InvalidMigrationError — a made-up digest can never
     # be verified and silently defeats drift detection. _resolve_mark_checksum is the
     # pure, DB-free core of that guardrail, so we can exercise it without a connection.
     # ==============================================================================
 
     @testset "mark_applied Checksum Guardrail" begin
         # Neither sql_content nor checksum → refuse (do NOT fabricate).
-        @test_throws ArgumentError Migrations._resolve_mark_checksum("", "")
+        @test_throws PormG.InvalidMigrationError Migrations._resolve_mark_checksum("", "")
 
         # The refusal message must point the caller at the fix (supply sql_content).
         err = try
@@ -422,7 +422,7 @@ using Dates
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa PormG.InvalidMigrationError
         @test occursin("sql_content", err.msg)
 
         # sql_content supplied, no explicit checksum → checksum is COMPUTED from the SQL

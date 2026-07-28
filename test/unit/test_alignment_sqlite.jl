@@ -1921,7 +1921,7 @@ end
 @testset "set_models throws on an unresolvable string FK target (#62)" begin
     # #62 restructured set_models' resolution (try/catch → _resolve_target_model + explicit
     # throw); the strict error must remain — a string target naming a model that is not
-    # defined in the module raises ArgumentError rather than silently skipping.
+    # defined in the module raises ModelDefinitionError rather than silently skipping.
     BadChild = PormG.Models.Model_Type(
         name = "bad_fk_child",
         fields = Dict(
@@ -1932,7 +1932,7 @@ end
     )
     bad_mod = Module(:bad_fk_target_module)
     Core.eval(bad_mod, :(const BadChild = $BadChild))
-    @test_throws ArgumentError PormG.Models.set_models(bad_mod, "mock_sl_path")
+    @test_throws PormG.ModelDefinitionError PormG.Models.set_models(bad_mod, "mock_sl_path")
 end
 
 # ── #64: db_column on M2M / CTE join keys (DB-free render asserts) ─────────────────────────
@@ -1962,7 +1962,7 @@ end
 
 @testset "_resolve_m2m_side_model: binding fallback + not-found error (#64)" begin
     # When the binding isn't a defined module binding, the helper falls back to a name scan
-    # over get_all_models; a name that matches no model raises ArgumentError.
+    # over get_all_models; a name that matches no model raises ModelDefinitionError.
     resolved = PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "m2m_rpk_sponsor_scratch", "sponsors")
     @test resolved === M.M2m_rpk_sponsor_scratch
     @test_throws PormGError PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "no_such_model_zzz", "sponsors")
@@ -1983,7 +1983,7 @@ end
 
 @testset "Related Objects - Duplicate related_name rejection" begin
     # Creating two ForeignKeys to the same target model with the same related_name
-    # should raise an ArgumentError during set_models.
+    # should raise a ModelDefinitionError during set_models.
     DupParent = PormG.Models.Model_Type(
         name = "dup_parent",
         fields = Dict(
@@ -2008,7 +2008,7 @@ end
     Core.eval(dup_mod, :(const DupChild = $DupChild))
 
     # set_models should reject the duplicate related_name
-    @test_throws ArgumentError PormG.Models.set_models(dup_mod, "mock_sl_path")
+    @test_throws PormG.ModelDefinitionError PormG.Models.set_models(dup_mod, "mock_sl_path")
 end
 
 @testset "Delete Graph - Circular dependency detection" begin

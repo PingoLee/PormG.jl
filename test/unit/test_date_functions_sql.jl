@@ -58,7 +58,7 @@ const _EMPTY = Dict{String, Any}()
       @test Dialect.EXTRACT(_COL, fmt, _SL) == "CAST(strftime('$slcode', $(_COL)) AS INTEGER)"
     end
     # The SQLite whitelist is fail-closed: an unsupported part must throw, not emit garbage.
-    @test_throws ArgumentError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL)
+    @test_throws PormG.UnsupportedConnectionError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL)
   end
 
   # ===========================================================================

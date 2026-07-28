@@ -4,6 +4,12 @@ using DataFrames
 import Tables
 import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
+# Semantic error taxonomy (#239). Dialect raises three categories:
+#   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String").
+#   UnsupportedConnectionError — the active backend cannot do this (a PG-only JSONB/unaccent
+#                                lookup, an extract part SQLite lacks, too old a SQLite library).
+#   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
+import PormG: InvalidValueError, UnsupportedConnectionError, QueryBuildError
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
@@ -128,7 +134,7 @@ function _assert_sqlite_window_support(conn::PormGSQLite)
     # Reconstruct M.mm.pp from the packed version integer (e.g. 3039000 -> "3.39.0").
     major, rem = divrem(version_number, 1_000_000)
     minor, patch = divrem(rem, 1_000)
-    throw(ArgumentError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $major.$minor.$patch."))
+    throw(UnsupportedConnectionError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $major.$minor.$patch."))
   end
   return nothing
 end
@@ -257,7 +263,7 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   elseif part == "DOY"
     "%j"
   else
-    throw(ArgumentError("Unsupported extract part for SQLite: $part"))
+    throw(UnsupportedConnectionError("Unsupported extract part for SQLite: $part"))
   end
 
   return "CAST(strftime('$(strftime_format)', $(column)) AS INTEGER)"
@@ -770,15 +776,15 @@ PostgreSQL and SQLite (≥3.24) share this syntax, so one method covers both bac
 function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{String},
                             conn::Union{PormGPostgres, PormGSQLite})::String
   action in (:nothing, :update) ||
-    throw(ArgumentError("on_conflict_clause: action must be :nothing or :update, got :$action"))
+    throw(QueryBuildError("on_conflict_clause: action must be :nothing or :update, got :$action"))
   target_sql = isempty(target) ? "" : " ($(join(target, ", ")))"
   if action === :nothing
     return "ON CONFLICT$(target_sql) DO NOTHING"
   end
   isempty(target) &&
-    throw(ArgumentError("on_conflict_clause: action :update requires a non-empty conflict target"))
+    throw(QueryBuildError("on_conflict_clause: action :update requires a non-empty conflict target"))
   isempty(set) &&
-    throw(ArgumentError("on_conflict_clause: action :update requires a non-empty set column list"))
+    throw(QueryBuildError("on_conflict_clause: action :update requires a non-empty set column list"))
   assignments = join(["$col = EXCLUDED.$col" for col in set], ", ")
   return "ON CONFLICT$(target_sql) DO UPDATE SET $(assignments)"
 end
@@ -1092,40 +1098,40 @@ function jcontains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) @> $(value)"                    # jsonb contains the given document
 end
 function jcontains(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
 function jcontains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
 
 function has_key(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ? $(value)"                     # top-level key exists
 end
 function has_key(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
 function has_key(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
 
 function has_any_keys(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ?| $(value)"                    # any of the given keys exists
 end
 function has_any_keys(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
 function has_any_keys(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
 
 function has_keys(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ?& $(value)"                    # all of the given keys exist
 end
 function has_keys(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 function has_keys(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+  throw(UnsupportedConnectionError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 
 function contains(conn::PormGPostgres, column::String, value::String)::String
@@ -1135,7 +1141,7 @@ function contains(conn::PormGSQLite, column::String, value::String)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function contains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1148,7 +1154,7 @@ function icontains(conn::PormGSQLite, column::String, value::String)::String
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function icontains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1158,11 +1164,11 @@ function iunaccent_contains(conn::PormGPostgres, column::String, value::String):
   return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
 function iunaccent_contains(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+  throw(UnsupportedConnectionError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function iunaccent_contains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1173,11 +1179,11 @@ function iunaccent_exact(conn::PormGPostgres, column::String, value::String)::St
   return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
 end
 function iunaccent_exact(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+  throw(UnsupportedConnectionError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function iunaccent_exact(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1188,7 +1194,7 @@ function startswith(conn::PormGSQLite, column::String, value::String)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function startswith(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1200,7 +1206,7 @@ function istartswith(conn::PormGSQLite, column::String, value::String)::String
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function istartswith(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1211,7 +1217,7 @@ function endswith(conn::PormGSQLite, column::String, value::String)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
 function endswith(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1223,7 +1229,7 @@ function iendswith(conn::PormGSQLite, column::String, value::String)::String
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function iendswith(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1242,7 +1248,7 @@ function ncontains(conn::PormGSQLite, column::String, value::String)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
 function ncontains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1254,7 +1260,7 @@ function nicontains(conn::PormGSQLite, column::String, value::String)::String
   return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function nicontains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1262,11 +1268,11 @@ function niunaccent_contains(conn::PormGPostgres, column::String, value::String)
   return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
 function niunaccent_contains(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+  throw(UnsupportedConnectionError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function niunaccent_contains(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1274,11 +1280,11 @@ function niunaccent_exact(conn::PormGPostgres, column::String, value::String)::S
   return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
 end
 function niunaccent_exact(conn::PormGSQLite, column::String, value::String)
-  throw(ArgumentError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+  throw(UnsupportedConnectionError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function niunaccent_exact(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1289,7 +1295,7 @@ function nstartswith(conn::PormGSQLite, column::String, value::String)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
 function nstartswith(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
@@ -1300,7 +1306,7 @@ function nendswith(conn::PormGSQLite, column::String, value::String)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
 function nendswith(conn::PormGAbstractType, column::String, value)
-  throw(ArgumentError("The value must be a String"))
+  throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 

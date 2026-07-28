@@ -79,7 +79,7 @@ function pool_stats(key::AbstractString)
   # no-op close_pool!(::String) uses for teardown) is deliberate for a stats query: a zeroed
   # snapshot for a never-built pool would read as a healthy empty pool.
   pool = Configuration.get_settings(String(key)).connections
-  pool === nothing && throw(ArgumentError("Connection '$(key)' has no pool yet (not built / not connected)."))
+  pool === nothing && throw(InvalidConfigurationError("Connection '$(key)' has no pool yet (not built / not connected)."))
   return pool_stats(pool)
 end
 

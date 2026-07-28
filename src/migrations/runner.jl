@@ -1032,7 +1032,7 @@ function migrate_to(connection::Union{PormGPostgres, PormGSQLite}, settings::Por
     end
   end
 
-  throw(ArgumentError("migrate_to(version) is not implemented for the current single pending_migrations.jl workflow. Generate and apply the pending plan with migrate(), or implement ordered multi-file migration queues first."))
+  throw(InvalidMigrationError("migrate_to(version) is not implemented for the current single pending_migrations.jl workflow. Generate and apply the pending plan with migrate(), or implement ordered multi-file migration queues first."))
 end
 
 function migrate_to(db::String, target_version::String; config::Dict{String,PormGSettings} = config, 
@@ -1058,7 +1058,7 @@ can be unit-tested directly.
 """
 function _resolve_mark_checksum(checksum::String, sql_content::String)::String
   if isempty(checksum) && isempty(sql_content)
-    throw(ArgumentError(
+    throw(InvalidMigrationError(
       "mark_applied requires the migration's `sql_content` (preferred — the checksum is then " *
       "computed from, and verifiable against, the real SQL) or an explicit `checksum`. Refusing " *
       "to fabricate one: a made-up checksum can never be verified and silently defeats drift " *

@@ -120,10 +120,10 @@ end
   @testset "missing / nothing pass through; invalid rejected" begin
     @test format_timezone_sql(missing) === missing
     @test format_timezone_sql(nothing) === missing
-    @test_throws ArgumentError format_timezone_sql("not-a-date")
+    @test_throws PormG.InvalidValueError format_timezone_sql("not-a-date")
     # Out-of-range offsets must be rejected, not silently shifted into a wrong instant.
-    @test_throws ArgumentError format_timezone_sql("2020-01-01T10:00:00+25:00")  # hour > 23
-    @test_throws ArgumentError format_timezone_sql("2020-01-01T10:00:00+00:60")  # minute > 59
+    @test_throws PormG.InvalidValueError format_timezone_sql("2020-01-01T10:00:00+25:00")  # hour > 23
+    @test_throws PormG.InvalidValueError format_timezone_sql("2020-01-01T10:00:00+00:60")  # minute > 59
     # Real-world offsets (up to the ±14:00 max) are still accepted and converted to UTC.
     @test format_timezone_sql("2020-01-01T10:00:00+14:00") == "2019-12-31T20:00:00.000+00:00"
     @test format_timezone_sql("2020-01-01T10:00:00-13:00") == "2020-01-01T23:00:00.000+00:00"

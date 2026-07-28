@@ -7,7 +7,10 @@ import Logging
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: @pormg_debug
-import PormG: PormGError  # semantic error taxonomy (#239); the pool errors are reparented under it
+import PormG: PormGError  # taxonomy root — PoolTimeoutError / PoolConnectError are reparented under it
+# Throw sites (#239): a bad acquire mode is a value error, an unresolvable pool is a config error,
+# and misuse of atomic() nesting lands on the long-tail QueryBuildError bucket.
+import PormG: InvalidValueError, InvalidConfigurationError, QueryBuildError
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
@@ -792,7 +795,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
 end
 
 function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, Real} = nothing, max_retries::Int = 300, mode::Symbol = :any)
-  mode in (:any, :read, :write) || throw(ArgumentError("Invalid SQLite acquire mode: $(mode). Expected :any, :read or :write."))
+  mode in (:any, :read, :write) || throw(InvalidValueError("Invalid SQLite acquire mode: $(mode). Expected :any, :read or :write."))
 
   start_time = time()
   # Default acquire timeout comes from the pool (connection.yml `pool_timeout`, #126); an explicit
@@ -1665,7 +1668,7 @@ _savepoint_name(depth::Integer) = "pormg_sp_$(depth)"
 # `settings` for `with_savepoint`/`fetch`) can route through the pinned connection.
 function _settings_for_pool(pool::Union{PormGPostgres, PormGSQLite})::PormGSettings
   key = connection_key_for_pool(pool)
-  key === nothing && throw(ArgumentError("Cannot resolve connection settings for the active transaction pool"))
+  key === nothing && throw(InvalidConfigurationError("Cannot resolve connection settings for the active transaction pool"))
   return get_settings(key)
 end
 
@@ -1793,7 +1796,7 @@ transaction is already active (mirrors Django's `atomic(durable=True)`).
 """
 function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::Bool=false)
   if durable && in_transaction_context()
-    throw(ArgumentError("atomic(durable=true) must be the outermost transaction, but a transaction is already active"))
+    throw(QueryBuildError("atomic(durable=true) must be the outermost transaction, but a transaction is already active"))
   end
   return run_in_transaction(f, pool)
 end

@@ -60,7 +60,7 @@ PormG.config["default"] = PormG.Configuration.Settings(
     @test format_fild_name("_DriverId") == "DriverId"
     # Only ONE leading underscore is stripped; a residual leading `_` is rejected so a
     # double leading underscore can never be mistaken for a stripped name.
-    @test_throws ArgumentError format_fild_name("__id")
+    @test_throws PormG.ModelDefinitionError format_fild_name("__id")
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

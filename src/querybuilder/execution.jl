@@ -1762,9 +1762,9 @@ function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
     pk_sym = try
       Models.get_model_pk_field(model)
     catch e
-      # get_model_pk_field lives in Models and still throws ArgumentError on a composite pk
-      # (mirrors save()/pk()). Re-home it as an actionable QueryBuildError.
-      e isa ArgumentError || rethrow(e)
+      # get_model_pk_field throws ModelDefinitionError on a composite pk (#239; was
+      # ArgumentError). Re-home it as an actionable QueryBuildError.
+      e isa ModelDefinitionError || rethrow(e)
       throw(QueryBuildError("last() with no order_by() needs a single-column primary key to order by, but $(model.name) has none — add an explicit order_by(...)."))
     end
     pk_sym === nothing &&
@@ -1925,10 +1925,10 @@ function save(row::PormGRow; show_query::Symbol = :execute)
   pk_sym = try
     Models.get_model_pk_field(model)
   catch e
-    # `get_model_pk_field` lives in Models, which is OUT OF SCOPE for the #231 error taxonomy and
-    # still throws `ArgumentError` (not a `PormGError`). Keep `isa ArgumentError` here; revisit when
-    # the Models error contract migrates. The re-thrown save() error below is in-scope (QueryBuildError).
-    e isa ArgumentError || rethrow(e)
+    # `get_model_pk_field` throws `ModelDefinitionError` on a composite pk (#239 migrated the
+    # Models error contract; it was `ArgumentError` under #231). The re-thrown save() error below
+    # stays a QueryBuildError — the caller's mistake is the save(), not the model definition.
+    e isa ModelDefinitionError || rethrow(e)
     throw(QueryBuildError("save() requires exactly one primary key field; $(model.name) is not supported."))
   end
   pk_sym === nothing && throw(QueryBuildError("save() requires exactly one primary key field; $(model.name) is not supported."))
@@ -2020,8 +2020,8 @@ function delete(row::PormGRow; show_query::Symbol = :execute)
   pk_sym = try
     Models.get_model_pk_field(model)
   catch e
-    # get_model_pk_field still throws ArgumentError on a composite pk (mirrors save()/pk()).
-    e isa ArgumentError || rethrow(e)
+    # get_model_pk_field throws ModelDefinitionError on a composite pk (#239; mirrors save()/pk()).
+    e isa ModelDefinitionError || rethrow(e)
     throw(QueryBuildError("delete() requires exactly one primary key field; $(model.name) is not supported."))
   end
   pk_sym === nothing &&

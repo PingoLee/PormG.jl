@@ -87,10 +87,12 @@ function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
   through_model = try
     _m2m_model_from_binding(owner_module, manager.relation.through_model, manager.relation.through_model)
   catch e
-    # The binding-not-found signal from _m2m_model_from_binding is now QueryBuildError <:
-    # PormGError (#231, was ArgumentError). Catch the taxonomy root so this stays robust to
-    # reclassification; any non-PormGError (type/module error) still propagates as intended.
-    e isa PormGError && return false
+    # The binding-not-found signal from _m2m_model_from_binding is QueryBuildError (#231, was
+    # ArgumentError). Match THAT type, not the taxonomy root: since #239 `PormGError` also covers
+    # Models/config/migration failures, and catching the root here would silently swallow a future
+    # model-definition error raised deeper in this call path — exactly the "silently allowed to
+    # mutate a through table with extra fields" outcome the comment above warns against.
+    e isa QueryBuildError && return false
     rethrow(e)
   end
 

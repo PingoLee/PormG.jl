@@ -191,9 +191,11 @@ default_env: dev
 # If you relied on load() creating the skeleton, be explicit:
 PormG.Configuration.load("db"; scaffold=true)      # or: PormG.setup("db")
 
-# A catch that keyed on the old per-op write message → match the type + the new stable phrase:
+# A catch that keyed on the old per-op write message → match the TYPE. #231 (same 0.3.0 train)
+# retyped this error to `PormG.PermissionError`, which is deliberately NOT <: ArgumentError —
+# so an `e isa ArgumentError` catch here would silently stop matching. No message check needed.
 catch e
-    e isa ArgumentError && occursin("not allowed to write", e.msg) && handle()
+    e isa PormG.PermissionError && handle()
 ```
 
 The recommended server pattern is unchanged and preferred: let the host resolve its environment and
@@ -209,8 +211,7 @@ environments. `default_env:` is a convenience for scripts/single-env apps.
   `src/PormG.jl` exports, `docs/src/{api,many_to_many,import_django}.md`
 - **Recorded**: 2026-07-24
 - **Severity**: **breaking (renames)** — pre-publish naming pass; every rename is old-name-gone, no aliases.
-  Part of the current `## Unreleased` wave: roll an app forward by applying **all** Unreleased entries
-  together when the train is cut.
+  Part of the `0.3.x` pre-publish wave — roll it forward together with the other `0.3.*` entries.
 
 ### What changed
 

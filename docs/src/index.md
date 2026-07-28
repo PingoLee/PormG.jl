@@ -35,8 +35,15 @@ using Pkg
 Pkg.develop(url="https://github.com/PingoLee/PormG.jl")
 ```
 
-!!! note
-    Since this is a development package, features may change and stability is not guaranteed. Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
+!!! note "Pre-1.0: breaking changes come with a migration path"
+    PormG is pre-1.0, so the API still changes when a change makes it better. Every breaking change
+    ships with a migration entry: what changed, a `grep` that finds the affected call sites in
+    *your* code, and the concrete `before → after` edit.
+
+    Run `PormG.upgrade_guide(from = v"<your pinned version>")` to see only what applies to your
+    version — usually nothing. See **[Upgrading PormG](upgrading.md)**.
+
+    Please report any issues on the [GitHub repository](https://github.com/PingoLee/PormG.jl).
 
 ### Install a database driver
 

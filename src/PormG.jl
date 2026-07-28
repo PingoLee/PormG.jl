@@ -36,67 +36,35 @@ import DataFrames, OrderedCollections, Dates, Logging, YAML
 # `Backend.jl`, whose methods live in `ext/PormGLibPQExt.jl` / `ext/PormGSQLiteExt.jl`
 # and load on `using LibPQ` / `using SQLite`.
 
-abstract type PormGAbstractType end
-abstract type PormGSettings <: PormGAbstractType end
-# Backend/dialect markers: the dispatch key for SQL rendering and driver selection. NOT <: PormGSettings —
-# PormGSettings is the Settings/config type, and a pool carries none of its fields (#186). Concrete pools are
-# PostgresConnectionPool <: PormGPostgres and SQLiteConnectionPool <: PormGSQLite.
-abstract type PormGBackend <: PormGAbstractType end
-abstract type PormGPostgres <: PormGBackend end
-abstract type PormGSQLite <: PormGBackend end
-abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
-abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
-abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
-abstract type SQLObject <: PormGAbstractType end
-abstract type SQLObjectHandler <: SQLObject end
-abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias
-abstract type SQLInstruction <: PormGAbstractType end # instruction to build a query
-abstract type SQLType <: PormGAbstractType end
-abstract type SQLTypeQ <: SQLType end
-abstract type SQLTypeQor <: SQLType end
-abstract type SQLTypeF <: SQLType end
-abstract type SQLTypeFunction <: SQLType end # Function to be used in the query
-abstract type SQLTypeOper <: SQLType end
-abstract type SQLTypeText <: SQLType end # raw texgt to be used in the query
-abstract type SQLTypeArrays <: SQLType end # Arrays to orgnize the query informations 
-abstract type SQLTypeField <: SQLType end # Field to be used in the query (values, filters, etc)
-abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
-abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
+# ── Layer 1: shared vocabulary ───────────────────────────────────────────────
+# Abstract types, constants, the `PormGError` root, `_emsg` and `config`. Kernel imports nothing
+# from PormG and is included first, so every submodule below can name any of it regardless of its
+# own position in this chain. See the `PormG.Kernel` docstring for why that ordering is load-bearing.
+#
+# `using .Kernel` BINDS Kernel's exports here (so `PormG.PormGModel`, `PormG.config`, … keep
+# resolving) but does NOT re-export them — this module's own `export` lines below remain the single
+# definition of the public surface.
+include("Kernel.jl")
+using .Kernel
+# Underscore-private members are not exported by Kernel; import the two that are reached as
+# `PormG._emsg` / `PormG._EXTRA_IGNORE_TABLES` (both pinned by tests).
+import .Kernel: _emsg, _EXTRA_IGNORE_TABLES
+# Part of the documented downstream-extension surface (Nitro et al. call it from an ext `__init__`).
+export register_ignore_tables!
 
-
-abstract type PormGModel <: PormGAbstractType end
-# A field is a COMPONENT of a model, not a kind of model — a sibling, not a subtype, so it does not
-# satisfy ::PormGModel signatures (which all read model-only attributes) (#186).
-abstract type PormGField <: PormGAbstractType end # define the type of the column from the model
-
-abstract type Migration <: PormGAbstractType end
-
-# Root of the semantic error taxonomy (#231). Subtypes <: Exception (NOT <: ArgumentError — a
-# clean break, so callers catch a type instead of string-matching a message). Declared at the top
-# module level so every submodule can `import PormG: PormGError`; the concrete query-builder
-# subtypes live in `src/querybuilder/exceptions.jl`. Extends the #197 typed-exception lineage.
-abstract type PormGError <: Exception end
-
-const config::Dict{String,PormGSettings} = Dict()
-
-include("constants.jl")
-
+# ── Layer 2: behavior owned by PormG ─────────────────────────────────────────
 # Backend interface (empty generics + friendly fallbacks); driver bodies live in the
 # weakdep extensions. Must precede Configuration/ConnectionPool, which call the generics.
+# Deliberately NOT in Kernel: the extensions define `PormG.backend_*(…) = …`, and Julia only
+# accepts a qualified method definition on the module that owns the binding.
 include("Backend.jl")
 
-# upper functions
-function get_constraints_pk end
-function get_constraints_unique end
-function get_constraints_check end
-
+# ── Layer 3: submodules ──────────────────────────────────────────────────────
 include("Generator.jl")
 using .Generator
 
 include("Configuration.jl")
 using .Configuration
-
-include("tools.jl")
 
 include("ConnectionPool.jl")
 using .ConnectionPool
@@ -187,6 +155,12 @@ export upgrade_guide  # version-scoped UPGRADING.md emitter (#216)
 
 include("Migrations.jl")
 using .Migrations
+
+# ── Layer 4: user-facing lifecycle helpers ───────────────────────────────────
+# `setup`, `install_ai_skills`, `upgrade_guide` — consumers of everything above, depended on by
+# nothing. (It used to sit between Configuration and ConnectionPool purely because it also held
+# `_emsg`; that helper now lives in Kernel, so this file is free to land where it belongs.)
+include("tools.jl")
 
 include("precompile.jl")
 

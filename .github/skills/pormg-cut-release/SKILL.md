@@ -46,6 +46,16 @@ outside this skill.
      `## <new> — <YYYY-MM-DD>`.
    - Insert a **fresh empty** `## Unreleased — next \`<next-y>\`` block at the very top of the entries
      (above the just-stamped section), carrying the same placeholder note the previous one had.
+   - **Sweep the prose.** Stamping the `- **Version**:` bullet does *not* fix an entry **body** that
+     refers to itself as unreleased. Grep the just-stamped section for `Unreleased` and rewrite every
+     prose hit — "Part of the current `## Unreleased` wave … when the train is cut" is false the
+     moment it ships, and points readers at a section that is now empty:
+     ```bash
+     awk '/^## <new> —/,/^## [0-9]/' UPGRADING.md | grep -n 'Unreleased'   # expect: no prose hits
+     ```
+     Prefer version-neutral phrasing when *writing* an entry (`Part of the `<y>.x` pre-publish wave —
+     roll it forward with the other `<y>.*` entries`) so there is nothing to sweep. Caught in #201,
+     which shipped in 0.3.0 still telling apps to wait for a cut that had already happened.
    - Leave already-stamped (older) entries untouched.
 
 5. **Verify the parser.** Run `julia --project=. test/unit/test_upgrade_guide.jl` (via a runner that

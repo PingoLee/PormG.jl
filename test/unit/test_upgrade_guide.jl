@@ -94,6 +94,25 @@ using PormG
         @test occursin("nothing to port", out)
     end
 
+    # `to` defaults to _UNRELEASED_VERSION — an internal sort key (v"1000000.0.0"), not a real
+    # version. It must render as the literal "Unreleased" token on BOTH output paths; leaking the
+    # raw sentinel reads as a bug to the consumer running the command.
+    @testset "printed guide: the Unreleased sentinel never reaches output" begin
+        # populated path — the scope header, with `to` defaulted
+        full = sprint(io -> PormG.upgrade_guide(io; from = v"0.1.0"))
+        @test occursin("→ Unreleased", full)
+        @test !occursin("1000000", full)
+
+        # empty path — from == to == sentinel is an empty range by construction
+        empty = sprint(io -> PormG.upgrade_guide(io; from = PormG._UNRELEASED_VERSION))
+        @test occursin("nothing to port between Unreleased and Unreleased.", empty)
+        @test !occursin("1000000", empty)
+
+        # a real version still renders normally — the label must not swallow ordinary versions
+        real = sprint(io -> PormG.upgrade_guide(io; from = v"0.1.0", to = v"0.2.0"))
+        @test occursin("0.1.0 → 0.2.0", real)
+    end
+
     # ── argument handling ──────────────────────────────────────────────────────
     @testset "from is required" begin
         @test_throws ArgumentError PormG.upgrade_guide()
@@ -146,5 +165,62 @@ using PormG
                   filter(e -> v"0.1.0" < e.version <= PormG._UNRELEASED_VERSION, parsed))
         @test !any(e -> occursin("(#9001)", e.title),
                    filter(e -> v"0.1.0" < e.version <= v"0.2.0", parsed))
+    end
+
+    # ── `/pormg-cut-release` writes the release marker (`## 0.8.0 — <date>`) directly above the
+    #    FIRST entry of that release with no `---` between them, so the block's first `##` is the
+    #    marker, not the entry heading. Hand-fed so the test does not depend on which releases the
+    #    live file happens to contain. ──────────────────────────────────────────────────────────
+    @testset "release-marker heading is not mistaken for the entry title" begin
+        text = "# UPGRADING (fixture)\n\n---\n\n" *
+               "## Unreleased — next `0.9.0`\n\n" *
+               "## An uncut change (#9101)\n\n" *
+               "- **Version**: Unreleased\n- **Recorded**: 2026-02-02\n\nUncut body.\n\n---\n\n" *
+               "## 0.8.0 — 2026-01-15\n\n" *
+               "## First entry of the release (#9100)\n\n" *
+               "- **Version**: 0.8.0\n- **Recorded**: 2026-01-15\n\nFirst body.\n\n---\n\n" *
+               "## Second entry of the same release (#9099)\n\n" *
+               "- **Version**: 0.8.0\n- **Recorded**: 2026-01-14\n\nSecond body.\n"
+        parsed = PormG._parse_upgrading(text)
+        @test length(parsed) == 3
+
+        # the title is the entry's OWN heading — never the release marker above it
+        @test parsed[1].title == "An uncut change (#9101)"
+        @test parsed[2].title == "First entry of the release (#9100)"
+        @test parsed[3].title == "Second entry of the same release (#9099)"
+
+        # the version still comes from the `- **Version**:` bullet, not the marker's date
+        @test parsed[1].version == PormG._UNRELEASED_VERSION
+        @test parsed[2].version == v"0.8.0"
+
+        # the marker is stripped from the body so entries render uniformly: without this, only the
+        # first entry of a release carries a `## <ver> — <date>` line and later entries from OTHER
+        # releases read as if they belonged to it.
+        @test startswith(parsed[2].body, "## First entry of the release (#9100)")
+        @test !occursin("## 0.8.0 — 2026-01-15", parsed[2].body)
+        @test !occursin("## Unreleased — next", parsed[1].body)
+        @test occursin("First body.", parsed[2].body)   # the entry's own content still survives
+    end
+
+    # A marker is recognized by the `<token> — ` shape, NOT by "starts with a version". Without the
+    # em-dash requirement a real entry titled `## 0.5.0 config format …` is skipped as a marker, the
+    # block then has no other `##`, and the entry is dropped SILENTLY — no error, it just vanishes
+    # from every guide that should have listed it. That is the worst failure mode this parser has.
+    @testset "an entry whose title starts with a version is NOT treated as a marker" begin
+        text = "# fixture\n\n---\n\n" *
+               "## 0.5.0 config format is now strict (#9200)\n\n" *
+               "- **Version**: 0.5.0\n- **Recorded**: 2026-03-03\n\nImportant body.\n"
+        parsed = PormG._parse_upgrading(text)
+        @test length(parsed) == 1                                        # not swallowed
+        @test parsed[1].title == "0.5.0 config format is now strict (#9200)"
+        @test parsed[1].version == v"0.5.0"
+        @test occursin("Important body.", parsed[1].body)
+
+        # …while a genuine marker sharing a block with its first entry is still stripped.
+        marked = PormG._parse_upgrading(
+            "# fixture\n\n---\n\n## 0.5.0 — 2026-03-03\n\n## A real change (#9201)\n\n" *
+            "- **Version**: 0.5.0\n- **Recorded**: 2026-03-03\n\nBody.\n")
+        @test length(marked) == 1
+        @test marked[1].title == "A real change (#9201)"
     end
 end

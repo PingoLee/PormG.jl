@@ -173,7 +173,20 @@ const _UNSTAMPED_VERSION = v"0.2.0-"
 # `/pormg-cut-release` command later rewrites `Unreleased` to the assigned release number.
 const _UNRELEASED_VERSION = v"1000000.0.0"
 
+# `_UNRELEASED_VERSION` is an internal sort key, never a user-facing version. Render it as the
+# literal `UPGRADING.md` token so output reads "0.3.0 → Unreleased" and not "0.3.0 → 1000000.0.0".
+_version_label(v::VersionNumber) = v == _UNRELEASED_VERSION ? "Unreleased" : string(v)
+
 const _UpgradeEntry = @NamedTuple{version::VersionNumber, title::String, body::String}
+
+# A release marker heading — `## 0.3.0 — 2026-07-24` or `## Unreleased — next \`0.4.0\``, both
+# written by `/pormg-cut-release`. It groups the entries of one release; it is NOT an entry title.
+#
+# The em-dash separator is REQUIRED, not decoration: without it this also matches a real entry whose
+# title merely starts with a version (`## 0.5.0 config format is now strict`), and the parser then
+# finds no other `##` in that block and drops the entry SILENTLY — it just disappears from the
+# guide. Both forms `/pormg-cut-release` writes carry the separator, so requiring it costs nothing.
+const _RELEASE_MARKER = r"^(?:Unreleased|\d+\.\d+\.\d+)\s+—"
 
 _asver(v::VersionNumber) = v
 _asver(v::AbstractString) = VersionNumber(v)
@@ -214,9 +227,20 @@ function _parse_upgrading(text::AbstractString)
 
     entries = _UpgradeEntry[]
     for block in split(text, r"(?m)^---[ \t]*$")
-        # A real change entry has a `## ` heading AND a `- **Recorded**:` bullet — this rejects
-        # the header/recipe prose and any stray section, regardless of `---` placement.
-        title_m = match(r"(?m)^##[ \t]+(.+)$", block)
+        # `/pormg-cut-release` writes the release marker (`## 0.3.0 — 2026-07-24`) directly above
+        # the first entry of that release with NO `---` between them, so the first `##` in a block
+        # is not necessarily the entry's own heading. Take the first non-marker heading instead —
+        # otherwise the first entry of every release is titled with the release date and its real
+        # title is lost (visible via `structured = true`).
+        title_m = nothing
+        for h in eachmatch(r"(?m)^##[ \t]+(.+)$", block)
+            occursin(_RELEASE_MARKER, strip(h[1])) && continue
+            title_m = h
+            break
+        end
+
+        # A real change entry has a non-marker `## ` heading AND a `- **Recorded**:` bullet — this
+        # rejects the header/recipe prose and any stray section, regardless of `---` placement.
         (title_m === nothing || !occursin(r"(?m)^-[ \t]+\*\*Recorded\*\*:", block)) && continue
 
         ver_m = match(r"(?m)^-[ \t]+\*\*Version\*\*:[ \t]*(\S+)", block)
@@ -224,9 +248,14 @@ function _parse_upgrading(text::AbstractString)
                   ver_m[1] == "Unreleased" ? _UNRELEASED_VERSION :
                                              VersionNumber(ver_m[1])
 
+        # Start the body at the entry's own heading. This drops a leading release marker, so every
+        # entry renders identically — previously only the first entry of a release carried the
+        # `## <ver> — <date>` line, making later entries from *other* releases look like they
+        # belonged to it. Each entry states its own `- **Version**:`, so nothing is lost.
+        body = block[title_m.offset:end]
+
         # Trim the internal per-app rollout table (which of PormG's own apps adopted it) —
         # noise for a consuming app, which only needs the porting work.
-        body = block
         roll = findfirst("### Per-app rollout", body)
         roll === nothing || (body = body[1:prevind(body, first(roll))])
 
@@ -281,11 +310,11 @@ function upgrade_guide(io::IO = stdout; from = nothing, to = _UNRELEASED_VERSION
     structured && return entries
 
     if isempty(entries)
-        println(io, "# PormG: nothing to port between $from_v and $to_v.")
+        println(io, "# PormG: nothing to port between $(_version_label(from_v)) and $(_version_label(to_v)).")
         return nothing
     end
 
-    println(io, "# Porting a PormG consumer from $from_v → $to_v")
+    println(io, "# Porting a PormG consumer from $(_version_label(from_v)) → $(_version_label(to_v))")
     println(io, "# Work newest-first; for each entry run its \"How to find the calls to migrate\"")
     println(io, "# grep, apply before → after, then run your app's tests.")
     for e in entries

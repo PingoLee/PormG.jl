@@ -150,14 +150,18 @@ PormG.config["default"] = MockSettings
     
     # Test: Auto-detect :update (has insert data + filters)
     q_up = DriverModel.objects.filter("id" => 1)
-    # Manually populate insert field for the test
-    q_up.object.insert = Dict("forename" => "Ayrton")
+    # Manually populate insert field for the test. It must be an OrderedDict — that is the
+    # declared field type (types.jl: `insert::OrderedDict{String,Any}`, ordered so INSERT/UPDATE
+    # column lists follow call order, #97). OrderedCollections 2 removed the implicit
+    # Dict→OrderedDict conversion (ordering would be undefined), so a plain Dict now throws here.
+    q_up.object.insert = PormG.QueryBuilder.OrderedCollections.OrderedDict{String,Any}("forename" => "Ayrton")
     res_up = inspect_query(q_up)
     @test res_up[:operation] === :update
     
     # Test: Auto-detect :insert (has insert data, no filters)
     q_in = DriverModel.objects.copy()
-    q_in.object.insert = Dict("forename" => "Ayrton", "surname" => "Senna")
+    q_in.object.insert = PormG.QueryBuilder.OrderedCollections.OrderedDict{String,Any}(
+        "forename" => "Ayrton", "surname" => "Senna")
     res_in = inspect_query(q_in)
     @test res_in[:operation] === :insert
     

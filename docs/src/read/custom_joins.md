@@ -473,7 +473,7 @@ query = M.Result.objects.
 # This raises an error: driverid points to Driver, not Constructor
 query = M.Result.objects.
     cjoin("driverid" => "Constructor", filters=["name" => "Ferrari"])  
-# ArgumentError: Field 'driverid' is already a ForeignKey pointing to 'Driver', 
+# QueryBuildError: Field 'driverid' is already a ForeignKey pointing to 'Driver', 
 # but `.cjoin()` attempted to join with 'Constructor'...
 # Use query.cjoin("driverid" => "Driver", filters=[...]) instead.
 ```

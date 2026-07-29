@@ -138,10 +138,10 @@ All updates pass through a centralized validation engine that enforces:
 
 ### Pagination Guard
 
-Standard SQL `UPDATE` does not support `LIMIT`, `OFFSET`, or `ORDER BY`. If any of these are set on the query handler when `.update()` is called, PormG throws an `ArgumentError` immediately — before any SQL is generated — so the developer gets a clear error rather than silently mutating the wrong rows.
+Standard SQL `UPDATE` does not support `LIMIT`, `OFFSET`, or `ORDER BY`. If any of these are set on the query handler when `.update()` is called, PormG throws an `UnsafeMutationError` immediately — before any SQL is generated — so the developer gets a clear error rather than silently mutating the wrong rows.
 
 ```julia
-# These all raise ArgumentError before any SQL is sent
+# These all raise UnsafeMutationError before any SQL is sent
 q = M.Driver.objects.filter("nationality" => "British")
 q.limit(5).update("nationality" => "English")   # ERROR: UPDATE with LIMIT is not supported
 q.offset(2).update("nationality" => "English")  # ERROR: UPDATE with OFFSET is not supported
@@ -163,7 +163,7 @@ update_q.update("nationality" => "English")
 
 ### `change_data` Guard
 
-If the connection is configured with `change_data: false`, any call to `.update()` raises an `ArgumentError` at the ORM layer before generating SQL. This applies to both normal execution and `show_query=:dict` dry-runs.
+If the connection is configured with `change_data: false`, any call to `.update()` raises a `PermissionError` at the ORM layer before generating SQL. This applies to both normal execution and `show_query=:dict` dry-runs.
 
 ```julia
 # connection.yml: change_data: false

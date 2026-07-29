@@ -64,7 +64,7 @@ sql = delete(query, show_query=:sql)
 
 ### `change_data` Guard
 
-If the connection is configured with `change_data: false`, any call to `delete()` raises an `ArgumentError` at the ORM layer before generating SQL.
+If the connection is configured with `change_data: false`, any call to `delete()` raises a `PermissionError` at the ORM layer before generating SQL.
 
 ```julia
 # connection.yml: change_data: false

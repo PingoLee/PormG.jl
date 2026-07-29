@@ -46,6 +46,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Many-to-Many"                 begin include("test_many_to_many.jl")       end
     @testset "CTEs (with)"                  begin include("test_cte.jl")                end
     @testset "Subqueries"                   begin include("test_subqueries.jl")         end
+    @testset "Documented Error Types (#239)" begin include("test_docs_error_types.jl")  end
     @testset "Correlated EXISTS"            begin include("test_exists_correlated.jl")  end
     @testset "Custom Joins (cjoin)"         begin include("test_cjoin.jl")              end    
     @testset "Cached Joins"                 begin include("test_cache_join.jl")         end

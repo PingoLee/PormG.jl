@@ -436,7 +436,7 @@ WHERE "Tb"."id" = source."id"::bigint
 - **Case-sensitive DataFrame matching**: PormG resolves `columns` and `match_on` against `DataFrame` column names **exactly**. A name that differs only in case from the model field (e.g. `ID` vs `id`) is rejected with an error that names the candidate column and suggests the fix — either `rename!(df, lowercase.(names(df)))` or an explicit `"DF_COL" => "field"` mapping in `columns=`. (An explicit `columns=` mapping is always honored, even when its source column differs in case from the field name.)
 - **Mapping-first match keys**: A `match_on` field with a `columns=` mapping always uses that mapping as its source. If the `DataFrame` *also* carries a column with the field's own name, the mapping still wins and the same-named column is ignored — with a warning, so the ambiguity is visible.
 - **Primary key fallback**: If you omit `match_on=`, `bulk_update()` infers the model primary key column(s) and expects those columns to be present in the `DataFrame` (or mapped in `columns=`).
-- **Missing column errors**: A `match_on` field with no source — no `columns=` mapping and no same-named `DataFrame` column — raises an `ArgumentError` rather than silently degrading to a constant filter. An explicit `columns=` mapping (`"df_col" => "field"`) whose source column is absent likewise raises — it is never silently bound to a non-existent column.
+- **Missing column errors**: A `match_on` field with no source — no `columns=` mapping and no same-named `DataFrame` column — raises an `UnknownFieldError` rather than silently degrading to a constant filter. An explicit `columns=` mapping (`"df_col" => "field"`) whose source column is absent likewise raises — it is never silently bound to a non-existent column.
 - **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `match_on=` and `filters=`. Pass every predicate you need through those arguments rather than relying on prior `query.filter(...)` state.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
 - **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.
@@ -467,13 +467,13 @@ each call by splitting `filters=` into **`match_on=`** (row-matching keys) and
 
 **How to update your apps:** search each project for `bulk_update(` and inspect its
 `filters=`. The fastest path is to **run the app or its tests** — every old per-row
-key still passed in `filters=` now raises an `ArgumentError` that names the offending
+key still passed in `filters=` now raises a `QueryBuildError` that names the offending
 key and tells you to move it to `match_on=`. Fix them one at a time until the errors
 stop. Calls that only ever passed constant `field => value` predicates (or no
 `filters=` at all) need no change.
 
 !!! warning "The migration error is temporary"
-    The `ArgumentError` that detects the old per-row-key-in-`filters=` usage is a
+    The `QueryBuildError` that detects the old per-row-key-in-`filters=` usage is a
     transitional aid for updating existing call sites. Once your applications are
     migrated it can be removed from PormG (see the `DEPRECATION SHIM` block in
     `src/querybuilder/execution_bulk.jl`); after removal, the same mistake surfaces

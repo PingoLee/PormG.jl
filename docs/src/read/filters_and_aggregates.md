@@ -163,7 +163,7 @@ M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")
 M.Driver.objects.filter("surname__@iunaccent_exact" => "RAIKKONEN")
 ```
 
-They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite these lookups raise an `ArgumentError`.
+They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite these lookups raise an `UnsupportedConnectionError`.
 
 There is no `@iunaccent_in`; OR the equality lookup with [`Qor`](q_objects.md) for accent-insensitive set membership:
 
@@ -215,7 +215,7 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 
 !!! note
     Keys must be simple (letters, digits, underscore) or an integer array index — a key with
-    spaces, dots, or quotes is not addressable via the `__` path and raises an `ArgumentError`.
+    spaces, dots, or quotes is not addressable via the `__` path and raises an `InvalidValueError`.
     Extraction is text-based: comparisons are string comparisons unless you use a numeric operator
     (`@gte` etc.), which casts to numeric on PostgreSQL. Equality against a numeric JSON value
     (`"metadata__wins" => 121`) works on both backends.
@@ -228,7 +228,7 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 ### Containment and key-existence operators (PostgreSQL only)
 
 These map to the PostgreSQL JSONB operators and apply to a JSON **column** (not a nested path).
-On SQLite they raise an `ArgumentError`:
+On SQLite they raise an `UnsupportedConnectionError`:
 
 | Lookup | JSONB operator | Meaning | Example |
 | :--- | :--- | :--- | :--- |
@@ -522,7 +522,7 @@ M.Driver.objects.values("surname", "nationality").order_by(
 ```
 
 `orientation` must be `"ASC"` or `"DESC"` (case-insensitive); any other value — including a
-user-supplied sort-direction string forwarded as-is — raises an `ArgumentError` at construction
+user-supplied sort-direction string forwarded as-is — raises a `QueryBuildError` at construction
 instead of reaching the SQL.
 
 On SQLite builds older than 3.30.0 (which lack `NULLS FIRST/LAST` syntax) PormG emits the portable
@@ -686,7 +686,7 @@ Joining a **to-many** relation — a reverse foreign key (one parent → many ch
 query = M.Driver.objects
 query.values("nationality", "n" => Count("driverid"))
 query.filter("driver_standings__position__@gte" => 1)
-query |> DataFrame   # ArgumentError: PormG fan-out guard (#74): the aggregate n is inflated because …
+query |> DataFrame   # QueryBuildError: PormG fan-out guard (#74): the aggregate n is inflated because …
 ```
 
 The legitimate case — aggregating the **related** table's own column (e.g. counting the related rows) — is exactly the intended fan-out and works normally:

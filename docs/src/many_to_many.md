@@ -85,7 +85,7 @@ This pattern matches Django exactly and keeps your model definitions clean and r
 ### Relationship Mutator Limitations on Custom Through Tables
 
 !!! warning
-    **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add`, `remove`, `clear`, and `set`) are disabled and will raise an `ArgumentError`.
+    **Django-Style Strict Mutators**: If your custom intermediate `through` model contains *any extra fields* beyond the two relationship foreign keys (like the `joined_year` field in `M2m_membership_scratch` above), all direct manager mutators (`add`, `remove`, `clear`, and `set`) are disabled and will raise a `QueryBuildError`.
 
 This constraint prevents silent failures or incomplete rows, as PormG cannot determine appropriate values to insert for your custom fields. 
 

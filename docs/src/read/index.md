@@ -82,7 +82,7 @@ For framework integrations that require plain dictionaries, use `.list(:dict)`. 
 !!! warning "No lazy FK traversal — project related columns up front"
     PormG never lazily loads a related row. Accessing a ForeignKey you did not
     project (`row.driverid`, or traversing further with `row.driverid.forename`)
-    raises an `ArgumentError`. Project what you need up front with `values(...)`,
+    raises a `LazyTraversalError`. Project what you need up front with `values(...)`,
     then read it off the row by its key:
 
     ```julia

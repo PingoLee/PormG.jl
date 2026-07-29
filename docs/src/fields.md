@@ -914,7 +914,7 @@ driver_rows = manager.all().values("surname", "nationality").list()
 Use `through=Existing_model` when the relationship table has extra fields, such as the season when a driver was added to a collection. In that case PormG treats the through model as a normal model and does not auto-generate a join table.
 
 !!! warning
-    **Django-Style Strict Mutators**: If the custom `through` model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (`add`, `remove`, `clear`, and `set`) will raise an `ArgumentError`. Create or delete custom through model objects directly using the through model's objects manager instead.
+    **Django-Style Strict Mutators**: If the custom `through` model contains any extra fields beyond the relationship foreign keys, direct manager mutator operations (`add`, `remove`, `clear`, and `set`) will raise a `QueryBuildError`. Create or delete custom through model objects directly using the through model's objects manager instead.
 
 ---
 

@@ -107,7 +107,7 @@ RETURNING *
 
 ### Validation
 
-PormG validates that all non-nullable fields are provided. If a required field is missing, it will raise an `ArgumentError`.
+PormG validates that all non-nullable fields are provided. If a required field is missing, it will raise an `InvalidValueError`.
 
 ```julia
 # This will fail because the 'driverref' field is required (NOT NULL)
@@ -122,7 +122,7 @@ driver = M.Driver.objects.create(
 
 **Error:**
 ```julia
-ERROR: ArgumentError: Error in insert, the field driverref not allow null
+ERROR: InvalidValueError: Error in insert, the field driverref not allow null
 ```
 
 ### Default Values

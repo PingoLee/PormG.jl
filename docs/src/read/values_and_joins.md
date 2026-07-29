@@ -72,7 +72,7 @@ WHERE "Tb_3"."status" = $1
 !!! warning "No lazy FK traversal — project related columns up front"
     PormG never lazily loads a related row. Accessing a ForeignKey you did not
     project (`row.driverid`, or traversing further with `row.driverid.forename`)
-    raises an `ArgumentError`. Project what you need up front with `values(...)`,
+    raises a `LazyTraversalError`. Project what you need up front with `values(...)`,
     then read it off the row by its key:
 
     ```julia
@@ -254,7 +254,7 @@ df = M.Driver.objects.filter("driverref" => "hamilton").
 ```
 
 !!! note
-    Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases containing spaces, punctuation, or other special characters throw an `ArgumentError` at query-build time.
+    Alias identifiers must start with a Unicode letter or underscore, followed by letters, combining marks, digits, or underscores. Aliases containing spaces, punctuation, or other special characters throw an `InvalidValueError` at query-build time.
 
 !!! tip
     Aliasing happens at the SQL level (`SELECT "field" AS "alias"`). This is more efficient than renaming columns in a Julia DataFrame after the query.

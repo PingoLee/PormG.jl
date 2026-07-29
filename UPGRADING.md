@@ -171,7 +171,10 @@ rg -n 'catch|@test_throws|isa' <app> | rg 'ArgumentError|ErrorException'
 ```
 
 Focus on blocks wrapping PormG query calls (`filter`/`values`/`update`/`delete`/`get`/row access/`bulk_*`).
-Field-definition and model-definition errors still throw `ArgumentError` — leave those.
+Field-definition and model-definition errors still throw `ArgumentError` — leave those. ⚠️ **This is no
+longer true** — #239 retyped them to `FieldValidationError` / `ModelDefinitionError`. If you already
+migrated on this instruction, revisit exactly those catches; see *"The `PormGError` taxonomy now covers
+all of PormG"* above.
 
 ### Migrate your app
 

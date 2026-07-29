@@ -35,10 +35,10 @@ WHERE "Tb"."statusid" IN (SELECT "Tb"."statusid" FROM "status" as "Tb" WHERE "Tb
 
 ## Subquery Column Constraint
 
-An `@in` subquery **must project exactly one column**. PormG validates this before generating SQL and throws an `ArgumentError` if the subquery selects more than one field.
+An `@in` subquery **must project exactly one column**. PormG validates this before generating SQL and throws a `FilterError` if the subquery selects more than one field.
 
 ```julia
-# Wrong — two columns will throw ArgumentError
+# Wrong — two columns will throw FilterError
 bad_sub = M.Status.objects.values("statusid", "status")
 query.filter("statusid__@in" => bad_sub)
 # ERROR: 'statusid__@in' requires a subquery that returns exactly one column
@@ -186,7 +186,7 @@ For an outer row with **no** related rows, an aggregate scalar returns its natur
 
 ### Rules and limitations
 
-- **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise an `ArgumentError` at build time — the same one-column rule as `@in` subqueries.
+- **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise a `QueryBuildError` at build time. The same one-column rule applies to `@in` subqueries, where it surfaces as a `FilterError` — the type names which argument you got wrong (a projection here, a filter there). Catch `PormGError` to handle both.
 - **The alias is mandatory.** Always project as a pair: `"alias" => Subquery(...)`. A bare `Subquery(...)` inside `values()` raises.
 - **At most one row.** The database requires a scalar subquery to return ≤ 1 row ("more than one row returned by a subquery used as an expression" at execution otherwise). An aggregate always satisfies this; for a plain column add `order_by` + `limit(1)` — PormG emits a build-time warning for the non-aggregate/no-limit case but does not block it.
 - **One level of correlation.** `OuterRef` resolves against the immediately enclosing query only, so a `Subquery`/`Exists` projected *inside another subquery* raises rather than risk silently correlating to the wrong level. Multi-level correlation is a possible future extension.

@@ -1,5 +1,22 @@
 using Pkg
-Pkg.activate(".") # Or the correct relative path
+# The integration suite needs the LibPQ/SQLite driver extensions loaded. The package env cannot
+# carry them — they are `[weakdeps]` by design (#34) and `Manifest.toml` is gitignored, so a
+# checkout has no installed copy to `Base.require`. `test/integration/Project.toml` is the
+# environment that does carry them; it resolves PormG through `[sources]`, so a fresh clone needs
+# only `Pkg.instantiate()`.
+#
+# This used to be an unconditional `Pkg.activate(".")`, which silently discarded whatever the
+# caller passed to `--project=` and forced the driver-less package env — making the suite
+# unrunnable regardless of how it was invoked. Now the package env and "no project" both redirect
+# here, while an explicit third-party environment is left alone.
+let _pkg_env = normpath(joinpath(@__DIR__, "..", "..", "Project.toml")),
+    _int_env = normpath(joinpath(@__DIR__, "Project.toml")),
+    _active  = Base.active_project()
+
+    if _active === nothing || normpath(_active) in (_pkg_env, _int_env)
+        Pkg.activate(@__DIR__)
+    end
+end
 ENV["PORMG_ENV"] = "dev"
 
 using Revise

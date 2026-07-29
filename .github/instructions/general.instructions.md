@@ -80,6 +80,8 @@ The subsystem map below is also the review **architecture checkpoint**: when a n
 
 - Run the narrowest relevant test slice first; broaden only after green.
 - PostgreSQL integration: `db_2`. SQLite: `PORMG_DB="db_sl"`.
+- **Integration runs in its own environment (`test/integration/Project.toml`)** — it carries `LibPQ` + `SQLite`, which the package env cannot (they are `[weakdeps]` by design, and `Manifest.toml` is gitignored so a checkout has no installed copy). `common_setup.jl` redirects the package env and "no project" to it automatically, so `--project=.` still works; on a fresh clone run `julia --project=test/integration -e 'using Pkg; Pkg.instantiate()'` once. An explicit `--project=<other>` is left alone.
+- **Local green ≠ CI green.** `Manifest.toml` is gitignored, so a local run reuses whatever versions were resolved once, while CI resolves fresh and lands on the newest versions `[compat]` allows. That is how OrderedCollections 2 broke CI for a day while every local suite passed (#263). Before claiming a change is green, check the CI run — or resolve into a scratch env to reproduce what CI will see.
 - Docs: `julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'` (the main project env has no Documenter — `--project=.` fails)
 
 ## Tool notes

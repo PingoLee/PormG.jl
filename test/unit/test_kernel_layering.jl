@@ -31,6 +31,52 @@ using PormG
         @test !isdefined(PormG.Kernel, :PormG)
     end
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # The layering RULE, not today's inventory (#261, #262)
+    # The assertions above pin four names by hand, so they only catch a regression in those four.
+    # This derives the check from the export list instead, so a taxonomy type added later is
+    # covered without anyone remembering to extend a list — the same "assert the invariant, not
+    # the inventory" approach as the #259 drift guards.
+    #
+    # The rule: every concrete PormGError subtype either lives in Kernel, or has a DEDICATED
+    # Kernel-owned abstract umbrella above it. Nothing may sit mid-include-chain as a bare child
+    # of the root — that is exactly the shape that made #239 need the Kernel extraction, and it
+    # recurred with PoolTimeoutError / PoolConnectError until #261 added `PoolError`.
+    #
+    # "Dedicated" is load-bearing: `PormGError` itself is always Kernel-owned, so accepting any
+    # Kernel-parented supertype would make this check vacuous — it would pass for every subtype
+    # ever, including the violation it exists to catch. Verified by mutation: reverting
+    # PoolTimeoutError to `<: PormGError` must fail this testset.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "every taxonomy type is reachable from Kernel (#261)" begin
+        offenders = String[]
+        checked = 0
+        for n in names(PormG)
+            T = try getfield(PormG, n) catch; continue end
+            (T isa Type && T <: Exception && !isabstracttype(T)) || continue
+            checked += 1
+            parentmodule(T) === PormG.Kernel && continue
+            S = supertype(T)
+            (S !== PormG.PormGError && parentmodule(S) === PormG.Kernel) && continue
+            push!(offenders, "$(n): defined in $(parentmodule(T)), supertype $(S) " *
+                             "in $(parentmodule(S))")
+        end
+
+        if !isempty(offenders)
+            @error """
+            Exported exception type(s) reachable from neither Kernel nor a Kernel-owned umbrella.
+            Define the type in src/exceptions.jl (Kernel), or give it an abstract supertype there —
+            the pattern ConfigurationError / MigrationError / PoolError already follow. A type left
+            mid-include-chain cannot be named by any submodule included before it.
+            """ offenders
+        end
+        @test isempty(offenders)
+
+        # Guard the guard: if the export list or the filter ever stops matching anything, the loop
+        # above passes vacuously. There are 16 concrete exported exception types as of #261.
+        @test checked >= 16
+    end
+
     @testset "backend generics stay owned by PormG (layer 2)" begin
         # ext/PormGLibPQExt.jl and ext/PormGSQLiteExt.jl define their methods as
         # `PormG.backend_execute(...) = ...`. Julia only accepts a qualified method definition

@@ -36,6 +36,9 @@ const TAXONOMY_TYPES = (
 # The abstract mid-nodes. Each groups its concrete leaves so `catch <node>` has no holes.
 const TAXONOMY_ABSTRACT = (
     PormG.FieldAccessError, PormG.ConfigurationError, PormG.MigrationError,
+    # #261: the pool errors were the only concrete subtypes with neither a Kernel home nor an
+    # abstract supertype in Kernel. `PoolError` closes that gap.
+    PormG.PoolError,
 )
 
 @testset "Error taxonomy (#231, #239)" begin
@@ -71,9 +74,16 @@ const TAXONOMY_ABSTRACT = (
         @test PormG.InvalidMigrationError <: PormG.MigrationError
         @test PormG.Migrations.DestructiveMigrationError <: PormG.MigrationError
 
-        # Reparented from bare `Exception` (#239) so `catch PormGError` covers the pool too.
+        # Reparented from bare `Exception` (#239) so `catch PormGError` covers the pool too,
+        # then grouped under the `PoolError` umbrella (#261) so `catch PoolError` handles
+        # saturation and connect failure without naming each.
         @test PormG.PoolTimeoutError <: PormG.PormGError
         @test PormG.PoolConnectError <: PormG.PormGError
+        @test PormG.PoolTimeoutError <: PormG.PoolError
+        @test PormG.PoolConnectError <: PormG.PoolError
+        # …and PoolError stays disjoint from the other umbrellas.
+        @test !(PormG.PoolError <: PormG.ConfigurationError)
+        @test !(PormG.InvalidConfigurationError <: PormG.PoolError)
 
         # …and the buckets stay disjoint: a config error is not a migration error.
         @test !(PormG.InvalidConfigurationError <: PormG.MigrationError)
@@ -112,6 +122,8 @@ const TAXONOMY_ABSTRACT = (
         @test InvalidConfigurationError === PormG.InvalidConfigurationError
         @test MigrationError === PormG.MigrationError
         @test InvalidMigrationError === PormG.InvalidMigrationError
+        @test PoolError === PormG.PoolError
+        @test error_message === PormG.error_message
 
         # QueryBuilder must see the SAME objects it imported, not redefinitions.
         @test QB.QueryBuildError === PormG.QueryBuildError
@@ -133,6 +145,63 @@ const TAXONOMY_ABSTRACT = (
         @test_throws PormG.QueryBuildError object(taxo_model).values("points__@gte")
         # UnsupportedConnectionError: a connection that is neither PG nor SQLite.
         @test_throws PormG.UnsupportedConnectionError QB._unsupported_conn("op", nothing)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # error_message: one accessor for every subtype (#261)
+    # `api.md` and `UPGRADING.md` both tell callers to `catch PormGError`. The obvious next line
+    # is `e.msg`, which throws on the four subtypes built from structured fields. `error_message`
+    # is the uniform reader; this pins that it works for EVERY concrete member, so a subtype added
+    # later cannot quietly reintroduce the gap.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "error_message covers every concrete subtype (#261)" begin
+        # A representative instance per concrete type. The four structured ones are constructed
+        # through their real field signatures precisely because they have no `msg`.
+        samples = Any[
+            PormG.DoesNotExist("Driver", "(driverref = \"senna\")"),
+            PormG.MultipleObjectsReturned("Driver", 3, "(nationality = \"British\")"),
+            PormG.PoolTimeoutError("SQLite", 1, 10, 3, 1.5),
+            PormG.PoolConnectError("SQLite", "disk I/O error", "f1.sqlite", 2, 0.5),
+            # carries the blocked statements alongside its message
+            PormG.Migrations.DestructiveMigrationError("boom", ["DROP TABLE \"drivers\""]),
+        ]
+        for T in TAXONOMY_TYPES
+            # the msg-carrying majority share one constructor shape
+            T in (PormG.DoesNotExist, PormG.MultipleObjectsReturned,
+                  PormG.PoolTimeoutError, PormG.PoolConnectError,
+                  PormG.Migrations.DestructiveMigrationError) && continue
+            push!(samples, T("boom"))
+        end
+
+        for e in samples
+            msg = PormG.error_message(e)
+            @test msg isa String
+            @test !isempty(msg)
+        end
+
+        # For the structured types `.msg` does not exist — that is the whole reason this accessor
+        # exists. Assert the failure mode directly so the motivation cannot rot.
+        @test_throws Exception PormG.PoolTimeoutError("SQLite", 1, 10, 3, 1.5).msg
+        @test_throws Exception PormG.DoesNotExist("Driver", "(id = 1)").msg
+
+        # For subtypes using the GENERIC showerror it is exactly `e.msg` — the accessor is a
+        # drop-in replacement, not a reformatting.
+        e = PormG.FilterError("bad filter arg")
+        @test PormG.error_message(e) == e.msg
+
+        # For subtypes with their OWN showerror it is a superset: they carry a `msg` but render it
+        # with the error name prefixed. Pinned because the docs promise `error_message` never
+        # returns *less* than `.msg` — a future showerror that dropped the message would break that
+        # promise silently.
+        for e2 in (PormG.Configuration.MissingDatabaseConfigurationException("no connection.yml"),
+                   PormG.Migrations.DestructiveMigrationError("refused", ["DROP TABLE \"drivers\""]))
+            @test occursin(e2.msg, PormG.error_message(e2))
+            @test length(PormG.error_message(e2)) >= length(e2.msg)
+        end
+
+        # And it reflects the structured fields rather than a placeholder.
+        @test occursin("SQLite", PormG.error_message(PormG.PoolTimeoutError("SQLite", 1, 10, 3, 1.5)))
+        @test occursin("Driver", PormG.error_message(PormG.DoesNotExist("Driver", "(id = 1)")))
     end
 
     @testset "showerror renders the message; catch the root works" begin

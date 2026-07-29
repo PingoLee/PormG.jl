@@ -127,6 +127,27 @@ struct MultipleObjectsReturned <: PormGError
   filters::String
 end
 
+"""
+    PoolError <: PormGError
+
+Abstract umbrella for connection-pool failures — `catch PoolError` to handle both saturation and
+connect failure without naming each. Subtypes: `ConnectionPool.PoolTimeoutError` (no connection
+became available in time) and `ConnectionPool.PoolConnectError` (the backend refused or dropped
+the connection).
+
+Both concrete types keep their structured fields (`adapter`, `pool_size`, `attempts`, …) and their
+own `showerror`, so they do not use the uniform `msg::String` shape — read them with
+[`error_message`](@ref).
+
+The umbrella lives here rather than in `ConnectionPool` on purpose (#261). The taxonomy's rule is
+that a concrete subtype either lives in `Kernel` or has a *dedicated* Kernel-owned abstract
+umbrella above it — the root `PormGError` does not count, or the rule would be vacuous. The pool
+errors were the only pair satisfying neither, which is the same mid-include-chain trap that made
+#239 need the `Kernel` extraction (#255). `Configuration` is included *before* `ConnectionPool`
+and already reasons about pool failure, so it could not have named those types.
+"""
+abstract type PoolError <: PormGError end
+
 # ── Schema, configuration and migration errors (#239) ───────────────────────
 
 """
@@ -212,6 +233,35 @@ end
 # reparented types that carry their own structured fields (PoolTimeoutError, PoolConnectError,
 # MissingDatabaseConfigurationException, DestructiveMigrationError), each next to its definition.
 Base.showerror(io::IO, e::PormGError) = print(io, e.msg)
+
+"""
+    error_message(e::PormGError) -> String
+
+The text of any PormG error, as a `String`.
+
+Use this instead of `e.msg`. Four subtypes are built from structured fields and have **no `msg`
+field at all** — `DoesNotExist`, `MultipleObjectsReturned`, `ConnectionPool.PoolTimeoutError`,
+`ConnectionPool.PoolConnectError` — so `e.msg` throws a `FieldError` on exactly the errors a caller
+is least likely to have tested against (#261).
+
+```julia
+try
+    M.Result.objects.values("bad alias!" => "points").list()
+catch e
+    e isa PormGError || rethrow()
+    @error "PormG rejected the query" msg=error_message(e) type=typeof(e)
+end
+```
+
+Defined via `showerror`, which every subtype implements, so it stays correct for subtypes added
+later without needing a new method. For subtypes that use the generic `showerror` above, the result
+is exactly `e.msg` (it prints that field verbatim, and `_emsg` has already normalized any ANSI at
+construction). Subtypes with their own `showerror` return that richer rendering instead — e.g.
+`Configuration.MissingDatabaseConfigurationException` and `Migrations.DestructiveMigrationError`
+both carry a `msg` yet prefix it with the error name, so `error_message` is a superset of `.msg`,
+never a subset.
+"""
+error_message(e::PormGError)::String = sprint(showerror, e)
 
 Base.showerror(io::IO, e::DoesNotExist) =
   print(io, "$(e.model_name).DoesNotExist: No record found matching filters: $(e.filters)")

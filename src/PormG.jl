@@ -148,6 +148,10 @@ export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, Filt
 export FieldValidationError, ModelDefinitionError,
   ConfigurationError, InvalidConfigurationError,   # ConfigurationError is the abstract umbrella
   MigrationError, InvalidMigrationError            # MigrationError likewise
+# Taxonomy edges (#261). `PoolError` is the connection-pool umbrella — the pool errors were the
+# only concrete subtypes with neither a Kernel home nor an abstract one. `error_message` is the
+# uniform way to read a caught PormGError: the structured subtypes have no `.msg` field.
+export PoolError, error_message
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)

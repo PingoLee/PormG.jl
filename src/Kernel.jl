@@ -164,7 +164,8 @@ export PormGError,
        DoesNotExist, MultipleObjectsReturned,
        FieldValidationError, ModelDefinitionError,
        ConfigurationError, InvalidConfigurationError,
-       MigrationError, InvalidMigrationError
+       MigrationError, InvalidMigrationError,
+       PoolError, error_message
 
 # Shared state / generics
 export config, get_constraints_pk, get_constraints_unique, get_constraints_check

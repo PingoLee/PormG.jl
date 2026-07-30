@@ -13,6 +13,96 @@
 # FieldValidationError so the whole constructor surface reports one category.
 _fielderr(msg::AbstractString) = FieldValidationError(msg)
 
+# ── Common keyword handling (#260) ──────────────────────────────────────────
+# Every field constructor used to open with the same four blocks copy-pasted: an `accepted` Set, an
+# unexpected-keyword `@warn` loop, a `get(kwargs, :x, default)` per keyword, and a type guard per
+# keyword. Across 27 constructors that was 27 accepted-sets, 27 warn loops, 254 extractions and 187
+# guards — roughly a fifth of this file, and the reason a single wording fix had to be applied by hand
+# in 26 places (which is how three different messages for the same check arose).
+#
+# `_common_kwargs` does all four jobs once and returns the extracted values.
+#
+# ## Defaults are NOT uniform — this is the part that bites
+#
+# Four keywords carry a different default in some constructors, so the helper takes overrides rather
+# than assuming the majority:
+#
+#     unique       true in IDField, OneToOneField, AutoField
+#     db_index     true in IDField, OneToOneField, SlugField
+#     editable     true in CharField, PasswordField, FileField, UUIDField, URLField, SlugField, JSONField
+#     primary_key  true in IDField, AutoField      (`nothing` = the constructor does not accept it)
+#
+# Passing them explicitly makes each deviation visible at the call site, where previously it hid
+# inside a `get(kwargs, …)` line identical to its neighbours. `test_field_kwargs_equivalence.jl`
+# pins every constructor's resulting struct against a frozen snapshot, so a flipped default fails
+# loudly instead of silently.
+#
+# ## Contract: accepted keyword NAMES are frozen
+#
+# `Model_to_str` generates model files that reload through this kwargs form (see the round-trip seam
+# at `Models.jl`'s `Model(name; fields...)`), so this helper may reorganize validation but must never
+# rename, add or drop an accepted keyword.
+#
+# ## Validation order (deliberate)
+#
+# Common keywords validate first (in `_COMMON_FIELD_KWARGS` order), then the constructor's declared
+# Booleans, then constructor-specific checks (`validate_default`, `max_length`, …). Pre-#260 each
+# constructor interleaved these ad hoc, so when a call has SEVERAL invalid keywords, the one
+# reported first may differ from before. The raised type is `FieldValidationError` either way.
+#
+# `bools` declares the constructor's own Boolean keywords with their defaults — they get the same
+# extraction and guard treatment. `extra` lists keywords the caller validates itself (`max_length`,
+# `choices`, `on_delete`, …), which are accepted but passed through untouched. `exclude` drops a
+# common keyword a constructor genuinely does not take (`PasswordField` has no `unique`, `db_index`
+# or `default`).
+const _COMMON_FIELD_KWARGS = (:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable)
+
+function _common_kwargs(field_type::AbstractString, kwargs;
+                        bools::NamedTuple = NamedTuple(),
+                        extra::Tuple = (),
+                        exclude::Tuple = (),
+                        unique::Bool = false,
+                        db_index::Bool = false,
+                        editable::Bool = false,
+                        primary_key::Union{Bool,Nothing} = nothing)
+  accepted = Set{Symbol}(k for k in _COMMON_FIELD_KWARGS if !(k in exclude))
+  primary_key === nothing || push!(accepted, :primary_key)
+  for k in keys(bools); push!(accepted, k); end
+  for k in extra;        push!(accepted, k); end
+
+  for (k, v) in kwargs
+    if !(k in accepted)
+      @warn "Unexpected parameter for $field_type. It will be ignored." field=field_type param=k value=v
+    end
+  end
+
+  _bool(name::Symbol, value) = value isa Bool ? value :
+    throw(_fielderr("$field_type: '$name' must be a Boolean, got $(typeof(value))"))
+  _str_or_nothing(name::Symbol, value) = value isa Union{Nothing,String} ? value :
+    throw(_fielderr("$field_type: '$name' must be a String or nothing, got $(typeof(value))"))
+
+  # Read a keyword from kwargs ONLY if this constructor accepts it. An unaccepted keyword was
+  # warned about above and must be GENUINELY ignored — the pre-#260 preambles never extracted it,
+  # so even a wrongly-typed value slid by with just the warning. Consulting kwargs here would turn
+  # "warn and ignore" into "warn then throw", making the warning a lie
+  # (test_field_kwargs_equivalence.jl pins this).
+  _take(key::Symbol, default) = key in accepted ? get(kwargs, key, default) : default
+
+  common = (
+    verbose_name = _str_or_nothing(:verbose_name, _take(:verbose_name, nothing)),
+    unique       = _bool(:unique,   _take(:unique,   unique)),
+    blank        = _bool(:blank,    _take(:blank,    false)),
+    null         = _bool(:null,     _take(:null,     false)),
+    db_index     = _bool(:db_index, _take(:db_index, db_index)),
+    db_column    = _str_or_nothing(:db_column, _take(:db_column, nothing)),
+    editable     = _bool(:editable, _take(:editable, editable)),
+    primary_key  = _bool(:primary_key, _take(:primary_key, primary_key === nothing ? false : primary_key)),
+  )
+  # The constructor's own Boolean keywords, same extraction and guard.
+  declared = NamedTuple{keys(bools)}(map(k -> _bool(k, get(kwargs, k, bools[k])), keys(bools)))
+  return merge(common, declared)
+end
+
 
 struct sIDField <: PormGField
   verbose_name::Union{String, Nothing}
@@ -90,48 +180,17 @@ Order = Models.Model(
 - Invalid parameters will trigger warnings but won't cause errors (they'll be ignored)
 """
 function IDField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :generated, :generated_always
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for IDField. It will be ignored." field="IDField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  primary_key = get(kwargs, :primary_key, true)
-  auto_increment = get(kwargs, :auto_increment, true)
-  unique = get(kwargs, :unique, true)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, true)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
-  generated = get(kwargs, :generated, true)
-  generated_always = get(kwargs, :generated_always, false)
+  (; verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, editable,
+     generated, generated_always) =
+    _common_kwargs("IDField", kwargs;
+      primary_key = true, unique = true, db_index = true,
+      bools = (auto_increment = true, generated = true, generated_always = false))
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
-  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
-  !(auto_increment isa Bool) && throw(_fielderr("The 'auto_increment' must be a Boolean"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
-  !(generated isa Bool) && throw(_fielderr("The 'generated' must be a Boolean"))
-  !(generated_always isa Bool) && throw(_fielderr("The 'generated_always' must be a Boolean"))
-  # Validate default
-  default = validate_default(default, Union{Int64, Nothing}, "IDField", format2int64)
-  # Return the field instance
+  default = validate_default(get(kwargs, :default, nothing), Union{Int64, Nothing}, "IDField", format2int64)
+
   return sIDField(
-    verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, default, editable, "BIGINT", format_number_sql, generated, generated_always
+    verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, default,
+    editable, "BIGINT", format_number_sql, generated, generated_always
   )
 end
 
@@ -263,51 +322,22 @@ Message = Models.Model(
 - Django's ForeignKey documentation for conceptual understanding
 """
 function ForeignKey(to::Union{String, PormGModel}; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for ForeignKey. It will be ignored." field="ForeignKey" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  primary_key = get(kwargs, :primary_key, false)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, true)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, deferrable, initially_deferred, db_constraint) =
+    _common_kwargs("ForeignKey", kwargs; primary_key = false, db_index = true,
+      bools = (deferrable = false, initially_deferred = false, db_constraint = true),
+      extra = (:pk_field, :on_delete, :on_update, :how, :related_name))
+
   default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
   pk_field = get(kwargs, :pk_field, nothing)
   on_delete = get(kwargs, :on_delete, nothing)
   on_update = get(kwargs, :on_update, nothing)
-  deferrable = get(kwargs, :deferrable, false)
-  initially_deferred = get(kwargs, :initially_deferred, false)
   how = get(kwargs, :how, nothing)
   related_name = get(kwargs, :related_name, nothing)
-  db_constraint = get(kwargs, :db_constraint, true)
 
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-
   # Validate boolean parameters
-  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
-  !(deferrable isa Bool) && throw(_fielderr("The 'deferrable' must be a Boolean"))
-  !(initially_deferred isa Bool) && throw(_fielderr("The 'initially_deferred' must be a Boolean"))
 
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "ForeignKey", format2int64)
@@ -319,7 +349,6 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
   !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
-  !(db_constraint isa Bool) && throw(_fielderr("The 'db_constraint' must be a Boolean"))
 
   # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint 
@@ -600,51 +629,22 @@ However, OneToOneField is more explicit about the intended relationship type and
 - Database normalization principles for when to use one-to-one relationships
 """
 function OneToOneField(to::Union{String, PormGModel}; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :pk_field, :on_delete, :on_update, :deferrable, :initially_deferred, :how, :related_name, :db_constraint
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for OneToOneField. It will be ignored." field="OneToOneField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  primary_key = get(kwargs, :primary_key, false)
-  unique = get(kwargs, :unique, true)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, true)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, deferrable, initially_deferred, db_constraint) =
+    _common_kwargs("OneToOneField", kwargs; primary_key = false, unique = true, db_index = true,
+      bools = (deferrable = false, initially_deferred = false, db_constraint = true),
+      extra = (:pk_field, :on_delete, :on_update, :how, :related_name))
+
   default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
   pk_field = get(kwargs, :pk_field, nothing)
   on_delete = get(kwargs, :on_delete, nothing)
   on_update = get(kwargs, :on_update, nothing)
-  deferrable = get(kwargs, :deferrable, false)
-  initially_deferred = get(kwargs, :initially_deferred, false)
   how = get(kwargs, :how, nothing)
   related_name = get(kwargs, :related_name, nothing)
-  db_constraint = get(kwargs, :db_constraint, true)
 
   # Validate 'to' parameter
   !(to isa Union{String, PormGModel}) && throw(_fielderr("The 'to' parameter must be a String or PormGModel"))
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-
   # Validate boolean parameters
-  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
-  !(deferrable isa Bool) && throw(_fielderr("The 'deferrable' must be a Boolean"))
-  !(initially_deferred isa Bool) && throw(_fielderr("The 'initially_deferred' must be a Boolean"))
 
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "OneToOneField", format2int64)
@@ -654,7 +654,6 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   !(on_update isa Union{Nothing, AbstractString}) && throw(_fielderr("The 'on_update' must be a String or nothing"))
   !(how isa Union{Nothing, String}) && throw(_fielderr("The 'how' must be a String or nothing"))
   !(related_name isa Union{Nothing, String}) && throw(_fielderr("The 'related_name' must be a String or nothing"))
-  !(db_constraint isa Bool) && throw(_fielderr("The 'db_constraint' must be a Boolean"))
 
   # Resolve on_delete using similar logic as ForeignKey
   on_delete = _get_on_delete_mode(on_delete)
@@ -755,39 +754,11 @@ The `AutoField` is designed for auto-incrementing integer primary keys and autom
 - Using modern PostgreSQL features like identity columns
 """
 function AutoField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :primary_key, :auto_increment, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for AutoField. It will be ignored." field="AutoField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  primary_key = get(kwargs, :primary_key, true)
-  auto_increment = get(kwargs, :auto_increment, true)
-  unique = get(kwargs, :unique, true)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, auto_increment) =
+    _common_kwargs("AutoField", kwargs; primary_key = true, unique = true, bools = (auto_increment = true,))
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
-  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
-  !(auto_increment isa Bool) && throw(_fielderr("The 'auto_increment' must be a Boolean"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
   # Return the field instance
@@ -990,31 +961,13 @@ Task = Models.Model(
 - Database design best practices for string field sizing
 """
 function CharField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :primary_key, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :choices, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for CharField. It will be ignored." field="CharField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  primary_key = get(kwargs, :primary_key, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key) =
+    _common_kwargs("CharField", kwargs; primary_key = false, editable = true, extra = (:max_length, :choices))
+
   max_length = get(kwargs, :max_length, 250)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
   default = get(kwargs, :default, nothing)
   choices = get(kwargs, :choices, nothing)
-  editable = get(kwargs, :editable, true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
-  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(_fielderr("The max_length must be an integer"))
   max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
@@ -1026,12 +979,6 @@ function CharField(; kwargs...)
   if !(default isa Nothing) && length(default) > max_length
     throw(_fielderr("The default value exceeds the max_length, but got $(length(default)) and max_length is $(max_length)"))
   end
-  !(unique isa Bool) && throw(_fielderr("The unique must be a boolean"))
-  !(blank isa Bool) && throw(_fielderr("The blank must be a boolean"))
-  !(null isa Bool) && throw(_fielderr("The null must be a boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The db_index must be a boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The db_column must be a string or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The editable must be a boolean"))  
   if choices isa AbstractString
     choices = parse_choices(choices)
   elseif !(choices isa Union{Nothing, NTuple{N, Tuple{AbstractString, AbstractString}} where N })
@@ -1135,52 +1082,14 @@ Review = Models.Model(
 
 """
 function IntegerField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for IntegerField. It will be ignored." field="IntegerField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("IntegerField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
-
-  # Validate default using validate_default
-  default = validate_default(default, Union{Int64, Nothing}, "IntegerField", format2int64)
-  
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
+  default = validate_default(get(kwargs, :default, nothing), Union{Int64, Nothing}, "IntegerField", format2int64)
 
   return sIntegerField(
-    verbose_name,
-    false, # primary_key
-    unique,
-    blank,
-    null,
-    db_index,
-    db_column,
-    default,
-    editable,
-    "INTEGER",
-    format_number_sql
+    verbose_name, false, unique, blank, null, db_index, db_column, default, editable,
+    "INTEGER", format_number_sql
   )
 end
 
@@ -1241,42 +1150,16 @@ Standing = Models.Model(
 ```
 """
 function PositiveSmallIntegerField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for PositiveSmallIntegerField. It will be ignored." field="PositiveSmallIntegerField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("PositiveSmallIntegerField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
 
   # Validate default using validate_default, then enforce the non-negative range
   default = validate_default(default, Union{Int64, Nothing}, "PositiveSmallIntegerField", format2int64)
   if default !== nothing && !(0 <= default <= POSITIVE_SMALL_INTEGER_MAX)
     throw(_fielderr("The default value for PositiveSmallIntegerField must be between 0 and $(POSITIVE_SMALL_INTEGER_MAX), got: $default"))
   end
-
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sPositiveSmallIntegerField(
     verbose_name,
@@ -1350,42 +1233,16 @@ Lap_times = Models.Model(
 ```
 """
 function PositiveIntegerField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for PositiveIntegerField. It will be ignored." field="PositiveIntegerField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("PositiveIntegerField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
 
   # Validate default using validate_default, then enforce the non-negative range
   default = validate_default(default, Union{Int64, Nothing}, "PositiveIntegerField", format2int64)
   if default !== nothing && !(0 <= default <= POSITIVE_INTEGER_MAX)
     throw(_fielderr("The default value for PositiveIntegerField must be between 0 and $(POSITIVE_INTEGER_MAX), got: $default"))
   end
-
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sPositiveIntegerField(
     verbose_name,
@@ -1487,39 +1344,14 @@ SocialMedia = Models.Model(
 - **Application Code**: May need updates if expecting different ranges
 """
 function BigIntegerField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for BigIntegerField. It will be ignored." field="BigIntegerField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("BigIntegerField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
 
   # Validate default using validate_default
   default = validate_default(default, Union{Int64, Nothing}, "BigIntegerField", format2int64)
   
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sBigIntegerField(
     verbose_name,
@@ -1588,37 +1420,13 @@ The field handles various input formats:
 - **NULL**: When `null=true`, accepts `NULL`/`nothing`
 """
 function BooleanField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for BooleanField. It will be ignored." field="BooleanField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("BooleanField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{Bool, Nothing}, "BooleanField", x -> parse(Bool, string(x)))
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBooleanField(
     verbose_name,
@@ -1730,41 +1538,13 @@ The field accepts various input formats:
 - **String formats**: Various date strings parseable by Julia
 """
 function DateField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :auto_now, :auto_now_add
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for DateField. It will be ignored." field="DateField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
-  auto_now = get(kwargs, :auto_now, false)
-  auto_now_add = get(kwargs, :auto_now_add, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add) =
+    _common_kwargs("DateField", kwargs; bools = (auto_now = false, auto_now_add = false))
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{Date, Nothing}, "DateField", format_date_sql)
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
-  !(auto_now isa Bool) && throw(_fielderr("The 'auto_now' must be a Boolean"))
-  !(auto_now_add isa Bool) && throw(_fielderr("The 'auto_now_add' must be a Boolean"))
   # Return the field instance
   return sDateField(
     verbose_name,
@@ -1841,27 +1621,10 @@ deadline = DateTimeField(null=true, blank=true)```
 ```
 """
 function DateTimeField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :auto_now, :auto_now_add, :type
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for DateTimeField. It will be ignored." field="DateTimeField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, auto_now, auto_now_add) =
+    _common_kwargs("DateTimeField", kwargs; bools = (auto_now = false, auto_now_add = false), extra = (:type,))
+
   default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
-  auto_now = get(kwargs, :auto_now, false)
-  auto_now_add = get(kwargs, :auto_now_add, false)
   #TIMESTAMPTZ
   type = get(kwargs, :type, "TIMESTAMPTZ") |> uppercase
 
@@ -1885,19 +1648,8 @@ function DateTimeField(; kwargs...)
     end
   end
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{ZonedDateTime, DateTime, Nothing}, "DateTimeField", normalize_datetime_default)
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
-  !(auto_now isa Bool) && throw(_fielderr("The 'auto_now' must be a Boolean"))
-  !(auto_now_add isa Bool) && throw(_fielderr("The 'auto_now_add' must be a Boolean"))
   !(type isa String) && throw(_fielderr("The 'type' must be a String"))
   if type != "TIMESTAMPTZ" && type != "TIMESTAMP"
     throw(_fielderr("The 'type' must be either 'TIMESTAMPTZ' or 'TIMESTAMP'"))
@@ -1981,36 +1733,18 @@ discount = DecimalField(
 ```
 """
 function DecimalField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :max_digits, :decimal_places, :primary_key
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for DecimalField. It will be ignored." field="DecimalField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key) =
+    _common_kwargs("DecimalField", kwargs; primary_key = false, extra = (:max_digits, :decimal_places))
+
   default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
   max_digits = get(kwargs, :max_digits, 10)
   decimal_places = get(kwargs, :decimal_places, 2)
-  primary_key = get(kwargs, :primary_key, false)
 
   # Validate primary_key rejection for Decimal (Best practice)
   if primary_key === true
     throw(_fielderr("DecimalField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
   end
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   
   # Validate default using validate_default
   default = validate_default(default, Union{Float64, Nothing}, "DecimalField", format2float64)
@@ -2021,14 +1755,6 @@ function DecimalField(; kwargs...)
   if decimal_places > max_digits
     throw(_fielderr("DecimalField 'decimal_places' ($decimal_places) cannot be greater than 'max_digits' ($max_digits)"))
   end
-
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sDecimalField(
     verbose_name,
@@ -2097,37 +1823,13 @@ primary_email = EmailField(
 ```
 """
 function EmailField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for EmailField. It will be ignored." field="EmailField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("EmailField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{String, Nothing}, "EmailField", x -> parse(String, x))
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sEmailField(
     verbose_name,
@@ -2226,35 +1928,13 @@ Users can continue to log in without any password reset.
 - Django's password management documentation
 """
 function PasswordField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :blank, :null, :editable, :max_length, :auto_hash, :db_column
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for PasswordField. It will be ignored." field="PasswordField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  editable = get(kwargs, :editable, true)
-  max_length = get(kwargs, :max_length, 128)
-  auto_hash = get(kwargs, :auto_hash, true)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, blank, null, db_column, editable, auto_hash) =
+    _common_kwargs("PasswordField", kwargs; editable = true, exclude = (:unique, :db_index, :default), extra = (:max_length,), bools = (auto_hash = true,))
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-  # Validate other parameters
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  max_length = get(kwargs, :max_length, 128)
+
   !(max_length isa Int) && throw(_fielderr("The 'max_length' must be an Integer"))
   max_length < 64 && throw(_fielderr("The 'max_length' must be at least 64 to store password hashes"))
-  !(auto_hash isa Bool) && throw(_fielderr("The 'auto_hash' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
   
   # Return the field instance
   return sPasswordField(
@@ -2315,45 +1995,20 @@ weight = FloatField(null=true)
 ```
 """
 function FloatField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :primary_key
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for FloatField. It will be ignored." field="FloatField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key) =
+    _common_kwargs("FloatField", kwargs; primary_key = false)
+
   default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
-  primary_key = get(kwargs, :primary_key, false)
 
   # Validate primary_key rejection for Float (Best practice)
   if primary_key === true
     throw(_fielderr("FloatField cannot be used as a Primary Key due to precision comparison risks. Use IDField or CharField instead."))
   end
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The verbose_name must be a String or nothing"))
   
   # Validate default using validate_default
   default = validate_default(default, Union{Float64, Nothing}, "FloatField", format2float64)
   
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' parameter must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' parameter must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' parameter must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' parameter must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' parameter must be a Boolean"))
 
   return sFloatField(
     verbose_name,
@@ -2420,37 +2075,13 @@ banner = ImageField(
 ```
 """
 function ImageField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for ImageField. It will be ignored." field="ImageField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("ImageField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{String, Nothing}, "ImageField", x -> parse(String, x))
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sImageField(
     verbose_name,
@@ -2474,32 +2105,11 @@ Django-compatibility alias for storing file upload paths. Behaves identically to
 Accepted kwargs: `verbose_name`, `unique`, `blank`, `null`, `db_index`, `default`, `editable`, `upload_to`, `max_length`.
 """
 function FileField(; kwargs...)
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable,
-      :upload_to, :max_length
-  ])
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for FileField. It will be ignored." field="FileField" param=k value=v
-      end
-  end
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique       = get(kwargs, :unique, false)
-  blank        = get(kwargs, :blank, false)
-  null         = get(kwargs, :null, false)
-  db_index     = get(kwargs, :db_index, false)
-  db_column    = get(kwargs, :db_column, nothing)
-  default      = get(kwargs, :default, nothing)
-  editable     = get(kwargs, :editable, true)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("FileField", kwargs; editable = true, extra = (:upload_to, :max_length))
 
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
   default = validate_default(default, Union{String, Nothing}, "FileField", x -> parse(String, x))
-  !(unique   isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank    isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null     isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   return sImageField(
     verbose_name,
@@ -2568,32 +2178,13 @@ template = TextField(
 ```
 """
 function TextField(; kwargs...)
-  accepted = Set([:verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable])
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for TextField. It will be ignored." field="TextField" param=k value=v
-      end
-  end
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("TextField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{String, Nothing}, "TextField", x -> parse(String, x))
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTextField(
     verbose_name,
@@ -2625,37 +2216,13 @@ mutable struct sTimeField <: PormGField
 end
 
 function TimeField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for TimeField. It will be ignored." field="TimeField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("TimeField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default
   default = validate_default(default, Union{Time, Nothing}, "TimeField", x -> Time(x))
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sTimeField(
     verbose_name,
@@ -2688,29 +2255,12 @@ mutable struct sBinaryField <: PormGField
 end
 
 function BinaryField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :max_length
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for BinaryField. It will be ignored." field="BinaryField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("BinaryField", kwargs; extra = (:max_length,))
+
   default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
   max_length = get(kwargs, :max_length, nothing)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
   # Validate default
   default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", x -> Base64.decode(x))
   if max_length isa AbstractString
@@ -2725,13 +2275,6 @@ function BinaryField(; kwargs...)
   elseif max_length isa Int && max_length <= 0
     throw(_fielderr("The 'max_length' must be a positive integer"))
   end
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sBinaryField(
     verbose_name,
@@ -2764,28 +2307,11 @@ mutable struct sDurationField <: PormGField
 end
 
 function DurationField(; kwargs...)
-  # List of accepted parameters
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  # Check for unexpected parameters
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for DurationField. It will be ignored." field="DurationField" param=k value=v
-      end
-  end
-  # Extract parameters with defaults
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("DurationField", kwargs)
 
-  # Validate verbose_name
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  default = get(kwargs, :default, nothing)
+
   # Validate default. `format_duration_sql` raises InvalidValueError — correct on the insert/update
   # path, but here the caller's mistake is the `default=` kwarg at model-definition time. Re-raise as
   # FieldValidationError so every field constructor reports the same category (#239), matching the
@@ -2800,13 +2326,6 @@ function DurationField(; kwargs...)
       throw(FieldValidationError("Invalid default value for DurationField: $(e.msg)"))
     end
   end
-  # Validate other parameters
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
   # Return the field instance
   return sDurationField(
     verbose_name,
@@ -2877,34 +2396,10 @@ Session = Models.Model(
 ```
 """
 function UUIDField(; kwargs...)
-  accepted = Set([
-      :verbose_name, :primary_key, :unique, :blank, :null, :db_index, :db_column, :default, :editable, :auto_add
-  ])
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for UUIDField. It will be ignored." field="UUIDField" param=k value=v
-      end
-  end
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  primary_key = get(kwargs, :primary_key, false)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, true)
-  auto_add = get(kwargs, :auto_add, false)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, auto_add) =
+    _common_kwargs("UUIDField", kwargs; primary_key = false, editable = true, bools = (auto_add = false,))
 
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-  !(primary_key isa Bool) && throw(_fielderr("The 'primary_key' must be a Boolean"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
-  !(auto_add isa Bool) && throw(_fielderr("The 'auto_add' must be a Boolean"))
+  default = get(kwargs, :default, nothing)
 
   # Validate UUID format for string defaults (validate_default won't invoke the
   # converter when the value already matches Union{String, Nothing})
@@ -2990,34 +2485,15 @@ Circuit = Models.Model(
 ```
 """
 function URLField(; kwargs...)
-  accepted = Set([
-      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for URLField. It will be ignored." field="URLField" param=k value=v
-      end
-  end
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  max_length = get(kwargs, :max_length, 200)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, true)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("URLField", kwargs; editable = true, extra = (:max_length,))
 
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  max_length = get(kwargs, :max_length, 200)
+  default = get(kwargs, :default, nothing)
+
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(_fielderr("The max_length must be an integer"))
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   default = validate_default(default, Union{String, Nothing}, "URLField", x -> string(x))
 
@@ -3089,35 +2565,16 @@ Race = Models.Model(
 ```
 """
 function SlugField(; kwargs...)
-  accepted = Set([
-      :verbose_name, :max_length, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for SlugField. It will be ignored." field="SlugField" param=k value=v
-      end
-  end
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  max_length = get(kwargs, :max_length, 50)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, true)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, true)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("SlugField", kwargs; db_index = true, editable = true, extra = (:max_length,))
 
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
+  max_length = get(kwargs, :max_length, 50)
+  default = get(kwargs, :default, nothing)
+
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(_fielderr("The max_length must be an integer"))
   max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
   max_length < 1 && throw(_fielderr("The max_length must be greater than 0"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
 
   default = validate_default(default, Union{String, Nothing}, "SlugField", x -> string(x))
 
@@ -3192,30 +2649,10 @@ Race = Models.Model(
 - PostgreSQL JSONB supports GIN indexing for efficient key/value lookups.
 """
 function JSONField(; kwargs...)
-  accepted = Set([
-      :verbose_name, :unique, :blank, :null, :db_index, :db_column, :default, :editable
-  ])
-  for (k, v) in kwargs
-      if !(k in accepted)
-          @warn "Unexpected parameter for JSONField. It will be ignored." field="JSONField" param=k value=v
-      end
-  end
-  verbose_name = get(kwargs, :verbose_name, nothing)
-  unique = get(kwargs, :unique, false)
-  blank = get(kwargs, :blank, false)
-  null = get(kwargs, :null, false)
-  db_index = get(kwargs, :db_index, false)
-  db_column = get(kwargs, :db_column, nothing)
-  default = get(kwargs, :default, nothing)
-  editable = get(kwargs, :editable, true)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable) =
+    _common_kwargs("JSONField", kwargs; editable = true)
 
-  !(verbose_name isa Union{Nothing, String}) && throw(_fielderr("The 'verbose_name' must be a String or nothing"))
-  !(unique isa Bool) && throw(_fielderr("The 'unique' must be a Boolean"))
-  !(blank isa Bool) && throw(_fielderr("The 'blank' must be a Boolean"))
-  !(null isa Bool) && throw(_fielderr("The 'null' must be a Boolean"))
-  !(db_index isa Bool) && throw(_fielderr("The 'db_index' must be a Boolean"))
-  !(db_column isa Union{Nothing, String}) && throw(_fielderr("The 'db_column' must be a String or nothing"))
-  !(editable isa Bool) && throw(_fielderr("The 'editable' must be a Boolean"))
+  default = get(kwargs, :default, nothing)
 
   # Validate JSON format for string defaults (validate_default won't invoke the
   # converter when the value already matches Union{String, Nothing})

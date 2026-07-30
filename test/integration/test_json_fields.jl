@@ -118,7 +118,7 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
         else
             @testset "containment operators throw on SQLite" begin
                 q = base(); q.filter("payload__@has_key" => "driver")
-                @test_throws PormG.UnsupportedConnectionError q.count()
+                @test_throws PormG.BackendCapabilityError q.count()
             end
         end
     finally

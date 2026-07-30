@@ -105,7 +105,11 @@ Base.showerror(io::IO, e::PoolConnectError) = print(io,
 function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
   if !ensure_before_connect!(pool)
     key = something(connection_key_for_pool(pool), "?")
-    throw(ErrorException("before_connect hook aborted the connection for '$(key)'"))
+    # PoolConnectError, not ErrorException: a hook refusing the connection is a connect-time
+    # failure like any other, and `catch PoolError` must cover it (audit finding). The hook is the
+    # documented downstream-extension seam (Nitro), so this is consumer-reachable.
+    throw(PoolConnectError(pool isa PormGPostgres ? "PostgreSQL" : "SQLite",
+                           "before_connect hook aborted the connection", key, 1, 0.0))
   end
   return nothing
 end

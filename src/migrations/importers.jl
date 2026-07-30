@@ -49,7 +49,7 @@ function import_models_from_sqlite(db::String = "db";
   # output folder comes from the resolved connection's settings — never a hardcoded path.
   settings = Configuration.get_settings(db)
   conn = settings.connections
-  conn isa PormGSQLite || throw(UnsupportedConnectionError(
+  conn isa PormGSQLite || throw(BackendCapabilityError(
     "Connection '$(db)' is not a SQLite connection (got $(typeof(conn))). Use import_models_from_postgres for PostgreSQL."))
   model_path = settings.db_def_folder
 
@@ -444,8 +444,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
         end
       catch e
         @pormg_debug
-        error_msg = "Error processing field '$field_name' in class '$class_name': $(e)"
-        throw(ErrorException(error_msg))
+        # A FieldValidationError/InvalidValueError from field construction is already the right
+        # type — stringifying it into an ErrorException would eject it from the taxonomy (audit).
+        e isa PormGError && rethrow()
+        throw(InvalidMigrationError("Error processing field '$field_name' in class '$class_name': $(e)"))
       end
     end
   end

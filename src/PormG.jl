@@ -141,7 +141,7 @@ end
 # live in `PormG.Functions` and are reached via `using PormG.Functions` / `PormG.Functions.X`.
 export object, get, PormGRow, pk, DoesNotExist, MultipleObjectsReturned, Q, Qor, F, Exists, OuterRef, Subquery, Interval, show_query, inspect_query, bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 # Semantic error taxonomy (#231): catch `PormGError` for any query-builder misuse, or a specific subtype.
-export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
+export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # Schema / configuration / migration errors (#239). These complete the taxonomy: `catch PormGError`
 # now covers field-constructor and model-definition mistakes, connection config, and the migration
 # engine — not just the query builder.
@@ -151,7 +151,7 @@ export FieldValidationError, ModelDefinitionError,
 # Taxonomy edges (#261). `PoolError` is the connection-pool umbrella — the pool errors were the
 # only concrete subtypes with neither a Kernel home nor an abstract one. `error_message` is the
 # uniform way to read a caught PormGError: the structured subtypes have no `.msg` field.
-export PoolError, error_message
+export PoolError, error_message, DefinitionError
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)

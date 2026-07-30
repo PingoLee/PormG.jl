@@ -189,11 +189,11 @@ function up_get_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query::
 
   for k in lookup_keys
     haskey(model.fields, k) ||
-      throw(QueryBuildError("Error in get_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+      throw(UnknownFieldError("Error in get_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   for k in default_keys
     haskey(model.fields, k) ||
-      throw(QueryBuildError("Error in get_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+      throw(UnknownFieldError("Error in get_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   length(unique(lookup_keys)) == length(lookup_keys) ||
     throw(QueryBuildError("Error in get_or_create, duplicate lookup field(s)"))

@@ -23,14 +23,17 @@ const QB = PormG.QueryBuilder
 const TAXONOMY_TYPES = (
     PormG.UnknownFieldError, PormG.LazyTraversalError, PormG.FilterError,
     PormG.QueryBuildError, PormG.UnsafeMutationError, PormG.InvalidValueError,
-    PormG.PermissionError, PormG.UnsupportedConnectionError,
+    PormG.WritesDisabledError, PormG.UnsupportedConnectionError,
+    # #268 audit: capability limits split out of UnsupportedConnectionError; PROTECT-delete refusal
+    # split out of the QueryBuildError long tail.
+    PormG.BackendCapabilityError, PormG.ProtectedError,
     PormG.DoesNotExist, PormG.MultipleObjectsReturned,
     # #239 completion: schema, configuration and migration errors, plus the four
     # pre-existing standalone types reparented under the taxonomy.
     PormG.FieldValidationError, PormG.ModelDefinitionError,
     PormG.InvalidConfigurationError, PormG.InvalidMigrationError,
     PormG.PoolTimeoutError, PormG.PoolConnectError,
-    PormG.Configuration.MissingDatabaseConfigurationException,
+    PormG.Configuration.MissingConfigurationError,
     PormG.Migrations.DestructiveMigrationError,
 )
 
@@ -40,10 +43,12 @@ const TAXONOMY_ABSTRACT = (
     # #261: the pool errors were the only concrete subtypes with neither a Kernel home nor an
     # abstract supertype in Kernel. `PoolError` closes that gap.
     PormG.PoolError,
+    # #268 audit: definition-time umbrella — one include("models.jl") can raise either member.
+    PormG.DefinitionError,
 )
 
 # Walk the real type tree. `names(PormG)` only sees EXPORTED names, which silently omits
-# `Configuration.MissingDatabaseConfigurationException` and `Migrations.DestructiveMigrationError` —
+# `Configuration.MissingConfigurationError` and `Migrations.DestructiveMigrationError` —
 # the two types that live mid-include-chain, i.e. exactly the ones a placement guard must inspect.
 function _concrete_pormg_errors(T = PormG.PormGError, acc = Any[])
     for S in subtypes(T)
@@ -88,9 +93,16 @@ end
         # surprise is what this taxonomy exists to remove. Concrete buckets would have made
         # these subtypings impossible ("can only subtype abstract types").
         @test PormG.InvalidConfigurationError <: PormG.ConfigurationError
-        @test PormG.Configuration.MissingDatabaseConfigurationException <: PormG.ConfigurationError
+        @test PormG.Configuration.MissingConfigurationError <: PormG.ConfigurationError
         @test PormG.InvalidMigrationError <: PormG.MigrationError
         @test PormG.Migrations.DestructiveMigrationError <: PormG.MigrationError
+
+        # #268 audit: the definition-time pair grouped under one umbrella, and the write-switch
+        # error reparented under ConfigurationError (its remedy is a connection.yml edit).
+        @test PormG.FieldValidationError <: PormG.DefinitionError
+        @test PormG.ModelDefinitionError <: PormG.DefinitionError
+        @test PormG.WritesDisabledError <: PormG.ConfigurationError
+        @test !(PormG.DefinitionError <: PormG.ConfigurationError)
 
         # Reparented from bare `Exception` (#239) so `catch PormGError` covers the pool too,
         # then grouped under the `PoolError` umbrella (#261) so `catch PoolError` handles
@@ -132,7 +144,7 @@ end
         @test QueryBuildError === PormG.QueryBuildError
         @test UnsafeMutationError === PormG.UnsafeMutationError
         @test InvalidValueError === PormG.InvalidValueError
-        @test PermissionError === PormG.PermissionError
+        @test WritesDisabledError === PormG.WritesDisabledError
         @test UnsupportedConnectionError === PormG.UnsupportedConnectionError
         @test FieldValidationError === PormG.FieldValidationError
         @test ModelDefinitionError === PormG.ModelDefinitionError
@@ -155,6 +167,53 @@ end
         fields = Dict("id" => Models.IDField(), "points" => Models.IntegerField()),
         field_names = ["id", "points"],
     )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # #268 audit reclassifications: each gets ONE discriminating representative, because a
+    # supertype assertion (isa PormGError) passes for the pre-audit type too and proves nothing.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "audit reclassifications raise their promised types (#268)" begin
+        # Missing driver: every backend generic funnels to InvalidConfigurationError. This cannot
+        # be probed by plain dispatch in the suite: load_drivers.jl loads BOTH extensions, and the
+        # SQLite ext types some methods on the ABSTRACT PormGSQLite with fixed arity — which
+        # shadows the fallback for one-argument calls entirely (even via `invoke`). The extra
+        # positional argument below matches ONLY the varargs fallback, so this pins the fallback
+        # method's behavior deterministically with or without any driver loaded.
+        struct _DriverlessSQLite <: PormG.PormGSQLite end
+        err = try
+            PormG.backend_connect(_DriverlessSQLite(), :force_varargs_fallback)
+            nothing
+        catch e; e; end
+        @test err isa PormG.InvalidConfigurationError
+        @test occursin("using SQLite", PormG.error_message(err))
+
+        # Config entry exists but its pool was never built → typed, not a downstream MethodError.
+        PormG.config["docerr_nopool"] = PormG.Configuration.Settings(change_data = true)
+        nopool = Models.Model_Type(name = "np_probe",
+            fields = Dict("id" => Models.IDField()), field_names = ["id"])
+        nopool.connect_key = "docerr_nopool"
+        err = try; object(nopool).filter("id" => 1).list(show_query = :dict); nothing; catch e; e; end
+        @test err isa PormG.InvalidConfigurationError
+        @test occursin("no pool yet", PormG.error_message(err))
+
+        # SQLite too old for window functions → BackendCapabilityError (capability, not dispatch).
+        struct _OldSQLite_Taxo <: PormG.PormGSQLite end
+        PormG.backend_sqlite_version(::_OldSQLite_Taxo) = 3024000
+        err = try; PormG.Dialect._assert_sqlite_window_support(_OldSQLite_Taxo()); nothing; catch e; e; end
+        @test err isa PormG.BackendCapabilityError
+        @test occursin("3.25.0", PormG.error_message(err))
+
+        # Migration engine: no pending plan / unparseable introspected DDL → InvalidMigrationError.
+        mktempdir() do d
+            st = PormG.Configuration.Settings(change_data = true)
+            st.db_def_folder = d
+            err = try; PormG.Migrations._load_migration_plan(st); nothing; catch e; e; end
+            @test err isa PormG.InvalidMigrationError
+            @test occursin("No pending migrations", PormG.error_message(err))
+        end
+        err = try; PormG.Migrations.convertSQLToModel("CREATE TABLE noquotes (x INTEGER)"); nothing; catch e; e; end
+        @test err isa PormG.InvalidMigrationError
+    end
 
     @testset "representative misuse → specific subtype" begin
         # FilterError: a bad filter argument (Int is not a Pair/Q/Qor/operator).
@@ -228,7 +287,7 @@ end
         # with the error name prefixed. Pinned because the docs promise `error_message` never
         # returns *less* than `.msg` — a future showerror that dropped the message would break that
         # promise silently.
-        for e2 in (PormG.Configuration.MissingDatabaseConfigurationException("no connection.yml"),
+        for e2 in (PormG.Configuration.MissingConfigurationError("no connection.yml"),
                    PormG.Migrations.DestructiveMigrationError("refused", ["DROP TABLE \"drivers\""]))
             # `occursin` already implies the result is no shorter, so one assertion suffices.
             @test occursin(e2.msg, PormG.error_message(e2))

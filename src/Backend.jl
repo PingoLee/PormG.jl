@@ -45,7 +45,10 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
            :backend_sqlite_version)
   @eval begin
     function $fn end
-    $fn(pool::PormGPostgres, args...; kwargs...) = error(_PG_DRIVER_HINT)
-    $fn(pool::PormGSQLite, args...; kwargs...) = error(_SQLITE_DRIVER_HINT)
+    # InvalidConfigurationError, not ErrorException: forgetting `using LibPQ`/`using SQLite` is a
+    # setup mistake the docs' `catch PormGError` recipe must cover (audit finding — this fires from
+    # ALL backend generics, i.e. the first thing a consumer hits with a missing driver).
+    $fn(pool::PormGPostgres, args...; kwargs...) = throw(InvalidConfigurationError(_PG_DRIVER_HINT))
+    $fn(pool::PormGSQLite, args...; kwargs...) = throw(InvalidConfigurationError(_SQLITE_DRIVER_HINT))
   end
 end

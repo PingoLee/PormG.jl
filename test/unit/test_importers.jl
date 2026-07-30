@@ -49,7 +49,7 @@ end
       db_def_folder = mktempdir(),
     )
     try
-      @test_throws PormG.UnsupportedConnectionError PormG.Migrations.import_models_from_sqlite(key)
+      @test_throws PormG.BackendCapabilityError PormG.Migrations.import_models_from_sqlite(key)
     finally
       delete!(PormG.config, key)
     end

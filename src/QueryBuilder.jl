@@ -11,7 +11,8 @@ import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLitePar
 # `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels
 # (`_unsupported_conn`, `_write_not_allowed`) live in `querybuilder/error_funnels.jl`.
 import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
-  QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError,
+  QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError,
+  InvalidConfigurationError,   # thrown by the model-not-bound guards (audit: was UnsupportedConnectionError)
   DoesNotExist, MultipleObjectsReturned,
   # Not thrown here — CAUGHT here: last()/save()/delete() convert Models' composite-pk failure
   # into an actionable QueryBuildError (#239).
@@ -105,7 +106,7 @@ export get
 export PormGRow, pk, DoesNotExist, MultipleObjectsReturned
 # Semantic error taxonomy (#231): every query-builder misuse throws a PormGError subtype.
 export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
-  QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError
+  QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 

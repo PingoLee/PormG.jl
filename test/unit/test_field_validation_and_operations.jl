@@ -703,7 +703,9 @@ end
         df_bad_scale = DataFrame(
             price = [123.456, 99.9999]
         )
-        @test_throws ErrorException bulk_insert(BoundaryModel.objects, df_bad_scale, show_query=:dict)
+        # #268 audit: bulk row validation now rethrows the taxonomy type instead of stringifying
+        # it into ErrorException — `catch InvalidValueError` behaves the same as for insert().
+        @test_throws InvalidValueError bulk_insert(BoundaryModel.objects, df_bad_scale, show_query=:dict)
         
         # Test 30: Bulk update with boundary values
         df_update_boundary = DataFrame(
@@ -1759,7 +1761,12 @@ end
             title = ["TITLE", "ANOTHER"],
             slug = ["slug1", "slug2"]
         )
-        @test_throws ErrorException bulk_insert(StringModel.objects, df_bad_strings, show_query=:dict)
+        # #268 audit: same contract as single-row insert — the taxonomy type survives bulk.
+        @test_throws InvalidValueError bulk_insert(StringModel.objects, df_bad_strings, show_query=:dict)
+        # …and bulk_update shares the rethrow pattern (bulk_copy is identical code, PG-only).
+        @test_throws InvalidValueError bulk_update(StringModel.objects,
+            DataFrame(id = [1], code = ["TOOLONG"]), columns = ["code"], match_on = ["id"],
+            show_query = :dict)
 
         # Test 15: Unicode strings (count as characters, not bytes)
         @test validate_field_data(StringModel, "code", "你好世", "insert") === true

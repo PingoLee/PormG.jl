@@ -197,7 +197,10 @@ import .models as M
 macro import_models(path_expr, alias)
     source_file = string(__source__.file)
     if !(path_expr isa String)
-        error("@import_models requires a string literal path, got: $(typeof(path_expr))")
+        # ArgumentError, deliberately outside the taxonomy: a non-literal macro argument is
+        # Julia-level API misuse (same class as tools.jl's two keeps), not a PormG domain error.
+        # Pinned in test_docs_error_type_drift.jl's allowlist.
+        throw(ArgumentError("@import_models requires a string literal path, got: $(typeof(path_expr))"))
     end
 
     calling_module = __module__

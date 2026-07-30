@@ -25,20 +25,20 @@
 #
 # Scope, so a fifth funnel has an obvious home: **shared** funnels live here; a funnel used by
 # exactly one file lives beside its call sites. `_fielderr` in `src/models/fields.jl` is the latter
-# — 248 sites in one file, one category, documented where it is used.
+# — its call sites live in one file, one category, documented where it is used (#260 cut them from 248 to ~50).
 
 # Internal dispatch fallback (#197, retyped in #231): a connection object that is neither a
 # PostgreSQL nor a SQLite pool reached an execution path — a catchable `PormGError` subtype.
 _unsupported_conn(op::AbstractString, conn) = UnsupportedConnectionError(
-  "PormG internal error in $(op): unsupported connection type $(typeof(conn)) — expected a PostgreSQL or SQLite connection pool.")
+  "PormG internal error in $(op): unsupported connection type $(typeof(conn)) — expected a PostgreSQL or SQLite connection pool. This is a PormG bug; please report it.")
 
 # Standard actionable error for a write blocked by `change_data: false` (#205), typed as
-# `PermissionError` (#231). Every DML entry point (insert, update, delete, update_or_create,
+# `WritesDisabledError` (#231, renamed from `PermissionError` in the pre-publish naming pass). Every DML entry point (insert, update, delete, update_or_create,
 # bulk_*, many-to-many add/remove/clear, primary-key allocation) shares this one message so a user
 # hitting any of them gets the same fix — writes are disabled by default (safety-first, the common
 # first-`create` trap), and the message names where to fix it: the `config:` block of the active
 # environment in connection.yml.
-_write_not_allowed(operation::AbstractString, conn_key) = PermissionError(
+_write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
   "Error in $(operation): the connection \e[4m\e[31m$(conn_key)\e[0m is not allowed to write. " *
   "Writes are disabled by default — set \e[1mchange_data: true\e[0m under the `config:` block of the active " *
   "environment in connection.yml to enable creates, updates, and deletes.")

@@ -291,7 +291,7 @@ function allocate_primary_keys(objct::SQLObjectHandler, df_o::DataFrames.DataFra
       end
     end
   else
-    throw(UnsupportedConnectionError("allocate_primary_keys: unsupported connection type $(typeof(connection))"))
+    throw(_unsupported_conn("allocate_primary_keys", connection))
   end
 
   df[!, pk_field] = ids
@@ -908,7 +908,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         # param_placeholders = add_parameter!(parameters, values)
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index, django_prefix)
-        throw(ErrorException("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
+        e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
+        throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1
@@ -982,7 +983,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
 
-  !(connection isa PormGPostgres) && throw(UnsupportedConnectionError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
+  !(connection isa PormGPostgres) && throw(BackendCapabilityError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
 
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))
@@ -1035,7 +1036,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
             validate_field_data(model, field, value, "bulk_copy"; allow_primary_key = true)
             model.fields[field].formatter(value)
           catch e
-            throw(ErrorException("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
+            e isa PormGError && rethrow()   # keep the taxonomy type (bulk_copy logs no per-row depuration; the message below carries the row index only for the wrapped case)
+            throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
           end
         end
       end
@@ -1404,7 +1406,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
         param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formatter(row[mapping[field]])) for field in joined_columns]
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, row, index, settings.django_prefix !== nothing)
-        throw(ErrorException("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
+        e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
+        throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
       push!(rows, "($(join(param_placeholders, ", ")))")
       count += 1

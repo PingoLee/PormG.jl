@@ -495,7 +495,7 @@ Load and return all OrderedDicts from the pending_migrations.jl file.
 function _load_migration_plan(settings::PormGSettings)
   pending_path = joinpath(settings.db_def_folder, "migrations", "pending_migrations.jl")
   if !isfile(pending_path)
-    error("No pending migrations found at: $pending_path")
+    throw(InvalidMigrationError("No pending migrations found at: $pending_path"))
   end
   temp_migration_module = include(pending_path)
   return Base.invokelatest(get_all_dicts, temp_migration_module)
@@ -705,7 +705,7 @@ function _execute_statements_sqlite(connection::PormGSQLite, statements::Vector{
         result, _ = with_transaction(connection, trimmed, conn=conn)
         violations = DataFrame(result)
         if nrow(violations) > 0
-          error("Migration aborted: PRAGMA foreign_key_check found $(nrow(violations)) orphaned foreign-key row(s) after a SQLite table rebuild; rolling back.")
+          throw(InvalidMigrationError("Migration aborted: PRAGMA foreign_key_check found $(nrow(violations)) orphaned foreign-key row(s) after a SQLite table rebuild; rolling back."))
         end
       else
         with_transaction(connection, trimmed, conn=conn)

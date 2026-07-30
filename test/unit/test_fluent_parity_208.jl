@@ -82,6 +82,10 @@ end
     _p208_error(() -> GocPg.objects.get_or_create("code"; show_query = :dict)))
   @test occursin("lookup field nope is not a field",
     _p208_error(() -> GocPg.objects.get_or_create("nope" => 1; show_query = :dict)))
+  # #268 audit: get_or_create's unknown-field check now matches update_or_create's type —
+  # UnknownFieldError, so `catch FieldAccessError` sees both. A PormGError assertion alone
+  # would also pass for the pre-audit QueryBuildError.
+  @test_throws PormG.UnknownFieldError GocPg.objects.get_or_create("nope" => 1; show_query = :dict)
   @test occursin("defaults field nope is not a field",
     _p208_error(() -> GocPg.objects.get_or_create("code" => "x"; defaults = ["nope" => 1], show_query = :dict)))
   @test occursin("appear in both lookup and defaults",

@@ -50,7 +50,7 @@ using PormG
     #     Kernel-parented supertype made this check vacuous — it passed for every subtype ever,
     #     including the violation it exists to catch.
     #   • The walk is over `subtypes(PormGError)`, not `names(PormG)`. An export-list walk sees only
-    #     exported types, which silently omits `MissingDatabaseConfigurationException` and
+    #     exported types, which silently omits `MissingConfigurationError` and
     #     `DestructiveMigrationError` — the two that actually live mid-include-chain, i.e. precisely
     #     the ones this rule is about. Reparenting either to a bare `<: PormGError` must fail here.
     #

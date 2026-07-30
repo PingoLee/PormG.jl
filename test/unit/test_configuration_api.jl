@@ -220,7 +220,11 @@ end
             conn = PormG.ConnectionPool.acquire_connection(pool; mode=:read)
 
             PormG.Configuration.set_before_connect_hook((key, settings) -> false)
-            @test_throws ErrorException PormG.ConnectionPool.reconnect_db(pool, conn)
+            # #268 audit: a hook refusing the connection is a connect-time failure — typed
+            # PoolConnectError so `catch PoolError` covers it (this is the Nitro extension seam).
+            err = @test_throws PormG.PoolConnectError PormG.ConnectionPool.reconnect_db(pool, conn)
+            @test err.value isa PormG.PoolError
+            @test occursin("before_connect hook", PormG.error_message(err.value))
 
             _cleanup_configuration_test_keys([db_dir])
         end
@@ -447,7 +451,7 @@ end
 # and a missing env block reports the available ones. All DB-free (SQLite `:memory:`), isolated via
 # `mktempdir` + `_cleanup_configuration_test_keys`.
 @testset "config env selection + fail-loud load (#205)" begin
-    MDCE = PormG.Configuration.MissingDatabaseConfigurationException
+    MDCE = PormG.Configuration.MissingConfigurationError
 
     # dev (read-only) + prod (writable) blocks, so the selected env is identifiable by change_data.
     _dev_prod_blocks =

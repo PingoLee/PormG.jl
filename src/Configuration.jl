@@ -70,18 +70,20 @@ const TEST  = "test"
 
 # Raised when configuration cannot be loaded: a missing folder/yml (`load` no longer silently
 # scaffolds + returns `nothing` — #205) or a selected environment with no matching block in the
-# yaml. Typed so callers can `catch e; e isa MissingDatabaseConfigurationException`. Previously the
+# yaml. Typed so callers can `catch e; e isa MissingConfigurationError`. Renamed from
+# `MissingDatabaseConfigurationException` in the pre-publish naming pass — the sole `*Exception`
+# that survived the #231 clean break in an otherwise uniform `*Error` taxonomy. Previously the
 # "no matching block" path referenced this name without defining it, so it threw an `UndefVarError`
 # instead of the intended message.
 #
 # Reparented from `Exception` to `ConfigurationError <: PormGError` (#239): catching the specific
 # type still works, it is merely ALSO catchable as `ConfigurationError` / `PormGError`. It keeps
 # its own `showerror` below (a more specific method wins over the taxonomy's shared one).
-struct MissingDatabaseConfigurationException <: ConfigurationError
+struct MissingConfigurationError <: ConfigurationError
   msg::String
 end
-Base.showerror(io::IO, e::MissingDatabaseConfigurationException) =
-  print(io, "MissingDatabaseConfigurationException: ", e.msg)
+Base.showerror(io::IO, e::MissingConfigurationError) =
+  print(io, "MissingConfigurationError: ", e.msg)
 
 #
 # Thread-Local Transaction Context
@@ -575,7 +577,7 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
   # No block for the selected env — list the available ones so the fix is obvious (#205).
   available = sort!(String[string(k) for (k, v) in db_conn_data if v isa AbstractDict])
   avail_str = isempty(available) ? "(none defined)" : join(available, ", ")
-  throw(MissingDatabaseConfigurationException(
+  throw(MissingConfigurationError(
     "environment \"$(settings.app_env)\" not found in $(db_settings_file); available: $(avail_str). " *
     "Select one with `load(...; env=\"…\")`, `ENV[\"PORMG_ENV\"]`, or a top-level `default_env:` in the yaml."))
 end
@@ -601,7 +603,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
     end
     missing_what = !isdir(path) ? "the folder \"$(path)\" does not exist" :
                                   "no \"$(PORMG_DB_CONFIG_FILE_NAME)\" was found in \"$(path)\""
-    throw(MissingDatabaseConfigurationException(
+    throw(MissingConfigurationError(
       "cannot load PormG configuration: $(missing_what). Create it interactively with " *
       "`PormG.setup(\"$(path)\")`, or call `PormG.Configuration.load(\"$(path)\"; scaffold=true)` " *
       "to write a skeleton to edit."))

@@ -344,13 +344,13 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
   elseif field.on_delete in [PROTECT, RESTRICT]    
     # More descriptive error with field name, constraint type, and sample IDs
     constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
-    throw(QueryBuildError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
+    throw(ProtectedError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
     @pormg_debug false
     # check if the field allow null
     if !field.null
-      throw(InvalidValueError("Error in delete, the field \e[4m\e[31m$(field_name)\e[0m not allow null"))
+      throw(ModelDefinitionError("Error in delete: ON DELETE SET_NULL is declared on \e[4m\e[31m$(field_name)\e[0m, but the field has null=false — the schema contradicts itself. Declare the FK with null=true or use a different on_delete."))
     end
 
     # Add field update to set field to NULL

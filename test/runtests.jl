@@ -90,6 +90,7 @@ end
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
+    @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")

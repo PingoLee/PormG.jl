@@ -6,7 +6,6 @@ import DataFrames
 
 # Helpers under test live in the package namespace / QueryBuilder submodule.
 const _emsg = PormG._emsg
-const _argerr = PormG.QueryBuilder._argerr
 
 # A representative message carrying the same ANSI vocabulary the real call sites
 # use: underline + foreground color around the offending token, reset at the end.
@@ -35,19 +34,6 @@ const SAMPLE = "the field \e[4m\e[31mpoints\e[0m is not allowed"
     @test _emsg("plain message"; color=true) == "plain message"
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Error colorization: _argerr routes messages through _emsg
-# `_argerr` is the long-tail funnel; #231 makes it return `QueryBuildError` (a `PormGError`)
-# instead of `ArgumentError`, still routing the message through `_emsg`. This proves the wiring
-# (so a regression that bypasses `_emsg` is caught) without depending on the ambient color mode.
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "_argerr wiring" begin
-    err = _argerr(SAMPLE)
-    @test err isa PormG.QueryBuildError     # #231: the funnel now returns QueryBuildError
-    # _argerr must produce exactly what _emsg produces under the same color mode.
-    @test err.msg == _emsg(SAMPLE)
-end
-
 # Run `f()` with `Base.have_color` pinned to `flag`, restoring the prior value
 # afterwards. `_emsg`'s default color decision reads `Base.have_color`, so this
 # lets the end-to-end assertions below exercise both the strip and keep paths
@@ -60,6 +46,39 @@ function _with_have_color(f, flag::Bool)
         f()
     finally
         Base.eval(Base, :(have_color = $old))
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error colorization: the subtype constructor routes messages through _emsg
+# This used to test `_argerr`, the long-tail funnel. #262 deleted that alias — it only mapped a
+# message to `QueryBuildError`, so testing it tested the alias. The real contract is that the
+# SUBTYPE CONSTRUCTOR applies `_emsg`, and every call site now depends on that directly.
+#
+# It must pin BOTH color modes against literal expected text. Asserting
+# `err.msg == _emsg(SAMPLE)` looks equivalent but is a tautology wherever color is ON, because
+# `_emsg` is then the identity — so a constructor that dropped `_emsg` entirely would still pass.
+# `Pkg.test` and julia-actions/julia-runtest both forward `--color=yes`, which is to say the guard
+# was inert in CI, the only place it had to work. There is no shared macro building these
+# constructors (each struct hand-writes `new(_emsg(msg))`), so this is QueryBuildError's only
+# constructor-level ANSI coverage and it has to bite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "subtype constructor routes through _emsg" begin
+    err = PormG.QueryBuildError(SAMPLE)
+    @test err isa PormG.QueryBuildError
+    @test err isa PormG.PormGError
+
+    # Color OFF: the escape codes must be stripped. This is the assertion that fails if a
+    # constructor is changed to `new(msg)`.
+    _with_have_color(false) do
+        @test PormG.QueryBuildError(SAMPLE).msg == "the field points is not allowed"
+        @test !occursin("\e[", PormG.QueryBuildError(SAMPLE).msg)
+    end
+
+    # Color ON: the codes must survive untouched — `_emsg` is the identity here, so this pins that
+    # the constructor does not over-strip.
+    _with_have_color(true) do
+        @test PormG.QueryBuildError(SAMPLE).msg == SAMPLE
     end
 end
 
@@ -142,9 +161,9 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Error colorization: real bulk error paths route through _argerr end-to-end
+# Error colorization: real bulk error paths route through the taxonomy end-to-end
 # The bulk validation sites in `execution_bulk.jl` build ANSI-highlighted messages
-# and were converted from raw `throw`/`throw(_emsg(...))` to `_argerr`. This drives
+# and were converted from raw `throw`/`throw(_emsg(...))` to typed subtypes. This drives
 # a genuine `bulk_update` failure (unknown `match_on` field) and asserts both the
 # behavior — an `ArgumentError`, never a bare `String` — and the off-TTY contract:
 # no `\e[` when color is off, codes preserved when on. No live DB is needed; a mock

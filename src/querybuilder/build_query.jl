@@ -52,7 +52,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       v_copy.field = _get_select_query(v_copy.field, instruc, _as=v_copy._as)
       instruc.select[i] = v_copy
       if v_copy._as === nothing
-        throw(_argerr("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
+        throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
       instruc.cache[v_copy._as] = instruc.select[i]
     end
@@ -85,7 +85,7 @@ const SQLITE_NULLS_ORDER_MIN_VERSION = 3030000
 function _nulls_placement(orientation::AbstractString, nulls::Union{Symbol,Nothing})
   nulls === :first && return :first
   nulls === :last  && return :last
-  nulls === nothing || throw(_argerr("Invalid nulls placement $(repr(nulls)); use :first or :last"))
+  nulls === nothing || throw(QueryBuildError("Invalid nulls placement $(repr(nulls)); use :first or :last"))
   return uppercase(strip(String(orientation))) == "DESC" ? :first : :last
 end
 
@@ -170,7 +170,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
           # transform order term the alias is the internal name (e.g. "created_at__date"), which is NOT
           # valid input syntax to paste back (the user wrote "created_at__@date"), so a specific token
           # would mislead. The offending term is still named in the diagnosis.
-          throw(_argerr(
+          throw(QueryBuildError(
             "DISTINCT query cannot ORDER BY \e[4m\e[31m$(v_field_copy._as)\e[0m: it is not in the " *
             "SELECT DISTINCT projection. PostgreSQL (and the SQL standard) rejects this; SQLite " *
             "would return rows in a nondeterministic order. Add the ordering column or expression " *
@@ -365,7 +365,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     if get(value, "no_anchor", "") == "1"
       # #45: anchor-less join — the ON clause is entirely the user's resolved extras (no equi-anchor).
       extras = get(on_clause_extras, idx, String[])
-      isempty(extras) && throw(_argerr("cjoin_on produced no ON conditions for alias '$(value["alias_b"])'."))
+      isempty(extras) && throw(QueryBuildError("cjoin_on produced no ON conditions for alias '$(value["alias_b"])'."))
       on_clause = join(extras, " AND ")
     else
       alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
@@ -471,7 +471,7 @@ function _check_aggregate_fanout(instruct::SQLInstruction)
     ambiguous = a.alias == "\0AMBIGUOUS"
     # Safe only when the aggregate targets the sole to-many table's own column.
     (!ambiguous && a.alias in many && n == 1) && continue
-    throw(_argerr(_fanout_error_msg(a, many, ambiguous)))
+    throw(QueryBuildError(_fanout_error_msg(a, many, ambiguous)))
   end
   return nothing
 end

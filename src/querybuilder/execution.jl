@@ -272,7 +272,7 @@ function query(q::SQLObjectHandler;
       # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
       # exempt — there the lock renders "" (pure no-op), so select_for_update never raises (#26).
       if q.object.distinct && instruction.connection isa PormGPostgres
-        throw(_argerr("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
+        throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
       end
       print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, instruction.connection))
     end
@@ -310,7 +310,7 @@ function query(q::SQLObjectHandler;
   # analog). Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE
   # without a live transaction. SQLite never locks (clause rendered ""), so it is exempt.
   if q.object.for_update !== nothing && instruction.connection isa PormGPostgres && !in_transaction_context()
-    throw(_argerr("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
+    throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
   end
   return resposta
 end
@@ -407,20 +407,20 @@ end
 # read the single row back — but generalized to multiple aggregates and a dot-accessible result.
 function do_aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
   isempty(pairs) &&
-    throw(_argerr("aggregate() requires at least one \"alias\" => AggregateFunction(...) pair, e.g. aggregate(\"total\" => Sum(\"points\"))."))
+    throw(QueryBuildError("aggregate() requires at least one \"alias\" => AggregateFunction(...) pair, e.g. aggregate(\"total\" => Sum(\"points\"))."))
   # aggregate() is whole-queryset only. If the caller already projected grouping columns via
   # values(), that is a DIFFERENT operation (grouped aggregation) — refuse rather than silently
   # discard their grouping. Steer them to values(...) + list() for the grouped form.
   isempty(oq.object.values) ||
-    throw(_argerr("aggregate() computes a single whole-queryset result and cannot combine with values() grouping columns. Use values(...) + list() for grouped aggregation, or call aggregate() on an unprojected queryset."))
+    throw(QueryBuildError("aggregate() computes a single whole-queryset result and cannot combine with values() grouping columns. Use values(...) + list() for grouped aggregation, or call aggregate() on an unprojected queryset."))
 
   aliases = Symbol[]
   for p in pairs
     (p isa Pair && p.first isa AbstractString) ||
-      throw(_argerr("aggregate() arguments must be \"alias\" => AggregateFunction(...) pairs; got $(typeof(p))."))
+      throw(QueryBuildError("aggregate() arguments must be \"alias\" => AggregateFunction(...) pairs; got $(typeof(p))."))
     val = p.second
     (val isa SQLTypeFunction && hasproperty(val, :aggregate) && getproperty(val, :aggregate) === true) ||
-      throw(_argerr("aggregate() value for \"$(p.first)\" must be an aggregate function (Sum/Avg/Count/Max/Min); got $(typeof(val)). For per-row expressions use values(...)."))
+      throw(QueryBuildError("aggregate() value for \"$(p.first)\" must be an aggregate function (Sum/Avg/Count/Max/Min); got $(typeof(val)). For per-row expressions use values(...)."))
     push!(aliases, Symbol(p.first))
   end
 
@@ -658,7 +658,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return PormGRow(result_dict, model)
   else
-    _unsupported_conn("insert()", connection)
+    throw(_unsupported_conn("insert()", connection))
   end
 
 end
@@ -764,7 +764,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     pk_exist && _update_sequence(model, connection, pk_field, settings)
     return (PormGRow(dict, model), created)
   else
-    _unsupported_conn("update_or_create()", connection)
+    throw(_unsupported_conn("update_or_create()", connection))
   end
 end
 
@@ -885,7 +885,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       pk_exist && _update_sequence(model, connection, pk_field, settings)
       return (row, true)
     else
-      _unsupported_conn("get_or_create()", connection)
+      throw(_unsupported_conn("get_or_create()", connection))
     end
   end
 
@@ -949,8 +949,8 @@ function _fix_sequence_name(connection::PormGPostgres, model::PormGModel; ignore
   pk_field = [field for field in keys(model.fields) if model.fields[field].primary_key]
   # #197 review: guard BEFORE anything indexes pk_field[1] — the empty-PK check used to sit
   # after an indexing condition, so BoundsError always won and the guard could never fire.
-  length(pk_field) == 0 && throw(_argerr("Cannot fix the PK sequence for model $(model.name): the model does not define a primary key."))
-  length(pk_field) > 1 && throw(_argerr("Cannot fix the PK sequence for model $(model.name): composite primary keys are not supported here."))
+  length(pk_field) == 0 && throw(QueryBuildError("Cannot fix the PK sequence for model $(model.name): the model does not define a primary key."))
+  length(pk_field) > 1 && throw(QueryBuildError("Cannot fix the PK sequence for model $(model.name): composite primary keys are not supported here."))
   sequences = fetch(connection, """SELECT *
       FROM pg_sequences
       WHERE sequencename LIKE '$(model.name |> lowercase)%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame
@@ -1144,7 +1144,7 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     isempty(mods) && return left_side
     return "$wrapper($(left_side), $(join(mods, ", ")))"
   else
-    _unsupported_conn("date/interval arithmetic", instruc.connection)
+    throw(_unsupported_conn("date/interval arithmetic", instruc.connection))
   end
 end
 
@@ -1229,7 +1229,7 @@ function _set_update_query(v::FExpression, instruc::SQLInstruction)
 
       return "((($(left_side1)) | ($(right_side1))) - (($(left_side2)) & ($(right_side2))))"
     else
-      _unsupported_conn("xor update expression", instruc.connection)
+      throw(_unsupported_conn("xor update expression", instruc.connection))
     end
   elseif v.operation in ("+", "-") && v.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
     # Date arithmetic with an explicit Julia duration type (#25). Handled ahead of the generic
@@ -1273,7 +1273,7 @@ function _get_join_condition_list(row_join::Vector{Dict{String, Union{String, Ve
   # only this correlated path is unsupported — fail loudly rather than drop the join condition.
   for join_dict in row_join
     if get(join_dict, "no_anchor", "") == "1"
-      throw(_argerr("cjoin_on is not supported in a correlated UPDATE-FROM/DELETE-USING (setting a " *
+      throw(QueryBuildError("cjoin_on is not supported in a correlated UPDATE-FROM/DELETE-USING (setting a " *
                     "column from a joined table); scope the mutation with a filter/subquery instead."))
     end
   end
@@ -1474,7 +1474,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       end
     else
       @error "Error in update: Unsupported database type for JOIN operations" connection_type=typeof(connection)
-      _unsupported_conn("update() with JOINs", connection)
+      throw(_unsupported_conn("update() with JOINs", connection))
     end
   else
     # No joins - simple UPDATE
@@ -1522,7 +1522,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         end
       end
     else
-      _unsupported_conn("update()", connection)
+      throw(_unsupported_conn("update()", connection))
     end
   catch e
     @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql
@@ -1805,7 +1805,7 @@ end
 # Flip a single order token's direction for latest() (the ASC↔DESC inverse of what the user wrote):
 # "field" → "-field" (DESC), "-field" → "field" (ASC). Matches Django's latest("-f") == earliest("f").
 _invert_order_token(f::AbstractString) = startswith(f, "-") ? String(f[2:end]) : "-" * String(f)
-_invert_order_token(f) = throw(_argerr("earliest()/latest() fields must be field-name Strings (\"-field\" for the opposite direction); got $(typeof(f))."))
+_invert_order_token(f) = throw(QueryBuildError("earliest()/latest() fields must be field-name Strings (\"-field\" for the opposite direction); got $(typeof(f))."))
 
 """
     earliest(objct::SQLObjectHandler, fields...; show_query = :execute) -> PormGRow
@@ -1816,7 +1816,7 @@ extreme-row counterpart of [`get`](@ref), matching Django's `earliest()`.
 """
 function earliest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execute)
   isempty(fields) &&
-    throw(_argerr("earliest() requires at least one field to order by, e.g. earliest(\"dob\")."))
+    throw(QueryBuildError("earliest() requires at least one field to order by, e.g. earliest(\"dob\")."))
   return _extreme(objct, fields, "earliest"; show_query=show_query)
 end
 
@@ -1829,7 +1829,7 @@ ascending). Requires at least one field and raises `DoesNotExist` when no rows m
 """
 function latest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execute)
   isempty(fields) &&
-    throw(_argerr("latest() requires at least one field to order by, e.g. latest(\"dob\")."))
+    throw(QueryBuildError("latest() requires at least one field to order by, e.g. latest(\"dob\")."))
   return _extreme(objct, _invert_order_token.(fields), "latest"; show_query=show_query)
 end
 

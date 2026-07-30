@@ -161,8 +161,11 @@ end
         @test_throws PormG.FilterError object(taxo_model).filter(123)
         # QueryBuildError: projection-shape misuse (operator suffix in a projection).
         @test_throws PormG.QueryBuildError object(taxo_model).values("points__@gte")
-        # UnsupportedConnectionError: a connection that is neither PG nor SQLite.
-        @test_throws PormG.UnsupportedConnectionError QB._unsupported_conn("op", nothing)
+        # UnsupportedConnectionError: a connection that is neither PG nor SQLite. Asserted with
+        # `isa`, not `@test_throws … throw(…)` — the latter reduces to `@test_throws T throw(T(…))`,
+        # which passes whether the funnel returns OR throws, so it says nothing about the #262
+        # convention it was edited for. test_typed_exceptions.jl pins the returning behavior.
+        @test QB._unsupported_conn("op", nothing) isa PormG.UnsupportedConnectionError
     end
 
     # ─────────────────────────────────────────────────────────────────────────

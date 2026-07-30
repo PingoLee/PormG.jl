@@ -2,8 +2,9 @@
 # Every failure in this file is one category: the caller got a field CONSTRUCTOR argument wrong —
 # a kwarg of the wrong type, an out-of-range `max_length`, a `default` that violates the field's
 # own contract, a malformed `choices`, or a field type that cannot serve as a primary key. So a
-# call site changes only `ArgumentError(` → `_fielderr(` and lands on `FieldValidationError`
-# (mirrors `_argerr` in querybuilder/exceptions.jl). The subtype's constructor applies `_emsg`, so
+# call site changes only `ArgumentError(` → `_fielderr(` and lands on `FieldValidationError`.
+# It lives here rather than in `querybuilder/error_funnels.jl` because it is used by exactly this
+# file — that is the placement rule stated in that file's header. The constructor applies `_emsg`, so
 # messages degrade correctly off-TTY without a second wrap.
 #
 # NOT for value coercion: `Models.format_*_sql` raises `InvalidValueError`, because there the

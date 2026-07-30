@@ -4,16 +4,33 @@
 # The subtypes are deliberately **NOT** `<: ArgumentError` — a clean pre-publish break.
 #
 # This file is included by `Kernel` (layer 1), not by `QueryBuilder`. #231 originally put the
-# subtypes in `src/querybuilder/exceptions.jl`, included at step 11 of PormG.jl's chain, which
-# meant `Models`, `Configuration`, `ConnectionPool` and `Dialect` — all included earlier — could
-# not name a single one of them. Defining the taxonomy in layer 1 is what lets #239 retype those
-# subsystems at all. The query-builder throw funnels (`_argerr`, `_unsupported_conn`,
-# `_write_not_allowed`) stay behind in `src/querybuilder/exceptions.jl`, next to their call sites.
+# subtypes in `src/querybuilder/exceptions.jl` (now `error_funnels.jl`), included at step 11 of
+# PormG.jl's chain, which meant `Models`, `Configuration`, `ConnectionPool` and `Dialect` — all
+# included earlier — could not name a single one of them. Defining the taxonomy in layer 1 is what
+# lets #239 retype those subsystems at all. The message-composing funnels (`_unsupported_conn`,
+# `_write_not_allowed`) stay behind in `src/querybuilder/error_funnels.jl`, next to their call sites.
 #
 # `_emsg` (defined above in Kernel) strips ANSI escape codes whenever Julia is not in color mode,
 # so coloured error tokens render in the REPL and as plain text in every non-TTY sink (CI output,
 # file logs, `sprint(showerror, e)`). Each subtype's inner constructor applies `_emsg` at
 # construction, so `.msg` is clean off-TTY (several tests read `err.msg`).
+
+# ## Adding a type to this taxonomy? Three guards enforce its contract
+#
+# They live with their subsystems rather than in one file, so this is the index:
+#
+#   • `test/unit/test_kernel_layering.jl` — the placement rule: a concrete subtype either lives in
+#     `Kernel`, or has a DEDICATED Kernel-owned abstract umbrella above it (the root does not
+#     count). Walks `subtypes(PormGError)` rather than the export list, so it also sees the types
+#     reachable only by qualified name — a new subtype is covered without touching the test.
+#   • `test/unit/test_docs_error_type_drift.jl` — no `throw(ArgumentError(` in `src/` outside
+#     `tools.jl`'s two Julia-level keeps, no `docs/src` page promising `ArgumentError`, the retired
+#     `_argerr` alias stays retired, and every funnel call site throws its result.
+#   • `test/unit/test_error_taxonomy.jl` — hierarchy shape, the clean break from `ArgumentError`,
+#     and `error_message` coverage for every concrete member.
+#
+# Also update `docs/src/api.md`'s taxonomy table and the frozen export list in
+# `test/unit/test_public_exports.jl`; both are asserted, so they fail loudly rather than drift.
 
 # ── Query-builder errors (#231) ─────────────────────────────────────────────
 

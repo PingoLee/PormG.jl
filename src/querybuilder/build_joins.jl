@@ -192,7 +192,7 @@ function _apply_many_to_many_branch(
   foreign_model = _resolve_many_to_many_related_model(foreing_table_module, relation)
   if length(vector) == 1
     msg = reverse ? "many-to-many reverse field" : "many-to-many field"
-    throw(_argerr("Invalid field path: $(vector[1]) is a $(msg), you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
+    throw(QueryBuildError("Invalid field path: $(vector[1]) is a $(msg), you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
   end
   last_field = size(vector, 1) == 2 ? foreign_model.fields[vector[2]] : nothing
   tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how)
@@ -266,7 +266,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
     cte_model = cte_dict["model"]::PormGModel
     
-    length(vector) == 1 && throw(_argerr("CTE reference '$(cte_name)' must include a field name. Example: '$(cte_name)__field_name'"))
+    length(vector) == 1 && throw(QueryBuildError("CTE reference '$(cte_name)' must include a field name. Example: '$(cte_name)__field_name'"))
 
     # Get the join field configuration from the CTE
     jf = cte_dict["join_field"]
@@ -355,7 +355,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     row_join["how"] = _determine_join_type(first_field, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
     foreign_table_name = first_field.to
     if foreign_table_name === nothing
-      throw(_argerr("Invalid field path: the column $(first_column) does not have a foreign key"))
+      throw(QueryBuildError("Invalid field path: the column $(first_column) does not have a foreign key"))
     elseif isa(foreign_table_name, PormGModel)
       row_join["b"] = foreign_table_name.name
       size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
@@ -381,7 +381,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # @pormg_debug false
     s_model = Symbol(uppercasefirst(string(instruct.object.model.related_objects[vector[1]][3])))
     reverse_model = getfield(foreing_table_module, s_model)
-    length(vector) == 1 && throw(_argerr("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
+    length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     row_join["a"] = instruct.object.model.name
     row_join["alias_a"] = instruct.alias
@@ -457,14 +457,14 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       _m2m_inserted = true
     elseif first_column in new_object.field_names
       first_field = new_object.fields[first_column]
-      !hasfield(typeof(first_field), :to) && throw(_argerr("Invalid field path: the column $(first_column) is a field from $(new_object.name), but it does not have a foreign key"))
+      !hasfield(typeof(first_field), :to) && throw(QueryBuildError("Invalid field path: the column $(first_column) is a field from $(new_object.name), but it does not have a foreign key"))
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias      
       row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=prev_how, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
       foreign_table_name = new_object.fields[first_column].to
       if foreign_table_name === nothing
         # #197: this used to blame `vector[2]`, but the FK-less column is `first_column`.
-        throw(_argerr("Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target"))
+        throw(QueryBuildError("Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target"))
       elseif isa(foreign_table_name, PormGModel)
         row_join["b"] = foreign_table_name.name
         size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
@@ -488,7 +488,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       else
       s_model = Symbol(uppercasefirst(string(new_object.related_objects[vector[1]][3])))
       reverse_model = getfield(foreing_table_module, s_model)
-      length(vector) == 1 && throw(_argerr("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
+      length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
       !(vector[2] in reverse_model.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(reverse_model.name)"))
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias

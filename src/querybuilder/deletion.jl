@@ -344,7 +344,7 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
   elseif field.on_delete in [PROTECT, RESTRICT]    
     # More descriptive error with field name, constraint type, and sample IDs
     constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
-    throw(_argerr("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
+    throw(QueryBuildError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     # TODO : I dont check if this works
     @pormg_debug false

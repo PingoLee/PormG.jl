@@ -8,8 +8,8 @@ import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
-# `Kernel` (layer 1) so every subsystem can reach them; only the throw funnels (`_argerr`,
-# `_unsupported_conn`, `_write_not_allowed`) still live in `querybuilder/exceptions.jl`.
+# `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels
+# (`_unsupported_conn`, `_write_not_allowed`) live in `querybuilder/error_funnels.jl`.
 import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
   QueryBuildError, UnsafeMutationError, InvalidValueError, PermissionError, UnsupportedConnectionError,
   DoesNotExist, MultipleObjectsReturned,
@@ -32,7 +32,7 @@ import Base: first, last, get
 # SQL Sanitization
 include("querybuilder/types.jl")
 
-include("querybuilder/exceptions.jl")
+include("querybuilder/error_funnels.jl")
 
 include("querybuilder/sanitization.jl")
 

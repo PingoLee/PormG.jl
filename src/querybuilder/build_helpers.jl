@@ -758,7 +758,7 @@ end
 # OuterRef resolves only one level, so nesting could bind to the wrong outer query and return a wrong
 # value. `instruc.outer !== nothing` means the current build is itself a subquery.
 function _guard_no_nested_projection(instruc::SQLInstruction, what::AbstractString)
-  instruc.outer === nothing || throw(_argerr(
+  instruc.outer === nothing || throw(QueryBuildError(
     "$what(...) projected inside another subquery is not supported yet: OuterRef resolves one level " *
     "only, so a nested projected subquery could correlate to the wrong level. Keep projected subqueries " *
     "to a single level of correlation."))
@@ -799,7 +799,7 @@ function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Unio
 
   # Exactly one projected column (reuse the @in one-column rule).
   labels = _subquery_projection_labels(handler)
-  length(labels) == 1 || throw(_argerr(
+  length(labels) == 1 || throw(QueryBuildError(
     "Subquery(...) must project exactly one column; it currently projects $(length(labels)): " *
     "$(_summarize_projection_labels(labels)). Call .values(\"alias\" => <expr>) on the inner query."))
 
@@ -900,7 +900,7 @@ function _get_filter_query(v::Vector{SubString{String}}, instruc::SQLInstruction
       # We need to construct the format_dict if needed, but for date parts it's simple
       text = getfield(Dialect, func_name)(text, Dict{String,Any}(), instruc.connection)
     else
-      throw(_argerr("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
+      throw(QueryBuildError("Unknown date function or modifier: \e[31m@$func_key\e[0m"))
     end
   end
   return text

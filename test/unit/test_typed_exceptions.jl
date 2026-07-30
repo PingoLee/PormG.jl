@@ -136,14 +136,50 @@ end
 # operation and the offending type.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "_unsupported_conn is UnsupportedConnectionError with context" begin
-    err = try
-        QB._unsupported_conn("unit-test-op", nothing)
-    catch e
-        e
-    end
+    # #262: the funnel RETURNS the exception rather than throwing it, so take it directly.
+    err = QB._unsupported_conn("unit-test-op", nothing)
     @test err isa PormG.UnsupportedConnectionError
     @test err isa PormG.PormGError               # still under the taxonomy root
     @test !(err isa ErrorException)              # #231: no longer a bare ErrorException
     @test occursin("unit-test-op", err.msg)      # names the operation
     @test occursin("Nothing", err.msg)           # names the offending type
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Funnel calling convention: helpers RETURN, call sites THROW (#262)
+# Before #262 three funnels returned an exception and one threw internally, so a contributor had to
+# remember which was which. The hazard is asymmetric and silent: a forgotten `throw(` around a
+# RETURNING funnel constructs an exception, discards it, and lets execution continue straight past
+# the guard — nothing raised, nothing failed. Uniformity removes that class of bug, but only if
+# something checks it. Adding a funnel? It returns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "error funnels return rather than throw (#262)" begin
+    # Each call must produce a VALUE. If a funnel regressed to throwing internally, these lines
+    # would error out of the testset instead of binding.
+    unsupported = QB._unsupported_conn("unit-test-op", nothing)
+    notallowed  = QB._write_not_allowed("insert", "db_test")
+    fielderr    = PormG.Models._fielderr("bad kwarg")
+
+    @test unsupported isa PormG.UnsupportedConnectionError
+    @test notallowed  isa PormG.PermissionError
+    @test fielderr    isa PormG.FieldValidationError
+
+    # …and each is still under the taxonomy root, so `catch PormGError` covers them.
+    for e in (unsupported, notallowed, fielderr)
+        @test e isa PormG.PormGError
+        @test !isempty(PormG.error_message(e))
+    end
+
+    # A funnel earns its place ONLY by composing a message from its parameters (that is the rule in
+    # error_funnels.jl's header — anything less is an alias, like the deleted `_argerr`). Type-only
+    # assertions would survive a funnel that ignored its arguments entirely, and nothing else in the
+    # suite asserts the conn-key interpolation, so pin the parameters reaching the text.
+    @test occursin("unit-test-op", PormG.error_message(unsupported))
+    @test occursin("insert", PormG.error_message(notallowed))
+    @test occursin("db_test", PormG.error_message(notallowed))
+    @test occursin("bad kwarg", PormG.error_message(fielderr))
+
+    # The pure-alias funnel that used to sit alongside these is gone (#262);
+    # test_docs_error_type_drift.jl keeps it from coming back.
+    @test !isdefined(QB, :_argerr)
 end

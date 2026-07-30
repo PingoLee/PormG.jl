@@ -150,7 +150,7 @@ function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
       delete!(mapping, field)
       filter!(mapped_field -> mapped_field != field, fields_df)
     elseif any(blank_mask)
-      throw(_argerr("Error in bulk_$(operation), the auto-generated primary key field \e[4m\e[31m$(field)\e[0m has mixed blank and explicit values; either remove the column or provide a value for every row"))
+      throw(QueryBuildError("Error in bulk_$(operation), the auto-generated primary key field \e[4m\e[31m$(field)\e[0m has mixed blank and explicit values; either remove the column or provide a value for every row"))
     end
   end
 
@@ -776,7 +776,7 @@ function _effective_chunk_size(requested::Integer, per_row::Integer, fixed::Inte
   per_row <= 0 && return requested            # nothing bound per row → no cap possible or needed
   max_rows = fld(limit - fixed, per_row)
   if max_rows < 1
-    throw(_argerr("Error in $op: each row binds $per_row parameter(s)" *
+    throw(QueryBuildError("Error in $op: each row binds $per_row parameter(s)" *
       (fixed > 0 ? " plus $fixed constant filter parameter(s)" : "") *
       ", exceeding the $backend limit of $limit bind parameters per statement — no chunk_size " *
       "can fit a single row. Reduce the columns per $op call (split the column set or the table)."))
@@ -1101,50 +1101,50 @@ function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vecto
 
   if on_conflict isa Symbol
     on_conflict === :nothing ||
-      throw(_argerr("Error in bulk_insert, on_conflict Symbol form only accepts :nothing " *
+      throw(QueryBuildError("Error in bulk_insert, on_conflict Symbol form only accepts :nothing " *
         "(got :$(on_conflict)); use (action = :update, target = [...], set = [...]) for upserts"))
     action, target, set = :nothing, String[], String[]
   elseif on_conflict isa NamedTuple
     extra = setdiff(keys(on_conflict), (:action, :target, :set))
     isempty(extra) ||
-      throw(_argerr("Error in bulk_insert, on_conflict has unknown key(s) $(join(extra, ", ")); " *
+      throw(QueryBuildError("Error in bulk_insert, on_conflict has unknown key(s) $(join(extra, ", ")); " *
         "accepted keys are action, target and set"))
     haskey(on_conflict, :action) ||
-      throw(_argerr("Error in bulk_insert, on_conflict NamedTuple requires an action key " *
+      throw(QueryBuildError("Error in bulk_insert, on_conflict NamedTuple requires an action key " *
         "(:nothing or :update)"))
     action = on_conflict.action
     action in (:nothing, :update) ||
-      throw(_argerr("Error in bulk_insert, on_conflict action must be :nothing or :update, " *
+      throw(QueryBuildError("Error in bulk_insert, on_conflict action must be :nothing or :update, " *
         "got :$(action)"))
     target = _on_conflict_column_list(on_conflict, :target)
     set = _on_conflict_column_list(on_conflict, :set)
   else
-    throw(_argerr("Error in bulk_insert, on_conflict must be nothing, :nothing or a NamedTuple " *
+    throw(QueryBuildError("Error in bulk_insert, on_conflict must be nothing, :nothing or a NamedTuple " *
       "like (action = :nothing, target = [\"field\"]), got $(typeof(on_conflict))"))
   end
 
   if action === :update
     isempty(target) &&
-      throw(_argerr("Error in bulk_insert, on_conflict action :update requires a non-empty target " *
+      throw(QueryBuildError("Error in bulk_insert, on_conflict action :update requires a non-empty target " *
         "column list (the conflicting unique/primary-key columns)"))
     isempty(set) &&
-      throw(_argerr("Error in bulk_insert, on_conflict action :update requires a non-empty set " *
+      throw(QueryBuildError("Error in bulk_insert, on_conflict action :update requires a non-empty set " *
         "column list (the columns to overwrite with EXCLUDED values)"))
   elseif on_conflict isa NamedTuple && haskey(on_conflict, :set)
-    throw(_argerr("Error in bulk_insert, on_conflict set is only valid with action :update — " *
+    throw(QueryBuildError("Error in bulk_insert, on_conflict set is only valid with action :update — " *
       "DO NOTHING never writes columns"))
   end
 
   insert_cols = Set(fields_df)
   for (kind, cols) in ((:target, target), (:set, set))
     length(unique(cols)) == length(cols) ||
-      throw(_argerr("Error in bulk_insert, on_conflict $kind has duplicate column entries"))
+      throw(QueryBuildError("Error in bulk_insert, on_conflict $kind has duplicate column entries"))
     for col in cols
       haskey(model.fields, col) ||
         throw(UnknownFieldError("Error in bulk_insert, on_conflict $kind column $(col) is not a field of " *
           "model $(model.name)"))
       kind === :set && !(col in insert_cols) &&
-        throw(_argerr("Error in bulk_insert, on_conflict set column $(col) does not participate " *
+        throw(QueryBuildError("Error in bulk_insert, on_conflict set column $(col) does not participate " *
           "in this INSERT (not in the DataFrame/columns selection), so EXCLUDED.$(col) would be " *
           "the column default — include it in the insert or drop it from set"))
     end
@@ -1167,7 +1167,7 @@ function _on_conflict_column_list(on_conflict::NamedTuple, key::Symbol)
   haskey(on_conflict, key) || return String[]
   value = on_conflict[key]
   value isa AbstractVector && all(v -> v isa AbstractString, value) ||
-    throw(_argerr("Error in bulk_insert, on_conflict $key must be a vector of field-name strings, " *
+    throw(QueryBuildError("Error in bulk_insert, on_conflict $key must be a vector of field-name strings, " *
       "got $(typeof(value))"))
   return String[string(v) for v in value]
 end
@@ -1242,7 +1242,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
       # and pass the parameterized query with correct bucket ordering
       fetch(settings, sql, parameters)
     else
-      _unsupported_conn("bulk_insert()", connection)
+      throw(_unsupported_conn("bulk_insert()", connection))
     end
 
     pk_exist && _update_sequence(model, connection, pk_field, settings)
@@ -1453,7 +1453,7 @@ function _bulk_update(model::PormGModel,
 
   @pormg_debug false
   if instruction !== nothing && instruction.join |> length > 0
-    throw(_argerr("bulk_update() does not allow joined field paths (\"__\") — restrict filters and update columns to the model's own fields."))
+    throw(QueryBuildError("bulk_update() does not allow joined field paths (\"__\") — restrict filters and update columns to the model's own fields."))
   end
 
   # Security: Quote table name and field names

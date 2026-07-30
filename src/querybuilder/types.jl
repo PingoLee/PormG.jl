@@ -144,7 +144,7 @@ Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as)
 # (_normalize_window_orientation, build_helpers.jl) delegates here with its own context label.
 function _normalize_order_orientation(orientation::AbstractString; context::String="ORDER BY")::String
   normalized = uppercase(strip(String(orientation)))
-  normalized in ("ASC", "DESC") || throw(_argerr("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))
+  normalized in ("ASC", "DESC") || throw(QueryBuildError("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))
   return normalized
 end
 

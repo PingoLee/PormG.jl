@@ -36,6 +36,13 @@ _drift_files(dir, ext) = sort!([joinpath(root, f)
 # Render a repo-relative path so failure output is copy-pasteable.
 _drift_rel(path) = replace(relpath(path, DRIFT_REPO_ROOT), '\\' => '/')
 
+# Julia source lines that are CODE, not commentary. Every `src/` guard below needs this: the
+# taxonomy's own header documents the contracts being enforced, so it necessarily quotes
+# `throw(ArgumentError(` and names the retired `_argerr`. A guard that counted prose would flag the
+# documentation of the rule as a violation of it — which it did, until this helper existed.
+_drift_code_lines(path) = [(i, l) for (i, l) in enumerate(_drift_lines(path))
+                           if !startswith(strip(l), "#")]
+
 # The ONLY legitimate reasons a `docs/src` page may name `ArgumentError`. Each entry is a
 # *pattern*, never a line number — line numbers drift on every unrelated doc edit and would make
 # this guard a nuisance rather than a signal.
@@ -93,6 +100,100 @@ const ALLOWED_SRC_ARGUMENTERROR = Dict("src/tools.jl" => 2)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The `_argerr` alias stays retired (#262)
+# It only mapped a message to `QueryBuildError`, so `throw(_argerr("…"))` told a reader nothing
+# about the resulting type — scaffolding from #231's mechanical swap, removed once the migration
+# finished. Reintroducing it by habit would re-hide the type at every new call site, so fail loudly
+# rather than let it creep back.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the _argerr alias stays retired (#262)" begin
+    # Absence-only guards pass when the scan itself breaks. Pin the fixture and prove the helper
+    # actually returns code lines from a file we know contains a funnel call — otherwise inverting
+    # `_drift_code_lines`' filter, or pointing DRIFT_SRC_DIR at an empty tree, would look green.
+    @test isdir(DRIFT_SRC_DIR)
+    @test length(_drift_files(DRIFT_SRC_DIR, ".jl")) >= 30
+    @test any(((_, l),) -> occursin("_write_not_allowed(", l),
+              _drift_code_lines(joinpath(DRIFT_SRC_DIR, "querybuilder", "error_funnels.jl")))
+
+    offenders = String[]
+    for path in _drift_files(DRIFT_SRC_DIR, ".jl")
+        for (lineno, line) in _drift_code_lines(path)
+            occursin("_argerr", line) || continue
+            push!(offenders, "$(_drift_rel(path)):$(lineno)  $(strip(line))")
+        end
+    end
+    if !isempty(offenders)
+        @error """
+        `_argerr` is back in src/. It is a pure alias for `QueryBuildError` and hides the thrown
+        type at the call site. Write `throw(QueryBuildError("…"))` instead. A funnel earns its place
+        only by composing a message from parameters — see src/querybuilder/error_funnels.jl.
+        """ offenders
+    end
+    @test isempty(offenders)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every funnel call site throws its result (#262)
+# This is the hazard `error_funnels.jl`'s header describes and that the convention exists to remove:
+# the funnels RETURN an exception, so a call site that forgets `throw(` constructs one, discards it,
+# and lets execution continue straight past the guard. Nothing raised, nothing failed — `insert()`
+# would simply return the exception object as its row.
+#
+# `test_typed_exceptions.jl` pins the funnel side (they return). Behavioral coverage of the call
+# sites is thin by nature — 4 of 13 `_write_not_allowed` sites, 0 of 8 `_unsupported_conn` — so a
+# static check is what actually covers the other 260-odd. Deliberately requires `throw(` on the SAME
+# line as the funnel call; a call split across lines should keep them together.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "every funnel call site throws its result (#262)" begin
+    funnels = ("_unsupported_conn", "_write_not_allowed", "_fielderr")
+
+    offenders = String[]
+    seen = Dict(f => 0 for f in funnels)
+    for path in _drift_files(DRIFT_SRC_DIR, ".jl")
+        for (lineno, line) in _drift_code_lines(path)
+            for f in funnels
+                occursin(f * "(", line) || continue
+                # Skip the funnel's own DEFINITION. Must match on the `= ` — testing only
+                # `startswith(line, "_funnel(")` also matches a bare call at statement start, which
+                # is exactly the violation being hunted, so the guard would skip its own target.
+                # (Verified by mutation: dropping `throw(` at execution.jl:661 must fail here.)
+                occursin(Regex("^" * f * raw"\(.*\)\s*="), strip(line)) && continue
+                seen[f] += 1
+                occursin("throw(", line) && continue
+                push!(offenders, "$(_drift_rel(path)):$(lineno)  $(strip(line))")
+            end
+        end
+    end
+
+    if !isempty(offenders)
+        @error """
+        Funnel result constructed but never thrown. These helpers RETURN an exception — the call
+        site must throw it, e.g. `throw(_write_not_allowed(op, key))`. As written the exception is
+        built and discarded, and execution continues past the guard with no error at all.
+        """ offenders
+    end
+    @test isempty(offenders)
+
+    # Guard the guard: every funnel must actually have been found, or a rename would silence this.
+    for f in funnels
+        @test seen[f] > 0
+    end
+
+    # And the funnel file itself must contain no `throw(` — that is the convention, stated once and
+    # enforced here, so a FOURTH funnel added later cannot quietly throw internally. The name-by-name
+    # testset in test_typed_exceptions.jl cannot cover a funnel nobody has written yet.
+    funnel_file = joinpath(DRIFT_SRC_DIR, "querybuilder", "error_funnels.jl")
+    @test isfile(funnel_file)
+    throwing = [(i, strip(l)) for (i, l) in _drift_code_lines(funnel_file) if occursin("throw(", l)]
+    if !isempty(throwing)
+        @error """
+        `error_funnels.jl` contains `throw(`. Funnels return; call sites throw — see the file header.
+        """ throwing
+    end
+    @test isempty(throwing)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Source error-type drift: `src/` raises no `ArgumentError` for a PormG domain error
 # #239 retyped all 358 sites; only `src/tools.jl`'s two Julia-level API misuses remain. A new
 # `throw(ArgumentError(...))` anywhere else re-splits the taxonomy that #239 closed, and
@@ -103,7 +204,7 @@ end
 
     found = Dict{String,Int}()
     for path in _drift_files(DRIFT_SRC_DIR, ".jl")
-        n = count(l -> occursin("throw(ArgumentError(", l), _drift_lines(path))
+        n = count(((_, l),) -> occursin("throw(ArgumentError(", l), _drift_code_lines(path))
         n > 0 && (found[_drift_rel(path)] = n)
     end
 
@@ -112,8 +213,8 @@ end
         @error """
         `throw(ArgumentError(...))` found in src/ outside the deliberate keeps.
         Use a `PormGError` subtype — `FieldValidationError` for a field constructor,
-        `ModelDefinitionError` for a schema definition, `_argerr` (→ `QueryBuildError`) for
-        query-builder misuse. `ArgumentError` is correct ONLY for Julia-level API misuse.
+        `ModelDefinitionError` for a schema definition, `QueryBuildError` for query-builder
+        misuse. `ArgumentError` is correct ONLY for Julia-level API misuse.
         """ unexpected expected = ALLOWED_SRC_ARGUMENTERROR
     end
     @test isempty(unexpected)

@@ -90,16 +90,17 @@ When adding any new identifier-quoting path, go through `quote_identifier` — n
 
 ### Error message construction
 
-Error messages may colorize the offending token with ANSI for the REPL, but they **must** degrade off-TTY. Route query-builder errors through `_argerr(msg)` (defined in `querybuilder/exceptions.jl`), or wrap a raw `throw`/`error` string with `_emsg(...)`:
+Error messages may colorize the offending token with ANSI for the REPL, but they **must** degrade off-TTY. Throw a taxonomy subtype directly — its constructor applies `_emsg` — or wrap a raw `throw`/`error` string with `_emsg(...)`:
 
 - `_emsg(msg; color = Base.have_color === true)` is the single shared helper, defined in `src/Kernel.jl` (layer 1 — it moved out of `src/tools.jl` in #254, because the error-taxonomy constructors call it and the taxonomy has to be reachable from every submodule). It keeps ANSI when color is on and strips every `\e[..m` code otherwise (CI, file logs, structured logging) — `Base.have_color` is the same flag Julia uses to colorize its own error displays, so it honors `--color` and `NO_COLOR`. The `color` keyword exists for deterministic testing.
-- `_argerr(msg) = QueryBuildError(msg)` is the common case: a call site changes only `ArgumentError(` → `_argerr(` (paren structure unchanged). It has **not** returned an `ArgumentError` since #231 — the name is historical. The subtype's own constructor applies `_emsg`, so don't wrap twice.
-- The taxonomy **types** live in `src/exceptions.jl` (included by `Kernel`); only the throw funnels (`_argerr`, `_unsupported_conn`, `_write_not_allowed`) live in `querybuilder/exceptions.jl`, next to their call sites. Sibling subsystems have their own funnels — see `general.instructions.md`.
+- **`throw(QueryBuildError("…"))` is the common case** — the long-tail bucket for query-shape misuse. Name the subtype at the call site; the constructor applies `_emsg`, so don't wrap twice. There is deliberately no alias for this: #262 deleted `_argerr(msg) = QueryBuildError(msg)` because it only hid which type was thrown, and `test/unit/test_docs_error_type_drift.jl` fails if it returns.
+- The taxonomy **types** live in `src/exceptions.jl` (included by `Kernel`). What lives in `querybuilder/error_funnels.jl` is only the funnels that **compose a message** from parameters — `_unsupported_conn`, `_write_not_allowed`. A helper that merely maps a message to a type is an alias, not an abstraction; write the type instead.
+- **The funnel convention: a helper RETURNS the exception, the call site THROWS it** — `throw(_write_not_allowed(op, key))`. Uniform with direct construction, so there is nothing to remember per helper. A funnel that threw internally would invite the mirror-image mistake at a returning one, where a forgotten `throw(` silently constructs an exception, discards it, and lets execution continue past the guard. `test/unit/test_typed_exceptions.jl` pins it.
 - Never write `throw(ArgumentError("...\e[31m..."))` directly — raw escape codes leak as noise into non-TTY sinks.
 - `_emsg(io, msg)` is the IO-aware overload for `show` / `print(io, …)` methods: it keys off the destination stream's `:color` IOContext property (`get(io, :color, false)`) rather than the global flag, so a non-color buffer (`sprint`, `repr`, a file) stays clean even on a color terminal.
 - *Logging* macros (`@info` / `@warn` / `@error`) and interactive `print`/`println` also route their colored messages through `_emsg(…)` — this keeps log files and captured output ANSI-free when redirected (Julia clears `Base.have_color` for non-TTY stdout). Don't add a new `@info("…\e[31m…")` without the `_emsg` wrapper.
 
-Scope: `_emsg` is shared (`src/tools.jl`, `PormG` namespace, both string and `IO`-aware methods); `QueryBuilder`, `Models`, and `Migrations` all `import PormG: _emsg`. `_argerr` is the QueryBuilder-internal convenience wrapper. Any submodule that needs colored errors/logs should import `_emsg` from `PormG` rather than re-embedding raw ANSI. Regression coverage: `test/unit/test_error_message_ansi.jl`.
+Scope: `_emsg` is shared (`src/Kernel.jl`, `PormG` namespace, both string and `IO`-aware methods); `QueryBuilder`, `Models`, and `Migrations` all `import PormG: _emsg`. Any submodule that needs colored errors/logs should import `_emsg` from `PormG` rather than re-embedding raw ANSI. Regression coverage: `test/unit/test_error_message_ansi.jl`.
 
 ### Query generation
 
@@ -189,4 +190,5 @@ julia -t auto --project=. test/integration/test_cte.jl
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
 - Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — the contract is fail-closed: validate via `_validate_identifier`, then quote; never silently rewrite an identifier
-- Do not embed raw ANSI (`\e[...`) in a `throw`/`error`/`@info`/`@warn`/`@error`/`print` message — route through `_argerr`/`_emsg` (or `_emsg(io, …)` inside `show` methods) so color degrades off-TTY
+- Do not embed raw ANSI (`\e[...`) in a `throw`/`error`/`@info`/`@warn`/`@error`/`print` message — throw a taxonomy subtype (its constructor applies `_emsg`) or wrap with `_emsg` / `_emsg(io, …)` inside `show` methods, so color degrades off-TTY
+- Do not reintroduce a funnel that only maps a message to a type (the deleted `_argerr`); name the subtype at the call site

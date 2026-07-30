@@ -25,7 +25,7 @@ function With(q::SQLObject, name::String, query::SQLObjectHandler;
   join_type::String="LEFT")
   cte_fields = _preset_cte_fields(name, query, join_field=join_field, join_type=join_type)
   if haskey(q.ctes, name)
-    throw(_argerr("CTE with name \"$(name)\" already exists in the query; please use a different name."))
+    throw(QueryBuildError("CTE with name \"$(name)\" already exists in the query; please use a different name."))
   end
   @pormg_debug false
   q.ctes[name] = cte_fields
@@ -414,7 +414,7 @@ function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing
   accepted = Set([:filters, :field, :join_type, :warn])
   for k in keys(kwargs)
     if !(k in accepted)
-      throw(_argerr("Invalid keyword argument: \e[31m$k\e[0m. Accepted: \e[31m$(collect(accepted))\e[0m"))
+      throw(QueryBuildError("Invalid keyword argument: \e[31m$k\e[0m. Accepted: \e[31m$(collect(accepted))\e[0m"))
     end
   end
   filters = get(kwargs, :filters, nothing)
@@ -446,14 +446,14 @@ cjoin(q::SQLObjectHandler; kwargs...) = cjoin(q, nothing; kwargs...)
 #   * `F("<alias>.col")`     → the joined copy declared here (b2)
 # A self-join is `cjoin_on(q, "<BaseModelName>"; alias="b2", on=[...])`.
 function cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
-  isempty(strip(target_model)) && throw(_argerr("cjoin_on requires a target model name."))
+  isempty(strip(target_model)) && throw(QueryBuildError("cjoin_on requires a target model name."))
   # Fail-closed identifier check on the user alias (it is interpolated into SQL as a quoted alias).
   _validate_identifier(alias)
   if !isdefined(q.model._module, Symbol(target_model))
-    throw(_argerr("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
+    throw(QueryBuildError("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
   end
   if haskey(q.custom_join, alias)
-    throw(_argerr("cjoin_on alias '$(alias)' already exists as a join path. Choose a distinct alias."))
+    throw(QueryBuildError("cjoin_on alias '$(alias)' already exists as a join path. Choose a distinct alias."))
   end
 
   # Collect + validate element types. Crucially we DO NOT run `_prefix_join_filter` here: that helper
@@ -470,7 +470,7 @@ function cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias:
       throw(FilterError("Invalid cjoin_on `on` element: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
     end
   end
-  isempty(parsed) && throw(_argerr("cjoin_on requires at least one `on` predicate."))
+  isempty(parsed) && throw(QueryBuildError("cjoin_on requires at least one `on` predicate."))
 
   q.custom_join[alias] = Dict{String,Any}(
     "filters" => parsed,
@@ -583,7 +583,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
   end
 
   if !(func.function_name in ["COUNT", "SUM", "AVG", "MIN", "MAX"])
-    throw(_argerr("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not a recognized function. Allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX, CASE, WHEN\e[0m"))
+    throw(QueryBuildError("Error in _set_field_from_sql_function, the function \e[4m\e[31m$(func.function_name)\e[0m is not a recognized function. Allowed: \e[4m\e[32mCOUNT, SUM, AVG, MIN, MAX, CASE, WHEN\e[0m"))
   end
 
   if func.function_name in ["COUNT", "SUM"]

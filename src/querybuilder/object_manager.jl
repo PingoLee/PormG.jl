@@ -9,7 +9,7 @@ function _up_values(str::String)
   if size(check, 1) == 1
     return SQLField(str, str)
   elseif haskey(PormGsuffix, check[end])
-    throw(_argerr("Invalid values() field \"$(str)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
+    throw(QueryBuildError("Invalid values() field \"$(str)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
   else
     @pormg_debug false
     return SQLField(_check_function(check), join(check, "__"))
@@ -33,7 +33,7 @@ function up_values!(q::SQLObject, values)
       push!(q.values, SQLField(_check_function(v), v._as))
     elseif isa(v, Pair)
       if !isa(v.first, String)
-        throw(_argerr("Invalid values() pair key: $(v.first) (::$(typeof(v.first))) — use a String alias as the key in \"alias\" => expr."))
+        throw(QueryBuildError("Invalid values() pair key: $(v.first) (::$(typeof(v.first))) — use a String alias as the key in \"alias\" => expr."))
       end
       if isa(v.second, Union{SQLTypeFunction,SQLTypeF})
         try
@@ -62,12 +62,12 @@ function up_values!(q::SQLObject, values)
       else
         # #92: previously an unhandled pair value was silently dropped — the column just vanished from
         # the result. Fail loud instead so a wrong projection surfaces at build time.
-        throw(_argerr("Invalid values pair \"$(v.first)\" => ::$(typeof(v.second)): the right side must be a field name, a function (Count, Sum, …), Value(x), Subquery(inner), or Exists(inner)."))
+        throw(QueryBuildError("Invalid values pair \"$(v.first)\" => ::$(typeof(v.second)): the right side must be a field name, a function (Count, Sum, …), Value(x), Subquery(inner), or Exists(inner)."))
       end
     elseif isa(v, String)
       push!(q.values, _up_values(v))
     else
-      throw(_argerr("Invalid argument: $(v) (::$(typeof(v)))); use a string field name, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
+      throw(QueryBuildError("Invalid argument: $(v) (::$(typeof(v)))); use a string field name, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
     end
   end
 
@@ -92,7 +92,7 @@ function up_update!(q::SQLObject, values; kwargs...)
       if k == :show_query
         show_query = v
       else
-        throw(_argerr("Invalid keyword argument for update(): $(k) — the only supported keyword is show_query."))
+        throw(QueryBuildError("Invalid keyword argument for update(): $(k) — the only supported keyword is show_query."))
       end
     end
   end
@@ -112,7 +112,7 @@ function _normalize_uoc_pairs(x, what::AbstractString; op::AbstractString = "upd
   out = Pair[]
   for item in items
     item isa Pair ||
-      throw(_argerr("Error in $op, each $what entry must be a `field => value` pair, got $(typeof(item))"))
+      throw(QueryBuildError("Error in $op, each $what entry must be a `field => value` pair, got $(typeof(item))"))
     push!(out, item)
   end
   return out
@@ -128,9 +128,9 @@ function up_update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_quer
   default_pairs = _normalize_uoc_pairs(defaults, "defaults")
 
   isempty(lookup_pairs) &&
-    throw(_argerr("Error in update_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
+    throw(QueryBuildError("Error in update_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
   isempty(default_pairs) &&
-    throw(_argerr("Error in update_or_create, `defaults` must be non-empty — ON CONFLICT DO UPDATE needs a SET. For a no-update match-or-insert, use get_or_create(...) instead."))
+    throw(QueryBuildError("Error in update_or_create, `defaults` must be non-empty — ON CONFLICT DO UPDATE needs a SET. For a no-update match-or-insert, use get_or_create(...) instead."))
 
   lookup_keys  = String[string(k) for (k, _) in lookup_pairs]
   default_keys = String[string(k) for (k, _) in default_pairs]
@@ -144,12 +144,12 @@ function up_update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_quer
       throw(UnknownFieldError("Error in update_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   length(unique(lookup_keys)) == length(lookup_keys) ||
-    throw(_argerr("Error in update_or_create, duplicate lookup field(s)"))
+    throw(QueryBuildError("Error in update_or_create, duplicate lookup field(s)"))
   length(unique(default_keys)) == length(default_keys) ||
-    throw(_argerr("Error in update_or_create, duplicate defaults field(s)"))
+    throw(QueryBuildError("Error in update_or_create, duplicate defaults field(s)"))
   overlap = intersect(Set(lookup_keys), Set(default_keys))
   isempty(overlap) ||
-    throw(_argerr("Error in update_or_create, field(s) $(join(sort(collect(overlap)), ", ")) appear in both lookup and defaults; put each in one (lookup = match key, defaults = updated on conflict)"))
+    throw(QueryBuildError("Error in update_or_create, field(s) $(join(sort(collect(overlap)), ", ")) appear in both lookup and defaults; put each in one (lookup = match key, defaults = updated on conflict)"))
 
   # Merge into the insert map (lookup then defaults; order preserved for deterministic SQL, #97).
   q.insert = OrderedCollections.OrderedDict{String,Any}()
@@ -182,26 +182,26 @@ function up_get_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query::
   default_pairs = _normalize_uoc_pairs(defaults, "defaults"; op = "get_or_create")
 
   isempty(lookup_pairs) &&
-    throw(_argerr("Error in get_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
+    throw(QueryBuildError("Error in get_or_create, at least one lookup pair is required (it becomes the ON CONFLICT target)"))
 
   lookup_keys  = String[string(k) for (k, _) in lookup_pairs]
   default_keys = String[string(k) for (k, _) in default_pairs]
 
   for k in lookup_keys
     haskey(model.fields, k) ||
-      throw(_argerr("Error in get_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+      throw(QueryBuildError("Error in get_or_create, lookup field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   for k in default_keys
     haskey(model.fields, k) ||
-      throw(_argerr("Error in get_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
+      throw(QueryBuildError("Error in get_or_create, defaults field \e[4m\e[31m$(k)\e[0m is not a field of $(model.name)"))
   end
   length(unique(lookup_keys)) == length(lookup_keys) ||
-    throw(_argerr("Error in get_or_create, duplicate lookup field(s)"))
+    throw(QueryBuildError("Error in get_or_create, duplicate lookup field(s)"))
   length(unique(default_keys)) == length(default_keys) ||
-    throw(_argerr("Error in get_or_create, duplicate defaults field(s)"))
+    throw(QueryBuildError("Error in get_or_create, duplicate defaults field(s)"))
   overlap = intersect(Set(lookup_keys), Set(default_keys))
   isempty(overlap) ||
-    throw(_argerr("Error in get_or_create, field(s) $(join(sort(collect(overlap)), ", ")) appear in both lookup and defaults; put each in one (lookup = match key, defaults = create-only extras applied on insert)"))
+    throw(QueryBuildError("Error in get_or_create, field(s) $(join(sort(collect(overlap)), ", ")) appear in both lookup and defaults; put each in one (lookup = match key, defaults = create-only extras applied on insert)"))
 
   # Merge into the insert map (lookup then defaults; order preserved for deterministic SQL, #97).
   q.insert = OrderedCollections.OrderedDict{String,Any}()
@@ -250,7 +250,7 @@ end
 distinct!(q::SQLObject, value::Tuple{}) = distinct!(q, true) # if no value is passed, distinct is true
 distinct!(q::SQLObject, value::Tuple{Bool}) = distinct!(q, value[1]) # if a value is passed, distinct is the value
 function distinct!(q::SQLObject, value)
-  throw(_argerr("Invalid distinct() argument: $(value) (::$(typeof(value))) — use a Bool (true or false)."))
+  throw(QueryBuildError("Invalid distinct() argument: $(value) (::$(typeof(value))) — use a Bool (true or false)."))
 end
 
 # #26: mark the query for row-level locking. Renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]`
@@ -259,7 +259,7 @@ end
 # is a deferred follow-up — it must name the query's generated FROM alias, not yet exposed.)
 function select_for_update!(q::SQLObject; nowait::Bool=false, skip_locked::Bool=false, no_key::Bool=false)
   if nowait && skip_locked
-    throw(_argerr("select_for_update: `nowait` and `skip_locked` are mutually exclusive — pass at most one."))
+    throw(QueryBuildError("select_for_update: `nowait` and `skip_locked` are mutually exclusive — pass at most one."))
   end
   q.for_update = ForUpdateClause(nowait, skip_locked, no_key)
   return q
@@ -317,7 +317,7 @@ function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} wh
       if size(check, 1) == 1
         push!(q.order, SQLOrder(SQLField(v, v), orientation=orientation))
       elseif haskey(PormGsuffix, check[end])
-        throw(_argerr("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
+        throw(QueryBuildError("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
       else
         push!(q.order, SQLOrder(SQLField(_check_function(check), join(check, "__")), orientation=orientation))
       end
@@ -328,7 +328,7 @@ function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} wh
   return q
 end
 function order_by!(q::SQLObject, values)
-  throw(_argerr("Invalid order_by() argument: $(values) (::$(typeof(values))) — use field-name Strings (\"-field\" for DESC) or SQLTypeOrder values."))
+  throw(QueryBuildError("Invalid order_by() argument: $(values) (::$(typeof(values))) — use field-name Strings (\"-field\" for DESC) or SQLTypeOrder values."))
 end
 
 

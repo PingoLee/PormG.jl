@@ -12,7 +12,8 @@ the package needs before it can define anything of its own.
 in `PormG.jl`'s include chain.
 
 That ordering used to be implicit, and it bit: the `#231` error taxonomy was defined in
-`src/querybuilder/exceptions.jl` (included at step 11), so `Models`, `Configuration`, `Dialect` and
+`src/querybuilder/exceptions.jl` (included at step 11; that file is now `error_funnels.jl` and holds
+only message-composing funnels), so `Models`, `Configuration`, `Dialect` and
 `ConnectionPool` — all included earlier — could not name a single one of its types. Each submodule
 resolves `import PormG: …` at include time, so "defined later in the module body" means "does not
 exist yet".

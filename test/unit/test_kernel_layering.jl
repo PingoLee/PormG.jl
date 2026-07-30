@@ -11,6 +11,7 @@ No database required.
 # julia -t auto --project=. test/unit/test_kernel_layering.jl
 
 using Test
+using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list
 using PormG
 
 @testset "Kernel layering" begin
@@ -29,6 +30,66 @@ using PormG
         # Kernel must not reach back into PormG — that is what makes it safe to include first.
         # `using PormG` inside Kernel would create the cycle this design removes.
         @test !isdefined(PormG.Kernel, :PormG)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The layering RULE, not today's inventory (#261, #262)
+    # The assertions above pin four names by hand, so they only catch a regression in those four.
+    # This derives the check from the export list instead, so a taxonomy type added later is
+    # covered without anyone remembering to extend a list — the same "assert the invariant, not
+    # the inventory" approach as the #259 drift guards.
+    #
+    # The rule: every concrete PormGError subtype either lives in Kernel, or has a DEDICATED
+    # Kernel-owned abstract umbrella above it. Nothing may sit mid-include-chain as a bare child
+    # of the root — that is exactly the shape that made #239 need the Kernel extraction, and it
+    # recurred with PoolTimeoutError / PoolConnectError until #261 added `PoolError`.
+    #
+    # Two things are load-bearing here, both learned the hard way:
+    #
+    #   • "Dedicated" excludes the root. `PormGError` is always Kernel-owned, so accepting ANY
+    #     Kernel-parented supertype made this check vacuous — it passed for every subtype ever,
+    #     including the violation it exists to catch.
+    #   • The walk is over `subtypes(PormGError)`, not `names(PormG)`. An export-list walk sees only
+    #     exported types, which silently omits `MissingDatabaseConfigurationException` and
+    #     `DestructiveMigrationError` — the two that actually live mid-include-chain, i.e. precisely
+    #     the ones this rule is about. Reparenting either to a bare `<: PormGError` must fail here.
+    #
+    # Both mutations are verified to fail this testset.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "every taxonomy type is reachable from Kernel (#261)" begin
+        # Recursive walk of the real type tree — exported or not.
+        function _concrete_errors(T = PormG.PormGError, acc = Any[])
+            for S in subtypes(T)
+                isabstracttype(S) ? _concrete_errors(S, acc) : push!(acc, S)
+            end
+            return acc
+        end
+
+        offenders = String[]
+        checked = 0
+        for T in _concrete_errors()
+            checked += 1
+            parentmodule(T) === PormG.Kernel && continue
+            S = supertype(T)
+            (S !== PormG.PormGError && parentmodule(S) === PormG.Kernel) && continue
+            push!(offenders, "$(nameof(T)): defined in $(parentmodule(T)), supertype $(S) " *
+                             "in $(parentmodule(S))")
+        end
+
+        if !isempty(offenders)
+            @error """
+            Exported exception type(s) reachable from neither Kernel nor a Kernel-owned umbrella.
+            Define the type in src/exceptions.jl (Kernel), or give it an abstract supertype there —
+            the pattern ConfigurationError / MigrationError / PoolError already follow. A type left
+            mid-include-chain cannot be named by any submodule included before it.
+            """ offenders
+        end
+        @test isempty(offenders)
+
+        # Guard the guard: if the walk or the filter ever stops matching anything, the loop above
+        # passes vacuously. 18 concrete subtypes as of #261 — 16 exported plus the two that are
+        # reached only by qualified name.
+        @test checked >= 18
     end
 
     @testset "backend generics stay owned by PormG (layer 2)" begin

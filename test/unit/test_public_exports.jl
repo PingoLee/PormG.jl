@@ -28,6 +28,9 @@ const EXPECTED_TOPLEVEL = Set([
     :FieldValidationError, :ModelDefinitionError,
     :ConfigurationError, :InvalidConfigurationError,
     :MigrationError, :InvalidMigrationError,
+    # Taxonomy edges (#261): PoolError is the connection-pool umbrella; error_message is the
+    # uniform way to read a caught PormGError (the structured subtypes have no `.msg`).
+    :PoolError, :error_message,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
     # Async API

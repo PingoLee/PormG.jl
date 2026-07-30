@@ -657,11 +657,31 @@ Every PormG misuse raises a subtype of `PormGError` (`<: Exception`) so callers 
 **type** instead of matching on a message string. Catch `PormGError` for any PormG failure, or a
 specific subtype for a specific reaction (#231, completed in #239):
 
-`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `PermissionError`, `UnsupportedConnectionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`
+`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `PermissionError`, `UnsupportedConnectionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `error_message`
 
 !!! warning "These are not `ArgumentError`s"
     The subtypes are deliberately **not** `<: ArgumentError`. A `catch ArgumentError` block around a
     PormG call will not match — catch `PormGError` (or a specific subtype) instead.
+
+### Reading a caught error
+
+Use `error_message(e)`, **not** `e.msg`. Most subtypes carry a `msg::String`, but the ones built
+from structured fields — `DoesNotExist`, `MultipleObjectsReturned`, `PoolTimeoutError`,
+`PoolConnectError` — do not, so `e.msg` throws on exactly the errors you are least likely to have
+tested against.
+
+```julia
+try
+    M.Result.objects.filter("driverid__surname" => "Senna").update("points" => 25)
+catch e
+    e isa PormGError || rethrow()
+    @error "PormG rejected the write" msg=error_message(e) type=typeof(e)
+end
+```
+
+`error_message` is defined through `showerror`, which every subtype implements, so it stays correct
+for subtypes added later. It never returns *less* than `e.msg`: for most subtypes it is exactly that
+field, and for the few with their own `showerror` it returns the richer rendering.
 
 **Querying**
 
@@ -698,9 +718,10 @@ specific subtype for a specific reaction (#231, completed in #239):
 | `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get both cases below. |
 | `InvalidMigrationError` | A duplicate index name in a plan, an invalid answer to an interactive `makemigrations` prompt, or an unimplemented `migrate_to(version)` path. |
 | `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`. |
-| `PoolTimeoutError` / `PoolConnectError` | The pool is saturated / a physical connection could not be opened. |
+| `PoolError` *(abstract)* | Umbrella for connection-pool failures — `catch` it to get both cases below. |
+| `PoolTimeoutError` / `PoolConnectError` | The pool is saturated / a physical connection could not be opened. Both carry structured fields (`adapter`, `pool_size`, `attempts`, …) rather than a `msg` — read them with `error_message`. |
 
-The two abstract umbrellas exist so the buckets have **no holes**: `catch ConfigurationError` also
+The abstract umbrellas exist so the buckets have **no holes**: `catch ConfigurationError` also
 catches a missing `connection.yml`, and `catch MigrationError` also catches a refused destructive
 migration.
 

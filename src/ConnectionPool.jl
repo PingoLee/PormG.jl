@@ -7,7 +7,9 @@ import Logging
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: @pormg_debug
-import PormG: PormGError  # taxonomy root — PoolTimeoutError / PoolConnectError are reparented under it
+# `PoolError` is the taxonomy's connection-pool umbrella; it lives in Kernel (layer 1) so that
+# modules included before this one can name it (#261). PormGError comes along for `catch` sites.
+import PormG: PormGError, PoolError
 # Throw sites (#239): a bad acquire mode is a value error, an unresolvable pool is a config error,
 # and misuse of atomic() nesting lands on the long-tail QueryBuildError bucket.
 import PormG: InvalidValueError, InvalidConfigurationError, QueryBuildError
@@ -61,7 +63,7 @@ i.e. the pool is saturated at its ceiling (`pool_size * POOL_EXPANSION_FACTOR`).
 Reparented from `Exception` to `PormGError` (#239), so `catch PormGError` covers connection
 saturation too. Catching `PoolTimeoutError` specifically is unaffected.
 """
-struct PoolTimeoutError <: PormGError
+struct PoolTimeoutError <: PoolError
   adapter::String        # "PostgreSQL" | "SQLite"
   pool_size::Int
   max_size::Int
@@ -86,7 +88,7 @@ redacted connection string; catchable so apps can translate it distinctly (e.g. 
 Reparented from `Exception` to `PormGError` (#239), so `catch PormGError` covers connection failures
 too. Catching `PoolConnectError` specifically is unaffected.
 """
-struct PoolConnectError <: PormGError
+struct PoolConnectError <: PoolError
   adapter::String        # "PostgreSQL" | "SQLite"
   cause                  # underlying driver exception (untyped: a driver may throw a non-Exception)
   connection::String     # redacted connection string

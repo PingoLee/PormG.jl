@@ -497,9 +497,9 @@ function _resolve_table_fields(
       for fsym in colect_deletion
         f = model.fields[model_fields_map[string(fsym)]]
         if hasfield(typeof(f), :primary_key) && f.primary_key
-          error("Cannot auto-migrate on SQLite: deleting primary-key column \"$(fsym)\" from table " *
+          throw(InvalidMigrationError("Cannot auto-migrate on SQLite: deleting primary-key column \"$(fsym)\" from table " *
                 "\"$(model_name)\" would leave it with no primary key. Declare a replacement primary key, " *
-                "or make this change manually.")
+                "or make this change manually."))
         end
       end
     end
@@ -779,7 +779,7 @@ end
 function makemigrations(db::String; config::Dict{String,PormGSettings} = config, interactive::Bool = true)
 settings = Configuration.get_settings(db)
 path = joinpath(db, settings.model_file)
-isfile(path) || error("The file $(path) does not exists")
+isfile(path) || throw(MissingConfigurationError("The models file $(path) does not exist for connection '$(db)'."))
 makemigrations(settings.connections, settings, path=path, interactive=interactive)
 end
 

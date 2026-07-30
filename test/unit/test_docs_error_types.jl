@@ -99,13 +99,13 @@ const DOCERR_CASES = [
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (
         "read/filters_and_aggregates.md — iunaccent_* lookups require PostgreSQL",
-        UnsupportedConnectionError,
+        BackendCapabilityError,
         () -> DOCERR_DRIVER_SL.objects.filter("surname__@iunaccent_contains" => "sena").
             list(show_query = :dict),
     ),
     (
         "read/filters_and_aggregates.md — JSONB key-existence operators require PostgreSQL",
-        UnsupportedConnectionError,
+        BackendCapabilityError,
         () -> DOCERR_RESULT_SL.objects.filter("payload__@has_key" => "wins").
             list(show_query = :dict),
     ),

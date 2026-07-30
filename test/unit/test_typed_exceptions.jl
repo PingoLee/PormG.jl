@@ -161,7 +161,7 @@ end
     fielderr    = PormG.Models._fielderr("bad kwarg")
 
     @test unsupported isa PormG.UnsupportedConnectionError
-    @test notallowed  isa PormG.PermissionError
+    @test notallowed  isa PormG.WritesDisabledError
     @test fielderr    isa PormG.FieldValidationError
 
     # …and each is still under the taxonomy root, so `catch PormGError` covers them.

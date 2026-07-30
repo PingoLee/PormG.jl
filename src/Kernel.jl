@@ -161,12 +161,15 @@ export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLit
 export PormGError,
        FieldAccessError, UnknownFieldError, LazyTraversalError,
        FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError,
-       PermissionError, UnsupportedConnectionError,
+       WritesDisabledError, UnsupportedConnectionError,
        DoesNotExist, MultipleObjectsReturned,
        FieldValidationError, ModelDefinitionError,
        ConfigurationError, InvalidConfigurationError,
        MigrationError, InvalidMigrationError,
-       PoolError, error_message
+       PoolError, error_message,
+       # Pre-publish naming pass (#268-era audit): narrowed/added members (WritesDisabledError
+       # replaces PermissionError on the taxonomy line above).
+       BackendCapabilityError, ProtectedError, DefinitionError
 
 # Shared state / generics
 export config, get_constraints_pk, get_constraints_unique, get_constraints_check

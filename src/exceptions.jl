@@ -109,35 +109,73 @@ struct InvalidValueError <: PormGError
 end
 
 """
-    PermissionError(msg) <: PormGError
-
-The connection is not permitted to insert/update/delete — its settings carry `change_data=false`.
-"""
-struct PermissionError <: PormGError
-  msg::String
-  PermissionError(msg::AbstractString) = new(_emsg(msg))
-end
-
-"""
     UnsupportedConnectionError(msg) <: PormGError
 
-A connection that is neither a PostgreSQL nor a SQLite pool (or a model not bound to a
-connection) reached an execution path, or a lookup/function requires a backend the active
-connection is not. The catchable replacement for the internal `ErrorException` from #197.
+A connection object that is neither a PostgreSQL nor a SQLite pool reached an execution path —
+a PormG internal dispatch bug; the message asks the user to report it. The catchable replacement
+for the internal `ErrorException` from #197.
+
+Narrowed in the pre-publish naming pass: it previously also covered backend capability limits
+(now [`BackendCapabilityError`](@ref)) and models not bound to a connection (now
+[`InvalidConfigurationError`](@ref), whose docstring always claimed that case) — three disjoint
+remedies distinguishable only by message text, which is the failure mode this taxonomy exists to
+remove.
 """
 struct UnsupportedConnectionError <: PormGError
   msg::String
   UnsupportedConnectionError(msg::AbstractString) = new(_emsg(msg))
 end
 
+"""
+    BackendCapabilityError(msg) <: PormGError
+
+The active backend cannot do this — a PostgreSQL-only lookup on SQLite (JSONB containment,
+`iunaccent_*`), an explicit window `frame=` on SQLite, `bulk_copy` on SQLite, or a SQLite library
+older than a feature requires. The query is well-formed and the configuration is fine; the remedy
+is to change the query or the backend. Split out of `UnsupportedConnectionError` in the pre-publish
+naming pass — capability limits are a user-facing contract, not an internal error.
+"""
+struct BackendCapabilityError <: PormGError
+  msg::String
+  BackendCapabilityError(msg::AbstractString) = new(_emsg(msg))
+end
+
+"""
+    ProtectedError(msg) <: PormGError
+
+A `delete()` was refused because other rows reference the target through a `ForeignKey` declared
+with `on_delete = PROTECT` (or `RESTRICT`). Nothing about the call is malformed — the *data*
+forbids it, and the remedy is to delete or reassign the referencing rows first. Mirrors Django's
+`ProtectedError`/`RestrictedError`; previously filed under the long-tail `QueryBuildError`, which
+made this case indistinguishable from a malformed delete.
+"""
+struct ProtectedError <: PormGError
+  msg::String
+  ProtectedError(msg::AbstractString) = new(_emsg(msg))
+end
+
 # get() cardinality errors — reparented from `Exception` to `PormGError` (#231) so
 # `catch PormGError` catches them too. They keep their structured fields and field-built
 # `showerror` (below), which is why they don't use the uniform `msg::String` shape.
+"""
+    DoesNotExist <: PormGError
+
+`get()` matched zero rows. Carries `model_name` and the rendered `filters` (structured — no `msg`
+field; read it with [`error_message`](@ref)). Often normal control flow: catch it to implement
+get-or-create-style logic.
+"""
 struct DoesNotExist <: PormGError
   model_name::String
   filters::String
 end
 
+"""
+    MultipleObjectsReturned <: PormGError
+
+`get()` matched more than one row — usually a data-integrity surprise rather than control flow.
+Carries `model_name`, the offending `count`, and the rendered `filters` (structured — no `msg`
+field; read it with [`error_message`](@ref)).
+"""
 struct MultipleObjectsReturned <: PormGError
   model_name::String
   count::Int
@@ -168,7 +206,18 @@ abstract type PoolError <: PormGError end
 # ── Schema, configuration and migration errors (#239) ───────────────────────
 
 """
-    FieldValidationError(msg) <: PormGError
+    DefinitionError <: PormGError  (abstract)
+
+Umbrella for model-definition-time failures — `catch DefinitionError` covers both a bad field
+constructor argument ([`FieldValidationError`](@ref)) and a bad model/schema shape
+([`ModelDefinitionError`](@ref)). They almost always surface together: one `include("models.jl")`
+can raise either, and a handler that names only one silently misses the other — which is exactly
+what `UPGRADING.md`'s own #239 migration recipe did.
+"""
+abstract type DefinitionError <: PormGError end
+
+"""
+    FieldValidationError(msg) <: DefinitionError <: PormGError
 
 A field constructor was given an invalid argument — a kwarg of the wrong type, a `max_length`
 outside its permitted range, a `default` that does not satisfy the field's own contract, a
@@ -177,20 +226,20 @@ outside its permitted range, a `default` that does not satisfy the field's own c
 Raised while *defining* a model. Contrast [`InvalidValueError`](@ref), which is raised while
 coercing a *value* on the insert/update path.
 """
-struct FieldValidationError <: PormGError
+struct FieldValidationError <: DefinitionError
   msg::String
   FieldValidationError(msg::AbstractString) = new(_emsg(msg))
 end
 
 """
-    ModelDefinitionError(msg) <: PormGError
+    ModelDefinitionError(msg) <: DefinitionError <: PormGError
 
 A model or schema definition is invalid — more than one primary key, a duplicate `related_name`,
 an illegal field name, a `UniqueConstraint` that names an unknown or many-to-many field, an
 unresolvable `ForeignKey` / `ManyToManyField` target, or a `Model(...)` call given something
 that is not a `PormGField`.
 """
-struct ModelDefinitionError <: PormGError
+struct ModelDefinitionError <: DefinitionError
   msg::String
   ModelDefinitionError(msg::AbstractString) = new(_emsg(msg))
 end
@@ -200,11 +249,12 @@ end
 
 Umbrella for connection-configuration failures — `catch` it to get every case below. Like
 [`FieldAccessError`](@ref), this is an abstract mid-node rather than a throwable type, so the
-pre-existing `MissingDatabaseConfigurationException` can live *inside* the bucket instead of
+pre-existing `MissingConfigurationError` can live *inside* the bucket instead of
 beside it. `catch ConfigurationError` must not have holes; that class of surprise is the reason
 this taxonomy exists.
 
-Subtypes: [`InvalidConfigurationError`](@ref), and `Configuration.MissingDatabaseConfigurationException`
+Subtypes: [`InvalidConfigurationError`](@ref), [`WritesDisabledError`](@ref) (the `change_data:
+false` write switch — its remedy is a config edit), and `Configuration.MissingConfigurationError`
 (a missing folder/`connection.yml`, or a selected environment with no matching block).
 """
 abstract type ConfigurationError <: PormGError end
@@ -214,11 +264,27 @@ abstract type ConfigurationError <: PormGError end
 
 Connection configuration is present but unusable or inconsistent — an unsupported adapter, an
 unknown connection key, a malformed `extensions` setting, an unsupported PostgreSQL extension,
-a model not bound to a connection, or an attempt to overwrite a static connection.
+a model not bound to a connection (or bound to an entry whose pool was never built), a missing
+driver package (`using LibPQ` / `using SQLite` forgotten), or an attempt to overwrite a static
+connection.
 """
 struct InvalidConfigurationError <: ConfigurationError
   msg::String
   InvalidConfigurationError(msg::AbstractString) = new(_emsg(msg))
+end
+
+"""
+    WritesDisabledError(msg) <: ConfigurationError <: PormGError
+
+The connection is not permitted to insert/update/delete — its settings carry `change_data: false`.
+The remedy is a configuration edit (`connection.yml`), which is why this lives under
+[`ConfigurationError`](@ref). Renamed from `PermissionError` in the pre-publish naming pass: that
+name read as OS/file permissions to some audiences and database GRANTs to others, while the actual
+meaning is PormG's own write switch.
+"""
+struct WritesDisabledError <: ConfigurationError
+  msg::String
+  WritesDisabledError(msg::AbstractString) = new(_emsg(msg))
 end
 
 """
@@ -237,7 +303,9 @@ abstract type MigrationError <: PormGError end
 
 The migration engine refused or could not complete an operation — a duplicate index name in a
 plan, an invalid answer to an interactive `makemigrations` prompt, an unimplemented
-`migrate_to(version)` path, or an importer pointed at a non-SQLite connection.
+`migrate_to(version)` path, or a migration-engine step that cannot proceed (no pending plan,
+an unparseable introspected DDL statement, a missing model file). The importer-pointed-at-the-
+wrong-backend case is [`BackendCapabilityError`](@ref).
 """
 struct InvalidMigrationError <: MigrationError
   msg::String
@@ -248,7 +316,7 @@ end
 # One `showerror` covers every `msg`-carrying subtype. DoesNotExist / MultipleObjectsReturned
 # override with their field-built messages (a more specific method wins on dispatch); so do the
 # reparented types that carry their own structured fields (PoolTimeoutError, PoolConnectError,
-# MissingDatabaseConfigurationException, DestructiveMigrationError), each next to its definition.
+# MissingConfigurationError, DestructiveMigrationError), each next to its definition.
 Base.showerror(io::IO, e::PormGError) = print(io, e.msg)
 
 """
@@ -274,7 +342,7 @@ Defined via `showerror`, which every subtype implements, so it stays correct for
 later without needing a new method. For subtypes that use the generic `showerror` above, the result
 is exactly `e.msg` (it prints that field verbatim, and `_emsg` has already normalized any ANSI at
 construction). Subtypes with their own `showerror` return that richer rendering instead — e.g.
-`Configuration.MissingDatabaseConfigurationException` and `Migrations.DestructiveMigrationError`
+`Configuration.MissingConfigurationError` and `Migrations.DestructiveMigrationError`
 both carry a `msg` yet prefix it with the error name, so `error_message` is a superset of `.msg`,
 never a subset.
 """

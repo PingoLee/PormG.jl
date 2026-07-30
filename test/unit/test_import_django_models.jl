@@ -162,7 +162,9 @@ class UnsupportedFieldModel(models.Model):
     config_key, db_dir_existed = temp_import_config!()
 
     try
-        err = @test_throws ErrorException import_models_from_django(
+        # #268 audit: importer failures are typed; a wrapped PormG error rethrows as itself,
+        # anything foreign (here: the unsupported-field UndefVarError) wraps as InvalidMigrationError.
+        err = @test_throws PormG.InvalidMigrationError import_models_from_django(
             django_text;
             db = config_key,
             file = "unsupported_field_unit.jl",

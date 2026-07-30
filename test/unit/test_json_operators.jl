@@ -3,7 +3,7 @@ Unit coverage for the PostgreSQL-only JSONB containment/overlap operators (#27):
 `__@jcontains` (@>), `__@has_key` (?), `__@has_any_keys` (?|), `__@has_keys` (?&).
 
 These are PostgreSQL-only (SQLite has no equivalent): the SQLite renderer throws a friendly
-UnsupportedConnectionError, mirroring the `iunaccent_*` precedent. The RHS binds per operator — a jsonb
+BackendCapabilityError, mirroring the `iunaccent_*` precedent. The RHS binds per operator — a jsonb
 document (`::jsonb`) for @>, a text key for ?, a text[] key array for ?|/?&. LibPQ binds `\$N`
 placeholders, so a literal `?`/`?|`/`?&` in the SQL is the operator, not a bind marker.
 

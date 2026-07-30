@@ -72,6 +72,7 @@ The subsystem map below is also the review **architecture checkpoint**: when a n
 | `src/Models.jl`, `src/models/` | Models and fields |
 | `src/QueryBuilder.jl`, `src/querybuilder/` | Query builder (incl. `many_to_many.jl`) |
 | `src/Dialect.jl` | Backend SQL rendering |
+| `src/AdvisoryLock.jl` | `with_advisory_lock` — cross-process advisory locking (migrations serialize on it) |
 | `src/Migrations.jl`, `src/migrations/` | State-based schema reconciliation |
 | `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite via `PORMG_DB`) |
 | `docs/src/` | User documentation |

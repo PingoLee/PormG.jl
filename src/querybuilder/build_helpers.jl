@@ -19,13 +19,19 @@ function get_settings(obj::Union{SQLObject,SQLObjectHandler}; connection::Union{
     if length(config) == 1
       conn_key = first(keys(config))
     else
-      throw(UnsupportedConnectionError("Model '$(q.model.name)' is not bound to a database connection key. " *
+      throw(InvalidConfigurationError("Model '$(q.model.name)' is not bound to a database connection key. " *
         "Call `set_models()` or `PormG.@import_models` to bind the model before querying."))
     end
   end
   settings = get_configuration_settings(conn_key)
 
   final_connection = connection === nothing ? settings.connections : connection
+  # A config entry can exist with no pool built yet (`connections === nothing`); letting that
+  # escape produced a raw `MethodError` at get_parameter downstream (audit probe). Same guard and
+  # wording as `pool_stats(key)` in PormG.jl.
+  final_connection === nothing && throw(InvalidConfigurationError(
+    "Connection '$(conn_key)' has no pool yet (not built / not connected). " *
+    "Call PormG.Configuration.load(...) so the pool exists before querying."))
   return settings, final_connection, conn_key
 end
 
@@ -558,7 +564,9 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
       return string(quoted_alias, ".*")
     end
     
-    if _as !== nothing && haskey(instruc.tab_field_cache, _as)
+    if _as !== nothing && haskey(instruc.tab_field_cache, _as) && haskey(instruc.object.model.fields, v)
+      # The fields haskey guard matters: an invalid `v` must fall through to _solve_field's
+      # UnknownFieldError below, not die here with a raw KeyError (audit finding).
       instruc.tab_field_cache[_as] = instruc.object.model.fields[v]
     end
     return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
@@ -615,7 +623,7 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
   end
 
   if over.frame !== nothing
-    instruc.connection isa PormGSQLite && throw(QueryBuildError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(over.frame)) or use PostgreSQL."))
+    instruc.connection isa PormGSQLite && throw(BackendCapabilityError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(over.frame)) or use PostgreSQL."))
     frame = strip(over.frame)
     isempty(frame) && throw(QueryBuildError("Window frame cannot be empty"))
     push!(parts, frame)

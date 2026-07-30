@@ -6,10 +6,10 @@ import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLT
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 # Semantic error taxonomy (#239). Dialect raises three categories:
 #   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String").
-#   UnsupportedConnectionError — the active backend cannot do this (a PG-only JSONB/unaccent
+#   BackendCapabilityError — the active backend cannot do this (a PG-only JSONB/unaccent
 #                                lookup, an extract part SQLite lacks, too old a SQLite library).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
-import PormG: InvalidValueError, UnsupportedConnectionError, QueryBuildError
+import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
@@ -134,7 +134,7 @@ function _assert_sqlite_window_support(conn::PormGSQLite)
     # Reconstruct M.mm.pp from the packed version integer (e.g. 3039000 -> "3.39.0").
     major, rem = divrem(version_number, 1_000_000)
     minor, patch = divrem(rem, 1_000)
-    throw(UnsupportedConnectionError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $major.$minor.$patch."))
+    throw(BackendCapabilityError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $major.$minor.$patch."))
   end
   return nothing
 end
@@ -263,7 +263,7 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   elseif part == "DOY"
     "%j"
   else
-    throw(UnsupportedConnectionError("Unsupported extract part for SQLite: $part"))
+    throw(BackendCapabilityError("Unsupported extract part for SQLite: $part"))
   end
 
   return "CAST(strftime('$(strftime_format)', $(column)) AS INTEGER)"
@@ -1098,40 +1098,40 @@ function jcontains(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) @> $(value)"                    # jsonb contains the given document
 end
 function jcontains(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
 function jcontains(conn::PormGAbstractType, column::String, value)
-  throw(UnsupportedConnectionError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
 
 function has_key(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ? $(value)"                     # top-level key exists
 end
 function has_key(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
 function has_key(conn::PormGAbstractType, column::String, value)
-  throw(UnsupportedConnectionError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
 
 function has_any_keys(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ?| $(value)"                    # any of the given keys exists
 end
 function has_any_keys(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
 function has_any_keys(conn::PormGAbstractType, column::String, value)
-  throw(UnsupportedConnectionError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
 
 function has_keys(conn::PormGPostgres, column::String, value::String)::String
   return "$(column) ?& $(value)"                    # all of the given keys exist
 end
 function has_keys(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 function has_keys(conn::PormGAbstractType, column::String, value)
-  throw(UnsupportedConnectionError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+  throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 
 function contains(conn::PormGPostgres, column::String, value::String)::String
@@ -1164,7 +1164,7 @@ function iunaccent_contains(conn::PormGPostgres, column::String, value::String):
   return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
 function iunaccent_contains(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+  throw(BackendCapabilityError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function iunaccent_contains(conn::PormGAbstractType, column::String, value)
@@ -1179,7 +1179,7 @@ function iunaccent_exact(conn::PormGPostgres, column::String, value::String)::St
   return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
 end
 function iunaccent_exact(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+  throw(BackendCapabilityError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function iunaccent_exact(conn::PormGAbstractType, column::String, value)
@@ -1268,7 +1268,7 @@ function niunaccent_contains(conn::PormGPostgres, column::String, value::String)
   return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
 function niunaccent_contains(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+  throw(BackendCapabilityError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function niunaccent_contains(conn::PormGAbstractType, column::String, value)
@@ -1280,7 +1280,7 @@ function niunaccent_exact(conn::PormGPostgres, column::String, value::String)::S
   return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
 end
 function niunaccent_exact(conn::PormGSQLite, column::String, value::String)
-  throw(UnsupportedConnectionError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+  throw(BackendCapabilityError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
   return nothing
 end
 function niunaccent_exact(conn::PormGAbstractType, column::String, value)

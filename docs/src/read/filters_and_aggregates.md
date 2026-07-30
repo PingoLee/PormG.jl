@@ -163,7 +163,7 @@ M.Driver.objects.filter("surname__@iunaccent_contains" => "raikkonen")
 M.Driver.objects.filter("surname__@iunaccent_exact" => "RAIKKONEN")
 ```
 
-They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite these lookups raise an `UnsupportedConnectionError`.
+They require the `unaccent` extension and its `immutable_unaccent` helper, declared once in `connection.yml` and installed by `migrate()` — see [PostgreSQL Extensions](../configuration/connection_yml.md#PostgreSQL-Extensions). On SQLite these lookups raise a `BackendCapabilityError`.
 
 There is no `@iunaccent_in`; OR the equality lookup with [`Qor`](q_objects.md) for accent-insensitive set membership:
 
@@ -228,7 +228,7 @@ Supported comparisons on a path lookup: `=` (default), `@ne`, `@gt`, `@gte`, `@l
 ### Containment and key-existence operators (PostgreSQL only)
 
 These map to the PostgreSQL JSONB operators and apply to a JSON **column** (not a nested path).
-On SQLite they raise an `UnsupportedConnectionError`:
+On SQLite they raise a `BackendCapabilityError`:
 
 | Lookup | JSONB operator | Meaning | Example |
 | :--- | :--- | :--- | :--- |

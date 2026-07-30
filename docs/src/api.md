@@ -657,7 +657,15 @@ Every PormG misuse raises a subtype of `PormGError` (`<: Exception`) so callers 
 **type** instead of matching on a message string. Catch `PormGError` for any PormG failure, or a
 specific subtype for a specific reaction (#231, completed in #239):
 
-`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `PermissionError`, `UnsupportedConnectionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `error_message`
+`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `error_message`
+
+!!! note "Database-level errors are not (yet) wrapped"
+    The taxonomy covers *misuse of PormG*. Once a statement reaches the database, failures —
+    a constraint violation, SQL the backend rejects, a connection dropped mid-query — currently
+    propagate as the **driver's own exception types** (`SQLite.SQLiteException`,
+    `LibPQ.Errors.*`), *not* as `PormGError`. Connect-time failures are the exception: they
+    arrive as `PoolConnectError`. Whether to wrap the rest is an open pre-publish decision —
+    see [#268](https://github.com/PingoLee/PormG.jl/issues/268).
 
 !!! warning "These are not `ArgumentError`s"
     The subtypes are deliberately **not** `<: ArgumentError`. A `catch ArgumentError` block around a
@@ -693,15 +701,18 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter (or another unsafe shape). |
+| `ProtectedError` | A `delete()` was refused because rows reference the target through a `ForeignKey` with `on_delete = PROTECT`/`RESTRICT` — the data forbids it; delete or reassign the referencing rows first. |
+| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, or a too-old SQLite library. Change the query or the backend. |
 | `InvalidValueError` | A **value** failed coercion/type validation on insert/update, an identifier failed the safety check, or an interval/duration could not be parsed. |
-| `PermissionError` | The connection is not permitted to insert/update/delete (`change_data=false`). |
-| `UnsupportedConnectionError` | A connection is neither PostgreSQL nor SQLite, a model is not bound to a connection, or a lookup requires a backend this connection is not. |
+| `WritesDisabledError` | The connection is not permitted to insert/update/delete — `change_data: false` in `connection.yml`, which is why it lives under `ConfigurationError`. (Renamed from `PermissionError` in the pre-publish naming pass.) |
+| `UnsupportedConnectionError` | A connection object that is neither PostgreSQL nor SQLite reached an execution path — an internal PormG dispatch bug; please report it. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |
 | `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. |
 
 **Defining models**
 
 | Type | Raised when |
 | :--- | :--- |
+| `DefinitionError` *(abstract)* | Umbrella for definition-time failures — `catch` it to get both cases below. One `include("models.jl")` can raise either, so a handler naming only one silently misses the other. |
 | `FieldValidationError` | A field constructor got an invalid argument — a kwarg of the wrong type, an out-of-range `max_length`, a `default` that violates the field's own contract, or a field type that cannot be a primary key. |
 | `ModelDefinitionError` | A model/schema definition is invalid — more than one primary key, a duplicate `related_name`, an illegal field name, a `UniqueConstraint` naming an unknown field, or an unresolvable `ForeignKey` target. |
 
@@ -712,9 +723,9 @@ field, and for the few with their own `showerror` it returns the richer renderin
 
 | Type | Raised when |
 | :--- | :--- |
-| `ConfigurationError` *(abstract)* | Umbrella for connection-configuration failures — `catch` it to get both cases below. |
-| `InvalidConfigurationError` | Configuration is present but unusable — unsupported adapter, unknown connection key, malformed `extensions`, or an attempt to overwrite a static connection. |
-| `MissingDatabaseConfigurationException` | No configuration folder / `connection.yml`, or the selected environment has no matching block. |
+| `ConfigurationError` *(abstract)* | Umbrella for configuration failures — covers `InvalidConfigurationError`, `MissingConfigurationError`, **and** `WritesDisabledError` (listed in the Querying table above, where users meet it). |
+| `InvalidConfigurationError` | Configuration is present but unusable — unsupported adapter, unknown connection key, malformed `extensions`, a model not bound to a connection (or bound to an entry whose pool was never built), a missing driver package, or an attempt to overwrite a static connection. |
+| `MissingConfigurationError` | No configuration folder / `connection.yml`, or the selected environment has no matching block. |
 | `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get both cases below. |
 | `InvalidMigrationError` | A duplicate index name in a plan, an invalid answer to an interactive `makemigrations` prompt, or an unimplemented `migrate_to(version)` path. |
 | `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`. |
@@ -730,7 +741,7 @@ try
     M.Result.objects.update("points" => 25)   # no filter → refused, protects every row
 catch e
     e isa PormG.UnsafeMutationError && @warn "add a filter before update()"
-    e isa PormG.PermissionError    && @warn "this connection is read-only"
+    e isa PormG.WritesDisabledError    && @warn "this connection is read-only"
     rethrow(e)
 end
 ```

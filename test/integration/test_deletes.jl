@@ -611,11 +611,13 @@ end
                 e
             end
 
-            @test err isa PormGError
+            # #268 audit: SET_NULL on a null=false FK is a schema self-contradiction — typed
+            # ModelDefinitionError, and the message names the contradiction rather than the row.
+            @test err isa ModelDefinitionError
             msg = _strip_ansi(lowercase(sprint(showerror, err)))
-            # The error must identify the field name and the null-constraint violation.
+            # The error must identify the field name and the schema contradiction.
             @test occursin("parent_id", msg)
-            @test occursin("not allow null", msg)
+            @test occursin("null=true", msg)
 
             # Both rows must be untouched.
             @test SetNullGuardM.Set_null_guard_parent_scratch.objects.filter("id" => parent_id).exists()
@@ -695,7 +697,10 @@ end
             e
         end
 
-        @test err isa PormGError
+        # #268 audit: PROTECT/RESTRICT refusal is ProtectedError — the data forbids the delete,
+        # distinct from a malformed call. A supertype assertion here would pass for the old
+        # QueryBuildError too, proving nothing about the retype.
+        @test err isa ProtectedError
         msg = _strip_ansi(lowercase(sprint(showerror, err)))
         # The error must name the parent table, the offending FK field,
         # and the on_delete constraint type.

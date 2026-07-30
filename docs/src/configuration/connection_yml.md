@@ -4,7 +4,7 @@ PormG uses a centralized YAML configuration file—typically located at `db/conn
 
 ## Creating `connection.yml`
 
-During standard initialization, `PormG.Configuration.load(path)` reads a `connection.yml` from `path` (default `DB_PATH`). If the folder or file is missing it **throws** a `MissingDatabaseConfigurationException` that points you at `PormG.setup(path)` (interactive) or `load(path; scaffold=true)` (writes an editable skeleton) — it no longer silently scaffolds a file and returns.
+During standard initialization, `PormG.Configuration.load(path)` reads a `connection.yml` from `path` (default `DB_PATH`). If the folder or file is missing it **throws** a `MissingConfigurationError` that points you at `PormG.setup(path)` (interactive) or `load(path; scaffold=true)` (writes an editable skeleton) — it no longer silently scaffolds a file and returns.
 
 To scaffold it programmatically, you can run:
 

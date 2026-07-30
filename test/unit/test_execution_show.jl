@@ -1,5 +1,5 @@
 using Test
-using PormG: object, Q, PormGError, PermissionError
+using PormG: object, Q, PormGError, WritesDisabledError
 using PormG.Models: Model, CharField, IDField
 import PormG
 import DataFrames
@@ -157,7 +157,7 @@ end
       e
     end
 
-    @test err isa PermissionError    # #231: write-blocked is a typed PermissionError
+    @test err isa WritesDisabledError    # #231: write-blocked is a typed WritesDisabledError
     # #205: unified write-disabled message names the op and points at the `config:` block.
     let m = lowercase(sprint(showerror, err))
       @test occursin("error in delete:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
@@ -181,7 +181,7 @@ end
       e
     end
 
-    @test err isa PermissionError    # #231: write-blocked is a typed PermissionError
+    @test err isa WritesDisabledError    # #231: write-blocked is a typed WritesDisabledError
     let m = lowercase(sprint(showerror, err))
       @test occursin("error in update:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
     end
@@ -193,7 +193,7 @@ end
       e
     end
 
-    @test inspect_err isa PermissionError    # #231: write-blocked is a typed PermissionError
+    @test inspect_err isa WritesDisabledError    # #231: write-blocked is a typed WritesDisabledError
     let m = lowercase(sprint(showerror, inspect_err))
       @test occursin("error in update:", m) && occursin("not allowed to write", m) && occursin("change_data", m)
     end
@@ -293,9 +293,9 @@ end
       e
     end
 
-    # Must raise a PermissionError with a message about not being allowed to
+    # Must raise a WritesDisabledError with a message about not being allowed to
     # write (sequence allocation is an insert-class operation).
-    @test err isa PermissionError
+    @test err isa WritesDisabledError
     @test occursin("not allowed", lowercase(sprint(showerror, err)))
 
     # The DataFrame must not have been mutated: no :id column should be present

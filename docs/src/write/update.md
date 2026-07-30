@@ -163,7 +163,7 @@ update_q.update("nationality" => "English")
 
 ### `change_data` Guard
 
-If the connection is configured with `change_data: false`, any call to `.update()` raises a `PermissionError` at the ORM layer before generating SQL. This applies to both normal execution and `show_query=:dict` dry-runs.
+If the connection is configured with `change_data: false`, any call to `.update()` raises a `WritesDisabledError` at the ORM layer before generating SQL. This applies to both normal execution and `show_query=:dict` dry-runs.
 
 ```julia
 # connection.yml: change_data: false

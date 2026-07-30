@@ -22,7 +22,7 @@ const EXPECTED_TOPLEVEL = Set([
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
     # Semantic error taxonomy (#231): PormGError root + query-builder subtypes
     :PormGError, :FieldAccessError, :UnknownFieldError, :LazyTraversalError, :FilterError,
-    :QueryBuildError, :UnsafeMutationError, :InvalidValueError, :PermissionError, :UnsupportedConnectionError,
+    :QueryBuildError, :UnsafeMutationError, :InvalidValueError, :WritesDisabledError, :UnsupportedConnectionError,
     # Taxonomy completion (#239): schema, configuration and migration errors. ConfigurationError
     # and MigrationError are abstract umbrellas (like FieldAccessError).
     :FieldValidationError, :ModelDefinitionError,
@@ -31,6 +31,9 @@ const EXPECTED_TOPLEVEL = Set([
     # Taxonomy edges (#261): PoolError is the connection-pool umbrella; error_message is the
     # uniform way to read a caught PormGError (the structured subtypes have no `.msg`).
     :PoolError, :error_message,
+    # #268 audit naming pass: renamed PermissionError→WritesDisabledError (in the taxonomy line
+    # above), plus the capability split, the PROTECT-delete type, and the definition-time umbrella.
+    :BackendCapabilityError, :ProtectedError, :DefinitionError,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
     # Async API

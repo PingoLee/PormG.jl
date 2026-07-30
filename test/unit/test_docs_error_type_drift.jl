@@ -58,7 +58,10 @@ const ALLOWED_DOC_MENTIONS = [
 
 # `src/tools.jl`'s two deliberate keeps: `upgrade_guide(from=…)` missing its required kwarg, and a
 # missing path. Both are Julia-level API misuse, not a PormG domain error.
-const ALLOWED_SRC_ARGUMENTERROR = Dict("src/tools.jl" => 2)
+const ALLOWED_SRC_ARGUMENTERROR = Dict(
+    "src/tools.jl" => 2,   # upgrade_guide's missing kwarg / missing path — Julia-level misuse
+    "src/Utils.jl" => 1,   # @import_models non-literal path — macro (Julia-level) misuse
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Docs error-type drift: no user-facing page may promise `ArgumentError`
@@ -97,6 +100,74 @@ const ALLOWED_SRC_ARGUMENTERROR = Dict("src/tools.jl" => 2)
     # The allow-list must stay *earned*: if a documented DataFrames.jl caveat or the clean-break
     # warning is deleted, this drops and the list should shrink with it.
     @test allowed_hits == 4
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# src/ and ext/ raise no untyped errors (#268 audit)
+# `catch PormGError` is the documented contract, and the 2026-07-30 audit found it leaking through
+# exactly the patterns no guard policed: `throw(ErrorException(` and bare `error(` calls — 14 of
+# them user-reachable (bulk row validation, missing-driver hints, five migration-engine sites, the
+# before_connect hook, `with_advisory_lock`). Those are fixed; this pins the residue so the leak
+# class cannot regrow. `ext/` is scanned too — it previously had NO guard coverage at all.
+#
+# The allowlists are positive pins (== , not <=): every entry is a deliberate, commented keep, and
+# removing one from src/ must shrink the list here or the guard fails — same discipline as
+# ALLOWED_SRC_ARGUMENTERROR.
+# ─────────────────────────────────────────────────────────────────────────────
+const DRIFT_EXT_DIR = joinpath(DRIFT_REPO_ROOT, "ext")
+
+# Internal invariant violations ("should not happen; please report") — not PormG misuse, so they
+# stay ErrorException by design rather than polluting the taxonomy with an InternalError type.
+const ALLOWED_UNTYPED_ERROREXCEPTION = Dict(
+    "src/AdvisoryLock.jl"    => 1,  # lock-acquisition timeout — parked with the #268 boundary decision
+    "src/ConnectionPool.jl"  => 1,  # SQLite async worker returned a malformed payload (internal)
+)
+const ALLOWED_UNTYPED_BARE_ERROR = Dict(
+    "src/querybuilder/deletion.jl"      => 1,  # empty generated SQL — internal invariant
+    "src/querybuilder/build_joins.jl"   => 2,  # missing join alias / unmaterialized CTE — internal
+    "src/querybuilder/build_helpers.jl" => 2,  # duplicate dedup row / bad placeholder type — internal
+    "src/ConnectionPool.jl"             => 1,  # `error("validation failed")` inside atomic()'s DOCSTRING example
+)
+
+@testset "src/ and ext/ raise no untyped errors (#268)" begin
+    found_ee = Dict{String,Int}()
+    found_err = Dict{String,Int}()
+    for dir in (DRIFT_SRC_DIR, DRIFT_EXT_DIR)
+        isdir(dir) || continue
+        for path in _drift_files(dir, ".jl")
+            n_ee, n_err = 0, 0
+            for (_, line) in _drift_code_lines(path)
+                occursin("throw(ErrorException(", line) && (n_ee += 1)
+                # The negated class's `.` lets `Base.error(` through — the canonical qualified
+                # spelling of exactly what this hunts — so it gets its own pattern.
+                (occursin(r"(?:^|[^_\w!.@])error\(", line) || occursin("Base.error(", line)) && (n_err += 1)
+            end
+            n_ee  > 0 && (found_ee[_drift_rel(path)] = n_ee)
+            n_err > 0 && (found_err[_drift_rel(path)] = n_err)
+        end
+    end
+
+    for (label, found, allowed) in (("throw(ErrorException(", found_ee, ALLOWED_UNTYPED_ERROREXCEPTION),
+                                    ("bare error(",           found_err, ALLOWED_UNTYPED_BARE_ERROR))
+        unexpected = filter(p -> get(allowed, p.first, 0) != p.second, found)
+        if !isempty(unexpected)
+            @error """
+            Untyped $(label) found outside the allowlisted internal invariants.
+            An error a consumer can reach must be a PormGError subtype — see the taxonomy index in
+            src/exceptions.jl. A genuine internal invariant may stay untyped, but it must be added
+            here WITH its rationale.
+            """ unexpected expected = allowed
+        end
+        @test isempty(unexpected)
+        # Equality (not <=): a STALE allowlist entry — the keep was removed but the pin wasn't —
+        # must also fail, so the list stays earned. The printed dicts show which side drifted.
+        @test found == allowed
+    end
+
+    # ext/ must stay completely clean — it has no legitimate keeps.
+    @test isdir(DRIFT_EXT_DIR)
+    @test !any(startswith(k, "ext/") for k in keys(found_ee))
+    @test !any(startswith(k, "ext/") for k in keys(found_err))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

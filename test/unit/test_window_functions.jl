@@ -127,7 +127,9 @@ end
     "row_number" => RowNumber(over=WindowOver(order_by=["resultid"], frame="ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"))
   )
 
-  @test_throws PormGError q.list(show_query=:dict)
+  # #268 audit: frame= on SQLite is a capability limit; PormGError alone would also pass for
+  # the pre-split QueryBuildError.
+  @test_throws PormG.BackendCapabilityError q.list(show_query=:dict)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

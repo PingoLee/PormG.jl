@@ -53,7 +53,7 @@ function _m2m_settings(manager::ManyToManyManager)
     if length(config) == 1
       conn_key = first(keys(config))
     else
-      throw(UnsupportedConnectionError("Model '$(manager.owner_model.name)' is not bound to a database connection key. Call set_models() before using a many-to-many manager."))
+      throw(InvalidConfigurationError("Model '$(manager.owner_model.name)' is not bound to a database connection key. Call set_models() before using a many-to-many manager."))
     end
   end
   settings = get_configuration_settings(conn_key)
@@ -111,7 +111,7 @@ end
 function (descriptor::ManyToManyDescriptor)(owner)
   owner_id = _m2m_extract_pk(owner, descriptor.relation.owner_pk)
   owner_module = descriptor.owner_model._module
-  owner_module === nothing && throw(QueryBuildError("Many-to-many descriptor $(descriptor.accessor) requires initialized models. Call set_models() before using it."))
+  owner_module === nothing && throw(InvalidConfigurationError("Many-to-many descriptor $(descriptor.accessor) requires initialized models. Call set_models() before using it."))
   related_model = _m2m_model_from_binding(owner_module, descriptor.relation.related_binding, descriptor.relation.related_model)
   return ManyToManyManager(descriptor.owner_model, related_model, descriptor.relation, owner_id)
 end
@@ -170,7 +170,7 @@ function add(manager::ManyToManyManager, targets...)
     sql = "INSERT OR IGNORE INTO $table_name ($owner_column, $related_column) VALUES $(join(groups, ", "));"
     fetch(settings, sql, parameters)
   else
-    throw(UnsupportedConnectionError("Unsupported connection type $(typeof(connection)) for many-to-many add"))
+    throw(_unsupported_conn("many-to-many add", connection))
   end
 
   return nothing

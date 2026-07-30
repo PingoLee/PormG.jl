@@ -79,7 +79,8 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
 
   # Extract table name
   table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
-  table_name = table_name_match !== nothing ? table_name_match.captures[1] : error("Table name not found")
+  table_name = table_name_match !== nothing ? table_name_match.captures[1] :
+    throw(InvalidMigrationError("Cannot introspect: CREATE TABLE statement has no double-quoted table name (table created outside PormG?): $(first(sql, 120))"))
 
   # Define a dictionary to map SQL types to Models.jl field types
   fk_map::Dict{String, Any} = Dict{String, Any}()

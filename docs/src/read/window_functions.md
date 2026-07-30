@@ -376,7 +376,7 @@ ORDER BY "constructorid" ASC, "positionorder" ASC
 ```
 
 !!! warning
-    Explicit frame strings are PostgreSQL-only. Passing `frame=` on a SQLite connection throws a `QueryBuildError` with a helpful message.
+    Explicit frame strings are PostgreSQL-only. Passing `frame=` on a SQLite connection throws a `BackendCapabilityError` with a helpful message.
 
 **Frame unit — `ROWS` vs `RANGE`**
 
@@ -803,12 +803,12 @@ PormG quotes the alias in `ORDER BY` and never adds it to `GROUP BY`.
 
 ## SQLite Support
 
-All window functions work on SQLite **3.25.0 and later** (released 2018-09-15). PormG checks the SQLite library version at query time and throws a clear `UnsupportedConnectionError` if the library is too old.
+All window functions work on SQLite **3.25.0 and later** (released 2018-09-15). PormG checks the SQLite library version at query time and throws a clear `BackendCapabilityError` if the library is too old.
 
 ```julia
 # SQLite version check happens automatically — you do not need to call it yourself.
 # If the library is too old, you will see:
-# UnsupportedConnectionError: SQLite window functions require SQLite >= 3.25.0; current SQLite library is 3.24.0.
+# BackendCapabilityError: SQLite window functions require SQLite >= 3.25.0; current SQLite library is 3.24.0.
 ```
 
 The only SQLite limitation is **explicit frame specifications** (`frame=` argument). These are PostgreSQL-only for now.
@@ -832,7 +832,7 @@ The only SQLite limitation is **explicit frame specifications** (`frame=` argume
 
 - **Aggregate-over-window** (`SUM(...) OVER (...)`) is not yet implemented. Use a CTE to aggregate first, then apply the window in the outer query.
 - **Named `WINDOW` clauses** (`WINDOW w AS (...)`) are not supported. Each function carries its own inline `OVER`.
-- **SQLite explicit frame specs** throw a `QueryBuildError`. Use PostgreSQL for frame-bound queries.
+- **SQLite explicit frame specs** throw a `BackendCapabilityError`. Use PostgreSQL for frame-bound queries.
 
 ---
 

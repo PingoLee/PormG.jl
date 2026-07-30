@@ -12,6 +12,7 @@ No database required: every assertion fires at query-build/validation time.
 # julia -t auto --project=. test/unit/test_error_taxonomy.jl
 
 using Test
+using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: object, Q, Qor, With
@@ -41,7 +42,24 @@ const TAXONOMY_ABSTRACT = (
     PormG.PoolError,
 )
 
+# Walk the real type tree. `names(PormG)` only sees EXPORTED names, which silently omits
+# `Configuration.MissingDatabaseConfigurationException` and `Migrations.DestructiveMigrationError` —
+# the two types that live mid-include-chain, i.e. exactly the ones a placement guard must inspect.
+function _concrete_pormg_errors(T = PormG.PormGError, acc = Any[])
+    for S in subtypes(T)
+        isabstracttype(S) ? _concrete_pormg_errors(S, acc) : push!(acc, S)
+    end
+    return acc
+end
+
 @testset "Error taxonomy (#231, #239)" begin
+
+    # TAXONOMY_TYPES is hand-maintained, and every testset below iterates it — so if it drifts out
+    # of sync with the real hierarchy, all of them narrow silently instead of failing. Pin it to the
+    # type tree so adding a subtype without listing it here is a test failure, not a coverage hole.
+    @testset "TAXONOMY_TYPES is the whole taxonomy (#262)" begin
+        @test Set(TAXONOMY_TYPES) == Set(_concrete_pormg_errors())
+    end
 
     @testset "root and hierarchy" begin
         @test PormG.PormGError <: Exception
@@ -179,10 +197,24 @@ const TAXONOMY_ABSTRACT = (
             @test !isempty(msg)
         end
 
+        # Shape-only checks above would survive an `error_message` that returned, say, the type
+        # name. Assert the actual text reaches the caller for every sample built from a known
+        # message — that is the contract, and it is knowable.
+        for T in TAXONOMY_TYPES
+            T in (PormG.DoesNotExist, PormG.MultipleObjectsReturned,
+                  PormG.PoolTimeoutError, PormG.PoolConnectError,
+                  PormG.Migrations.DestructiveMigrationError) && continue
+            @test occursin("boom", PormG.error_message(T("boom")))
+        end
+
         # For the structured types `.msg` does not exist — that is the whole reason this accessor
-        # exists. Assert the failure mode directly so the motivation cannot rot.
-        @test_throws Exception PormG.PoolTimeoutError("SQLite", 1, 10, 3, 1.5).msg
-        @test_throws Exception PormG.DoesNotExist("Driver", "(id = 1)").msg
+        # exists. Assert on the FIELD SET rather than `@test_throws Exception …msg`: the latter also
+        # matches a MethodError from a changed constructor arity, so it could pass while the thing
+        # it documents had moved.
+        for T in (PormG.PoolTimeoutError, PormG.PoolConnectError,
+                  PormG.DoesNotExist, PormG.MultipleObjectsReturned)
+            @test :msg ∉ fieldnames(T)
+        end
 
         # For subtypes using the GENERIC showerror it is exactly `e.msg` — the accessor is a
         # drop-in replacement, not a reformatting.
@@ -195,8 +227,8 @@ const TAXONOMY_ABSTRACT = (
         # promise silently.
         for e2 in (PormG.Configuration.MissingDatabaseConfigurationException("no connection.yml"),
                    PormG.Migrations.DestructiveMigrationError("refused", ["DROP TABLE \"drivers\""]))
+            # `occursin` already implies the result is no shorter, so one assertion suffices.
             @test occursin(e2.msg, PormG.error_message(e2))
-            @test length(PormG.error_message(e2)) >= length(e2.msg)
         end
 
         # And it reflects the structured fields rather than a placeholder.

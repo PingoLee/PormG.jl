@@ -11,6 +11,7 @@ No database required.
 # julia -t auto --project=. test/unit/test_kernel_layering.jl
 
 using Test
+using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list
 using PormG
 
 @testset "Kernel layering" begin
@@ -43,22 +44,35 @@ using PormG
     # of the root — that is exactly the shape that made #239 need the Kernel extraction, and it
     # recurred with PoolTimeoutError / PoolConnectError until #261 added `PoolError`.
     #
-    # "Dedicated" is load-bearing: `PormGError` itself is always Kernel-owned, so accepting any
-    # Kernel-parented supertype would make this check vacuous — it would pass for every subtype
-    # ever, including the violation it exists to catch. Verified by mutation: reverting
-    # PoolTimeoutError to `<: PormGError` must fail this testset.
+    # Two things are load-bearing here, both learned the hard way:
+    #
+    #   • "Dedicated" excludes the root. `PormGError` is always Kernel-owned, so accepting ANY
+    #     Kernel-parented supertype made this check vacuous — it passed for every subtype ever,
+    #     including the violation it exists to catch.
+    #   • The walk is over `subtypes(PormGError)`, not `names(PormG)`. An export-list walk sees only
+    #     exported types, which silently omits `MissingDatabaseConfigurationException` and
+    #     `DestructiveMigrationError` — the two that actually live mid-include-chain, i.e. precisely
+    #     the ones this rule is about. Reparenting either to a bare `<: PormGError` must fail here.
+    #
+    # Both mutations are verified to fail this testset.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "every taxonomy type is reachable from Kernel (#261)" begin
+        # Recursive walk of the real type tree — exported or not.
+        function _concrete_errors(T = PormG.PormGError, acc = Any[])
+            for S in subtypes(T)
+                isabstracttype(S) ? _concrete_errors(S, acc) : push!(acc, S)
+            end
+            return acc
+        end
+
         offenders = String[]
         checked = 0
-        for n in names(PormG)
-            T = try getfield(PormG, n) catch; continue end
-            (T isa Type && T <: Exception && !isabstracttype(T)) || continue
+        for T in _concrete_errors()
             checked += 1
             parentmodule(T) === PormG.Kernel && continue
             S = supertype(T)
             (S !== PormG.PormGError && parentmodule(S) === PormG.Kernel) && continue
-            push!(offenders, "$(n): defined in $(parentmodule(T)), supertype $(S) " *
+            push!(offenders, "$(nameof(T)): defined in $(parentmodule(T)), supertype $(S) " *
                              "in $(parentmodule(S))")
         end
 
@@ -72,9 +86,10 @@ using PormG
         end
         @test isempty(offenders)
 
-        # Guard the guard: if the export list or the filter ever stops matching anything, the loop
-        # above passes vacuously. There are 16 concrete exported exception types as of #261.
-        @test checked >= 16
+        # Guard the guard: if the walk or the filter ever stops matching anything, the loop above
+        # passes vacuously. 18 concrete subtypes as of #261 — 16 exported plus the two that are
+        # reached only by qualified name.
+        @test checked >= 18
     end
 
     @testset "backend generics stay owned by PormG (layer 2)" begin

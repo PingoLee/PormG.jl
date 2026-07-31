@@ -119,7 +119,9 @@ const DRIFT_EXT_DIR = joinpath(DRIFT_REPO_ROOT, "ext")
 # Internal invariant violations ("should not happen; please report") — not PormG misuse, so they
 # stay ErrorException by design rather than polluting the taxonomy with an InternalError type.
 const ALLOWED_UNTYPED_ERROREXCEPTION = Dict(
-    "src/AdvisoryLock.jl"    => 1,  # lock-acquisition timeout — parked with the #268 boundary decision
+    # AdvisoryLock's entry is GONE, not zeroed: #268 settled the boundary decision it was parked
+    # with, and lock-acquisition timeout is now an OperationalError (contention is a transient
+    # runtime condition, not misuse). This dict is asserted with `==`, so a stale key fails too.
     "src/ConnectionPool.jl"  => 1,  # SQLite async worker returned a malformed payload (internal)
 )
 const ALLOWED_UNTYPED_BARE_ERROR = Dict(

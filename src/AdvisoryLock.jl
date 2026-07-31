@@ -6,6 +6,12 @@ import PormG
 import PormG: PormGSettings, PormGPostgres, PormGSQLite, backend_execute_async
 import PormG.Configuration: get_settings
 import PormG.ConnectionPool: acquire_connection, release_connection
+# This module is the only one outside ConnectionPool that talks to the driver directly, so no
+# `fetch`/`with_transaction` seam covers it — it has to funnel its own failures through the
+# database-error boundary (#268) or `with_advisory_lock` would be the last public entry point
+# still leaking raw `LibPQ.Errors.*`.
+import PormG.ConnectionPool: _as_database_error
+import PormG: PormGError, OperationalError
 
 import PormG: @pormg_debug
 export with_advisory_lock
@@ -29,7 +35,11 @@ function _exec_lock_query(pool::PormGPostgres, conn, sql::String, key::AbstractS
   # Base.fetch awaits the LibPQ AsyncResult and returns the driver result.
   # Qualified deliberately: this module imports no `fetch`, so a bare call would
   # resolve to Base only by absence — qualifying keeps it immune to import shadowing.
-  res = Base.fetch(async_res)
+  res = try
+    Base.fetch(async_res)
+  catch e
+    throw(_as_database_error(pool, e))
+  end
 
   rows = collect(res)
   return !isempty(rows) && rows[1][1] == true
@@ -95,7 +105,14 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       try
         got_lock = _exec_lock_query(pool, conn, BLOCK_SQL, key)
       catch e
-        msg = lowercase(string(e))
+        # `sprint(showerror, e)`, not `string(e)` — and this was a latent bug, not just style.
+        # `_exec_lock_query` awaits an async handle, so a server-side cancellation used to arrive
+        # here as a `TaskFailedException`, whose `string()` does NOT include the inner driver
+        # message (the same fact `_is_benign_rollback_error`'s docstring records). The substring
+        # below therefore never matched and this branch had never once fired: the LibPQ
+        # `QueryCanceled` propagated instead of degrading to `got_lock = false`. The seam added
+        # above now unwraps, and `showerror` renders the cause (#268).
+        msg = lowercase(sprint(showerror, e))
         if occursin("canceling statement due to statement timeout", msg)
           @warn "Advisory lock timed out on server-side statement_timeout" key=key timeout_ms=timeout_ms
           got_lock = false
@@ -115,7 +132,12 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
     end
     
     if !got_lock
-      throw(ErrorException("Failed to acquire advisory lock for '$key'"))
+      # OperationalError, not ErrorException (#268): losing a race for a lock is a transient
+      # runtime condition — the caller may reasonably back off and retry — not misuse of PormG,
+      # and it must be reachable via `catch PormGError` like every other runtime failure. The
+      # `cause` is a plain String because no driver raised anything: the lock query succeeded and
+      # answered "no". `PoolConnectError` sets the precedent for a non-Exception cause.
+      throw(OperationalError("PostgreSQL", "Failed to acquire advisory lock for '$key'"))
     end
     
     # Execute user function while holding lock

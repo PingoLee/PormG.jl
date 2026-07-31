@@ -31,6 +31,10 @@
 #
 # Also update `docs/src/api.md`'s taxonomy table and the frozen export list in
 # `test/unit/test_public_exports.jl`; both are asserted, so they fail loudly rather than drift.
+#
+# One trap the guards do NOT catch cleanly: a subtype built from structured fields (no `msg`) must
+# be added to the hand-written skip lists in `test_error_taxonomy.jl`'s `error_message` testset, or
+# it fails there as an opaque `MethodError` on `T("boom")` rather than as a readable assertion.
 
 # ── Query-builder errors (#231) ─────────────────────────────────────────────
 
@@ -203,6 +207,159 @@ and already reasons about pool failure, so it could not have named those types.
 """
 abstract type PoolError <: PormGError end
 
+# ── Database errors (#268) ──────────────────────────────────────────────────
+#
+# The boundary this taxonomy could not previously describe: everything above is *misuse of PormG*,
+# raised before a statement leaves the process. These four are the other half — the database
+# accepted a connection, ran something, and said no.
+#
+# Before #268 those failures propagated as the driver's own exception types, so an app that wanted
+# to handle a UNIQUE violation had to `catch SQLite.SQLiteException` / `LibPQ.Errors.*` — taking a
+# hard dependency on the driver package purely to *name* the type, which fights the weakdep design
+# that keeps LibPQ/SQLite optional. Every mature ORM wraps here (Django's PEP-249 tree,
+# SQLAlchemy's `DBAPIError.orig`, ActiveRecord's `translate_exception`, Diesel's
+# `DatabaseErrorKind`), always with the original reachable; PormG now does too, via `.cause`.
+#
+# Classification is per-adapter and lives in the extensions (`backend_classify_error`), because
+# telling a UNIQUE violation from a syntax error needs driver knowledge and core must never name a
+# driver type. The two backends are not equally precise, on purpose — see `backend_classify_error`
+# in `src/Backend.jl` and the two extension bodies.
+
+"""
+    DatabaseError <: PormGError  (abstract)
+
+Umbrella for failures raised *by the database itself*, once a statement has reached it — as opposed
+to the rest of the taxonomy, which reports misuse of PormG before anything is sent.
+`catch DatabaseError` covers every case below without naming a driver package.
+
+Subtypes: [`IntegrityError`](@ref) (a constraint said no), [`OperationalError`](@ref) (transient —
+the connection dropped, a deadlock, a lock timeout), and [`StatementError`](@ref) (the statement
+itself was rejected, plus anything the backend could not classify).
+
+All three are built from structured fields rather than a `msg::String`, so read them with
+[`error_message`](@ref). Each keeps the driver's own exception in `.cause`, so SQLSTATE-level
+detail stays available to callers that want it:
+
+```julia
+try
+    M.Driver.objects.create("code" => "SEN")
+catch e
+    e isa IntegrityError  && return conflict(error_message(e))
+    e isa OperationalError && return retry()
+    rethrow()
+end
+```
+
+Connect-time failure is *not* here: it never reached a statement, and has been
+`ConnectionPool.PoolConnectError` under [`PoolError`](@ref) since #261.
+"""
+abstract type DatabaseError <: PormGError end
+
+# Render a wrapped driver failure for human consumption.
+#
+# Driver exceptions are not required to be `Exception` subtypes (same defensive reasoning as
+# `PoolConnectError.cause`), so both shapes are handled.
+#
+# The `msg` branch exists because the two drivers are not equally well-behaved. LibPQ defines
+# `Base.showerror` for its exceptions, so `sprint(showerror, …)` renders "UniqueViolation: ERROR:
+# duplicate key …" — exactly what we want. SQLite.jl defines none, so Julia falls back to
+# `showerror(io, ::Exception) = show(io, ex)` and the cause renders as the struct literal
+# `SQLiteException("UNIQUE constraint failed: t.c")` — type name and quoting as noise inside our own
+# sentence. Comparing against `show` detects that fallback exactly (it is the same method), so a
+# driver that bothers to define `showerror` keeps its richer rendering and one that doesn't
+# contributes its bare message.
+function _cause_text(cause)
+  cause isa Exception || return string(cause)
+  rendered = sprint(showerror, cause)
+  if hasproperty(cause, :msg) && rendered == sprint(show, cause)
+    return string(getproperty(cause, :msg))
+  end
+  return rendered
+end
+
+"""
+    IntegrityError(adapter, cause) <: DatabaseError <: PormGError
+
+A constraint rejected the statement — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK`, or an exclusion
+constraint. This is the one database failure applications routinely *handle* rather than propagate,
+which is why it is its own type.
+
+`adapter` is `"PostgreSQL"` or `"SQLite"`; `cause` is the driver's own exception. On PostgreSQL this
+is derived from SQLSTATE class `23`, so it is exact; on SQLite it comes from SQLite's own literal
+constraint messages.
+"""
+struct IntegrityError <: DatabaseError
+  adapter::String        # "PostgreSQL" | "SQLite"
+  cause                  # underlying driver exception (untyped: a driver may throw a non-Exception)
+end
+
+Base.showerror(io::IO, e::IntegrityError) = print(io,
+  "IntegrityError: ", e.adapter, " rejected the statement — a constraint was violated: ",
+  _cause_text(e.cause))
+
+"""
+    OperationalError(adapter, cause) <: DatabaseError <: PormGError
+
+The database could not complete the statement for a reason outside the statement itself, and
+retrying may succeed — the connection dropped mid-query, a deadlock was detected, a serialization
+failure occurred, or a lock could not be acquired in time.
+
+`catch OperationalError` is the retry signal. PormG raises it for `with_advisory_lock` acquisition
+timeouts too: contention is a runtime condition, not misuse.
+"""
+struct OperationalError <: DatabaseError
+  adapter::String
+  cause
+end
+
+Base.showerror(io::IO, e::OperationalError) = print(io,
+  "OperationalError: the ", e.adapter, " operation could not complete and may succeed on retry: ",
+  _cause_text(e.cause))
+
+"""
+    StatementError(adapter, cause) <: DatabaseError <: PormGError
+
+A statement failed to execute — invalid SQL, an unknown table or column, a type the backend would
+not accept, or insufficient privileges. Also the landing type for any failure on the database path
+that could not be classified, so `catch DatabaseError` never has a hole.
+
+Usually a bug to fix rather than a condition to handle. The driver's exception is in `.cause`; the
+SQL text is deliberately **not** stored, because it can embed user data (the `@error … sql=…` log
+sites already surface the statement where that is appropriate).
+
+The wording says *could not execute*, not *the database rejected this*, on purpose. Being the
+unclassified fallback means a PormG-internal fault on the statement path can land here too — the
+SQLite worker's malformed-payload invariant, for one — and claiming the server refused something it
+never saw would send a reader hunting for a SQL bug that does not exist.
+"""
+struct StatementError <: DatabaseError
+  adapter::String
+  cause
+end
+
+Base.showerror(io::IO, e::StatementError) = print(io,
+  "StatementError: the ", e.adapter, " statement could not be executed: ", _cause_text(e.cause))
+
+"""
+    TransactionError(msg) <: PormGError
+
+The transaction API was used in a way that cannot work — `atomic(durable=true)` nested inside an
+open transaction, or an operation on a model bound to one connection attempted while a transaction
+is open on another.
+
+Not a [`DatabaseError`](@ref): nothing was sent, and the database is not involved. Both cases are
+caught before any statement is issued. A deadlock or a rollback the *server* forces is an
+[`OperationalError`](@ref) instead.
+
+Introduced in #268 so the two checks stop reporting as unrelated types (`QueryBuildError` said
+"query shape" for what is a transaction-nesting mistake; `InvalidConfigurationError` said "your
+config is wrong" when the config was fine and the call pattern was not).
+"""
+struct TransactionError <: PormGError
+  msg::String
+  TransactionError(msg::AbstractString) = new(_emsg(msg))
+end
+
 # ── Schema, configuration and migration errors (#239) ───────────────────────
 
 """
@@ -316,7 +473,8 @@ end
 # One `showerror` covers every `msg`-carrying subtype. DoesNotExist / MultipleObjectsReturned
 # override with their field-built messages (a more specific method wins on dispatch); so do the
 # reparented types that carry their own structured fields (PoolTimeoutError, PoolConnectError,
-# MissingConfigurationError, DestructiveMigrationError), each next to its definition.
+# MissingConfigurationError, DestructiveMigrationError) and the three DatabaseError subtypes, each
+# next to its definition.
 Base.showerror(io::IO, e::PormGError) = print(io, e.msg)
 
 """
@@ -324,10 +482,11 @@ Base.showerror(io::IO, e::PormGError) = print(io, e.msg)
 
 The text of any PormG error, as a `String`.
 
-Use this instead of `e.msg`. Four subtypes are built from structured fields and have **no `msg`
+Use this instead of `e.msg`. Seven subtypes are built from structured fields and have **no `msg`
 field at all** — `DoesNotExist`, `MultipleObjectsReturned`, `ConnectionPool.PoolTimeoutError`,
-`ConnectionPool.PoolConnectError` — so `e.msg` throws a `FieldError` on exactly the errors a caller
-is least likely to have tested against (#261).
+`ConnectionPool.PoolConnectError`, and the three [`DatabaseError`](@ref) subtypes
+(`IntegrityError`, `OperationalError`, `StatementError`) — so `e.msg` throws a `FieldError` on
+exactly the errors a caller is least likely to have tested against (#261, #268).
 
 ```julia
 try

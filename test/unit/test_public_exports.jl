@@ -34,6 +34,9 @@ const EXPECTED_TOPLEVEL = Set([
     # #268 audit naming pass: renamed PermissionError→WritesDisabledError (in the taxonomy line
     # above), plus the capability split, the PROTECT-delete type, and the definition-time umbrella.
     :BackendCapabilityError, :ProtectedError, :DefinitionError,
+    # #268 the database-error boundary: what the database itself refused, once a statement reached
+    # it. `TransactionError` is transaction-API misuse — nothing was sent.
+    :DatabaseError, :IntegrityError, :OperationalError, :StatementError, :TransactionError,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
     # Async API

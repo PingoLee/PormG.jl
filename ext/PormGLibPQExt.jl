@@ -70,6 +70,46 @@ function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, e)
          (occursin("database ", msg) && occursin("does not exist", msg))
 end
 
+# ── Error classification (#268) ──────────────────────────────────────────────
+#
+# PostgreSQL is the precise half of the boundary: LibPQ parameterizes its exception type on the
+# SQLSTATE (`PQResultError{Class, Code}`), so the class is available without parsing a message.
+#
+# Two ordering rules, both load-bearing:
+#
+#   1. Ask `backend_is_connection_error` FIRST. A connection dropped mid-query arrives as
+#      `PQResultError{CUN, EUNOWN}` — libpq returned no SQLSTATE, so LibPQ synthesized the class
+#      "UN". Class-mapping that yields :statement, which would tell `fetch` the statement was bad
+#      and silently kill the reconnect-retry of #138.
+#   2. Dispatch on the LibPQ exception type, not on `PormGPostgres` alone. A method typed on the
+#      abstract pool marker would shadow core's default for every PG-flavored pool, including the
+#      behavioral mocks the unit suite builds — which throw plain `ErrorException`s and steer
+#      through their own `backend_is_connection_error` overrides. (PormG has been bitten by
+#      exactly this shadowing before; see test/unit/test_error_taxonomy.jl.)
+const _PG_OPERATIONAL_CLASSES = (
+  LibPQ.Errors.C08,   # connection_exception
+  LibPQ.Errors.C40,   # transaction_rollback — serialization_failure, deadlock_detected
+  LibPQ.Errors.C53,   # insufficient_resources — out of memory / disk / connections
+  LibPQ.Errors.C55,   # object_not_in_prerequisite_state — lock_not_available
+  LibPQ.Errors.C57,   # operator_intervention — query_canceled, admin_shutdown
+)
+
+function PormG.backend_classify_error(pool::PormGPostgres, e::LibPQ.Errors.LibPQException)
+  PormG.backend_is_connection_error(pool, e) && return :operational
+  # Connection-level failures are a SIBLING of PQResultError, not a subtype, so they carry no
+  # SQLSTATE to map. The realistic source is the COPY drain in `_drain_postgres_connection!` below,
+  # which raises this when `PQconsumeInput` fails mid-stream — the connection is gone, which is
+  # operational, not a bad statement.
+  e isa LibPQ.Errors.PQConnectionError && return :operational
+  e isa LibPQ.Errors.PQResultError || return :unknown
+  class = LibPQ.Errors.error_class(e)
+  class === LibPQ.Errors.C23 && return :integrity      # integrity_constraint_violation
+  class in _PG_OPERATIONAL_CLASSES && return :operational
+  # Everything else the server named — syntax (42), data (22), feature (0A), privilege — is the
+  # statement being refused. An unrecognized class lands here too, which is the safe default.
+  return :statement
+end
+
 PormG.backend_num_affected_rows(pool::PormGPostgres, result) = LibPQ.num_affected_rows(result)
 PormG.backend_num_rows(pool::PormGPostgres, result) = LibPQ.num_rows(result)
 

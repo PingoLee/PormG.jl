@@ -152,6 +152,12 @@ export FieldValidationError, ModelDefinitionError,
 # only concrete subtypes with neither a Kernel home nor an abstract one. `error_message` is the
 # uniform way to read a caught PormGError: the structured subtypes have no `.msg` field.
 export PoolError, error_message, DefinitionError
+# The database-error boundary (#268). Every export above reports *misuse of PormG*, raised before a
+# statement leaves the process; these report what the database itself refused once it got there, so
+# `catch PormGError` finally covers constraint violations, rejected SQL and dropped connections
+# without an app naming `SQLite.SQLiteException` / `LibPQ.Errors.*`. The driver exception stays
+# reachable on `.cause`. `TransactionError` is transaction-API misuse — not a database failure.
+export DatabaseError, IntegrityError, OperationalError, StatementError, TransactionError
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)

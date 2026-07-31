@@ -57,6 +57,7 @@ end
     @testset "Field Validation and Operations" include("unit/test_field_validation_and_operations.jl")
     @testset "Typed Exceptions on Query Surface (#197)" include("unit/test_typed_exceptions.jl")
     @testset "Semantic Error Taxonomy (#231)" include("unit/test_error_taxonomy.jl")
+    @testset "Database-error Boundary (#268)" include("unit/test_database_error_boundary.jl")
     @testset "Error-contract Drift Guard (#239)" include("unit/test_docs_error_type_drift.jl")
     @testset "Documented Error Types (#239)" include("unit/test_docs_error_types.jl")
     @testset "Kernel Layering" include("unit/test_kernel_layering.jl")

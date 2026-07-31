@@ -3,6 +3,7 @@ module Configuration
 import YAML, Logging
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
+import PormG: TransactionError  # cross-connection transaction misuse (#268); the config is valid, the call pattern is not
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: Generator
 import PormG: @pormg_debug
@@ -184,7 +185,11 @@ function ensure_model_transaction_scope(model::PormGModel)
   end
   active_key = connection_key_for_pool(tx_pool)
   active_desc = active_key === nothing ? "unknown transaction" : active_key
-  throw(InvalidConfigurationError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
+  # TransactionError, not InvalidConfigurationError (#268): the configuration is fine — both
+  # connections are correctly declared — and the caller's *call pattern* is what cannot work. Its
+  # sibling check, `ConnectionPool.atomic(durable=true)`, reported the same class as
+  # QueryBuildError until #268 gave both one honest home.
+  throw(TransactionError("Active transaction on connection $(active_desc) cannot include model $(model.name) bound to $(model.connect_key). Run run_in_transaction(\"$(model.connect_key)\") or move this operation outside the current transaction."))
 end
 
 function transaction_connection_for(settings::PormGSettings)

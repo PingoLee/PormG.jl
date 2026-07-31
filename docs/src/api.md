@@ -657,15 +657,15 @@ Every PormG misuse raises a subtype of `PormGError` (`<: Exception`) so callers 
 **type** instead of matching on a message string. Catch `PormGError` for any PormG failure, or a
 specific subtype for a specific reaction (#231, completed in #239):
 
-`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `error_message`
+`PormGError`, `FieldAccessError`, `UnknownFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `DatabaseError`, `IntegrityError`, `OperationalError`, `StatementError`, `TransactionError`, `error_message`
 
-!!! note "Database-level errors are not (yet) wrapped"
-    The taxonomy covers *misuse of PormG*. Once a statement reaches the database, failures —
-    a constraint violation, SQL the backend rejects, a connection dropped mid-query — currently
-    propagate as the **driver's own exception types** (`SQLite.SQLiteException`,
-    `LibPQ.Errors.*`), *not* as `PormGError`. Connect-time failures are the exception: they
-    arrive as `PoolConnectError`. Whether to wrap the rest is an open pre-publish decision —
-    see [#268](https://github.com/PingoLee/PormG.jl/issues/268).
+!!! note "Database failures are wrapped too"
+    The taxonomy has two halves. Most of it reports **misuse of PormG**, caught before anything is
+    sent. [`DatabaseError`](#database-errors) reports what the **database itself** refused once a
+    statement got there — a constraint violation, SQL the backend rejects, a connection dropped
+    mid-query — so `catch PormGError` really does cover both, and an app never has to name
+    `SQLite.SQLiteException` / `LibPQ.Errors.*` (which would mean depending on the driver package
+    just to spell the type). The driver's own exception stays reachable on `.cause` (#268).
 
 !!! warning "These are not `ArgumentError`s"
     The subtypes are deliberately **not** `<: ArgumentError`. A `catch ArgumentError` block around a
@@ -675,7 +675,8 @@ specific subtype for a specific reaction (#231, completed in #239):
 
 Use `error_message(e)`, **not** `e.msg`. Most subtypes carry a `msg::String`, but the ones built
 from structured fields — `DoesNotExist`, `MultipleObjectsReturned`, `PoolTimeoutError`,
-`PoolConnectError` — do not, so `e.msg` throws on exactly the errors you are least likely to have
+`PoolConnectError`, and the three `DatabaseError` subtypes (`IntegrityError`, `OperationalError`,
+`StatementError`) — do not, so `e.msg` throws on exactly the errors you are least likely to have
 tested against.
 
 ```julia
@@ -731,6 +732,43 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`. |
 | `PoolError` *(abstract)* | Umbrella for connection-pool failures — `catch` it to get both cases below. |
 | `PoolTimeoutError` / `PoolConnectError` | The pool is saturated / a physical connection could not be opened. Both carry structured fields (`adapter`, `pool_size`, `attempts`, …) rather than a `msg` — read them with `error_message`. |
+
+**Database errors**
+
+Everything above reports *misuse of PormG*, raised before a statement leaves the process. These
+report what the **database** refused once it got there. Each carries `adapter` (`"PostgreSQL"` /
+`"SQLite"`) and `cause` — the driver's own exception, kept so SQLSTATE-level detail stays reachable
+— instead of a `msg`, so read them with `error_message`.
+
+| Type | Raised when |
+| :--- | :--- |
+| `DatabaseError` *(abstract)* | Umbrella for every failure raised by the database itself. `catch DatabaseError` covers all three below without naming a driver package. |
+| `IntegrityError` | A constraint said no — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK`, or an exclusion constraint. The one database failure applications routinely *handle* rather than propagate. |
+| `OperationalError` | Transient, and retrying may succeed — the connection dropped mid-query, a deadlock, a serialization failure, or a lock that could not be acquired (including a `with_advisory_lock` timeout). |
+| `StatementError` | The statement could not be executed — invalid SQL, unknown table/column, a rejected type, or insufficient privileges. Also the landing type for anything the backend could not classify, so the umbrella has no holes. |
+| `TransactionError` | Not a database error: the *transaction API* was used in a way that cannot work — `atomic(durable=true)` nested inside an open transaction, or touching a model bound to one connection while a transaction is open on another. Nothing was sent. |
+
+```julia
+try
+    M.Driver.objects.create("driverref" => "senna", "code" => "SEN")
+catch e
+    e isa IntegrityError   && return conflict(error_message(e))   # a constraint refused it
+    e isa OperationalError && return retry_later()                # transient — try again
+    rethrow()
+end
+```
+
+!!! note "Classification is exact on PostgreSQL, message-based on SQLite"
+    LibPQ parameterizes its exception type on the SQLSTATE, so on PostgreSQL the kind is read
+    straight off the error code. `SQLite.SQLiteException` carries only a message, so on SQLite the
+    kind comes from SQLite's own literal constraint strings (`"UNIQUE constraint failed"`, …) —
+    stable, but not a code. Treat `IntegrityError` as reliable on both; `.cause` is there when you
+    need more than PormG's three kinds.
+
+Connect-time failure is **not** a `DatabaseError` — it never reached a statement, and arrives as
+`PoolConnectError` under `PoolError`. A failed migration `ALTER TABLE` **is** one: `migrate()` lets
+the `StatementError` through rather than re-wrapping it as `MigrationError`, which would bury the
+constraint detail — so catch `DatabaseError` alongside `MigrationError` around `migrate()`.
 
 The abstract umbrellas exist so the buckets have **no holes**: `catch ConfigurationError` also
 catches a missing `connection.yml`, and `catch MigrationError` also catches a refused destructive

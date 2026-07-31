@@ -52,3 +52,52 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
     $fn(pool::PormGSQLite, args...; kwargs...) = throw(InvalidConfigurationError(_SQLITE_DRIVER_HINT))
   end
 end
+
+"""
+    backend_classify_error(pool, e) -> Symbol
+
+Classify a failure raised by the database into one of the [`DatabaseError`](@ref) kinds:
+`:integrity`, `:operational`, `:statement`, or `:unknown`. `ConnectionPool._as_database_error` maps
+the symbol to a type; `:unknown` lands on `StatementError` so the umbrella never has a hole.
+
+Deliberately **not** part of the missing-driver loop above: those fallbacks `throw`, and a
+classifier that throws while an error is already propagating would replace the real failure with a
+setup hint. This one always returns.
+
+The default below is driver-agnostic — it can only recognize the case core already had a generic
+for. Extensions refine it, and they dispatch on the **driver exception type**, not just the pool
+marker:
+
+    PormG.backend_classify_error(pool::PormGSQLite, e::SQLite.SQLiteException) = …
+
+That is load-bearing. An extension method typed on the abstract marker alone shadows this default
+for *every* pool of that flavor, including the behavioral mock pools the unit suite builds — which
+throw plain `ErrorException`s and rely on their own `backend_is_connection_error` overrides. Pinning
+the exception type means an extension only claims errors it actually understands. (PormG has been
+bitten by exactly this shadowing before; see the note in `test/unit/test_error_taxonomy.jl`.)
+
+Precision differs by backend, on purpose:
+
+  * **PostgreSQL** — exact. LibPQ parameterizes its exception type on the SQLSTATE
+    (`PQResultError{Class, Code}`), so the extension reads the class directly. No string matching.
+  * **SQLite** — message-based. `SQLiteException` carries only `msg`. The extended result code
+    (`sqlite3_extended_errcode`) exists but is unusable here: it reads live per-connection state,
+    and the transaction seams issue `ROLLBACK` on that same connection before rethrowing, which
+    resets it. So the extension matches SQLite's own literal constraint strings — the same approach
+    ActiveRecord's SQLite3 adapter takes.
+"""
+function backend_classify_error end
+
+function backend_classify_error(pool::PormGBackend, e)
+  # `backend_is_connection_error` hits the throwing fallback above when no driver is loaded, and a
+  # pool mock may not define it at all. Never let classification throw: the caller is mid-`catch`,
+  # and the original failure is preserved on `.cause` regardless of how we label it.
+  try
+    return backend_is_connection_error(pool, e) ? :operational : :unknown
+  catch classify_failure
+    # Everything except a cancellation. Swallowing Ctrl-C here would make a hung query
+    # uninterruptible, which is worse than an unclassified error.
+    classify_failure isa InterruptException && rethrow()
+    return :unknown
+  end
+end

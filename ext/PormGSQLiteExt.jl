@@ -142,6 +142,38 @@ function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, e)
   return occursin("unable to open database file", msg)
 end
 
+# ── Error classification (#268) ──────────────────────────────────────────────
+#
+# SQLite is the imprecise half of the boundary, and the asymmetry with PostgreSQL is deliberate —
+# do not "clean it up" into a shared helper.
+#
+# `SQLiteException` carries a single `msg::AbstractString` field and nothing else: `sqliteexception`
+# builds it from `sqlite3_errmsg` and discards the result code. `sqlite3_extended_errcode` does
+# exist in the C wrapper, but it is unusable from here — it reads live per-connection state, this
+# generic is handed `(pool, e)` with no connection, and by the time a caller classifies, the
+# transaction seams have already run `ROLLBACK` on that same handle and reset it.
+#
+# So this matches SQLite's own literal, self-generated constraint strings, which is what
+# ActiveRecord's SQLite3 adapter does for the same reason. They are stable across SQLite versions.
+#
+# Dispatch pins `SQLite.SQLiteException` rather than the abstract `PormGSQLite` marker alone, so
+# this never shadows core's default for the unit suite's mock pools (see `backend_classify_error`
+# in src/Backend.jl for why that matters).
+function PormG.backend_classify_error(pool::PormGSQLite, e::SQLite.SQLiteException)
+  PormG.backend_is_connection_error(pool, e) && return :operational
+  msg = lowercase(string(e.msg))
+  # SQLite spells every constraint failure "<KIND> constraint failed[: table.column]".
+  occursin("constraint failed", msg) && return :integrity
+  # Contention. `_sqlite_with_retry` above already burns 20 attempts on these, so reaching here
+  # means the lock never cleared — transient, and the caller may reasonably retry.
+  (occursin("database is locked", msg) || occursin("database table is locked", msg)) && return :operational
+  occursin("no such table", msg) && return :statement
+  occursin("no such column", msg) && return :statement
+  occursin("syntax error", msg) && return :statement
+  # Unrecognized: core maps :unknown onto StatementError, so the umbrella still has no hole.
+  return :unknown
+end
+
 # Window-function support probe used by src/Dialect.jl.
 PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversion_number())
 

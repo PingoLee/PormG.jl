@@ -169,7 +169,11 @@ export PormGError,
        PoolError, error_message,
        # Pre-publish naming pass (#268-era audit): narrowed/added members (WritesDisabledError
        # replaces PermissionError on the taxonomy line above).
-       BackendCapabilityError, ProtectedError, DefinitionError
+       BackendCapabilityError, ProtectedError, DefinitionError,
+       # The database-error boundary (#268): everything above reports misuse of PormG; these report
+       # what the database itself refused, with the driver exception kept in `.cause`.
+       DatabaseError, IntegrityError, OperationalError, StatementError,
+       TransactionError
 
 # Shared state / generics
 export config, get_constraints_pk, get_constraints_unique, get_constraints_check

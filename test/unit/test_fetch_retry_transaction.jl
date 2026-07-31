@@ -32,6 +32,24 @@ using PormG
 
 const CP = PormG.ConnectionPool
 
+# #268: the pool wraps driver failures in the taxonomy, so the mock's "connection lost" reaches the
+# caller as an `OperationalError` carrying the original on `.cause` — not as the bare
+# `ErrorException` these tests used to assert. Check all three facts rather than just the type:
+#
+#   * the KIND is what the retry gate reads, so a misclassification (`:statement`) would silently
+#     disable the #138 reconnect path while a type-only assertion still passed;
+#   * `.cause` must be the driver's own exception, or apps lose SQLSTATE-level detail;
+#   * the text must still reach the caller, so a wrapper that swallowed the message fails here.
+#
+# It also pins that classification reaches a MOCK pool at all: these mocks define
+# `backend_is_connection_error` on their concrete type, and the core default classifier is what
+# consults it. An extension method typed on the abstract marker would shadow that and break this.
+function assert_wrapped_conn_loss_138(err)
+  @test err isa PormG.OperationalError
+  @test err.cause isa MockConnLost138
+  @test occursin("mock: connection lost", PormG.error_message(err))
+end
+
 # ── Fake driver handle: tracks whether the pool cleanup closed it ──
 # (structs live at file top level — Julia forbids type definitions inside @testset blocks)
 mutable struct FakeConn138
@@ -40,6 +58,16 @@ mutable struct FakeConn138
 end
 FakeConn138(id::Int) = FakeConn138(id, false)
 Base.close(c::FakeConn138) = (c.closed = true; nothing)
+
+# ── Driver-shaped "connection lost" sentinel ──
+# Deliberately its own TYPE rather than `error("mock: connection lost")`, because the real
+# classifiers recognize a mid-query drop by type: LibPQ matches
+# `e isa LibPQ.Errors.UnknownError && string(e) == "…UnknownError(\"\")"`. A substring-matching
+# mock cannot detect a `_driver_cause` regression at fetch's retry gate — Julia's default `show`
+# recursively prints `.cause`, so `occursin(…, string(wrapper))` keeps answering `true` even when
+# the classifier is handed the WRAPPER instead of the driver exception (#268).
+struct MockConnLost138 <: Exception end
+Base.showerror(io::IO, ::MockConnLost138) = print(io, "mock: connection lost")
 
 # ── PG-shaped mock: PostgresConnectionPool's exact fields + failure knobs ──
 mutable struct MockPGPool138 <: PormG.PormGPostgres
@@ -72,7 +100,7 @@ function PormG.backend_execute_async(pool::MockPGPool138, conn, sql::String, par
     end
     if pool.fail_prefix !== nothing && pool.fail_times > 0 && startswith(sql, pool.fail_prefix)
       pool.fail_times -= 1
-      error("mock: connection lost")
+      throw(MockConnLost138())
     end
     NamedTuple[]
   end
@@ -83,7 +111,7 @@ function PormG.backend_renew_connection(pool::MockPGPool138, conn; kwargs...)
 end
 # Classify only the injected failure as a lost connection, so the retry branch is
 # reachable under the mock (the real drivers match their own message fingerprints).
-PormG.backend_is_connection_error(::MockPGPool138, e) = occursin("mock: connection lost", string(e))
+PormG.backend_is_connection_error(::MockPGPool138, e) = e isa MockConnLost138
 
 # ── SQLite-shaped mock: SQLiteConnectionPool's exact fields + the same knobs.
 #    Statements funnel through the REAL global async worker → backend_execute, proving the
@@ -126,11 +154,11 @@ function PormG.backend_execute(pool::MockSQLitePool138, conn, sql::String, param
   end
   if pool.fail_prefix !== nothing && pool.fail_times > 0 && startswith(sql, pool.fail_prefix)
     pool.fail_times -= 1
-    error("mock: connection lost")
+    throw(MockConnLost138())
   end
   return NamedTuple[]
 end
-PormG.backend_is_connection_error(::MockSQLitePool138, e) = occursin("mock: connection lost", string(e))
+PormG.backend_is_connection_error(::MockSQLitePool138, e) = e isa MockConnLost138
 
 # Run a transaction whose body issues one INSERT through the retry-capable fetch() wrapper —
 # the exact path ORM writes take inside run_in_transaction — and return the caught error.
@@ -161,7 +189,7 @@ end
     run_tx_with_failing_fetch_138(pool)
   end
 
-  @test err isa ErrorException && occursin("mock: connection lost", err.msg)  # root error wins
+  assert_wrapped_conn_loss_138(err)                                          # root error wins
   @test count(sql -> startswith(sql, "INSERT"), pool.executed) == 1           # never re-run
   @test pool.renewals == 1                            # renewed by the #71 path, not the retry
   @test pool.connections[1] !== old                   # slot renewed (identity changed)
@@ -187,7 +215,7 @@ end
     run_tx_with_failing_fetch_138(pool)
   end
 
-  @test err isa ErrorException && occursin("mock: connection lost", err.msg)
+  assert_wrapped_conn_loss_138(err)
   @test count(sql -> startswith(sql, "INSERT"), pool.executed) == 1
   @test pool.renewals == 0                            # nothing to heal
   @test pool.connections[1] === old                   # same handle stays in the slot
@@ -235,7 +263,7 @@ end
     end
   end
 
-  @test err isa ErrorException && occursin("mock: connection lost", err.msg)
+  assert_wrapped_conn_loss_138(err)
   @test count(sql -> startswith(sql, "SELECT"), pool.executed) == 1
   @test pool.renewals == 0
 end
@@ -254,7 +282,7 @@ end
     run_tx_with_failing_fetch_138(pool)
   end
 
-  @test err isa ErrorException && occursin("mock: connection lost", err.msg)
+  assert_wrapped_conn_loss_138(err)
   @test count(sql -> startswith(sql, "INSERT"), pool.executed) == 1
   @test pool.renewals == 1
   @test pool.connections[1] !== old

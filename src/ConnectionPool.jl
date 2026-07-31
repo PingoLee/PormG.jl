@@ -11,12 +11,16 @@ import PormG: @pormg_debug
 # modules included before this one can name it (#261). PormGError comes along for `catch` sites.
 import PormG: PormGError, PoolError
 # Throw sites (#239): a bad acquire mode is a value error, an unresolvable pool is a config error,
-# and misuse of atomic() nesting lands on the long-tail QueryBuildError bucket.
-import PormG: InvalidValueError, InvalidConfigurationError, QueryBuildError
+# and atomic(durable=true) nesting is transaction-API misuse (#268 — was QueryBuildError).
+import PormG: InvalidValueError, InvalidConfigurationError, TransactionError
+# The database-error boundary (#268). This module owns the wrap: every driver failure leaving the
+# pool passes `_as_database_error` and arrives as one of these instead of a raw
+# `SQLite.SQLiteException` / `LibPQ.Errors.*`.
+import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
-              backend_copy_in!
+              backend_copy_in!, backend_classify_error
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, atomic, with_savepoint
@@ -137,6 +141,61 @@ function _unwrap_async_exception(exception)
     else
       return current
     end
+  end
+end
+
+"""
+    _driver_cause(e) -> Any
+
+The driver's own exception behind `e`, or `e` itself when it is not one of ours. Every site that
+*classifies* a failure must call this, because since #268 a driver error may already be wrapped in a
+[`DatabaseError`](@ref) by a lower seam — and the driver classifiers (`backend_is_connection_error`,
+`backend_is_permanent_connect_error`) match on the driver type and message, so handing them a
+wrapper silently answers `false`.
+
+That is not theoretical: LibPQ reports a connection dropped mid-query as `PQResultError{CUN,EUNOWN}`
+with an *empty* message, which `backend_is_connection_error` recognizes by exact type-and-string
+match. Wrapped, that branch never fires and `fetch`'s reconnect-retry (#138) dies silently.
+"""
+_driver_cause(e::DatabaseError) = e.cause
+_driver_cause(e) = e
+
+"""
+    _as_database_error(pool, e) -> Exception
+
+Funnel every failure leaving the pool through the taxonomy: unwrap the async envelope, pass PormG's
+own errors through untouched, and wrap anything else as a [`DatabaseError`](@ref) whose kind comes
+from [`backend_classify_error`](@ref) (#268).
+
+**Only ever apply this where the exception can only have come from the driver.** It must never see a
+caller's closure: `run_in_transaction`/`atomic`/`with_savepoint` run user code inside their `try`,
+and relabelling a user's `BoundsError` — or an `InterruptException` — as a `StatementError` would be
+worse than the raw-driver-error problem this solves. Those bodies wrap their own BEGIN/COMMIT/
+ROLLBACK statements individually instead (`_await_tx_statement`).
+"""
+function _as_database_error(pool, e)
+  root = _unwrap_async_exception(e)
+  root isa PormGError && return root
+  adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite"
+  kind = backend_classify_error(pool, root)
+  kind === :integrity   && return IntegrityError(adapter, root)
+  kind === :operational && return OperationalError(adapter, root)
+  # `:statement` and anything unrecognized land here, so `catch DatabaseError` has no hole.
+  return StatementError(adapter, root)
+end
+
+"""
+    _await_tx_statement(pool, task)
+
+Await a bare BEGIN/COMMIT/ROLLBACK task and convert a driver failure into the taxonomy. These
+statements are issued directly through `backend_execute_async` / `sqlite_execute_async` rather than
+through `fetch`, so they are the one driver path a transaction body owns that no other seam covers.
+"""
+function _await_tx_statement(pool, task)
+  try
+    return Base.fetch(task)
+  catch e
+    throw(_as_database_error(pool, e))
   end
 end
 #
@@ -1123,9 +1182,17 @@ released normally. SQLite-only divergence: SQLite auto-rolls-back some failures,
 which `ROLLBACK` reports "no transaction is active"; PostgreSQL's `ROLLBACK` outside a
 transaction merely warns, it never throws. Unwraps before matching: async failures arrive
 as `TaskFailedException`, whose `string()` does not include the driver message.
+
+Stays a message match on purpose. "no transaction is active" is a SQLite-only condition and SQLite
+attaches no error code to it (`SQLiteException` carries only `msg`), so there is no kind for
+[`backend_classify_error`](@ref) to return — this is a *benign* signal, not an error class. It does
+have to see through a [`DatabaseError`](@ref) wrapper though: `finalize_transaction_connection!`
+is handed `rollback_error` values that already crossed a seam (`migrations/runner.jl`,
+`querybuilder/deletion.jl`), so `_driver_cause` is load-bearing here (#268).
 """
 _is_benign_rollback_error(pool::Union{PormGPostgres, PormGSQLite}, e) =
-  pool isa PormGSQLite && occursin("no transaction is active", string(_unwrap_async_exception(e)))
+  pool isa PormGSQLite &&
+  occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
 
 """
     finalize_transaction_connection!(pool, conn; rollback_error=nothing) -> Nothing
@@ -1295,8 +1362,11 @@ function await_result(ft::FetchTask)
     return result
   catch e
     ft.completed = true
-    root = _unwrap_async_exception(e)
-    root === e ? rethrow() : throw(root)
+    # `rethrow()` when nothing changed: PormG's own errors (DoesNotExist, QueryBuildError,
+    # PoolTimeoutError…) pass through `_as_database_error` untouched, and re-`throw`ing the same
+    # object would discard the backtrace saying where it came from.
+    err = _as_database_error(ft.pool, e)
+    err === e ? rethrow() : throw(err)
   finally
     # Only release connection if we're not in a transaction context
     # Transaction context manages its own connection lifecycle
@@ -1356,7 +1426,7 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
       return FetchTask(task, connection, conn, true)  # true = in_transaction
     catch e
       # Don't release - transaction context manages the connection
-      throw(e)
+      throw(_as_database_error(connection, e))
     end
   else
     # Normal path: acquire connection from pool
@@ -1378,7 +1448,7 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     catch e
       # If EXEC fails immediately, release connection
       release_connection(connection, conn)
-      throw(e)
+      throw(_as_database_error(connection, e))
     end
   end
 end
@@ -1406,13 +1476,20 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   try
     return await_result(fetch_task)
   catch e
-    root = _unwrap_async_exception(e)
+    root = _as_database_error(connection, e)
     # Never retry inside a transaction context or on a caller-pinned conn (#138): the retry
     # re-runs the statement on a fresh autocommit session (a write that should die with the
     # transaction gets committed) and reconnect_db + await_result would swap and release the
     # transaction's pool slot mid-transaction. Propagate instead so run_in_transaction's
     # rollback/renewal path (#71) owns the cleanup on the original pinned connection.
-    if conn === nothing && !fetch_task.in_transaction && backend_is_connection_error(connection, root)
+    #
+    # `_driver_cause`, not `root`: await_result has already wrapped this, and the classifier
+    # matches on the driver's type/message. Deliberately NOT `root isa OperationalError` either —
+    # that kind also covers deadlock, lock timeout and serialization failure, and transparently
+    # re-running a statement on a fresh autocommit session after a deadlock is a data-corruption
+    # bug. Only a *dropped connection* is safe to retry, which is exactly what this asks (#268).
+    if conn === nothing && !fetch_task.in_transaction &&
+       backend_is_connection_error(connection, _driver_cause(root))
       @warn "Lost connection to database. Attempting to reconnect..."
       # Renew the dead handle in its slot, then retry through NORMAL pool acquisition —
       # never by pinning `conn=new_conn`: the failed task's finally already marked the slot
@@ -1442,15 +1519,25 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
   # Check for transaction context
   tx_conn = get_tx_connection()
 
+  # COPY bypasses `fetch`/`await_result` entirely, so it needs its own catch to honor the
+  # database-error contract (#268) — before this it was the one write path that still leaked raw
+  # `LibPQ.Errors.*` to callers. The catch sits INSIDE the pool branch's try so the terminal
+  # `finally` still releases the lease.
   if tx_conn !== nothing
     # Reuse the transaction connection — COPY is part of the open transaction.
-    backend_copy_in!(connection, tx_conn, sql, data_itr)
+    try
+      backend_copy_in!(connection, tx_conn, sql, data_itr)
+    catch e
+      throw(_as_database_error(connection, e))
+    end
   else
     # Acquire a pool connection for the duration of the COPY stream. CopyIn owns the
     # connection until the stream is fully consumed, so we hold it until done.
     conn = acquire_connection(connection)
     try
       backend_copy_in!(connection, conn, sql, data_itr)
+    catch e
+      throw(_as_database_error(connection, e))
     finally
       release_connection(connection, conn)
     end
@@ -1487,7 +1574,7 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
     return task, conn
   catch e
     release_connection(pool, conn)
-    throw(e)
+    throw(_as_database_error(pool, e))
   end
 end
 
@@ -1528,7 +1615,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
       rollback_failed ? _renew_or_discard_connection!(pool, conn) : release_connection(pool, conn)
     end
     @error "Failed to execute SQL transaction, rolling back: $e"
-    throw(e)
+    throw(_as_database_error(pool, e))
   finally
     if release_conn
       rollback_failed ? _renew_or_discard_connection!(pool, conn) : release_connection(pool, conn)
@@ -1701,15 +1788,17 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
   tx_started = false
   local rollback_error = nothing
   try
-    # Begin transaction
+    # Begin transaction. `_await_tx_statement`, not a bare `Base.fetch`: these statements bypass
+    # `fetch`, so they are the only driver contact in this function that no seam covers. The
+    # function-wide `catch` below must NOT wrap — it also sees `f()`, the caller's own code (#268).
     if pool isa PormGPostgres
         task = backend_execute_async(pool, conn, "BEGIN;", nothing)
-        Base.fetch(task)
+        _await_tx_statement(pool, task)
     else
         # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks and ensure
         # write lock is acquired early for multi-threaded scenarios.
       task = sqlite_execute_async(pool, conn, "BEGIN IMMEDIATE TRANSACTION;", nothing)
-      Base.fetch(task)
+      _await_tx_statement(pool, task)
     end
     tx_started = true
 
@@ -1721,10 +1810,10 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     # Commit on success
     if pool isa PormGPostgres
         task = backend_execute_async(pool, conn, "COMMIT;", nothing)
-        Base.fetch(task)
+        _await_tx_statement(pool, task)
     else
       task = sqlite_execute_async(pool, conn, "COMMIT;", nothing)
-      Base.fetch(task)
+      _await_tx_statement(pool, task)
     end
 
     return result
@@ -1735,10 +1824,10 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
       try
         if pool isa PormGPostgres
             task = backend_execute_async(pool, conn, "ROLLBACK;", nothing)
-            Base.fetch(task)
+            _await_tx_statement(pool, task)
         else
           task = sqlite_execute_async(pool, conn, "ROLLBACK;", nothing)
-          Base.fetch(task)
+          _await_tx_statement(pool, task)
         end
       catch rb
         # Capture the rollback error so the finally can decide release-vs-renew (a benign
@@ -1802,7 +1891,11 @@ transaction is already active (mirrors Django's `atomic(durable=True)`).
 """
 function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::Bool=false)
   if durable && in_transaction_context()
-    throw(QueryBuildError("atomic(durable=true) must be the outermost transaction, but a transaction is already active"))
+    # TransactionError, not QueryBuildError: nothing is wrong with the query shape — the
+    # transaction API was called in a way that cannot work. Its sibling check,
+    # `Configuration.ensure_model_transaction_scope`, reports the same class and used to say
+    # InvalidConfigurationError; #268 gave both one honest home.
+    throw(TransactionError("atomic(durable=true) must be the outermost transaction, but a transaction is already active"))
   end
   return run_in_transaction(f, pool)
 end

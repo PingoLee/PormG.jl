@@ -1219,7 +1219,16 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
         # With ON CONFLICT active a surviving duplicate-key error means a DIFFERENT constraint
         # than the clause target conflicted — the values came from the DataFrame, not a stale
         # sequence, so the resync-and-retry below would fail identically. Propagate instead.
-        if on_conflict_sql === nothing && occursin("duplicate key value violates unique constraint", e |> string)
+        #
+        # `sprint(showerror, e)`, not `string(e)` (#268): since the pool wraps driver failures,
+        # `e` is normally an `IntegrityError` here, and `string()` on a struct renders the struct
+        # literal rather than calling `showerror`. It happens to still contain the driver text
+        # because Julia's default `show` recurses into `.cause` — an accident that would evaporate
+        # the moment anyone gave the wrapper a `Base.show`, silently disabling the sequence resync.
+        # `showerror` is the contract for both wrapped and raw errors. Kept as a message match
+        # rather than `e isa IntegrityError`: the sequence-resync retry is specific to a PostgreSQL
+        # *duplicate-key* failure, not to constraint violations in general.
+        if on_conflict_sql === nothing && occursin("duplicate key value violates unique constraint", sprint(showerror, e))
           if !isempty(pk_field)
             # with_savepoint already rolled back and released the savepoint; the outer
             # transaction is still usable. Fix the sequence and retry without a savepoint.
@@ -1232,7 +1241,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
             @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the DataFrame" model=model.name exception=e
             rethrow()
           end
-        elseif occursin("violates foreign key constraint", e |> string)
+        elseif occursin("violates foreign key constraint", sprint(showerror, e))
           @error "bulk_insert: foreign key constraint violated — a referenced row is missing" model=model.name exception=e
           rethrow()
         else

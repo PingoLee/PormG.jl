@@ -35,6 +35,20 @@ const TAXONOMY_TYPES = (
     PormG.PoolTimeoutError, PormG.PoolConnectError,
     PormG.Configuration.MissingConfigurationError,
     PormG.Migrations.DestructiveMigrationError,
+    # #268 — the database-error boundary: what the database itself refused, once a statement got
+    # there. Plus transaction-API misuse, which is neither a query-shape nor a config problem.
+    PormG.IntegrityError, PormG.OperationalError, PormG.StatementError,
+    PormG.TransactionError,
+)
+
+# The subtypes built from structured fields instead of a `msg::String`. Declared ONCE: this list
+# used to be hand-copied into three testsets below, and a type missing from any copy failed as an
+# opaque `MethodError` on `T("boom")` rather than as a readable assertion.
+const STRUCTURED_TYPES = (
+    PormG.DoesNotExist, PormG.MultipleObjectsReturned,
+    PormG.PoolTimeoutError, PormG.PoolConnectError,
+    PormG.Migrations.DestructiveMigrationError,
+    PormG.IntegrityError, PormG.OperationalError, PormG.StatementError,
 )
 
 # The abstract mid-nodes. Each groups its concrete leaves so `catch <node>` has no holes.
@@ -45,6 +59,9 @@ const TAXONOMY_ABSTRACT = (
     PormG.PoolError,
     # #268 audit: definition-time umbrella — one include("models.jl") can raise either member.
     PormG.DefinitionError,
+    # #268: the database-error umbrella. `catch DatabaseError` is the one name an app needs for
+    # "the database said no", without naming SQLite.jl / LibPQ to reach the driver's own type.
+    PormG.DatabaseError,
 )
 
 # Walk the real type tree. `names(PormG)` only sees EXPORTED names, which silently omits
@@ -154,6 +171,12 @@ end
         @test InvalidMigrationError === PormG.InvalidMigrationError
         @test PoolError === PormG.PoolError
         @test error_message === PormG.error_message
+        # #268 — the database-error boundary.
+        @test DatabaseError === PormG.DatabaseError
+        @test IntegrityError === PormG.IntegrityError
+        @test OperationalError === PormG.OperationalError
+        @test StatementError === PormG.StatementError
+        @test TransactionError === PormG.TransactionError
 
         # QueryBuilder must see the SAME objects it imported, not redefinitions.
         @test QB.QueryBuildError === PormG.QueryBuildError
@@ -244,12 +267,18 @@ end
             PormG.PoolConnectError("SQLite", "disk I/O error", "f1.sqlite", 2, 0.5),
             # carries the blocked statements alongside its message
             PormG.Migrations.DestructiveMigrationError("boom", ["DROP TABLE \"drivers\""]),
+            # #268 — (adapter, cause); the cause is the driver's own exception
+            PormG.IntegrityError("SQLite", ErrorException("UNIQUE constraint failed: drivers.code")),
+            PormG.OperationalError("PostgreSQL", ErrorException("server closed the connection")),
+            PormG.StatementError("PostgreSQL", ErrorException("syntax error at end of input")),
         ]
+        # Guard the samples list itself: every structured type must be represented above, or the
+        # `error_message` coverage below silently skips it.
+        @test Set(typeof.(samples)) == Set(STRUCTURED_TYPES)
+
         for T in TAXONOMY_TYPES
             # the msg-carrying majority share one constructor shape
-            T in (PormG.DoesNotExist, PormG.MultipleObjectsReturned,
-                  PormG.PoolTimeoutError, PormG.PoolConnectError,
-                  PormG.Migrations.DestructiveMigrationError) && continue
+            T in STRUCTURED_TYPES && continue
             push!(samples, T("boom"))
         end
 
@@ -263,9 +292,7 @@ end
         # name. Assert the actual text reaches the caller for every sample built from a known
         # message — that is the contract, and it is knowable.
         for T in TAXONOMY_TYPES
-            T in (PormG.DoesNotExist, PormG.MultipleObjectsReturned,
-                  PormG.PoolTimeoutError, PormG.PoolConnectError,
-                  PormG.Migrations.DestructiveMigrationError) && continue
+            T in STRUCTURED_TYPES && continue
             @test occursin("boom", PormG.error_message(T("boom")))
         end
 
@@ -273,8 +300,8 @@ end
         # exists. Assert on the FIELD SET rather than `@test_throws Exception …msg`: the latter also
         # matches a MethodError from a changed constructor arity, so it could pass while the thing
         # it documents had moved.
-        for T in (PormG.PoolTimeoutError, PormG.PoolConnectError,
-                  PormG.DoesNotExist, PormG.MultipleObjectsReturned)
+        for T in STRUCTURED_TYPES
+            T === PormG.Migrations.DestructiveMigrationError && continue  # carries msg AND statements
             @test :msg ∉ fieldnames(T)
         end
 

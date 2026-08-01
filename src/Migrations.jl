@@ -49,9 +49,20 @@ include("migrations/runner.jl")
 export makemigrations, migrate
 export import_models_from_postgres, import_models_from_sqlite, import_models_from_django
 export django_to_string
-export convertSQLToModel, convert_schema_to_models, get_database_schema
-export get_migration_plan, get_all_models, get_all_dicts
-export get_constraints_fk, get_constraints_index, get_constraints_pk, get_constraints_unique, get_constraints_check, get_sequence_name
+export convertSQLToModel, convert_schema_to_models
+export get_migration_plan
+
+# NOT exported, on purpose (#274) — schema-introspection and module-scanning plumbing whose only
+# callers live inside src/migrations/. They were exported by accident, which made them read as
+# public API and put them on the docstring-coverage guard for a surface nobody consumes. Reach
+# them qualified (`PormG.Migrations.get_database_schema(...)`) if you are extending PormG itself:
+#
+#   get_database_schema, get_all_models, get_all_dicts,
+#   get_constraints_fk, get_constraints_index, get_sequence_name
+#
+# get_constraints_pk / get_constraints_unique / get_constraints_check are NOT re-exported here
+# either — they are Kernel generics (Kernel.jl) that Kernel already exports, so `PormG.get_*`
+# keeps resolving; re-exporting them from Migrations only duplicated the name.
 
 # Exports — new migration lifecycle APIs (Phases 1–7)
 export init_migrations, status, dry_run

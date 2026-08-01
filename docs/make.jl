@@ -96,7 +96,17 @@ makedocs(
         collapselevel = 1,
 
         assets = String[],
-        size_threshold = 600 * 1024, # api.md is one comprehensive auto-generated page (~340 KiB); headroom for growth
+        # api.md is one comprehensive page: hand-written reference plus an @autodocs dump of every
+        # module. It renders to ~510 KiB as of #274 (measured, not estimated — the previous "~340
+        # KiB" note dated from before #212/#213/#274 added ~45 docstrings). Raised 600 → 900 KiB so
+        # the next batch of docstrings does not fail the build; re-measure `docs/build/api.html`
+        # and update this number whenever a PR adds a significant number of docstrings.
+        size_threshold = 900 * 1024,
+        # Documenter warns at 100 KiB by default, which api.md passed long ago and will never go
+        # back under — so that warning was pure noise. Move the warn limit to 700 KiB: below the
+        # 900 KiB hard limit, but above today's 510 KiB, so it fires as an early signal that the
+        # page is approaching the ceiling instead of on every single build.
+        size_threshold_warn = 700 * 1024,
     ),
     checkdocs = :exports,
 )

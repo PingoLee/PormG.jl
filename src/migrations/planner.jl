@@ -588,7 +588,27 @@ end
 # Public API (makemigrations)
 # ---
 
-# Compare model definitions to the current database schema
+"""
+    get_migration_plan(models, current_schema, conn, settings; interactive = true)
+
+Diff the model definitions against the live database schema and return the DDL that would
+reconcile them, as an `OrderedDict{Symbol, OrderedDict{String, String}}` — model name ⇒
+ordered (human description ⇒ SQL statement). It only *computes* the plan; nothing is written
+or executed. [`makemigrations`](@ref) is the entry point that drives it.
+
+!!! warning "The two schema arguments read backwards"
+    `models` is the **old** schema, reverse-engineered from the database. `current_schema` is
+    the **new** state defined in your `models.jl`. The names predate the current terminology
+    and are kept to avoid churning the planner's unit tests.
+
+An empty `models` means an empty database, so every model becomes a `CREATE TABLE`.
+
+With `interactive = true` (the default) a model with no matching table prompts whether it is
+new or a rename of a table that disappeared, so a rename keeps its data. `interactive = false`
+answers "new table" and "not a rename" for everything — a non-interactive run therefore
+**never renames**, it drops and creates. Choosing a nonexistent option at the prompt raises
+`InvalidMigrationError`.
+"""
 function get_migration_plan(models::Vector{PormGModel}, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn, settings::PormGSettings; interactive::Bool = true)
 # models is olds models
 
@@ -698,7 +718,31 @@ end
 return migration_plan
 end
 
-# Main function to simulate makemigrations
+"""
+    makemigrations(db::String; interactive = true)
+    makemigrations(connection, settings::PormGSettings; path = "db/models.jl", interactive = true)
+
+Compare your `models.jl` against the live database and **write** the pending migration plan.
+The first form is the one to call: `db` is a connection key from your configuration, e.g.
+`makemigrations("db")`.
+
+It does **not** touch the schema. The generated DDL lands in
+`<db_def_folder>/migrations/pending_migrations.jl` for review; apply it with
+`PormG.Migrations.migrate(db)`.
+
+# Keyword arguments
+- `path`: the models file. Defaults to `<db>/<settings.model_file>` in the `String` form.
+- `interactive`: when `true`, a model with no matching table prompts whether it is a new
+  table or a rename of one that disappeared — a rename preserves the data. `false` answers
+  "new table" for everything and so **never renames**; use it in CI, not on real data.
+
+Returns `nothing`. Logs and returns early — writing no plan — when the connection has
+`change_db: false`. An up-to-date schema logs that no migrations are pending. A missing models
+file raises `MissingConfigurationError`.
+
+See also [`migrate`](@ref), [`get_migration_plan`](@ref), and the
+[Database Migrations in PormG](@ref) guide.
+"""
 function makemigrations(connection::PormGPostgres, settings::PormGSettings; path::String = "db/models.jl", interactive::Bool = true)
 if !settings.change_db
   @warn("Schema changes are disabled (`change_db: false`). Set `change_db: true` in your db/connection.yml under the active environment to allow migrations.")

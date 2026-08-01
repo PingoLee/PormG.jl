@@ -1150,7 +1150,11 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   `.values`/`.order_by`, which replace their previous call (#199)
 - `.values(fields...)` — choose/annotate the selected columns; `"*"` selects the main table
 - `.order_by(fields...)` — sort; prefix `-` for descending
-- `.limit(n)` / `.offset(n)` / `.page(limit, offset)` — pagination
+- `.limit(n)` / `.offset(n)` — pagination, one clause each
+- `.page(limit)` / `.page(limit, offset)` — pagination in one call; `.page(n)` sets the limit only
+  and leaves any offset already on the handler in place. Those are the only two arities — anything
+  else (no argument, three arguments, a non-`Integer`, a keyword) raises `QueryBuildError`, same as
+  `.limit(...)` / `.offset(...)` (#272)
 - `.distinct()` — add `DISTINCT`
 - `.db("key")` — route the query to another connection pool
 - `.on(path, pairs...)` — add predicates to the `ON` clause of an existing join path

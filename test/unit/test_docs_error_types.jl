@@ -140,6 +140,11 @@ const DOCERR_CASES = [
         UnsafeMutationError,
         () -> DOCERR_RESULT_PG.objects.delete(show_query = :dict),
     ),
+    (
+        "read/index.md — `.page(...)` takes one or two Integers; anything else raises",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.page("20", "10"),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -195,7 +195,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | **Replaces** previous call |
 | `.limit(n)` | Limit the number of returned rows. | Last value wins |
 | `.offset(n)` | Skip the first `n` rows. | Last value wins |
-| `.page(n)` | Convenience for pagination (requires `.limit()` to be set first). | Last value wins |
+| `.page(limit)` / `.page(limit, offset)` | Pagination in one call. `.page(n)` sets `LIMIT` only and leaves `.offset()` untouched; `.page(n, m)` sets both. Any other shape raises `QueryBuildError`. | Last value wins |
 | `.distinct()` | Add `SELECT DISTINCT` to the query. | Last value wins |
 | `.db("key")` | Route the query to a different connection pool. | Last value wins |
 | `.with("name" => subquery)` | Attach a Common Table Expression (CTE). | Adds another CTE |
@@ -232,6 +232,12 @@ page1 = M.Driver.objects.order_by("surname").limit(20).list()
 
 # Page 2: skip 20, take 20
 page2 = M.Driver.objects.order_by("surname").limit(20).offset(20).list()
+
+# Same thing in one call — .page(limit, offset)
+page2_alt = M.Driver.objects.order_by("surname").page(20, 20).list()
+
+# .page(n) is limit-only: it sets LIMIT and leaves any offset already on the handler alone
+top20 = M.Driver.objects.order_by("surname").page(20).list()
 ```
 
 ### Distinct Results

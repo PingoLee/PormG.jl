@@ -138,6 +138,7 @@ df   = query |> DataFrame   # DataFrames.DataFrame
 | `.order_by("field", "-field")` | Sort. Prefix `-` for descending. |
 | `.limit(n)` | Limit rows returned. |
 | `.offset(n)` | Skip first `n` rows. |
+| `.page(limit)` / `.page(limit, offset)` | Limit, or limit and offset, in one call. `.page(n)` leaves any offset already set. Positional `Integer`s only — no keywords. |
 | `.db("key")` | Route to a different connection pool. |
 | `.on("path", key => value)` | Add ON-clause predicates to an existing join. |
 

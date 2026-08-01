@@ -43,6 +43,7 @@ rows = M.Result.objects
 
 | When | Read |
 |------|------|
+| Working a GitHub issue end-to-end — scope, worktree, verify, independent review, land, clean up | `.github/skills/pormg-issue-workflow/SKILL.md` |
 | Editing PormG itself — public API, models, fields, integration tests, in-repo docs | `.github/skills/pormg-public-api-development/SKILL.md` |
 | `src/QueryBuilder.jl`, `src/querybuilder/`, `src/Dialect.jl`, SQL/parameters | `.github/skills/pormg-querybuilder-internals/SKILL.md` |
 | `src/migrations/`, `src/Migrations.jl`, migration CI | `.github/skills/pormg-migrations-development/SKILL.md` |

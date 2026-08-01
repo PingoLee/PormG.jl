@@ -74,6 +74,14 @@ dev:
 
 At the core of `connection.yml` is the `config` sub-dictionary. This section decides whether the application acts internally as a read-only client or a full administrative client:
 
+!!! warning "Both default to `false`, and a misplaced key is silent"
+    Omit the `config:` block and you get `change_data: false` **and** `change_db: false` — writes
+    raise `WritesDisabledError` and migrations are rejected. Both keys are only read from the
+    `config:` sub-dictionary of the environment you actually loaded; the same key at the top level,
+    or under a different environment, is **ignored without any error**. A config scaffolded by
+    `PormG.setup()` already sets `change_data: true`; one written by hand or registered through
+    `register_connection` does not.
+
 ### `change_data`
 - **`true`**: DML operations (Data Manipulation Language) are permitted. You can `save()`, `update()`, and `delete()` records through PormG models.
 - **`false`**: Makes the database connection read-only internally. Queries fetch data securely, but any invocation of model-mutating functions will fail safely at the ORM layer before generating SQL.

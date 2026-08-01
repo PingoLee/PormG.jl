@@ -682,9 +682,10 @@ specific subtype for a specific reaction (#231, completed in #239):
 
 Use `error_message(e)`, **not** `e.msg`. Most subtypes carry a `msg::String`, but the ones built
 from structured fields — `DoesNotExist`, `MultipleObjectsReturned`, `PoolTimeoutError`,
-`PoolConnectError`, and the three `DatabaseError` subtypes (`IntegrityError`, `OperationalError`,
-`StatementError`) — do not, so `e.msg` throws on exactly the errors you are least likely to have
-tested against.
+`PoolConnectError`, the three `DatabaseError` subtypes (`IntegrityError`, `OperationalError`,
+`StatementError`), and `DestructiveMigrationError` (which renders its `statements` too) — do not
+render from `msg` alone, so reaching for that field breaks on exactly the errors you are least
+likely to have tested against. See [Error Handling](errors.md) for the per-type field list.
 
 ```julia
 try
@@ -733,10 +734,10 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | :--- | :--- |
 | `ConfigurationError` *(abstract)* | Umbrella for configuration failures — covers `InvalidConfigurationError`, `MissingConfigurationError`, **and** `WritesDisabledError` (listed in the Querying table above, where users meet it). |
 | `InvalidConfigurationError` | Configuration is present but unusable — unsupported adapter, unknown connection key, malformed `extensions`, a model not bound to a connection (or bound to an entry whose pool was never built), a missing driver package, or an attempt to overwrite a static connection. |
-| `MissingConfigurationError` | No configuration folder / `connection.yml`, or the selected environment has no matching block. |
+| `MissingConfigurationError` | No configuration folder / `connection.yml`, or the selected environment has no matching block. **Not on the `using PormG` surface** — name it `PormG.Configuration.MissingConfigurationError`. |
 | `MigrationError` *(abstract)* | Umbrella for migration-engine failures — `catch` it to get both cases below. |
 | `InvalidMigrationError` | A duplicate index name in a plan, an invalid answer to an interactive `makemigrations` prompt, or an unimplemented `migrate_to(version)` path. |
-| `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`. |
+| `DestructiveMigrationError` | A destructive plan was applied non-interactively without `destructive=true`; carries the refused `statements`. **Not on the `using PormG` surface** — name it `PormG.Migrations.DestructiveMigrationError`. |
 | `PoolError` *(abstract)* | Umbrella for connection-pool failures — `catch` it to get both cases below. |
 | `PoolTimeoutError` / `PoolConnectError` | The pool is saturated / a physical connection could not be opened. Both carry structured fields (`adapter`, `pool_size`, `attempts`, …) rather than a `msg` — read them with `error_message`. |
 

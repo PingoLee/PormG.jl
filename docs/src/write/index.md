@@ -2,6 +2,13 @@
 
 This section covers all data manipulation operations in PormG, including creating, updating, and deleting records. PormG provides both single-record and bulk operations for efficient data management.
 
+!!! warning "Every write on this page is gated on `change_data`"
+    `change_data` defaults to **`false`**, so a connection cannot write until you enable it under
+    the `config:` block of the active environment in `connection.yml`. Until then the first
+    `create`, `update`, `delete`, bulk call or ManyToMany mutator raises `WritesDisabledError`
+    before any SQL is generated. See [Creating Records](create.md) for the exact YAML and the
+    two ways it commonly goes wrong.
+
 ## Async-First Philosophy
 
 PormG is designed as **Async-First**. All database operations must utilize non-blocking I/O where possible. Synchronous APIs (like `create()`, `update()`, `delete()`) are strictly wrappers around an asynchronous core. This ensures that even synchronous code yields to the Julia scheduler, preventing the blocking of the event loop—essential for integration with web frameworks like Genie.jl.

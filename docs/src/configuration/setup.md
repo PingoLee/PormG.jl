@@ -46,6 +46,14 @@ df = query |> DataFrame
 
 ---
 
+!!! warning "`load()` must come before `@import_models`"
+    The order in the snippet above is a requirement, not a style preference. `@import_models`
+    calls `set_models(...)`, which triggers an implicit `Configuration.load(path)` if no
+    configuration is loaded yet — and that implicit load picks the **default** environment and
+    keeps it for the rest of the process. Nothing errors; the application just runs against the
+    wrong database until it restarts. See
+    [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
+
 ## The Bootstrap Sequence
 
 For most applications, the bootstrap sequence is:

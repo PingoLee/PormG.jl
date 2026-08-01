@@ -109,6 +109,37 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_SL.objects.filter("payload__@has_key" => "wins").
             list(show_query = :dict),
     ),
+    # #213 — the delete guards. `write/delete.md` and `errors.md` both promise UnsafeMutationError
+    # for each of these query shapes; every one is refused before SQL is generated, so a mock
+    # connection is enough. The four are separate cases on purpose: they are four independent
+    # checks in `deletion.jl`, and collapsing them would let three regress unnoticed.
+    (
+        "write/delete.md — delete() rejects limit()",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => 0).limit(10).delete(show_query = :dict),
+    ),
+    (
+        "write/delete.md — delete() rejects offset()",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => 0).offset(5).delete(show_query = :dict),
+    ),
+    (
+        "write/delete.md — delete() rejects order_by()",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => 0).order_by("-points").
+            delete(show_query = :dict),
+    ),
+    (
+        "write/delete.md — delete() rejects distinct()",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => 0).distinct().
+            delete(show_query = :dict),
+    ),
+    (
+        "write/delete.md — a filterless delete() needs allow_delete_all = true",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.delete(show_query = :dict),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

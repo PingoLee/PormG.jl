@@ -199,13 +199,16 @@ end
 try
     bulk_insert(M.Driver.objects, df)
 catch e
-    if contains(string(e), "duplicate key")
-        @warn "Some rows have duplicate values" exception=e
-    else
-        rethrow(e)
-    end
+    e isa IntegrityError || rethrow()
+    @warn "Some rows violate a constraint" msg=error_message(e) adapter=e.adapter
 end
+```
 
+`IntegrityError` is what the database itself refused — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`,
+`CHECK`. Match on the **type**, never on the message: the wording differs between PostgreSQL and
+SQLite and is not part of any contract. See [Error Handling](../errors.md) for the full set.
+
+```julia
 # Pre-validate data before insertion
 using DataFrames
 

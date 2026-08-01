@@ -43,7 +43,7 @@ end
 
 When a lock is already held by another session, you can choose how PormG should behave:
 
-1.  **Non-blocking (`wait=false`)**: Immediately throws an error if the lock cannot be acquired.
+1.  **Non-blocking (`wait=false`)**: Immediately raises [`OperationalError`](errors.md) if the lock cannot be acquired. The same type is raised when a `:poll` or `:block` acquisition exceeds `timeout_ms`.
 2.  **Client Polling (`strategy=:poll`)**: (Default) PormG will try to acquire the lock, wait for a few milliseconds, and try again until the `timeout_ms` is reached.
 3.  **Server Blocking (`strategy=:block`)**: PormG tells PostgreSQL to block the connection until the lock is granted. This is more efficient as it reduces network traffic, but it ties up a database connection from the pool.
 
@@ -56,8 +56,23 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
 ## Implementation Details
 
 - **PostgreSQL**: Implementation uses `pg_try_advisory_lock` (non-blocking) or `pg_advisory_lock` (blocking).
-- **SQLite**: Since SQLite does not support advisory locks, `with_advisory_lock` is a **no-op** (it simply executes the function without any locking). This allows you to write database-agnostic code that behaves correctly on production PostgreSQL while still running on SQLite for simple tests.
+- **SQLite**: `with_advisory_lock` is a **no-op** — see the warning below.
 - **Async Safety**: `with_advisory_lock` uses `LibPQ.async_execute` and `fetch()` to ensure that the Julia task yields while waiting for the database, keeping the event loop unblocked.
+
+!!! warning "Advisory locks are a silent no-op on SQLite"
+    On a SQLite connection `with_advisory_lock(f, conn, key; kwargs...)` is defined as `f()` —
+    nothing more. The body runs **unprotected**, and:
+
+    - `wait`, `timeout_ms`, `strategy` and `interval_ms` are accepted and silently ignored.
+    - **No warning is logged.** Nothing in the output distinguishes a held lock from no lock.
+    - The contention path cannot fire, so code that reacts to `OperationalError` never sees one.
+
+    SQLite's own writer serialization (`BEGIN IMMEDIATE`) is per-database-file and per-process; it
+    is not a substitute for a named application lock, and it protects nothing for the non-SQL
+    critical sections this page recommends locks for — report generation, external API calls,
+    scheduled jobs. Treat SQLite as single-instance, exactly as
+    [migrations do](migrations/index.md), and rely on advisory locks only where PostgreSQL is the
+    production backend.
 
 ## API Reference
 

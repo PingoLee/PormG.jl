@@ -596,6 +596,44 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
 - **`with_transaction(settings, sql, conn=nothing, release_conn=false)`**: Execute raw SQL inside a transaction context.
 - **`get_tx_connection()`**: Check if a transaction context is active and return the connection.
 - **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
+- **`acquire_connection(pool; timeout_seconds=nothing)`** / **`release_connection(pool, conn)`**: Lease a connection and give it back. Every acquire must be paired with a release, from a `finally`. `with_transaction` does this for you when you pass `conn=nothing`. Neither is exported — call them qualified, as below.
+
+!!! warning "SQLite: acquire writes with `mode = :write`"
+    SQLite allows only one writer, so a PormG SQLite pool splits its slots into readers plus a
+    single **writer slot**. The SQLite method of `acquire_connection` therefore takes an extra
+    `mode` keyword — `:read`, `:write`, or `:any` (the default). Acquire with `:read` or `:any`
+    and you can be handed a read-only connection on which a write fails.
+
+    ```julia
+    import PormG.ConnectionPool: acquire_connection, release_connection
+
+    settings = PormG.Configuration.get_settings("db_sl")
+    pool = settings.connections
+
+    conn = acquire_connection(pool; mode = :write)   # SQLite: required before writing
+    try
+        # … use conn …
+    finally
+        release_connection(pool, conn)               # exactly once, from a finally
+    end
+    ```
+
+    **`mode` is SQLite-only — it is not a keyword the PostgreSQL method accepts**, so passing it
+    to a PostgreSQL pool is a `MethodError`, not a no-op. Backend-portable code must branch on
+    the pool type, which is what PormG's own internals do:
+
+    ```julia
+    conn = pool isa PormG.PormGSQLite ? acquire_connection(pool; mode = :write) :
+                                        acquire_connection(pool)
+    ```
+
+    This applies **only** to manual checkout — `run_in_transaction`, `atomic` and
+    `with_transaction(conn = nothing)` already request the writer slot on your behalf.
+
+    If you are driving a `BEGIN`/`COMMIT`/`ROLLBACK` lifecycle rather than a single statement,
+    do **not** end it with `release_connection`: a failed cleanup `ROLLBACK` can leave the
+    connection holding an open transaction. Terminate with `finalize_transaction_connection!`
+    instead, exactly as the example below does.
 
 ### Example: Manual Savepoint
 

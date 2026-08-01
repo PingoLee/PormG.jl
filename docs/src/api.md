@@ -812,13 +812,16 @@ end
 `fetch_async`, `await_result`, `FetchTask` — see [Async & Concurrency](async.md)
 
 ### Transactions
-`run_in_transaction`, `atomic`, `with_savepoint`, `with_tx_context`, `in_transaction_context`
+`run_in_transaction`, `atomic`, `with_savepoint`, `with_tx_context`, `in_transaction_context` —
+plus `PormG.ConnectionPool.with_transaction` for hand-rolled lifecycles
 
 ### Locking
 `with_advisory_lock`
 
 ### Connection pool
-`pool_stats`, `PoolTimeoutError`, `PoolConnectError`
+`pool_stats`, `PoolTimeoutError`, `PoolConnectError` — manual checkout via
+`PormG.ConnectionPool.acquire_connection` / `release_connection` (pair them in a `finally`;
+on SQLite a write needs `mode = :write`)
 
 ### Utilities & lifecycle
 `upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
@@ -854,6 +857,20 @@ M.Result.objects.values(              # …or qualify without importing
 `bulk_*`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `Interval` stay at the top level —
 they are query primitives, not part of the function library.
 
+The library in full — the same index `?PormG.Functions` prints in the REPL:
+
+**Aggregate** — `Sum`, `Avg`, `Count`, `Max`, `Min` — see [Filters and Aggregates](read/filters_and_aggregates.md)
+
+**Conditional** — `Case`, `When` — see [Functions and Dates](read/functions_and_dates.md)
+
+**Window** — `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — see [Window Functions](read/window_functions.md)
+
+**String** — `Concat`, `Lower`, `Upper`, `Length`, `Replace`, `Trim`, `LTrim`, `RTrim`
+
+**Math** — `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
+
+**Type / value** — `Cast`, `Extract`, `ToChar`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
+
 ### Functional CTE constructor: `PormG.QueryBuilder.With`
 
 The `With` (CTE) constructor lives in the `PormG.QueryBuilder` submodule and is **not** part
@@ -864,13 +881,6 @@ when you want the functional style. Import it explicitly:
 ```julia
 using PormG.QueryBuilder: With        # or qualify: PormG.QueryBuilder.With(...)
 ```
-
-**Aggregate** — `Sum`, `Avg`, `Count`, `Max`, `Min`
-**Conditional** — `Case`, `When`
-**Window** — `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`
-**String** — `Concat`, `Lower`, `Upper`, `Length`, `Replace`, `Trim`, `LTrim`, `RTrim`
-**Math** — `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
-**Type / value** — `Cast`, `Extract`, `ToChar`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
 
 ### Result-shape contract for `list()`
 

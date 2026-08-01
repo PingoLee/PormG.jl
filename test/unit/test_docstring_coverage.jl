@@ -49,6 +49,46 @@ _doccov_read(path) = replace(read(path, String), "\r\n" => "\n")
     end
 
     # ─────────────────────────────────────────────────────────────────────────
+    # The same invariant for the submodule surfaces (#274)
+    # `using PormG` does not bring these names into scope, so the loop above never saw them —
+    # yet the docs tell users to reach the function library by `using PormG.Functions`, which
+    # makes it just as public as the top level. #274 closed the gap: Functions 16 missing,
+    # Migrations 12, ConnectionPool 3.
+    #
+    # `PormG.Kernel` is deliberately NOT in this list. Its ~95 exports are almost entirely
+    # constants and type maps (`APP_PATH`, `*_type_map`, `reserved_words`, `CASCADE`, …) that no
+    # user types at the REPL; docstrings on them would be noise in the `@autodocs` dump for no
+    # gain. Only the extension-facing types (`PormGModel`, `PormGField`, `SQLObject`,
+    # `SQLObjectHandler`, `PormGBackend`) are documented, which is partial by design and so
+    # cannot be enforced by an all-or-nothing check.
+    #
+    # `Models`, `QueryBuilder`, `Configuration` and `Utils` are also in `docs/make.jl`'s
+    # `modules` list and the api.md `@autodocs` block but are NOT guarded here — #274 scoped
+    # itself to the three surfaces the docs actively tell users to import. Adding them is a
+    # follow-up, and each needs its own gap measured first.
+    #
+    # Note the one thing this cannot catch: a name can always be made to pass by DELETING its
+    # export rather than documenting it. That is a legitimate fix (it is what #274 did for nine
+    # Migrations internals) but it is a public-surface decision, so the floors below exist to
+    # make a wholesale export cull fail loudly rather than silently satisfy the check.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "submodule exports answer `?`" begin
+        # (module, floor) — the floor is the vacuous-pass guard. `names(M)` on a module whose
+        # export list vanished returns just `[:M]`, which would filter to an empty
+        # `undocumented` and pass while testing nothing. Floors sit just under the real counts
+        # at the time of writing (42 / 24 / 16) so a genuine addition does not trip them.
+        for (mod, floor) in ((PormG.Functions, 40), (PormG.Migrations, 20), (PormG.ConnectionPool, 14))
+            @testset "$(nameof(mod))" begin
+                exported = filter(n -> n !== nameof(mod), names(mod))
+                @test length(exported) >= floor
+
+                undocumented = sort(filter(n -> !Base.Docs.hasdoc(mod, n), exported))
+                @test undocumented == Symbol[]
+            end
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Fluent-method drift: every getproperty branch is documented
     # Source of truth is the `sym === :name` chain in Base.getproperty(::ObjectHandler). Scanning
     # the text (rather than calling getproperty) keeps this DB-free and catches a method the

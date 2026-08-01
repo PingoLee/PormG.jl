@@ -111,19 +111,41 @@ import .QueryBuilder: object, get, PormGRow, pk, Q, Qor, F, Exists, OuterRef, Su
 """
     PormG.Functions
 
-The SQL function library — aggregate (`Sum`, `Avg`, `Count`, `Max`, `Min`), conditional
-(`Case`, `When`), window (`WindowOver`, `Rank`, `Lag`, …), string (`Lower`, `Replace`,
-`Trim`, …) and math (`Round`, `Floor`, `Power`, …) constructors.
+The SQL function library, and the index of it. Because these names are **not** exported into
+`Main` by `using PormG`, `?Sum` answers nothing until you import them — so this docstring is
+the entry point: it lists every constructor and where each family is documented.
 
-These are **not** exported into `Main` by `using PormG`: the names are generic enough to
-collide with `Base` and user code (`Sum`, `Count`, `Max`, `Replace`, `Round`, `Length`…).
-Opt in explicitly:
+**Aggregate** — [`Sum`](@ref), [`Avg`](@ref), [`Count`](@ref), [`Max`](@ref), [`Min`](@ref)
+— see [Filters and Aggregates](@ref)
+
+**Conditional** — [`Case`](@ref), [`When`](@ref) — see [Functions and Dates](@ref)
+
+**Window** — [`WindowOver`](@ref), [`WindowSpec`](@ref), [`Rank`](@ref), [`DenseRank`](@ref),
+[`RowNumber`](@ref), [`Lag`](@ref), [`Lead`](@ref), [`FirstValue`](@ref), [`LastValue`](@ref),
+[`NthValue`](@ref) — see [Window Functions](@ref)
+
+**String** — [`Concat`](@ref), [`Lower`](@ref), [`Upper`](@ref), [`Length`](@ref),
+[`Replace`](@ref), [`Trim`](@ref), [`LTrim`](@ref), [`RTrim`](@ref)
+
+**Math** — [`Abs`](@ref), [`Round`](@ref), [`Floor`](@ref), [`Ceil`](@ref), [`Sqrt`](@ref),
+[`Exp`](@ref), [`Ln`](@ref), [`Power`](@ref), [`Mod`](@ref)
+
+**Type / value** — [`Cast`](@ref), [`Extract`](@ref), [`ToChar`](@ref), [`Value`](@ref),
+[`Coalesce`](@ref), [`Greatest`](@ref), [`Least`](@ref), [`NullIf`](@ref)
+
+They live here rather than at the top level because the names are generic enough to collide
+with `Base` and user code (`Sum`, `Count`, `Max`, `Replace`, `Round`, `Length`…), so the
+library has exactly one home and you opt in explicitly:
 
 ```julia
 using PormG, PormG.Functions          # brings Sum, Count, … into scope
+using PormG.Functions: Sum, Count     # …or just the ones you use
 # or qualify without importing:
 M.Result.objects.values("n" => PormG.Functions.Count("resultid"))
 ```
+
+`Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery` and `Interval` are **not** part of this
+library — they are query primitives and stay on the top-level `using PormG` surface.
 """
 module Functions
   import ..QueryBuilder: Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,

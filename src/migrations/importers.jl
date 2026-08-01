@@ -197,17 +197,17 @@ end
 # ---
 
 """
-  django_to_string(path::String)
+    django_to_string(path::String) -> Union{String, Nothing}
 
-Reads the content of a Django model file and returns it as a string.
+Read a Django `models.py` and return its text, ready for [`import_models_from_django`](@ref).
 
-# Description
-This function reads the content of a Django model file and returns it as a string. The file path is provided as an argument.
+Single quotes are normalized to double quotes so the Django parser sees one string delimiter.
+A missing file logs a warning and returns `nothing` rather than throwing.
 
-# Example
+```julia
 django_to_string("/home/user/models.py") |> import_models_from_django
-""" 
-
+```
+"""
 function django_to_string(path::String)
   # check if db/models/automatic_models.jl exists
   if !isfile(path)

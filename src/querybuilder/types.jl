@@ -787,6 +787,25 @@ function Base.deepcopy(f::FObject)
   )
 end
 
+"""
+    WindowSpec <: SQLType
+
+The `OVER (...)` clause of a window function, in structured form.
+
+# Fields
+- `partition_by::Vector` — the grouping the window restarts on. Empty means one window over
+  the whole result set.
+- `order_by::Vector` — the ordering inside each window, stored **as given**: a `"-points"`
+  entry stays `"-points"`, and the `-` prefix is resolved to `DESC` at build time.
+- `frame::Union{String,Nothing}` — an explicit frame clause, or `nothing` for the SQL default
+  (`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`). PostgreSQL only.
+
+Build one with [`WindowOver`](@ref), which validates and coerces its arguments; the `@kwdef`
+constructor is exported for the rare case where you want to assemble or mutate a spec
+directly. The same spec can be reused across several window functions in one query.
+
+See also [Window Functions](@ref).
+"""
 @kwdef mutable struct WindowSpec <: SQLType
   partition_by::Vector{WindowPartitionPart} = WindowPartitionPart[]
   order_by::Vector{WindowOrderPart} = WindowOrderPart[]

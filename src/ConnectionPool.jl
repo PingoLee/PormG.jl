@@ -705,6 +705,44 @@ end
 # `config` entry) aborts with a `FieldError` the first time it reaches a leaked test mock (#147).
 close_pool!(::Union{PormGPostgres, PormGSQLite}) = nothing
 
+"""
+    acquire_connection(pool::PormGPostgres; timeout_seconds=nothing, max_retries=300)
+    acquire_connection(pool::PormGSQLite; timeout_seconds=nothing, max_retries=300, mode=:any)
+
+Lease a connection from the pool. **You own it until you give it back** — every
+`acquire_connection` must be paired with a [`release_connection`](@ref), and the release
+belongs in a `finally` so an exception cannot leak the slot:
+
+```julia
+conn = acquire_connection(pool)
+try
+    # … use conn …
+finally
+    release_connection(pool, conn)
+end
+```
+
+Most code should not call this at all — `run_in_transaction` and the fluent terminals do the
+pairing for you. Reach for it only when hand-rolling a connection lifecycle.
+
+# Keyword arguments
+- `timeout_seconds`: how long to wait for a free connection. Defaults to the pool's
+  `pool_timeout` from `connection.yml` (30 s if unset, #126); passing it explicitly wins.
+- `max_retries`: a safety bound on scan/materialize iterations, not a poll count — waiting is
+  event-driven (#124), so this is normally 1.
+- `mode` (**SQLite only**): `:read`, `:write`, or `:any`. When the pool has read/write
+  splitting enabled, only the writer slot may write, so **a connection you intend to write on
+  must be acquired with `mode = :write`**; `:read` or `:any` can hand you a read-only handle
+  and the write will fail. Any other symbol raises `InvalidValueError`.
+
+The pool grows lazily up to `pool_size × 10`. Exhausting that budget within the timeout raises
+`PoolTimeoutError`; a permanent connect failure (bad credentials, missing database, unopenable
+SQLite file) fails fast with `PoolConnectError`, whose connection string is redacted. Both are
+catchable and exported.
+
+See also [`release_connection`](@ref), `pool_stats`, and the
+[Advanced Configuration](@ref) guide for pool tuning and leak detection.
+"""
 function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing, Real} = nothing, max_retries::Int = 300)
   start_time = time()
   # Default acquire timeout comes from the pool (connection.yml `pool_timeout`, #126); an explicit
@@ -1003,6 +1041,29 @@ function acquire_connection(pool::PormGSQLite; timeout_seconds::Union{Nothing, R
   end
 end
 
+"""
+    release_connection(pool, conn) -> Bool
+
+Return a connection leased by [`acquire_connection`](@ref) to its pool. The other half of the
+pairing contract — call it from a `finally`.
+
+Returns `true` when the slot was found and freed, `false` (with a warning) when it was not,
+which means the connection had already been replaced after a failure. The slot is matched by
+object **identity**, so you must release the same handle you were given: after a renewal, pass
+the renewed connection, not the original.
+
+On release the pool either hands the slot straight to a caller waiting for one (#124) or marks
+it available; an overflow connection past its `max_lifetime` is closed and retired instead of
+reused (#125).
+
+!!! warning "Not for a transaction that may have failed"
+    A connection whose `ROLLBACK` itself threw can still hold an open transaction, and this
+    function would hand it back to the pool as-is. Terminate a manual `BEGIN`/`COMMIT`/
+    `ROLLBACK` lifecycle with [`finalize_transaction_connection!`](@ref), which renews or
+    discards it in that case (#71).
+
+See also [`acquire_connection`](@ref).
+"""
 function release_connection(pool::PormGPostgres, conn)
   retired = nothing
   released = Base.lock(pool.lock) do
@@ -1578,6 +1639,42 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
   end
 end
 
+"""
+    with_transaction(pool, sql::String; conn=nothing, release_conn=false, params=nothing) -> (result, conn)
+
+Run one statement on a transaction-carrying connection. The building block behind manual
+`BEGIN` / `COMMIT` / `ROLLBACK` sequences.
+
+!!! tip "Prefer `run_in_transaction`"
+    It acquires, commits, rolls back and releases correctly on every path. Reach for
+    `with_transaction` only when you genuinely need to drive the lifecycle statement by
+    statement.
+
+Returns a **tuple** `(result, conn)`, not just the result — `conn` is the connection the
+statement ran on, which you pass back in as `conn` for the next statement of the same
+transaction.
+
+# Keyword arguments
+- `conn`: an existing connection to reuse. When `nothing`, one is acquired — on SQLite with
+  `mode = :write`, since a transaction writes.
+- `release_conn`: return the connection to the pool when this call finishes. Leave it `false`
+  while the transaction is still open; you receive `conn` back in the return tuple.
+- `params`: bound query parameters. Never interpolate values into `sql`.
+
+On error the connection is never orphaned: it is released if this call acquired it, and a
+transaction-ending `ROLLBACK` that itself failed causes a renew-or-discard instead, so a
+connection with an open or aborted transaction cannot go back into the pool (#71). The
+underlying driver exception is rethrown as a `DatabaseError` subtype.
+
+!!! warning "`release_conn=true` on a COMMIT/ROLLBACK is a use-after-release race"
+    It releases the connection **even when the statement fails**, which can hand it back to
+    the pool before your cleanup `ROLLBACK` runs on it (#139). Do the cleanup on the still-
+    leased connection and return it exactly once from a single `finally` via
+    [`finalize_transaction_connection!`](@ref).
+
+See also [`acquire_connection`](@ref), `with_transaction_async`, and the
+[Transactions and `run_in_transaction`](@ref) guide.
+"""
 function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
   release_conn::Bool = false,

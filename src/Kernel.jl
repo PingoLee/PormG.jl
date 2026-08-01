@@ -38,16 +38,54 @@ module Kernel
 
 abstract type PormGAbstractType end
 abstract type PormGSettings <: PormGAbstractType end
-# Backend/dialect markers: the dispatch key for SQL rendering and driver selection. NOT <: PormGSettings —
-# PormGSettings is the Settings/config type, and a pool carries none of its fields (#186). Concrete pools are
-# PostgresConnectionPool <: PormGPostgres and SQLiteConnectionPool <: PormGSQLite.
+"""
+    PormGBackend <: PormGAbstractType
+
+The backend/dialect marker — the dispatch key for SQL rendering and driver selection.
+
+Its two subtypes, `PormGPostgres` and `PormGSQLite`, are what every dialect method dispatches
+on, so a function that renders SQL differently per backend is written as a pair of methods on
+them rather than as a runtime branch. The values you actually hold are the concrete connection
+pools: `PostgresConnectionPool <: PormGPostgres` and `SQLiteConnectionPool <: PormGSQLite`.
+
+Deliberately **not** `<: PormGSettings`: that is the configuration/`Settings` type, and a pool
+carries none of its fields (#186).
+
+Adding a backend means defining `PormG.backend_*` methods in a package extension — see
+[Extending PormG](@ref).
+"""
 abstract type PormGBackend <: PormGAbstractType end
 abstract type PormGPostgres <: PormGBackend end
 abstract type PormGSQLite <: PormGBackend end
 abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
 abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
 abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
+"""
+    SQLObject <: PormGAbstractType
+
+Base type for the query state itself — the accumulated filters, projections, joins and
+ordering that a query is built from.
+
+The concrete type you hold is `SQLObjectQuery`. You rarely name `SQLObject` in application
+code; it appears when a helper accepts "the underlying query object", e.g. the `mq.object`
+handed to a subquery or CTE constructor.
+
+See also [`SQLObjectHandler`](@ref), [Architecture & Request Flow](@ref).
+"""
 abstract type SQLObject <: PormGAbstractType end
+
+"""
+    SQLObjectHandler <: SQLObject
+
+Base type for the chainable wrapper around a query — the thing `Model.objects` returns and
+`.filter(...)`, `.values(...)`, `.list()` hang off.
+
+The concrete type is `ObjectHandler`; its fluent methods are synthesized by `getproperty`, so
+they have no bindings of their own and `?query.filter` cannot work — the full method reference
+lives on `object` instead (`?object`).
+
+See also [`SQLObject`](@ref) (the state it wraps).
+"""
 abstract type SQLObjectHandler <: SQLObject end
 abstract type SQLTableAlias <: SQLObject end # Manage the name from table alias
 abstract type SQLInstruction <: PormGAbstractType end # instruction to build a query
@@ -64,9 +102,34 @@ abstract type SQLTypeOrder <: SQLTypeField end # Order to be used in the query
 abstract type SQLTypeCTE <: SQLType end # Common Table Expression (WITH clause)
 
 
+"""
+    PormGModel <: PormGAbstractType
+
+Base type for model definitions — one table, its fields, and its relations.
+
+Instances are produced by `Models.Model("table_name", field = FieldType(...), ...)` and
+collected by `@import_models` / `set_models`. Dispatch on it when you are writing code that
+takes "any model", such as a framework extension that registers its own tables.
+
+See also [`PormGField`](@ref), [Defining Models in PormG](@ref), [Extending PormG](@ref).
+"""
 abstract type PormGModel <: PormGAbstractType end
-# A field is a COMPONENT of a model, not a kind of model — a sibling, not a subtype, so it does not
-# satisfy ::PormGModel signatures (which all read model-only attributes) (#186).
+
+"""
+    PormGField <: PormGAbstractType
+
+Base type for field definitions — `CharField`, `IntegerField`, `ForeignKey`, and the rest.
+
+A field is a **component** of a model, not a kind of model: `PormGField` is a *sibling* of
+[`PormGModel`](@ref), not a subtype, so it deliberately does not satisfy `::PormGModel`
+signatures, which all read model-only attributes (#186).
+
+Fields own their validation — a value is checked here, before any SQL is generated — and
+carry the formatter that coerces a Julia value on its way *into* the database (inserts, bulk
+writes, bound filter parameters). Values read back are not decoded through the field type.
+
+See also [PormG Field Types Reference](@ref).
+"""
 abstract type PormGField <: PormGAbstractType end # define the type of the column from the model
 
 abstract type Migration <: PormGAbstractType end

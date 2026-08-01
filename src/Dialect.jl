@@ -884,7 +884,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     if new_field.unique
       push!(sql_statements, """ALTER TABLE "$table_name" ADD UNIQUE ("$field_name");""")
     else
-      contrains = get_constraints_unique(conn, table_name, field_name)
+      contrains = get_constraints_unique(conn, string(table_name), string(field_name))
       if contrains !== nothing
         push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(contrains)";""")
       end
@@ -906,7 +906,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     if new_field.primary_key
       push!(sql_statements, """ALTER TABLE "$table_name" ADD PRIMARY KEY ("$field_name");""")
     else
-      contrains = get_constraints_pk(conn, table_name)
+      contrains = get_constraints_pk(conn, string(table_name), string(field_name))
       if contrains !== nothing
         push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(contrains)";""")
       end

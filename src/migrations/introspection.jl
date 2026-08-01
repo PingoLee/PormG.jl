@@ -522,19 +522,25 @@ function get_secondary_index_ddls(conn::PormGSQLite, table_name::Union{String,Sy
   return ddls
 end
 
-function get_constraints_pk(conn::PormGPostgres, table_name::Symbol, field_name::String )
+# `table_name::String` — NOT Symbol. This was the odd one out of the four `get_constraints_*`
+# helpers, and since `alter_field`'s model-based overload always resolves the table to
+# `model.name |> lowercase` (a String), a Symbol signature could never be dispatched to (#283).
+function get_constraints_pk(conn::PormGPostgres, table_name::String, field_name::String)
+  # Joins carry `table_schema` as well as `constraint_name`: constraint names are unique per
+  # SCHEMA, not per database, so joining on the name alone can splice rows from a same-named
+  # table in another schema and return a constraint that does not exist on the table the DDL
+  # targets. Same shape as get_constraints_check below, which is the exercised sibling. This
+  # query was unreachable until #283 (its only caller passed the wrong arity), so it had never
+  # run to expose the defect.
+  # Filters on `tc.table_name` rather than `ccu.table_name` — `tc` IS the constrained table.
   query = """
-  SELECT
-      tc.constraint_name, kcu.column_name,
-      ccu.table_name AS foreign_table_name,
-      ccu.column_name AS foreign_column_name
-  FROM 
-      information_schema.table_constraints AS tc 
-      JOIN information_schema.key_column_usage AS kcu
-        ON tc.constraint_name = kcu.constraint_name
-      JOIN information_schema.constraint_column_usage AS ccu
-        ON ccu.constraint_name = tc.constraint_name
-  WHERE tc.constraint_type = 'PRIMARY KEY' AND kcu.column_name = '$field_name' AND ccu.table_name = '$table_name';
+  SELECT tc.constraint_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu
+    ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+  WHERE tc.table_name = '$table_name'
+    AND tc.constraint_type = 'PRIMARY KEY'
+    AND kcu.column_name = '$field_name';
   """
   result = fetch(conn, query) |> DataFrame
   if nrow(result) == 0
@@ -543,12 +549,16 @@ function get_constraints_pk(conn::PormGPostgres, table_name::Symbol, field_name:
   return result[1, :constraint_name]
 end
 
-function get_constraints_unique(conn::PormGPostgres, table_name::String, field_name::String)::String
+# Returns `nothing` when no UNIQUE constraint matches — the annotation must admit it, or Julia
+# converts the `return nothing` below and raises instead of letting callers test it (#284).
+function get_constraints_unique(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
+  # `AND tc.table_schema = ccu.table_schema` for the same reason as get_constraints_pk above:
+  # constraint names are unique per schema, so a name-only join can cross schemas (#283 review).
   query = """
   SELECT tc.constraint_name
   FROM information_schema.table_constraints tc
   JOIN information_schema.constraint_column_usage ccu
-  ON tc.constraint_name = ccu.constraint_name
+    ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
   WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'UNIQUE' AND ccu.column_name = '$field_name';
   """
   result = fetch(conn, query) |> DataFrame
@@ -585,7 +595,8 @@ function get_constraints_check(conn::PormGPostgres, table_name::String, field_na
   return result[1, :constraint_name]
 end
 
-function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::String)::String
+# Same empty-result contract as `get_constraints_unique` above (#284).
+function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
   query = """
   SELECT pg_get_serial_sequence('$table_name', '$field_name');
   """

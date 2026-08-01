@@ -96,6 +96,7 @@ end
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
+    @testset "alter_field Constraint DROPs (#283, #284)" include("unit/test_alter_field_constraint_drops.jl")
     @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     @testset "Migration Runner (checksum, guardrails)" include("unit/test_migrations_runner.jl")
     @testset "SQLite Rebuild Index Filter (#116)" include("unit/test_sqlite_index_filter.jl")

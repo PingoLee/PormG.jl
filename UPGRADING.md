@@ -67,7 +67,14 @@ get_constraints_pk    get_constraints_unique get_constraints_check
 
 The last three are a special case: they are `PormG.Kernel` generics that `Kernel` already exports,
 so `Migrations` was re-exporting a name it did not own. **`PormG.get_constraints_check(...)` and
-friends keep working unchanged** — including extending them with your own method for a mock.
+friends keep resolving as qualified calls** — including extending them with your own method for a
+mock.
+
+> **Amended by #283:** one exception to "unchanged". `get_constraints_pk`'s second parameter was
+> narrowed from `Symbol` to `String`, so a qualified call passing a `Symbol` table name — or a mock
+> method typed `(::MyMock, ::Symbol, ::String)` — no longer dispatches. Pass a `String` instead. It
+> was unreachable through PormG itself (its only caller passed the wrong arity and always raised
+> `MethodError`), which is why it is recorded here rather than as its own entry.
 
 `names(PormG)` is unchanged (63), so nothing that only does `using PormG` is affected.
 

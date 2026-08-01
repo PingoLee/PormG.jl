@@ -2,6 +2,26 @@
 
 PormG provides methods for inserting data into your database, from single rows to complex related objects. All create operations are **async-aware** and will automatically participate in a transaction context if one is active.
 
+!!! warning "Writes are disabled by default"
+    Every write path — `create`, `update`, `delete`, the bulk helpers, the ManyToMany mutators —
+    is gated on `change_data`, which defaults to **`false`**. Until you enable it, the first write
+    raises `WritesDisabledError` before any SQL is generated. Enable it under the `config:` block
+    of the **active environment** in `connection.yml`:
+
+    ```yaml
+    dev:
+      adapter: postgresql
+      # …
+      config:
+        change_data: true
+    ```
+
+    Two things bite here. A `change_data:` key placed anywhere else — at the top level, or outside
+    the environment you actually loaded — is **silently ignored**, not an error. And a config
+    created by `PormG.setup()` is already write-enabled, while one written by hand or registered
+    through `register_connection` is not. See
+    [Connection YML](../configuration/connection_yml.md).
+
 ## Single Record Creation
 
 Use the `.create()` method to insert individual records. It returns a [`PormGRow`](../read/index.md) — the same row object `get()`, `first()`, and `list()` return — containing the newly created record, including any database-generated fields (like auto-increment primary keys). Because it's a `PormGRow`, you can read fields by dot-access or key, and mutate it and call `.save()` to persist further changes.
@@ -22,6 +42,15 @@ VALUES ($1, $2)
 RETURNING *
 -- Parameters: ["test", 1]
 ```
+
+!!! note "SQLite does not use `RETURNING`"
+    The SQL above is the PostgreSQL form. On SQLite, PormG deliberately issues a plain `INSERT`
+    and then reads the row back with a follow-up `SELECT` on the **same** connection — SQLite's
+    `last_insert_rowid()` is per-connection session state, so the read-back has to share the
+    connection. `RETURNING` is avoided because it can hang inside `libsqlite3` for some table
+    shapes (observed with an `AUTOINCREMENT` primary key that migrations left in a non-first
+    column position). The returned `PormGRow` is identical either way; only the statement count
+    differs.
 
 ### Return Value
 
@@ -332,10 +361,11 @@ RETURNING *
 
 ### Foreign Key Constraints
 
-PormG enforces referential integrity. Attempting to create a record with a non-existent foreign key will raise an error:
+On PostgreSQL, creating a record whose foreign key points at a row that does not exist raises
+[`IntegrityError`](../errors.md) — the database refused the statement:
 
 ```julia
-# This will fail if circuit_id=9999 doesn't exist
+# This will fail if circuitid=9999 doesn't exist
 try
     race = M.Race.objects.create(
         "year" => 2025,
@@ -345,9 +375,26 @@ try
         "date" => Date(2025, 3, 23)
     )
 catch e
-    @error "Foreign key constraint violation" exception=e
+    e isa IntegrityError || rethrow()
+    @error "Foreign key constraint violation" msg=error_message(e) adapter=e.adapter
 end
 ```
+
+`IntegrityError` covers every constraint the database enforces — `FOREIGN KEY`, `UNIQUE`,
+`NOT NULL`, `CHECK`. It is a `DatabaseError`, so it means the statement *reached* the database and
+was rejected there; a value PormG rejects before sending raises `InvalidValueError` instead (see
+the null-field example above).
+
+!!! warning "SQLite does not enforce foreign keys"
+    SQLite ships with `PRAGMA foreign_keys` **off**, and PormG does not turn it on. The insert
+    above therefore **succeeds** on SQLite, storing a row that references a `circuitid` which does
+    not exist — no error, no warning. `UNIQUE` and `PRIMARY KEY` violations *are* enforced on both
+    backends and raise `IntegrityError` as described.
+
+    The practical consequence: referential integrity you rely on in production PostgreSQL is not
+    reproduced by a SQLite test run, so a dangling-FK bug can pass its tests. Declare the
+    relationship on the model either way — `on_delete` cascade handling is applied by the ORM and
+    works on both backends — but do not treat a green SQLite suite as proof the constraint holds.
 
 **Generated SQL (PostgreSQL):**
 ```sql

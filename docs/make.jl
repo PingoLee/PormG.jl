@@ -66,6 +66,7 @@ makedocs(
             "Q Objects" => "read/q_objects.md",
         ],
         "Guides" => [
+            "Error Handling" => "errors.md",
             "PostgreSQL Guide" => "postgres.md",
             "Async & Concurrency" => "async.md",
             "Advisory Locks" => "advisory_lock.md",

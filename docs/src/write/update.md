@@ -138,7 +138,11 @@ All updates pass through a centralized validation engine that enforces:
 
 ### Pagination Guard
 
-Standard SQL `UPDATE` does not support `LIMIT`, `OFFSET`, or `ORDER BY`. If any of these are set on the query handler when `.update()` is called, PormG throws an `UnsafeMutationError` immediately — before any SQL is generated — so the developer gets a clear error rather than silently mutating the wrong rows.
+!!! warning "`UPDATE` cannot carry `LIMIT`, `OFFSET` or `ORDER BY`"
+    Standard SQL `UPDATE` does not support them. If any is set on the query handler when
+    `.update()` is called, PormG raises `UnsafeMutationError` immediately — before any SQL is
+    generated — so you get a clear error rather than a silent mutation of the wrong rows. There is
+    no "update the first N rows" form; narrow the filter instead.
 
 ```julia
 # These all raise UnsafeMutationError before any SQL is sent

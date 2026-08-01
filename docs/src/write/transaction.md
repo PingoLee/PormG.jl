@@ -346,31 +346,45 @@ try
       "constructorid" => 1,
       "points" => 25,
     )
-    
-    # Simulate a validation error
-    throw(ErrorException("Driver not found"))
+
+    # A constraint violation on the next write aborts the whole block
+    (M.Result.objects).create("raceid" => 999_999, "driverid" => 1, "constructorid" => 1)
   end
 catch e
-  @error "Transaction failed, rolling back" exception=e
+  e isa PormGError || rethrow()
+  @error "Transaction failed, rolled back" msg=error_message(e) type=typeof(e)
   # Perform cleanup (e.g., release temporary resources)
 end
 ```
+
+Two things worth separating here:
+
+- **PormG's own failures are typed.** The example above raises [`IntegrityError`](../errors.md)
+  (the FK does not exist); a filterless `update` would raise `UnsafeMutationError`, and a
+  connection with `change_data: false` raises `WritesDisabledError`. Catch `PormGError` to handle
+  any of them, or a specific subtype to react to one.
+- **Your own exceptions propagate as themselves.** Raising `ErrorException("Driver not found")`
+  inside the block still rolls the transaction back — PormG rolls back on *any* throw — but it
+  reaches your `catch` as an `ErrorException`, not wrapped. Only driver failures are wrapped into
+  the taxonomy.
+
 **Generated SQL (PostgreSQL):**
 ```sql
 BEGIN;
 
--- Insert attempted
+-- First insert succeeds
 INSERT INTO "result" ("raceid", "driverid", "constructorid", "points") 
 VALUES (\$1, \$2, \$3, \$4) 
 RETURNING *
 -- Parameters: [1, 1, 1, 25]
 
+-- Second insert violates the raceid foreign key -> IntegrityError
 -- Exception raised -> PormG intercepts and executes rollback
 ROLLBACK;
 ```
 
 ```julia
-# The record was never inserted because the transaction rolled back
+# Neither record was inserted because the transaction rolled back
 q = M.Result.objects
 q.filter("raceid" => 1)
 @test q.count() == 0
@@ -378,21 +392,25 @@ q.filter("raceid" => 1)
 
 ### Nested Exception Handling
 
-You can nest `try`/`catch` blocks and still maintain transaction semantics:
+!!! warning "Catching an exception inside the block cancels the rollback"
+    PormG rolls back when an exception **escapes** the `run_in_transaction` block — the rollback
+    lives in that function's `catch`. If an inner `try`/`catch` swallows the error, the block
+    returns normally and the transaction **commits**, including the writes that came before the
+    failure. To log an inner failure *and* still abort, `rethrow()` after logging, or use a
+    savepoint (see [Nested Transactions and Savepoints](#Nested-Transactions-and-Savepoints)) to
+    roll back just the inner step.
 
 ```julia
 PormG.run_in_transaction("db_2") do
   (M.Result.objects).create("raceid" => 1, "driverid" => 1, ...)
-  
+
   try
-    (M.Result.objects).create("raceid" => 999, "driverid" => 999, ...)
-    throw(ErrorException("Simulated error"))
+    (M.Result.objects).create("raceid" => 999_999, "driverid" => 1, ...)
   catch e
-    @warn "Inner block failed, outer transaction will roll back" exception=e
+    e isa PormGError || rethrow()
+    @warn "Inner write failed, aborting the transaction" msg=error_message(e)
+    rethrow()          # ← without this, the outer block COMMITS the first insert
   end
-  
-  # Even though we caught the error, it was already logged
-  # The outer transaction will still roll back when this block exits
 end
 ```
 
@@ -406,8 +424,34 @@ other exception: the transaction rolls back (or is already gone with the dead se
 pooled connection is renewed or discarded before returning to the pool, so the next borrower
 always gets a clean connection.
 
+The connection failure reaches your `catch` as an [`OperationalError`](../errors.md) — a
+`DatabaseError` for a condition that is transient rather than a defect in the statement. Retry the
+**whole transaction**, never the individual statement:
+
+```julia
+try
+    PormG.run_in_transaction("db_2") do
+        (M.Result.objects).filter("resultid" => 1).update("points" => 25)
+    end
+catch e
+    e isa OperationalError || rethrow()
+    @warn "Connection lost mid-transaction; the whole block must be retried" msg=error_message(e)
+end
+```
+
 Outside transactions, plain queries still recover transparently: the pooled connection is
 renewed and the statement retried once.
+
+### Misusing the transaction API
+
+[`TransactionError`](../errors.md) is raised *before* anything is sent, for two call patterns that
+cannot work:
+
+- `atomic(durable = true)` nested inside an already-open transaction — it must be outermost.
+- Touching a model bound to one connection while a transaction is open on another. Open the
+  transaction on that model's own connection instead: `run_in_transaction("<its connect_key>")`.
+
+It is deliberately **not** a `DatabaseError` — the database was never involved.
 
 If the work must survive connection loss, retry the **whole transaction** at the application
 level — the standard contract across ORMs:

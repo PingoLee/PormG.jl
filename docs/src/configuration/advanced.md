@@ -93,7 +93,7 @@ end
 ### Key Technical Details
 - **Hashing:** Keys are hashed using MD5 to provide a 64-bit bigint identifier.
 - **Cleanup:** PostgreSQL releases the lock automatically if the session drops.
-- **SQLite Limitation:** SQLite does not support advisory locks; the helper will no-op with a warning on that backend.
+- **SQLite Limitation:** SQLite does not support advisory locks; the helper is a **silent no-op** on that backend — the body runs unprotected, no warning is logged, and the wait/timeout keyword arguments are ignored. See [Advisory Locks](../advisory_lock.md).
 
 ---
 
@@ -103,4 +103,10 @@ There is an important boot-time hazard when using `@import_models` in a server m
 
 `@import_models` eventually calls `Models.set_models(...)`. If the corresponding configuration path is not loaded yet, `set_models(...)` can trigger `Configuration.load(path)` implicitly. If that happens before the server has selected the intended environment, PormG may initialize that settings object using the default environment and retain it for the rest of the process.
 
-**Recommendation:** Always call `Configuration.load(path; env="...")` explicitly before `@import_models` in server-side code.
+!!! warning "Load the configuration before `@import_models`"
+    If `set_models(...)` triggers an implicit `Configuration.load(path)` before the server has
+    selected its environment, PormG initializes that settings object from the **default**
+    environment and keeps it for the rest of the process. Nothing errors — the application simply
+    runs against the wrong database until it restarts. Always call
+    `Configuration.load(path; env = "...")` explicitly **before** `@import_models` in server-side
+    code.

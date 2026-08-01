@@ -3,49 +3,103 @@
 #
 
 """
-Delete objects from the database with proper handling of foreign key relationships and cascading operations.
+    delete(objct::SQLObjectHandler; show_query=:execute, allow_delete_all=false) -> (total::Int, Dict{String,Integer})
 
-## Arguments
-- `objct::SQLObjectHandler`: The SQL object handler containing the query and model information
-- `show_query::Bool=false`: If `true`, displays the generated SQL queries instead of executing them
-- `allow_delete_all::Bool=false`: If `true`, allows deletion without WHERE clause filters (dangerous operation)
+Delete every row the query matches, cascading through foreign-key relationships according to each
+referencing field's `on_delete` action. The root delete and every dependent statement run inside one
+transaction, so a failure part-way through leaves the database untouched.
 
-## Returns
-- `Tuple{Integer, Dict{String, Integer}}`: A tuple containing:
-  - Total number of deleted objects
-  - Dictionary mapping model names to their respective deletion counts
+# Arguments
+- `objct::SQLObjectHandler`: the handler carrying the query and its model.
+- `show_query::Symbol = :execute`: `:execute` runs the delete. `:sql`, `:dict`, `:inspection` and
+  `:params` build the statements and return them instead of executing them, and `:none` builds and
+  discards them — see [`show_query`](@ref). An unrecognized value raises `QueryBuildError` when the
+  statements are rendered, which is *after* the guards below have run.
+- `allow_delete_all::Bool = false`: permit a delete whose query carries no filter. Off by default;
+  see the guard table below.
+- `table_alias::Union{Nothing, SQLTableAlias} = nothing`: accepted for call-signature compatibility
+  with the other terminals; the delete path does not read it.
+- `connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing`: execute against this connection
+  pool instead of the one on the model's settings (those two abstract types are the backend markers
+  the concrete pools subtype). Only the pool is overridden; the settings, and therefore the dialect
+  and the `change_data` flag, still come from the model's `connect_key`. Whether the delete joins a
+  surrounding transaction is decided by the task-local transaction context, not by this argument.
 
-## Behavior
-- Validates that the connection allows data modification operations
-- Requires WHERE clause filters unless `allow_delete_all` is explicitly set to `true`
-- Handles foreign key relationships by building a deletion dependency graph
-- Processes SET_NULL, SET_DEFAULT, and cascading delete operations appropriately
-- Executes all operations within a database transaction for data integrity
+# Returns
+- Under `:execute`: `Tuple{Integer, Dict{String, Integer}}` — the total rows deleted and a per-table
+  breakdown, e.g. `(1, Dict("just_a_test_deletion" => 1))`. A query matching nothing returns
+  `(0, Dict())`; a delete that ran but removed no rows warns.
+- Under `:sql`, `:dict`, `:inspection` or `:params`: the built statement(s) — one per statement the
+  plan emits, returned bare when the plan is a single statement and as a `Vector` otherwise. A
+  cascade can emit several statements for the same table (one `UPDATE` per `SET_NULL` /
+  `SET_DEFAULT` field, plus its `DELETE`), so the count tracks statements, not tables.
+- Under `:none`: `nothing`.
 
-## Examples
+# Behavior
+
+Every check below runs before any SQL is generated:
+
+| Guard | Raises |
+|-------|--------|
+| A transaction is open on a connection other than the model's | `TransactionError` |
+| The connection is configured `change_data: false` | [`WritesDisabledError`](@ref) |
+| The query has `limit()`, `offset()` or `order_by()` set | [`UnsafeMutationError`](@ref) |
+| The query has `distinct()` set | [`UnsafeMutationError`](@ref) |
+| The query carries `group_by()` / aggregate annotations | [`UnsafeMutationError`](@ref) |
+| The query has no filter and `allow_delete_all` is `false` | [`UnsafeMutationError`](@ref) |
+
+The three query-shape guards share one rationale: the deletion collector walks the *complete*
+filtered set so row counts, cascades and constraint handling stay deterministic. Any shape that
+truncates or collapses that set is refused rather than quietly applied to part of it — there is no
+"delete the first N rows" form, so filter by primary key to bound a delete.
+
+Dependent rows are then resolved per referencing field, by that field's `on_delete`:
+
+- `CASCADE`: the dependents are collected and deleted too, recursing into their own dependents.
+- `PROTECT` / `RESTRICT`: raises [`ProtectedError`](@ref), naming the referencing model and field.
+  The two behave identically apart from the word in the message. The check is existence-driven — it
+  fires only when referencing rows are actually present, so an empty reverse relation does not block
+  the delete.
+- `SET_NULL`: issues `UPDATE ... SET <column> = NULL` over the dependents instead of deleting them.
+  Declaring it on a `null = false` field is a contradiction the schema cannot satisfy, and raises
+  [`ModelDefinitionError`](@ref).
+- `SET_DEFAULT`: issues `UPDATE ... SET <column> = <the field's default>` over the dependents.
+- `DO_NOTHING`: PormG emits nothing for the relation and defers to the database's own constraint.
+
+Only `CASCADE` walks further down the graph; `SET_NULL` and `SET_DEFAULT` do not recurse.
+
+Any other state of `on_delete` — including an **unset** one, which is the default for `ForeignKey` —
+also produces no ORM statement for that relation, leaving the reference entirely to the database's own
+constraint. An unset `on_delete` renders `ON DELETE NO ACTION` in DDL, so a dependent row is *not*
+cascaded by PormG unless its field says so explicitly.
+
+The collected statements then execute in dependency order inside a single transaction (`BEGIN` on
+PostgreSQL, `BEGIN IMMEDIATE TRANSACTION` on SQLite), so any failure rolls the whole set back.
+
+# Examples
 
 ```julia
 # Delete objects from a model with a specific filter
-query = M.Status |> object
+query = M.Status.objects
 query.filter("status" => "Engine")
 total, dict = delete(query)
 
-# Show the SQL query without executing it
-query = M.Just_a_test_deletion |> object
+# Build the SQL without executing it
+query = M.Just_a_test_deletion.objects
 query.filter("test_result__constructorid__name" => "Williams")
-total, dict = delete(query, show_query = :sql)
+sql = delete(query, show_query = :sql)
 
 # Delete related tables (cascading delete)
-query = M.Result |> object
+query = M.Result.objects
 query.filter("resultid" => 1)
 total, dict = delete(query)
 
 # Delete all objects from a model (use with caution)
-query = M.Just_a_test_deletion |> object
+query = M.Just_a_test_deletion.objects
 total, dict = delete(query; allow_delete_all = true)
-
-
 ```
+
+See also [`show_query`](@ref), [`inspect_query`](@ref), and [Deleting Records](write/delete.md).
 """
 function delete(objct::SQLObjectHandler; 
     table_alias::Union{Nothing, SQLTableAlias} = nothing, 
@@ -346,7 +400,6 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
     throw(ProtectedError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
-    # TODO : I dont check if this works
     @pormg_debug false
     # check if the field allow null
     if !field.null
@@ -363,7 +416,6 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     collector.field_updates[(field_name |> string, nothing)][related_model] = prepare_related_query(keys, related_model, field_name)
 
   elseif field.on_delete == SET_DEFAULT
-    # TODO : I dont check if this works
     # Add field update to set field to default value
     default_value = field.default
     if !haskey(collector.field_updates, (field_name |> string, default_value))

@@ -32,7 +32,10 @@ Everything below covers setup, the read/query surface, and a summary of the writ
 ## 1. Project Setup
 
 ```julia
-using PormG
+using PormG, LibPQ   # Add the driver to your project (`Pkg.add("LibPQ")`, or `"SQLite"`) and load
+                     # it alongside PormG. Both are weak dependencies of PormG, so a bare
+                     # `using PormG` gives you the ORM but no backend, and the first query raises
+                     # "the PostgreSQL backend requires LibPQ".
 
 # First-time setup (interactive)
 PormG.setup()   # configures db/connection.yml and optionally installs AI skills
@@ -349,13 +352,13 @@ sql = query.list(show_query=:sql)
 
 # Full metadata (useful for mutations — update, delete, bulk ops)
 meta = query.update("nationality" => "GB", show_query=:dict)
-println(meta[:sql])
+println(meta[:sql_text])
 println(meta[:parameters])
 
 # Inspect SELECT queries without executing
 using PormG: inspect_query
 inspection = query |> inspect_query()
-println(inspection[:sql])
+println(inspection[:sql_text])
 println(inspection[:dialect])
 ```
 

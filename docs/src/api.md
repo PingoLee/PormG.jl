@@ -31,7 +31,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | `.order_by("-points", "surname")` |
 | `.limit(n)` | Limit the number of returned rows. | `.limit(10)` |
 | `.offset(n)` | Skip the first `n` rows. | `.offset(20)` |
-| `.page(limit, offset)` | Limit and offset in one call. | `.page(20, 40)` |
+| `.page(limit)` / `.page(limit, offset)` | Limit, or limit and offset in one call. The one-argument form leaves any `.offset()` already set untouched. | `.page(20, 40)` / `.page(20)` |
 | `.distinct()` | Add `DISTINCT` to the SELECT. | `.distinct()` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
 | `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverid", "nationality" => "British")` |

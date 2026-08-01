@@ -593,6 +593,26 @@ end
     @test issorted(df.resultid)
   end
 
+  @testset "page functor with limit only (#272)" begin
+    # #272: `query.page(n)` — the single-argument form the docs had always advertised — raised a
+    # bare MethodError, because only page!(::SQLObject, ::Tuple{Integer, Integer}) existed. It sets
+    # LIMIT and must leave any OFFSET already on the handler alone.
+    query = M.Result.objects
+    query.filter("statusid__status" => "Finished")
+    query.values("resultid")
+    query.order_by("resultid")
+
+    first_four = query.copy().page(4) |> DataFrame
+    @test nrow(first_four) == 4
+    @test issorted(first_four.resultid)
+
+    # An offset set before the call survives it — page(n) is limit-only, not a pagination reset.
+    next_four = query.copy().offset(4).page(4) |> DataFrame
+    @test nrow(next_four) == 4
+    @test isempty(intersect(first_four.resultid, next_four.resultid))
+    @test minimum(next_four.resultid) > maximum(first_four.resultid)
+  end
+
   @testset "page functor with offset skips rows" begin
     query = M.Result.objects
     query.filter("statusid__status" => "Finished")

@@ -102,6 +102,27 @@ Error messages may colorize the offending token with ANSI for the REPL, but they
 
 Scope: `_emsg` is shared (`src/Kernel.jl`, `PormG` namespace, both string and `IO`-aware methods); `QueryBuilder`, `Models`, and `Migrations` all `import PormG: _emsg`. Any submodule that needs colored errors/logs should import `_emsg` from `PormG` rather than re-embedding raw ANSI. Regression coverage: `test/unit/test_error_message_ansi.jl`.
 
+### Fluent surface: `ChainCaller` vs closure
+
+`Base.getproperty(::ObjectHandler, sym)` in `object_manager.jl` builds each fluent method one of two
+ways, and the choice is forced by whether the method takes keywords:
+
+- **`ChainCaller(mutator!, q)`** — positional only. The functor packs the call's varargs into **one
+  tuple** and calls `mutator!(q.object, args)`, so the mutator's signature is
+  `f(::SQLObject, ::Tuple{…})` and **arity is dispatch**. Every accepted arity needs its own
+  `Tuple{…}` method *and* the family needs an `::Any` fallback throwing a taxonomy subtype —
+  otherwise a wrong shape escapes as a `MethodError` naming an internal `f!` and a tuple the caller
+  never wrote (#272). The functor rejects keywords with a `QueryBuildError` for the same reason.
+- **A closure** — e.g. `(args...; kwargs...) -> (f(q, args...; kwargs...); q)`, or `(; kwargs...)`
+  when there are no positional arguments — the only way to forward keywords (#26). `.with`,
+  `.cjoin`, `.cjoin_on`, `.on` and `.select_for_update` use this form.
+
+So adding a keyword to a `ChainCaller`-backed method means **converting it to a closure**; leaving it
+as a `ChainCaller` makes the keyword throw. Coverage: `test/unit/test_fluent_parity_208.jl`.
+
+New fluent method? `test/unit/test_docstring_coverage.jl` scans the `sym === :name` branches and
+requires each one documented in **both** the `object` docstring and `docs/src/api.md`.
+
 ### Query generation
 
 Focus on:

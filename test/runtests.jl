@@ -69,7 +69,7 @@ end
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
     @testset "bulk_insert ON CONFLICT (#123)" include("unit/test_bulk_on_conflict.jl")
     @testset "update_or_create (#30)" include("unit/test_update_or_create.jl")
-    @testset "Fluent parity: get_or_create/last/aggregate (#208)" include("unit/test_fluent_parity_208.jl")
+    @testset "Fluent parity: get_or_create/last/aggregate/page (#208, #272)" include("unit/test_fluent_parity_208.jl")
     @testset "create() returns PormGRow (#166)" include("unit/test_create_returns_pormgrow.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

@@ -490,30 +490,32 @@ end
 
 
 # ---
-# Pagination functions
+# Pagination
 #
+# INTERNAL, and NOT the fluent implementation. `query.page(...)` routes through
+# `ChainCaller(page!, q)` (object_manager.jl), which dispatches on `SQLObject`; these methods take
+# an `SQLObjectHandler` and are never reached from the chain. `page` is un-exported (#202), has no
+# caller in this repo, and survives only because test_public_exports.jl pins it as
+# defined-but-unexported. The external API is the fluent `query.page(limit)` /
+# `query.page(limit, offset)` — nothing in `docs/` or `README.md` mentions the function form.
+#
+# It is a second, parallel implementation of the same semantics, and the two surfaces silently
+# drifting apart is exactly what #272 was. `test_fluent_parity_208.jl` now pins them equal; keep
+# that test passing rather than editing one side alone.
+#
+# No docstring on purpose — `docs/src/api.md` builds an `@autodocs` page over the whole QueryBuilder
+# module with `Private = true`, so a docstring here publishes `page` in the public API reference as
+# if the function form were supported surface. The `.page(...)` reference lives on the `object`
+# docstring and in `docs/src/api.md` (the split that test_docstring_coverage.jl enforces).
 
-
-"""
-Set pagination parameters for a SQL query object.
-
-# Arguments
-- `object::SQLObjectHandler`: The SQL object handler to modify
-- `limit::Integer`: Maximum number of records to return (default: 10)  
-- `offset::Integer`: Number of records to skip from the beginning (default: 0)
-
-# Examples
-query.page(20, 10) |> DataFrame
-query.page(20) |> DataFrame
-
-The function form `page(query, 20, 10)` is still supported, but the fluent
-`query.page(...)` style is the preferred public API.
-"""
+# Sets BOTH clauses (offset falls back to its 0 default). Unreachable from the chain: `ChainCaller`
+# forwards positional arguments only, so no keyword can arrive on the fluent path.
 function page(object::SQLObjectHandler; limit::Integer = 10, offset::Integer = 0)
   object.object.limit = limit
   object.object.offset = offset
   return object
 end
+# Limit-only: the offset already on the handler is left alone. `page!`'s 1-tuple method mirrors this.
 function page(object::SQLObjectHandler, limit::Integer)
   object.object.limit = limit
   return object
@@ -524,19 +526,34 @@ function page(object::SQLObjectHandler, limit::Integer, offset::Integer)
   return object
 end
 
+# ---
+# Fluent mutators behind `query.limit(...)`, `query.offset(...)` and `query.page(...)`.
+#
+# `ChainCaller` packs the call's varargs into ONE tuple and calls `f(q.object, args)`, so the
+# argument these receive is always a `Tuple` and the arity check IS the dispatch. Every shape that is
+# not an accepted arity therefore needs an `::Any` fallback throwing a `PormGError`: without one the
+# user gets a bare `MethodError` naming `page!` and a `Tuple{String, String}` — neither of which
+# appears anywhere in their code — and `catch PormGError` (#231/#239) does not cover it (#272).
 function limit!(object::SQLObject, limit::Tuple{Integer})
   object.limit = limit[1]
 end
 function limit!(object::SQLObject, limit)
-  throw(QueryBuildError("Error in page, limit must be an Integer"))
+  throw(QueryBuildError("Invalid limit() arguments: $(limit) (::$(typeof(limit))) — limit() takes exactly one Integer, e.g. limit(20)."))
 end
 function offset!(object::SQLObject, offset::Tuple{Integer})
   object.offset = offset[1]
 end
 function offset!(object::SQLObject, offset)
-  throw(QueryBuildError("Error in page, offset must be an Integer"))
+  throw(QueryBuildError("Invalid offset() arguments: $(offset) (::$(typeof(offset))) — offset() takes exactly one Integer, e.g. offset(40)."))
+end
+# page(n) is limit-only — the offset already on the handler survives, matching page(object, limit).
+function page!(object::SQLObject, v::Tuple{Integer})
+  object.limit = v[1]
 end
 function page!(object::SQLObject, v::Tuple{Integer, Integer})
   object.limit = v[1]
   object.offset = v[2]
+end
+function page!(object::SQLObject, v)
+  throw(QueryBuildError("Invalid page() arguments: $(v) (::$(typeof(v))) — page() takes one Integer (limit) or two Integers (limit, offset), e.g. page(20) or page(20, 40)."))
 end

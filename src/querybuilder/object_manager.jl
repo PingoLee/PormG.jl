@@ -342,8 +342,18 @@ struct ChainCaller{F,T}
   handler::T
 end
 
-# When called (e.g., query.filter(...)), it executes and returns the handler itself
-function (c::ChainCaller)(args...)
+# When called (e.g., query.filter(...)), it executes and returns the handler itself.
+#
+# `kwargs...` is slurped only to REJECT it. Without it a keyword call dies on this functor with a
+# bare `MethodError` naming `ChainCaller{typeof(page!), ObjectHandler}` — outside the PormGError
+# taxonomy (#231/#239), and a spelling that appears nowhere in the caller's code (#272). Users reach
+# for it because the docs name the parameters (`.page(limit = 20)`) and because the sibling fluent
+# methods built from closures below — `.with`, `.cjoin`, `.cjoin_on`, `.on`, `.select_for_update` —
+# genuinely do take keywords. The mutators behind ChainCaller do not: their argument is the packed
+# positional tuple, so a keyword has nowhere to go and must fail loudly rather than obscurely.
+function (c::ChainCaller)(args...; kwargs...)
+  isempty(kwargs) || throw(QueryBuildError(
+    "Keyword arguments are not accepted here: $(join(keys(kwargs), ", ")). The chainable query methods take positional arguments only — e.g. page(20, 40), limit(20), order_by(\"-points\")."))
   c.func(c.handler.object, args)
   return c.handler
 end

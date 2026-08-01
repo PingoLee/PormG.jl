@@ -124,16 +124,20 @@ Use internal or function-style helpers only when the test is explicitly about in
 
 ### Verifying doc examples against the live database
 
-Every query example added or changed in `docs/`, `README.md`, or `src/*.md` should be confirmed **two ways** before commit: the **generated SQL shape** (no DB needed) and the **actual result** against the preloaded F1 data. `test/integration/db_sl/f1.sqlite` ships with the full dataset, so this needs no setup.
+Every query example added or changed in `docs/`, `README.md`, or `src/*.md` should be confirmed **two ways** before commit: the **generated SQL shape** (no DB needed) and the **actual result** against the preloaded F1 data in `test/integration/db_sl/f1.sqlite`. That fixture is gitignored *local* state rather than a checked-in file — the main checkout has it, and a fresh clone or worktree gets it from `scripts/worktree_setup.sh` (see `.worktreeinclude`).
 
-Run a scratch script placed under `test/integration/` (so `@import_models` resolves) or use absolute paths:
+Place the scratch script under `test/integration/` (so `@import_models` resolves) and run it with the **integration environment**, which carries the `LibPQ`/`SQLite` drivers as real dependencies:
 
 ```julia
+# One-time per checkout/worktree (test/integration/Manifest.toml is gitignored and not copied):
+#   julia --project=test/integration -e 'using Pkg; Pkg.instantiate()'
+# Then run the script with that environment:
+#   julia --project=test/integration test/integration/<scratch>.jl
 ENV["PORMG_ENV"] = "dev"            # never "test" — it breaks Generator scratch configs
-import Pkg; Pkg.activate(".")
-using PormG, DataFrames
-import PormG.QueryBuilder: Sum, Count, Max, Min, inspect_query
-cd("test/integration")
+using PormG, PormG.Functions, SQLite, DataFrames  # SQLite loads the weakdep extension (LibPQ for
+                                                  # db_2); without it the first query throws
+                                                  # "the SQLite backend requires SQLite"
+cd(@__DIR__)                                    # runnable from the repo root and from here
 PormG.Configuration.load("db_sl")               # local SQLite, F1 data preloaded
 PormG.@import_models "db_sl/models.jl" models
 import .models as M
@@ -150,6 +154,8 @@ raw = (M.Result.objects.filter("constructorid" => 131).values("points") |> DataF
 
 Rules and gotchas:
 
+- **Run it with `--project=test/integration`, never `Pkg.activate(".")`.** A `[weakdeps]` package (#34) cannot be `using`-ed by name from the package environment, and `Manifest.toml` is gitignored so a fresh checkout has no installed copy to fall back on — `Pkg.activate(".")` is the one choice guaranteed to fail with *"the SQLite backend requires SQLite"*. (The suite survives `--project=.` only because `common_setup.jl` redirects the environment and `test/load_drivers.jl` falls back to `Base.require` by UUID; a bare scratch script does neither.) Same rule as [`general.instructions.md`](../../instructions/general.instructions.md) → *Verification*.
+- **Shortcut:** a script already inside `test/integration/` can `include("common_setup.jl")` instead of writing the preamble — it redirects the environment, loads the drivers (via `test/load_drivers.jl`), `cd`s, and defines `M`, honouring `PORMG_DB` to pick db_sl or db_2. Heavier (also pulls in Test/CSV/Revise and the pool tuning), but it cannot drift from how the suite actually runs.
 - **Verify the value, not just execution.** For aggregates/computed columns, recompute the answer independently (raw row scan, plain `Sum`, etc.) and assert equality — a query that runs can still be wrong.
 - **Query a field by the exact case it was declared** — field lookups are case-sensitive (#57). The F1 models declare **lowercase** fields, so their paths are lowercase (`constructorid__name`); a camelCase path like `constructorId__name` throws *because the field is `constructorid`*, not because PormG folds case. (House style is lowercase snake_case; mixed-case is supported for legacy columns.)
 - **`@import_models` resolves its path relative to the script file's directory** — keep the script in `test/integration/` or pass an absolute path.

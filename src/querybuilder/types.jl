@@ -6,6 +6,43 @@
 @kwdef mutable struct ExistsObject <: SQLType
   query::SQLObjectHandler
 end
+"""
+    Exists(query::SQLObjectHandler) -> ExistsObject
+
+Wrap a subquery as a SQL `EXISTS` predicate. Renders as `EXISTS (SELECT 1 … LIMIT 1)`, so it
+answers "is there at least one match?" without counting or fetching the child rows.
+
+Correlate the subquery to the current outer row with [`OuterRef`](@ref); the result can be used
+two ways.
+
+**As a filter predicate** — pass it positionally to `filter`, alongside ordinary pairs or inside
+[`Qor`](@ref):
+
+```julia
+# Results whose driver set a lap under 90 s in that same race
+fast_laps = M.Lap_times.objects.filter(
+    "raceid"             => OuterRef("raceid"),
+    "driverid"           => OuterRef("driverid"),
+    "milliseconds__@lte" => 90_000,
+)
+
+n = M.Result.objects.filter(Exists(fast_laps)).count()
+```
+
+**As a projected boolean column** — pair it with an alias inside `values`:
+
+```julia
+standings = M.Driver_standings.objects.filter("driverid" => OuterRef("driverid"))
+
+query = M.Driver.objects
+query.values("surname", "has_standings" => Exists(standings))
+```
+
+SQLite returns `0`/`1` integers for a projected `Exists`; PostgreSQL returns booleans.
+
+See also [`Subquery`](@ref) for the scalar (single-value) form and
+[Subqueries and CTEs](read/subqueries_and_ctes.md).
+"""
 Exists(query::SQLObjectHandler) = ExistsObject(query=query)
 Base.deepcopy(x::ExistsObject) = ExistsObject(query=deepcopy(x.query))
 
@@ -16,6 +53,39 @@ Base.deepcopy(x::ExistsObject) = ExistsObject(query=deepcopy(x.query))
 @kwdef mutable struct SubqueryObject <: SQLType
   query::SQLObjectHandler
 end
+"""
+    Subquery(query::SQLObjectHandler) -> SubqueryObject
+
+Project a **scalar correlated subquery** as a column of the enclosing `SELECT` (#92) — one value
+per outer row, computed by its own sub-`SELECT`.
+
+The inner query must select exactly **one** column, and it correlates to the outer row through
+[`OuterRef`](@ref). Always project it with an alias — a bare `Subquery(...)` inside `values`
+raises.
+
+```julia
+# How many standings rows each driver has — one exact count per driver
+standings = M.Driver_standings.objects
+standings.filter("driverid" => OuterRef("driverid"))
+standings.values("t" => Count("driverstandingsid"))
+
+query = M.Driver.objects
+query.values("surname", "total_standings" => Subquery(standings))
+df = query |> DataFrame
+```
+
+This is the fan-out-safe way to aggregate across a to-many relation: two `Subquery` columns over
+two different relations stay exact, where a joined `values(Count(...), Count(...))` would
+row-multiply (the guard for that is #74).
+
+!!! warning "Outer `GROUP BY`"
+    Combining a correlated `Subquery` with an outer aggregate is only well-defined when the
+    correlated column is itself grouped. If it is not, PostgreSQL fails loudly while SQLite
+    silently evaluates the subquery against an arbitrary row of each group. See
+    [Subqueries and CTEs](read/subqueries_and_ctes.md).
+
+See also [`Exists`](@ref) for the boolean form and [`OuterRef`](@ref) for the correlation.
+"""
 Subquery(query::SQLObjectHandler) = SubqueryObject(query=query)
 Base.deepcopy(x::SubqueryObject) = SubqueryObject(query=deepcopy(x.query))
 # Defensive backstop: a SubqueryObject is always resolved to a string by get_select_query before any
@@ -404,31 +474,9 @@ Interval(s::AbstractString) = Interval(_parse_time_string_to_compoundperiod(s))
 # Duration operands accepted by F-expression +/- date arithmetic (#25).
 const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 
-"""
-F object for direct database field references and operations (similar to Django F expressions).
-
-Allows you to reference database fields directly in operations without pulling data into Julia.
-
-# Examples
-```julia
-# Update a field with another field's value
-query = MyModel |> object
-query.filter("id" => 1)
-query.update("field1" => F("field2"))
-
-# Increment a field by a constant
-query.update("counter" => F("counter") + 1)
-
-# Update with arithmetic operations between fields
-query.update("total" => F("price") * F("quantity"))
-
-# Use in filters to compare fields
-query.filter(F("start_date") <= F("end_date"))
-
-# Use in annotations/values
-query.values("price", "discounted_price" => F("price") * 0.9)
-```
-"""
+# Carrier for an F reference and any arithmetic built on top of it. Users construct it through
+# `F(field_name)` (documented below) and the Base.:+/-/*// overloads further down; the struct
+# itself is internal.
 @kwdef mutable struct FExpression <: SQLTypeF
   field_name::Union{String,Integer,SQLTypeF,SQLTypeFunction}
   operation::OptionalString = nothing  # +, -, *, /, etc.
@@ -440,7 +488,37 @@ query.values("price", "discounted_price" => F("price") * 0.9)
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
 
-# Constructor for F expressions
+"""
+    F(field_name::String) -> FExpression
+
+Reference a **database column** rather than a Julia value (the Django `F()` equivalent). The
+comparison or arithmetic happens inside SQL, so no data is pulled into Julia and the update stays
+a single atomic statement.
+
+`F` expressions support `+`, `-`, `*` and `/` against constants, other `F`s and SQL functions.
+`+` and `-` additionally accept a `Dates` period or an [`Interval`](@ref), for date arithmetic
+(`*` and `/` do not).
+
+```julia
+# Field-to-field comparison — grid position worse than finishing position
+query = M.Result.objects.filter(F("grid") > F("positionorder"))
+
+# Arithmetic projection, computed by the database
+query = M.Result.objects
+query.values("resultid", "adjusted" => F("points") * 2)
+
+# Atomic update against the column's current value (no read-modify-write race)
+M.Result.objects.filter("resultid" => 1).update("points" => F("points") + 1)
+
+# Field-to-field update
+M.Result.objects.filter("resultid" => 1).update("position" => F("positionorder"))
+```
+
+Prefer a plain lookup when the predicate compares against a *scalar*: write
+`filter("points__@gt" => 20)`, not `filter(F("points") > 20)`.
+
+See also [Field Expressions](read/field_expressions.md).
+"""
 function F(field_name::String)
   return FExpression(
     field_name=field_name,
@@ -647,6 +725,38 @@ end
 @kwdef mutable struct OuterRefObject <: SQLTypeF
   field_name::String
 end
+
+"""
+    OuterRef(field_name::AbstractString) -> OuterRefObject
+
+Reference a column of the **enclosing** query from inside a subquery — the correlation that turns
+an independent child query into a per-outer-row one. Use it inside the query you hand to
+[`Exists`](@ref) or [`Subquery`](@ref).
+
+```julia
+# "did this driver set a lap under 90 s in this race?" — both columns come from the outer row
+fast_laps = M.Lap_times.objects.filter(
+    "raceid"             => OuterRef("raceid"),
+    "driverid"           => OuterRef("driverid"),
+    "milliseconds__@lte" => 90_000,
+)
+
+query = M.Result.objects.filter(Exists(fast_laps))
+```
+
+`OuterRef("pk")` resolves to the outer model's primary key, so a correlation does not have to
+name the column: `filter("driverid" => OuterRef("pk"))` against an outer `M.Driver` query.
+
+Two limits, both enforced with a `QueryBuildError`:
+
+- **One level only.** It binds to the immediately enclosing query, so a projected subquery nested
+  inside another projected subquery is rejected rather than silently correlated to the wrong level.
+- **Correlated context required.** Used outside an `Exists`/`Subquery` build there is no outer
+  query to bind to.
+
+Correlate on a base column of the outer model. A joined path (`OuterRef("constructorid__name")`)
+adds a join to the outer query and is outside the validated surface.
+"""
 function OuterRef(field_name::AbstractString)
   normalized = String(field_name)
   isempty(normalized) && throw(QueryBuildError("OuterRef requires a non-empty field name"))
@@ -851,9 +961,25 @@ function Base.xor(a::Integer, b::BitwiseExpression)
 end
 
 
-# ---
-# Define a struct ObjectHandler that wraps a SQLObjectQuery
-# ---
+"""
+    ObjectHandler <: SQLObjectHandler
+
+The query handler `Model.objects` returns — the object every fluent chain is built on.
+
+Its methods are synthesized by `getproperty` rather than being real fields, which means the Julia
+REPL cannot help you with them: `?query.filter` does not work (it errors, for any Julia value).
+**The complete fluent reference lives on [`object`](@ref)** — type `?object` — and on the
+[API reference](api.md).
+
+```julia
+query = M.Driver.objects          # an ObjectHandler
+query.filter("nationality" => "Brazilian")
+rows = query.values("forename", "surname").list()
+```
+
+Chainable methods mutate the handler and return it; terminal methods execute and return a result.
+Use `.copy()` when you need to branch a chain without disturbing the original.
+"""
 mutable struct ObjectHandler <: SQLObjectHandler
   object::SQLObject
 end
@@ -1007,60 +1133,88 @@ Tables.getcolumn(row::PormGRow, nm::Symbol) = getfield(row, :_data)[_normalize_r
 
 
 """
-Wraps a PormGModel into an ObjectHandler on which you can call:
-```
-- .filter(...) to add WHERE clauses
-- .values(...) to choose/annotate columns
-- .order_by(...) to sort
-- .distinct() to add DISTINCT clause
-- .create(...) for single-row DML
-- .update(...) for single-row DML
-- .limit(...), .offset(...), .page(...) for pagination
-- .count(), .exists() for quick checks without fetching data
-- .on(...) to specify joins with other models
-- .cjoin(...) for complex joins with custom conditions
-- .with(...) to define CTEs
-- plus bulk_insert, bulk_update, do_count, do_exists, list, etc.
-```
+    object(model::PormGModel) -> ObjectHandler
 
-# Arguments
-- `model::PormGModel`: The model to be wrapped and handled.
+Wrap a model in an [`ObjectHandler`](@ref) — the start of every query. `M.Driver.objects` is the
+idiomatic spelling; `object(M.Driver)` is the same thing as a function call.
 
-# Example
+**This docstring is the fluent-API reference.** The methods below are synthesized by
+`getproperty`, so they have no bindings of their own — `?query.filter` cannot work. `?object` (or
+the [API reference](api.md)) is where to look them up.
+
+# Chainable methods
+
+Each mutates the handler and returns it, so calls can be chained or accumulated on a variable.
+
+- `.filter(pairs...)` — add `WHERE` conditions. Repeated calls **accumulate** (ANDed), unlike
+  `.values`/`.order_by`, which replace their previous call (#199)
+- `.values(fields...)` — choose/annotate the selected columns; `"*"` selects the main table
+- `.order_by(fields...)` — sort; prefix `-` for descending
+- `.limit(n)` / `.offset(n)` / `.page(limit, offset)` — pagination
+- `.distinct()` — add `DISTINCT`
+- `.db("key")` — route the query to another connection pool
+- `.on(path, pairs...)` — add predicates to the `ON` clause of an existing join path
+- `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time
+- `.cjoin_on(model; alias, on, join_type)` — anchor-less join where `on` is the entire `ON` clause
+- `.with("name" => subquery; join_field, join_type)` — define a CTE; call again for a second one
+- `.select_for_update(; nowait, skip_locked, no_key)` — `SELECT … FOR UPDATE` row lock
+- `.copy()` — deep copy, to branch a chain without disturbing the original
+
+# Terminal methods
+
+Each executes and returns a result. Every one below except `.inspect()` takes
+`show_query = :sql` / `:dict` / `:params` to render instead of executing; `.inspect()` is already
+an inspection call and takes `operation =` / `connection =` instead.
+
+- `.list()` → `Vector{PormGRow}`; `.list(:dict)` → `Vector{Dict}`; `.list(:json)` → JSON `String`
+- `query |> DataFrame` — preferred for analytical queries
+- `.get(pairs...)` — exactly one row, or `DoesNotExist` / `MultipleObjectsReturned`
+- `.first()` / `.last()` — one row or `nothing`, using the ordering already on the query
+  (`.last` inverts it, falling back to primary-key descending when none is set)
+- `.earliest(fields...)` / `.latest(fields...)` — **replace** the ordering with `fields`
+  (ascending / descending) and take one row; at least one field is required, and an empty
+  queryset raises `DoesNotExist` rather than returning `nothing`
+- `.count(column = nothing; distinct = false)` / `.exists()` — checks without fetching rows
+- `.aggregate(pairs...)` — whole-queryset aggregation with no `GROUP BY`; returns a `NamedTuple`
+- `.create(pairs...)` — insert one row, returned as a `PormGRow`
+- `.update(pairs...)` — update every matching row
+- `.get_or_create(lookup...; defaults)` / `.update_or_create(lookup...; defaults)` → `(row, created)`
+- `.delete()` — delete every matching row
+- `.inspect()` — the [`inspect_query`](@ref) metadata `Dict`
+
+# Examples
+
 ```julia
 using PormG, DataFrames
+using PormG.Functions: Count
 
-# assume models loaded as `M`
-query = M.User.objects
+# Accumulate on a variable — clearest for multi-step queries
+query = M.Result.objects
+query.filter("driverid__surname" => "Senna", "positionorder" => 1)
+query.values("raceid__year", "raceid__name", "constructorid__name")
 
-# 1) Filtering & selecting
-query.filter("is_active" => true)
-query.values("id", "username", "email")
-df = query |> DataFrame
-
-# 2) Counting
-active_users = query.count()
-
-# 3) Inserting a single row
-new = M.Status.objects.create("statusid" => 42, "status" => "Foo")
-# returns a PormGRow of the inserted row (dot-access + .save())
-
-# 4) Updating a single row
-M.Status.objects.filter("statusid" => 42).update("status" => "Bar")
-
-# 5) Ordering & aggregation
-query = M.Result.objects.filter("raceid__year" => 2020)
-query.values(
-  "driverid__forename", 
-  "constructorid__name", 
-  "laps" => Count("laps")
-).order_by("-laps")
-df2 = query |> DataFrame
-
-# 6) Existence check
-exists = M.User.objects.filter("id" => 1).exists()
-
+df    = query |> DataFrame
+wins  = query.count()
+any_  = query.exists()
 ```
+
+```julia
+# Inline chain — trailing dots; a leading dot on the next line is a ParseError
+podiums = M.Result.objects.
+    filter("raceid__year" => 2020, "positionorder__@lte" => 3).
+    values("driverid__surname", "n" => Count("resultid")).
+    order_by("-n").
+    limit(10).
+    list()
+```
+
+```julia
+# Single-row writes — let the IDField allocate the key, then read it off the returned row
+row = M.Status.objects.create("status" => "Heat shield fire")   # PormGRow
+M.Status.objects.filter("statusid" => row.statusid).update("status" => "Heat shield")
+```
+
+See also [`ObjectHandler`](@ref), [`show_query`](@ref), and [Reading Data](read/index.md).
 """
 function object(model::PormGModel)
   return ObjectHandler(object=SQLObjectQuery(model=model))

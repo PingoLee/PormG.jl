@@ -314,7 +314,33 @@ function query(q::SQLObjectHandler;
   end
   return resposta
 end
-# #43: build on a copy so inspecting a query never mutates the caller (see inspect_query).
+"""
+    show_query(q::SQLObjectHandler, mode::Symbol = :sql)
+
+Render a `SELECT` query without executing it. The default `:sql` mode returns just the SQL string,
+which makes it the quickest way to see what a chain builds.
+
+| `mode` | Returns |
+|--------|---------|
+| `:sql` | `String` — the generated SQL |
+| `:params` | `Vector` — the parameterized values, in bucket order |
+| `:dict` / `:inspection` | `Dict` — the full metadata shape of [`inspect_query`](@ref) |
+| `:none` | `nothing` — builds and discards, for benchmarking the builder |
+
+```julia
+query = M.Driver.objects.filter("nationality" => "British").values("forename", "surname")
+
+println(show_query(query))              # SELECT "Tb"."forename" … WHERE "Tb"."nationality" = \$1
+params = show_query(query, :params)     # ["British"]
+```
+
+Inspection builds on a `deepcopy`, so it never mutates the query you pass (#43) — the same chain
+can be inspected and then executed.
+
+For `INSERT`/`UPDATE`/`DELETE`, pass `show_query=` to the terminal method itself
+(`query.delete(show_query = :sql)`); this function always renders a `SELECT`. Use
+[`inspect_query`](@ref) when you want the metadata `Dict` with an explicit operation override.
+"""
 show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(deepcopy(q); show_query=mode)
 
 # ---

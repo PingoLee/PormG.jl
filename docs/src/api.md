@@ -26,14 +26,20 @@ These methods modify the query builder and return the handler for further chaini
 
 | Method | Description | Example |
 | :--- | :--- | :--- |
-| `.filter(key => value, ...)` | Add WHERE conditions (AND). Multiple pairs are ANDed. | `.filter("nationality" => "British")` |
+| `.filter(key => value, ...)` | Add WHERE conditions (AND). Repeated calls **accumulate**, unlike `.values()`/`.order_by()` which replace. | `.filter("nationality" => "British")` |
 | `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. | `.values("*", "driverid__surname")` |
 | `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | `.order_by("-points", "surname")` |
 | `.limit(n)` | Limit the number of returned rows. | `.limit(10)` |
 | `.offset(n)` | Skip the first `n` rows. | `.offset(20)` |
+| `.page(limit, offset)` | Limit and offset in one call. | `.page(20, 40)` |
+| `.distinct()` | Add `DISTINCT` to the SELECT. | `.distinct()` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
 | `.on("path", key => value)` | Add predicates to the ON clause of an existing join path. | `.on("driverid", "nationality" => "British")` |
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
+| `.cjoin_on("Model"; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. | `.cjoin_on("Driver"; alias = "d", on = [...])` |
+| `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. | `.with("fast" => sub)` |
+| `.select_for_update(; nowait, skip_locked, no_key)` | `SELECT … FOR UPDATE` row lock (PostgreSQL; must run inside a transaction). | `.select_for_update(nowait = true)` |
+| `.copy()` | Deep-copy the handler to branch a chain without disturbing the original. | `base.copy().filter("year" => 2020)` |
 
 See also: [`.cjoin()`](#cjoin) for custom join definitions and [`.with()`](#with-common-table-expressions) for CTEs.
 
@@ -67,6 +73,7 @@ These methods finalize the query and execute it against the database:
 | `.get_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Fetch-or-insert, never updates a match; returns `(row, created)`. See [Get or Create](write/create.md#get-or-create). |
 | `.update_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Row-level upsert: inserts on a fresh lookup or updates `defaults` on conflict; returns `(row, created)`. See [Update or Create](write/create.md#update-or-create). |
 | `.delete()` | — | Deletes all matching records. |
+| `.inspect()` | `Dict` | Full query metadata without executing — the `inspect_query` shape (see Query Inspection & Debugging below). |
 
 ### `PormGRow` Instance Methods
 
@@ -636,7 +643,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | `SQLTypeCTE` | Common Table Expression type. |
 | `PormGModel` | Base for model types. |
 | `PormGField` | Base for field type definitions. |
-| `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every PormG misuse — querying, model definition, configuration, migrations, the pool — raises a subtype (see [Error taxonomy](#error-taxonomy)); `catch PormGError` catches them all. |
+| `PormGError` | Root of the semantic error taxonomy (`<: Exception`). Every PormG misuse — querying, model definition, configuration, migrations, the pool — raises a subtype (see [Error taxonomy](#Error-taxonomy)); `catch PormGError` catches them all. |
 
 ---
 

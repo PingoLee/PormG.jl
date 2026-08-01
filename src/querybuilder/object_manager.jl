@@ -475,16 +475,8 @@ function Base.getproperty(m::Models.Model_Type, sym::Symbol)
   end
 end
 
-@doc """
-    filter(args...)
-
-Apply filters to the query. Chainable method that returns the query object.
-
-Usage: `query.filter("field" => value)`
-
-Repeated calls **accumulate**: each `.filter(...)` appends its conditions (ANDed) to
-those already on the handler — unlike `.values(...)`/`.order_by(...)`, which replace
-their previous call (Django parity, #199).
-
-See [Read documentation](read/index.md) for detailed filter syntax and examples.
-""" ChainCaller(up_filter!, q)
+# NOTE: do NOT try to document a fluent method here with `@doc "…" ChainCaller(up_filter!, q)`.
+# The docsystem does not evaluate that expression — it reads it as a method signature and binds the
+# text to `ChainCaller(::Any, ::Any)`, so the docstring documents the constructor, never `.filter`,
+# and `@autodocs` publishes it on the site under a heading that belongs to nothing (#212). There is
+# no binding behind `q.filter` to attach docs to; the fluent reference lives on `object`.

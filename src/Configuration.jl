@@ -151,6 +151,37 @@ function current_transaction_depth()::Int
   return _tx_context[].depth
 end
 
+"""
+    with_tx_context(f::Function, pool, conn)
+
+Run `f()` with `conn` installed as the ambient transaction connection, so every query inside the
+block reuses that one connection instead of checking a fresh one out of the pool.
+
+!!! warning "This does not start a transaction"
+    It only *binds the connection*. `BEGIN` and `COMMIT`/`ROLLBACK` are the caller's job —
+    [`run_in_transaction`](@ref) issues them around its own `with_tx_context` block. Call this
+    directly only when you already hold a connection with a transaction open on it; otherwise
+    [`in_transaction_context`](@ref) reports `true` while the database is still in autocommit and
+    nothing can be rolled back.
+
+Use [`run_in_transaction`](@ref) or [`atomic`](@ref) instead for ordinary work — they acquire the
+connection (in `:write` mode on SQLite), issue `BEGIN IMMEDIATE`/`BEGIN`, commit or roll back, and
+release it:
+
+```julia
+run_in_transaction("db_sl") do
+    in_transaction_context()                 # true — and really inside a transaction
+    PormG.current_transaction_depth()        # 1; a nested atomic() block reports 2
+    M.Status.objects.create("status" => "Heat shield fire")
+end
+```
+
+The context nests: `depth` increments by one per block (so [`current_transaction_depth`](@ref)
+drives savepoint naming), and a nested block **inherits** the outer block's SQLite
+reserved-primary-key reservations rather than starting a fresh table. Being a `ScopedValue` it is
+*dynamically* scoped — tasks spawned inside the block inherit it, and it unwinds automatically,
+including on a throw.
+"""
 function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn)
   old_ctx = _tx_context[]
   new_ctx = TransactionContext()

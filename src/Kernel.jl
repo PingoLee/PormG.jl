@@ -71,10 +71,37 @@ abstract type PormGField <: PormGAbstractType end # define the type of the colum
 
 abstract type Migration <: PormGAbstractType end
 
-# Root of the semantic error taxonomy (#231). Subtypes <: Exception (NOT <: ArgumentError — a
-# clean break, so callers catch a type instead of string-matching a message). It lives in Kernel
-# precisely so every submodule can reach it and its concrete subtypes; see the module docstring
-# for why "defined later in PormG.jl" was not good enough. Extends the #197 typed-exception lineage.
+"""
+    PormGError <: Exception
+
+Root of PormG's semantic error taxonomy (#231). Every error PormG raises for a *domain* failure —
+an unknown field, an invalid value, a refused write, a pool timeout, a database rejection — is a
+subtype, so one `catch` clause covers the whole surface:
+
+```julia
+try
+    M.Driver.objects.get("driverref" => "nobody")
+catch e
+    e isa PormGError || rethrow()
+    @error "query failed" msg=error_message(e)
+end
+```
+
+Use [`error_message`](@ref) to read a caught error: the structured subtypes carry typed fields
+rather than a `.msg` string.
+
+Catch a narrower type when you want to act on one failure — `DoesNotExist`, `IntegrityError`,
+`PoolTimeoutError` — and the umbrellas (`FieldAccessError`, `PoolError`, `DatabaseError`,
+`ConfigurationError`, `MigrationError`, `DefinitionError`) to group a family.
+
+These are deliberately **not** `<: ArgumentError`: a clean break so callers match a type instead
+of string-matching a message. Plain Julia-level misuse (a missing kwarg, a missing path) still
+raises the stock Julia exception, because it is not a PormG domain error.
+
+The type lives in `PormG.Kernel` — layer 1 — so every submodule can name it and its subtypes
+regardless of include order (#239). The full list is in the
+[API reference](api.md#Error-taxonomy).
+"""
 abstract type PormGError <: Exception end
 
 #═══════════════════════════════════════════════════════════════════════════════

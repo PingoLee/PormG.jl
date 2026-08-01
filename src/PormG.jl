@@ -2,25 +2,24 @@ module PormG
 
 using PrecompileTools
 
-# Internal debug hook — no-op in production.
-#
-# HOW TO USE BREAKPOINTS (requires dev + Revise, because macros are compile-time):
-#
-#   Step 1 — switch to source in your project:
-#     ]dev PormG
-#
-#   Step 2 — load Revise + Infiltrator before PormG in your REPL/startup.jl:
-#     using Revise, Infiltrator
-#     using PormG   # Revise now tracks PormG source
-#
-#   Step 3 — redefine the macro (before editing any source file):
-#     PormG.eval(:(macro pormg_debug(ex); :(Infiltrator.@infiltrate($(esc(ex)))); end))
-#
-#   Step 4 — edit the target .jl file (e.g. change `@pormg_debug false` → `@pormg_debug true`).
-#     Revise re-parses the file and the macro now expands to a real breakpoint.
-#
-# NOTE: redefining the macro alone (without Revise re-parsing the call site) has no effect,
-# because macro expansion happens at parse time, not at runtime.
+"""
+    @pormg_debug
+    @pormg_debug condition
+
+Contributor-facing breakpoint hook, scattered through PormG's source. It expands to `nothing`, so
+it costs a package user exactly nothing at runtime.
+
+To make the call sites live while debugging PormG itself, `]dev PormG`, load `Revise` and
+`Infiltrator` before PormG, then redefine the macro to expand to a real breakpoint and edit the
+target file so Revise re-parses it — macros expand at parse time, so redefining the macro without
+touching the call site has no effect. The step-by-step recipe is in
+[Contributing & Debugging](contributing.md).
+
+```julia
+@pormg_debug false                  # inert; flip to `true` (or a real condition) to fire
+@pormg_debug model.name == "result" # fires only for that model, once wired up
+```
+"""
 macro pormg_debug()
   return nothing
 end

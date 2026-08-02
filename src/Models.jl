@@ -24,6 +24,25 @@ using Decimals
 
 import PormG: @pormg_debug
 
+# ---
+# `public` (Julia 1.11+) — the field constructors are this module's user-facing API (#289).
+#
+# `Models` exports NOTHING (`names(Models) == [:Models]`) and that is deliberate: users write
+# `Models.CharField(...)` qualified, as every page of `docs/src/fields.md` shows. But un-exported is
+# not the same as private, and two things were reading it that way:
+#   - `docs/src/api.md`'s `@autodocs` uses `Private = false`, and Documenter decides via
+#     `Base.ispublic(mod, name)` against THIS module — so without these declarations every field
+#     constructor silently disappears from the API reference.
+#   - `names(Models)` and tooling reported the module as having no API at all.
+# `public` fixes both without changing what a bare `using` brings into scope.
+#
+# Everything else here (`add_field!`, `ensure_model_initialized`, `validate_default`,
+# `normalize_sqlite_datetime_string`, …) is genuinely internal and deliberately omitted.
+public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, DateField, DateTimeField,
+  DecimalField, DurationField, EmailField, FileField, FloatField, ForeignKey, IDField, ImageField,
+  IntegerField, JSONField, ManyToManyField, OneToOneField, PasswordField, PositiveIntegerField,
+  PositiveSmallIntegerField, SlugField, TextField, TimeField, URLField, UUIDField
+
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Core Types

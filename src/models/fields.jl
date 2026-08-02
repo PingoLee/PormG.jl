@@ -2239,6 +2239,26 @@ mutable struct sTimeField <: PormGField
   formatter::Function
 end
 
+"""
+    TimeField(; kwargs...)
+
+Time of day with no date component — SQL `TIME`.
+
+`default` accepts a `Time` or anything `Time(x)` parses (e.g. `"09:30:00"`); an invalid value raises
+`FieldValidationError` at model-definition time rather than on the first insert.
+
+# Examples
+```julia
+Team_store = Models.Model("team_store",
+  id           = Models.IDField(),
+  name         = Models.CharField(max_length = 100),
+  opening_time = Models.TimeField(),
+  closing_time = Models.TimeField(null = true),
+)
+```
+
+See also [`DateField`](@ref), [`DateTimeField`](@ref), [`DurationField`](@ref).
+"""
 function TimeField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable) =
     _common_kwargs("TimeField", kwargs)
@@ -2278,6 +2298,38 @@ mutable struct sBinaryField <: PormGField
   max_length::Union{Int, Nothing}
 end
 
+"""
+    BinaryField(; max_length = nothing, kwargs...)
+
+A column intended for binary payloads.
+
+!!! warning "Incomplete — verify before relying on it"
+    Measured against the current code, not the intent:
+
+    - It renders as **`TEXT` on both PostgreSQL and SQLite**, not `BYTEA`/`BLOB` — `_get_column_type`
+      (`Dialect.jl`) has no `sBinaryField` branch, so it reaches the `else` fallthrough.
+    - **`default=` cannot be used.** Every non-`nothing` value raises: a `String` (even valid
+      Base64) fails validation, and a `Vector{UInt8}` cannot be stored in the field's
+      `Union{String,Nothing}`.
+    - `max_length` never reaches the DDL — the column is unbounded `TEXT`. It *is* enforced on the
+      write path, but as a **character** count on `AbstractString` values (the check is
+      `hasfield`-gated, not type-gated); a `Vector{UInt8}` bypasses it entirely.
+
+    Prefer `TextField`/`CharField` with your own encoding until these are fixed. Documented here
+    rather than left silent because `docs/src/fields.md` advertises the `BYTEA` behavior.
+
+# Examples
+```julia
+Technical_document = Models.Model("technical_document",
+  id        = Models.IDField(),
+  name      = Models.CharField(max_length = 200),
+  file_data = Models.BinaryField(),          # renders TEXT today
+  mime_type = Models.CharField(max_length = 100),
+)
+```
+
+See also [`FileField`](@ref), [`TextField`](@ref), [`CharField`](@ref).
+"""
 function BinaryField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable) =
     _common_kwargs("BinaryField", kwargs; extra = (:max_length,))
@@ -2330,6 +2382,27 @@ mutable struct sDurationField <: PormGField
   formatter::Function
 end
 
+"""
+    DurationField(; kwargs...)
+
+An elapsed time span — `INTERVAL` on both PostgreSQL and SQLite.
+
+`default` is validated at model-definition time and re-raised as `FieldValidationError`, so a bad
+`default=` surfaces where the mistake is rather than on the insert path (where the same coercion
+raises `InvalidValueError`).
+
+# Examples
+```julia
+Pit_task = Models.Model("pit_task",
+  id                 = Models.IDField(),
+  name               = Models.CharField(max_length = 200),
+  estimated_duration = Models.DurationField(),
+  actual_duration    = Models.DurationField(null = true),
+)
+```
+
+See also [`TimeField`](@ref), [`DateTimeField`](@ref).
+"""
 function DurationField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable) =
     _common_kwargs("DurationField", kwargs)

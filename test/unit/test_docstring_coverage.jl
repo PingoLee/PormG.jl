@@ -4,7 +4,7 @@ Docstring coverage of the public surface (#212).
 Two invariants that nothing else enforces:
 
 1. **Every exported name answers `?`.** `?Name` is the first thing a Julia user tries. Documenter's
-   `checkdocs = :exports` does NOT catch a gap here — it flags docstrings that *exist* but are not
+   `checkdocs` (`:public` since #289) does NOT catch a gap here — it flags docstrings that *exist* but are not
    included in the manual, and a name with no docstring has no docs object for it to see. So an
    undocumented export ships silently, which is exactly what happened: the 2026-07-23 audit behind
    #212 missed `@pormg_debug`, and `PormGError` did not exist yet when it was written.
@@ -136,9 +136,10 @@ end
     # ─────────────────────────────────────────────────────────────────────────
     # `ChainCaller` stays undocumented — the `@doc "…" ChainCaller(up_filter!, q)` trap
     # That form does not document `.filter`: the docsystem does not evaluate the expression, it
-    # reads it as a signature and binds the text to `ChainCaller(::Any, ::Any)`. `@autodocs`
-    # (Private = true by default) then publishes it on the site under a `filter(args...)` heading
-    # that belongs to nothing. It looked like it worked for as long as nobody checked.
+    # reads it as a signature and binds the text to `ChainCaller(::Any, ::Any)`, which then shows up
+    # under a `filter(args...)` heading that belongs to nothing. It looked like it worked for as
+    # long as nobody checked. (`Private = false` since #289 keeps it off the site now, but the
+    # docstring would still be misattributed, and a stray `public` would put it back.)
     #
     # This forbids ANY docstring on ChainCaller, not just a misattributed one — deliberately. The
     # type is internal plumbing with nothing a user needs to read, and no-docstring is the only
@@ -150,11 +151,14 @@ end
 
     # ─────────────────────────────────────────────────────────────────────────
     # …and neither do the helpers it dispatches to (#281)
-    # `api.md`'s `@autodocs` block sets no `Private` key, so Documenter's `Private = true` default
-    # publishes EVERY docstring in `PormG.QueryBuilder` as a public API heading. A docstring on
-    # `up_filter!` therefore ships a heading for a function no user can name — the same defect the
-    # ChainCaller guard above exists to prevent, one level down. Three had drifted in
-    # (`up_filter!`, `up_values!`, `order_by!`) before #281; `page` had it until #280.
+    # Before #289, `api.md`'s `@autodocs` set no `Private` key, so Documenter's `Private = true`
+    # default published EVERY docstring in `PormG.QueryBuilder` as a public API heading — a docstring
+    # on `up_filter!` shipped a heading for a function no user can name. Three had drifted in
+    # (`up_filter!`, `up_values!`, `order_by!`) before #281; `page` had it until #280. `Private =
+    # false` now filters by `ispublic`, so this testset is no longer the thing keeping them off the
+    # site — it is the sharper rule that they should carry no docstring at all, since there is no
+    # USER-FACING binding to attach docs to (the helper is reachable by name, but only from inside
+    # the module; the fluent `.values(...)` a reader would `?` is synthesized and has none).
     #
     # SCOPED TO `ChainCaller(helper, q)` BRANCHES ON PURPOSE — do not "fix" this by widening it to
     # every `sym === :name` branch. That rule is not satisfiable: the closure branches route to
@@ -163,12 +167,11 @@ end
     # `cjoin`/`With`, which are legitimately documented. The ChainCaller set is exactly the set
     # with no user-facing binding to attach docs to.
     #
-    # This is NOT the whole leak. 41 documented QueryBuilder-owned bindings are exported from
-    # neither `QueryBuilder` nor `PormG`, and `@autodocs` publishes every one of them
-    # (`_solve_field`, `get_filter_query`, `set_context!`, `quote_identifier`, `CTEDict`, …).
-    # Closing that needs a deliberate call, not a flag flip: the same 41 also contains `delete`,
-    # `list`, `earliest`, `latest`, `cjoin`, `save` and `ObjectHandler`, which are genuinely
-    # user-facing, so `Private = false` would drop real documentation. Tracked separately.
+    # Closed module-wide by #289: `api.md`'s `@autodocs` now sets `Private = false`, so publication
+    # follows `Base.ispublic` and internals stay off the page whether or not they carry a docstring.
+    # The `PUBLIC_SURFACE` testset below is what keeps that honest. This testset survives as the
+    # sharper, name-level rule for the ChainCaller set: those helpers should carry no docstring at
+    # all, because there is no user-facing binding to attach them to.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "ChainCaller-backed helpers carry no docstring (#281)" begin
         body = _doccov_getproperty_body()
@@ -212,5 +215,65 @@ end
                 Base.Docs.Binding(PormG.QueryBuilder, sym).mod === PormG.QueryBuilder
         end
         @test documented == String[]
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The `public` surface is frozen (#289)
+    # `docs/src/api.md` sets `@autodocs Private = false`, so what lands on the API reference is
+    # exactly what each module marks as API — `export`ed, or declared `public` (Julia 1.11+).
+    # Documenter tests `Base.ispublic` against the module a docstring was WRITTEN in, never
+    # `PormG`'s re-export list, which is why user-facing names defined in a submodule
+    # (`inspect_query`, `show_query`, every field constructor) need a `public` declaration there.
+    #
+    # The failure mode this guards is over-declaring: one stray `public` on an internal silently
+    # republishes it, and a docs build cannot tell you that is wrong. Freezing the set forces the
+    # question "is this really user-facing?" into review. Under-declaring is caught too — a
+    # user-facing name dropped from the page fails here rather than vanishing quietly.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "the `public`-but-unexported surface is exactly the declared set" begin
+        expected = Dict(
+            PormG              => [:install_ai_skills, :setup],
+            PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :cjoin, :delete, :earliest, :first,
+                                   :inspect_query, :last, :latest, :list, :save, :show_query],
+            PormG.Models       => [:AutoField, :BigIntegerField, :BinaryField, :BooleanField,
+                                   :CharField, :DateField, :DateTimeField, :DecimalField,
+                                   :DurationField, :EmailField, :FileField, :FloatField,
+                                   :ForeignKey, :IDField, :ImageField, :IntegerField, :JSONField,
+                                   :ManyToManyField, :OneToOneField, :PasswordField,
+                                   :PositiveIntegerField, :PositiveSmallIntegerField, :SlugField,
+                                   :TextField, :TimeField, :URLField, :UUIDField],
+            PormG.Migrations   => [:MIGRATION_FORMAT_VERSION],
+            PormG.Configuration => [:get_tx_connection, :is_loaded, :load_many, :ping, :status],
+        )
+        for (mod, want) in expected
+            @testset "$(nameof(mod))" begin
+                actual = sort([s for s in names(mod)
+                               if s !== nameof(mod) && Base.ispublic(mod, s) && !Base.isexported(mod, s)])
+                @test actual == sort(want)
+
+                # `public X` on a name the module cannot resolve creates a public-but-UNDEFINED
+                # entry — `names()` lists it, `mod.X` throws UndefVarError, and the docs build says
+                # nothing. `public DataFrame` did exactly this until `import DataFrames: DataFrame`
+                # was added, because only the module was imported. Aqua's `test_undefined_exports`
+                # also catches it, but Aqua is an optional dep here (`HAS_AQUA` in runtests.jl), so
+                # a worktree without it runs green while CI fails. Check it where it belongs.
+                undefined = filter(s -> !isdefined(mod, s), actual)
+                @test undefined == Symbol[]
+            end
+        end
+
+        # Modules with no declarations must stay that way — otherwise a new one could be added to a
+        # module absent from `expected` and no assertion above would ever look at it.
+        for mod in (PormG.Kernel, PormG.Functions, PormG.ConnectionPool, PormG.Utils)
+            @test isempty([s for s in names(mod)
+                           if s !== nameof(mod) && Base.ispublic(mod, s) && !Base.isexported(mod, s)])
+        end
+
+        # A `_`-prefixed name is internal by convention here, without exception — 0 of 38 at #289.
+        # Declaring one `public` is always a mistake, whatever the module.
+        for mod in (PormG, PormG.Kernel, PormG.Functions, PormG.QueryBuilder, PormG.Models,
+                    PormG.Migrations, PormG.Configuration, PormG.ConnectionPool, PormG.Utils)
+            @test isempty([s for s in names(mod) if startswith(String(s), "_") && Base.ispublic(mod, s)])
+        end
     end
 end

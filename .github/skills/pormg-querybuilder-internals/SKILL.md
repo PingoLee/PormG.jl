@@ -120,22 +120,31 @@ ways, and the choice is forced by whether the method takes keywords:
 So adding a keyword to a `ChainCaller`-backed method means **converting it to a closure**; leaving it
 as a `ChainCaller` makes the keyword throw. Coverage: `test/unit/test_fluent_parity_208.jl`.
 
-**A `ChainCaller`-backed helper carries no docstring.** `docs/src/api.md` builds `@autodocs` over the
-whole `QueryBuilder` module with **no `Private` key**, so Documenter's `Private = true` default
-publishes *any* docstring in the module as a public API heading — for a function no user can name.
-Three had drifted in (`up_filter!`, `up_values!`, `order_by!`) before #281; `page` had it until #280.
-Put the contract on the `object` docstring's `.method(...)` bullet and use a `#` comment on the
-helper. `test_docstring_coverage.jl` enforces it, scoped to the `ChainCaller(helper, q)` branches —
+**A `ChainCaller`-backed helper carries no docstring.** Not because it would be published — since
+#289 `api.md` sets `Private = false`, so an un-`public` name stays off the site either way — but
+because there is no **user-facing** binding to attach docs to — the fluent `.values(...)` a reader
+would `?` is synthesized by `getproperty` and has none, and nobody reaches `up_values!` by name — so
+the text would only ever be seen by someone already in the file. Three had drifted in (`up_filter!`, `up_values!`, `order_by!`) before
+#281; `page` had it until #280. Put the contract on the `object` docstring's `.method(...)` bullet
+and use a `#` comment on the helper. `test_docstring_coverage.jl` enforces it, scoped to the
+`ChainCaller(helper, q)` branches —
 widening it to every `sym === :name` branch is not possible, because the closure branches route to
 `first`/`last`/`get`/`deepcopy`, whose bindings resolve to `Base` and are documented there.
 
-**That guard covers the ChainCaller set only — it is not the whole leak.** 41 documented
-QueryBuilder-owned bindings are exported from neither `QueryBuilder` nor `PormG`, and `@autodocs`
-publishes every one (`_solve_field`, `get_filter_query`, `set_context!`, `quote_identifier`,
-`CTEDict`, …). Do not assume a docstring you add to an internal here stays private just because the
-guard is green. Closing the rest needs a deliberate call rather than a flag flip: those same 41 also
-include `delete`, `list`, `earliest`, `latest`, `cjoin`, `save` and `ObjectHandler`, which are
-genuinely user-facing, so `Private = false` would delete real documentation.
+**What reaches the published API page (#289).** `docs/src/api.md`'s `@autodocs` sets
+`Private = false`, so a docstring is published only if its name is `export`ed **or** declared
+`public` (Julia 1.11+). Adding a docstring to an internal is therefore safe — it stays in the source
+and off the site.
+
+The trap is which module Documenter asks. It calls `Base.ispublic(mod, name)` against the module the
+docstring was **written in**, never `PormG`'s re-export list, because `Docs.meta` is per-module and
+`import`/`export` do not copy entries. So a user-facing name defined here needs its `public`
+declaration **here** — `inspect_query` and `show_query` are exported from `PormG` and would still
+have vanished from the page without the declaration in `src/QueryBuilder.jl`.
+
+Making something user-facing? Declare it `public` next to the exports **and** add it to the frozen
+set in `test/unit/test_docstring_coverage.jl` ("the `public`-but-unexported surface"). That test
+exists because over-declaring silently republishes an internal and no docs build will tell you.
 
 New fluent method? `test/unit/test_docstring_coverage.jl` scans the `sym === :name` branches and
 requires each one documented in **both** the `object` docstring and `docs/src/api.md`.

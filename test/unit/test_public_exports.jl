@@ -15,6 +15,11 @@ using Test
 using PormG
 
 # The frozen top-level surface of `using PormG` (must match docs/src/api.md exactly).
+#
+# NOTE (#289): `names(PormG)` reports exported names AND ones declared `public` (Julia 1.11+), so
+# this set is the *public* surface, not the *exported* one — the two now differ by exactly the two
+# `public` entries at the bottom. A bare `using PormG` still brings only the exported names into
+# scope; `public` records "this is API" for tooling, `?`, and Documenter's `Private = false`.
 const EXPECTED_TOPLEVEL = Set([
     # Query builder
     :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :Interval, :show_query, :inspect_query,
@@ -45,9 +50,15 @@ const EXPECTED_TOPLEVEL = Set([
     :run_in_transaction, :atomic, :with_savepoint, :with_tx_context, :in_transaction_context,
     # Locking
     :with_advisory_lock,
-    # Utilities & lifecycle (#201: setup / install_ai_skills are qualified-call-only, not exported)
+    # Utilities & lifecycle
     :upgrade_guide, :register_ignore_tables!,
     Symbol("@import_models"), Symbol("@models_module"), Symbol("@pormg_debug"),
+    # #201 kept `setup` / `install_ai_skills` OUT of `export` — they are maximally generic names
+    # for one-off helpers, and every example calls them qualified. That still holds: neither is
+    # exported, so a bare `using PormG` does not bind them. #289 additionally declares them
+    # `public`, which is what puts them in `names(PormG)` and therefore in this set — recording
+    # that they ARE API (as docs/src/api.md already stated) without widening `using`.
+    :setup, :install_ai_skills,
 ])
 
 # The SQL function library, namespaced under PormG.Functions (NOT exported by PormG).
@@ -70,6 +81,30 @@ const EXPECTED_FUNCTIONS = Set([
         @test setdiff(actual, EXPECTED_TOPLEVEL) == Set{Symbol}()   # nothing unexpected leaked in
         @test setdiff(EXPECTED_TOPLEVEL, actual) == Set{Symbol}()   # nothing documented went missing
         @test actual == EXPECTED_TOPLEVEL
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # `public` is not `export` (#289)
+    # The set above is `names(PormG)`, which since Julia 1.11 reports exported AND `public` names.
+    # That makes it a weaker statement than it looks: a name could enter it by being declared
+    # `public` while #201's "qualified-call-only" promise still holds. Pin the distinction, so a
+    # future `export setup` cannot slip in behind an unchanged EXPECTED_TOPLEVEL.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "public-but-not-exported lifecycle helpers stay out of `using`" begin
+        for n in (:setup, :install_ai_skills)
+            @test Base.ispublic(PormG, n)          # API, and Documenter's `Private = false` keeps it
+            @test !Base.isexported(PormG, n)       # …but #201 still says: call it qualified
+        end
+
+        # The load-bearing half: a bare `using PormG` must not bind them. `names(…; imported=false)`
+        # is what `using` consults, so check the binding directly in a throwaway module.
+        mod = Module(:PormGUsingProbe)
+        Core.eval(mod, :(using PormG))
+        for n in (:setup, :install_ai_skills)
+            @test !isdefined(mod, n)
+        end
+        # Control: something genuinely exported DOES arrive, so the probe itself is not vacuous.
+        @test isdefined(mod, :object)
     end
 
     # The SQL function constructors must NOT be exported at the top level (the whole point

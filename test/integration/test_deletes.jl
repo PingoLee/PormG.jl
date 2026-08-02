@@ -204,6 +204,39 @@ function _reset_set_null_guard_scratch_schema!()
     return nothing
 end
 
+# ── Schema helpers: set_default_guard_scratch ─────────────────────────────────
+
+function _drop_set_default_guard_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_default_guard_child_scratch\";")
+    PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"set_default_guard_parent_scratch\";")
+    return nothing
+end
+
+function _reset_set_default_guard_scratch_schema!()
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    _drop_set_default_guard_scratch_schema!()
+
+    id_type = _scratch_id_type(pool)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "set_default_guard_parent_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "name" TEXT NOT NULL
+    );
+    """)
+
+    PormG.ConnectionPool.fetch(pool, """
+    CREATE TABLE "set_default_guard_child_scratch" (
+        "id" $id_type PRIMARY KEY,
+        "parent_id" INTEGER NOT NULL REFERENCES "set_default_guard_parent_scratch" ("id"),
+        "label" TEXT
+    );
+    """)
+
+    return nothing
+end
+
 # ── Fixture helpers ───────────────────────────────────────────────────────────
 
 """
@@ -624,6 +657,62 @@ end
             @test SetNullGuardM.Set_null_guard_child_scratch.objects.filter("id" => child_id).exists()
         finally
             _drop_set_null_guard_scratch_schema!()
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SET_DEFAULT guard (#287): a FK declared SET_DEFAULT with no default is the
+    # mirror image of the SET_NULL contradiction. Before #287 the missing default
+    # flowed into update_field as a bare NULL — SET_DEFAULT silently acted as
+    # SET_NULL and then violated the column's NOT NULL constraint. The collector
+    # must now refuse before any SQL is sent.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "Delete with SET_DEFAULT: Missing default is Rejected" begin
+        parent_id = 940001
+        child_id  = 940101
+
+        _reset_set_default_guard_scratch_schema!()
+
+        try
+            SetDefaultGuardM.Set_default_guard_parent_scratch.objects.create(
+                "id"   => parent_id,
+                "name" => "set-default-guard-parent"
+            )
+            SetDefaultGuardM.Set_default_guard_child_scratch.objects.create(
+                "id"        => child_id,
+                "parent_id" => parent_id,
+                "label"     => "no-default-child"
+            )
+
+            delete_q = SetDefaultGuardM.Set_default_guard_parent_scratch.objects
+            delete_q.filter("id" => parent_id)
+
+            err = try
+                delete_q.delete()
+                nothing
+            catch e
+                e
+            end
+
+            # Typed, and the message must name the contradiction rather than the row.
+            # NB: the table is named set_default_guard_child_scratch, so `occursin("default")` or
+            # `occursin("parent_id")` would be satisfied by any database error that merely mentions
+            # the table. Match on wording only this guard produces.
+            @test err isa ModelDefinitionError
+            msg = _strip_ansi(lowercase(sprint(showerror, err)))
+            @test occursin("no default", msg)
+            @test occursin("default=", msg)
+
+            # The negative half — this is what proves it refused BEFORE writing. If the guard
+            # regressed to the old behaviour the child's FK would have been nulled (or the
+            # statement would have failed mid-transaction), so asserting both rows survive
+            # intact is what actually fails on a regression.
+            @test SetDefaultGuardM.Set_default_guard_parent_scratch.objects.filter("id" => parent_id).exists()
+            survivor = SetDefaultGuardM.Set_default_guard_child_scratch.objects.
+                filter("id" => child_id).values("id", "parent_id").list() |> first
+            @test survivor[:parent_id] == parent_id
+        finally
+            _drop_set_default_guard_scratch_schema!()
         end
     end
 

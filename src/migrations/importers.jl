@@ -434,8 +434,9 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
           continue
         elseif field_type in ["ForeignKey", "OneToOneField"]
           # Add "_id" suffix for foreign keys
-          field_key = Symbol("$(field_name)_id")              
+          field_key = Symbol("$(field_name)_id")
           # println(related_model, " ", related_model |> typeof)
+          _normalize_django_set_default!(options, field_name)
           fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
         elseif field_type == "ManyToManyField"
           fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; options...)
@@ -511,6 +512,38 @@ function is_current_time_default(value::AbstractString)::Bool
   # Accept both `timezone.now` (callable reference) and `timezone.now()` (call).
   normalized = replace(strip(value), r"\(\s*\)$" => "")
   return normalized in CURRENT_TIME_CALLABLES
+end
+
+"""
+    _normalize_django_set_default!(options, field_name) -> options
+
+Rewrite Django's `on_delete=SET_DEFAULT, default=None` on a nullable FK to `SET_NULL` (#287).
+
+Django accepts that combination and it denotes exactly one thing: on parent delete, set the
+dependent FK to `None`, i.e. SQL `NULL`. PormG cannot express "SET_DEFAULT whose default is NULL" —
+since #287 that pair is a rejected self-contradiction — so the faithful translation is `SET_NULL`.
+
+Without this the importer emits a model file that raises `ModelDefinitionError` the moment it is
+loaded through `@import_models`, and regenerating produces the identical unloadable file. Only the
+nullable case is rewritten: `SET_DEFAULT` with no default on a **non**-nullable FK is genuinely
+contradictory in both ORMs and is left to fail loudly at registration.
+"""
+function _normalize_django_set_default!(options::Dict, field_name)
+  haskey(options, :on_delete) || return options
+  # A malformed on_delete (e.g. Django's `SET(callable)`) throws here; let the field constructor
+  # raise it in its usual place rather than from this helper.
+  mode = try
+    Models._get_on_delete_mode(options[:on_delete])
+  catch
+    return options
+  end
+  mode === Models.SET_DEFAULT || return options
+  get(options, :default, nothing) === nothing || return options
+  get(options, :null, false) === true || return options
+
+  @warn "Django field $(field_name): on_delete=SET_DEFAULT with default=None denotes SET NULL; importing it as on_delete=SET_NULL."
+  options[:on_delete] = "SET_NULL"
+  return options
 end
 
 function parse_value(value::AbstractString)

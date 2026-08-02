@@ -59,7 +59,7 @@ include("querybuilder/execution.jl")
 
 include("querybuilder/execution_bulk.jl")
 
-import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, PROTECT
+import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, PROTECT
 
 include("querybuilder/deletion.jl")
 

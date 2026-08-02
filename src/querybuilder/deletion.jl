@@ -64,14 +64,18 @@ Dependent rows are then resolved per referencing field, by that field's `on_dele
   Declaring it on a `null = false` field is a contradiction the schema cannot satisfy, and raises
   [`ModelDefinitionError`](@ref).
 - `SET_DEFAULT`: issues `UPDATE ... SET <column> = <the field's default>` over the dependents.
+  Declaring it on a field with no `default` is the mirror-image contradiction, and raises
+  [`ModelDefinitionError`](@ref) too.
 - `DO_NOTHING`: PormG emits nothing for the relation and defers to the database's own constraint.
 
 Only `CASCADE` walks further down the graph; `SET_NULL` and `SET_DEFAULT` do not recurse.
 
-Any other state of `on_delete` — including an **unset** one, which is the default for `ForeignKey` —
-also produces no ORM statement for that relation, leaving the reference entirely to the database's own
-constraint. An unset `on_delete` renders `ON DELETE NO ACTION` in DDL, so a dependent row is *not*
-cascaded by PormG unless its field says so explicitly.
+Both contradictions are normally caught earlier, at `set_models` registration; the checks here are the
+backstop for models that never passed through it.
+
+An **unset** `on_delete` — the default for `ForeignKey` — produces no ORM statement for that relation,
+leaving the reference entirely to the database's own constraint. It renders `ON DELETE NO ACTION` in
+DDL, so a dependent row is *not* cascaded by PormG unless its field says so explicitly.
 
 The collected statements then execute in dependency order inside a single transaction (`BEGIN` on
 PostgreSQL, `BEGIN IMMEDIATE TRANSACTION` on SQLite), so any failure rolls the whole set back.
@@ -416,6 +420,13 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     collector.field_updates[(field_name |> string, nothing)][related_model] = prepare_related_query(keys, related_model, field_name)
 
   elseif field.on_delete == SET_DEFAULT
+    # check that there is a default to set — symmetric with the SET_NULL guard above (#287).
+    # Without it `field.default === nothing` flows into update_field, which renders a bare NULL,
+    # so SET_DEFAULT silently behaved as SET_NULL and then died on the column's NOT NULL constraint.
+    if field.default === nothing
+      throw(ModelDefinitionError("Error in delete: ON DELETE SET_DEFAULT is declared on \e[4m\e[31m$(field_name)\e[0m, but the field has no default — the schema contradicts itself. Give the FK a default= or use a different on_delete."))
+    end
+
     # Add field update to set field to default value
     default_value = field.default
     if !haskey(collector.field_updates, (field_name |> string, default_value))

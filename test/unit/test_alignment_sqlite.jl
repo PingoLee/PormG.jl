@@ -1935,6 +1935,67 @@ end
     @test_throws PormG.ModelDefinitionError PormG.Models.set_models(bad_mod, "mock_sl_path")
 end
 
+@testset "set_models rejects contradictory on_delete declarations (#287)" begin
+    # Both checks existed in set_models as `@error` logs: they named the contradiction and then
+    # let the broken model through, so it resurfaced later as a mangled UPDATE (SET_DEFAULT with
+    # no default renders a bare NULL) or a database constraint violation. #287 made them throws.
+    # Nothing pinned either behaviour before this testset.
+    function _on_delete_mod(modname::Symbol, make_fk)
+        parent = PormG.Models.Model_Type(
+            name = "od_parent_$(modname)",
+            fields = Dict("id" => PormG.Models.IDField()),
+            field_names = ["id"]
+        )
+        child = PormG.Models.Model_Type(
+            name = "od_child_$(modname)",
+            fields = Dict("id" => PormG.Models.IDField(), "parent" => make_fk(parent)),
+            field_names = ["id", "parent"]
+        )
+        mod = Module(modname)
+        Core.eval(mod, :(const Parent = $parent))
+        Core.eval(mod, :(const Child = $child))
+        return mod
+    end
+
+    # `set_models` has several other ModelDefinitionError sites (duplicate related_name, strict FK
+    # target resolution), so a bare @test_throws would pass on a fixture typo for the wrong reason.
+    # Assert the cause, not just the type.
+    function _set_models_error(mod)
+        try
+            PormG.Models.set_models(mod, "mock_sl_path")
+            nothing
+        catch e
+            e
+        end
+    end
+
+    # SET_NULL on a field that cannot hold NULL.
+    sn_bad = _on_delete_mod(:od_set_null_bad, p -> PormG.Models.ForeignKey(p,
+        pk_field = "id", on_delete = "SET_NULL", null = false, related_name = "od_sn_bad"))
+    sn_err = _set_models_error(sn_bad)
+    @test sn_err isa PormG.ModelDefinitionError
+    @test occursin("SET_NULL", sprint(showerror, sn_err))
+    @test occursin("null=true", sprint(showerror, sn_err))
+
+    # SET_DEFAULT with nothing to set it to.
+    sd_bad = _on_delete_mod(:od_set_default_bad, p -> PormG.Models.ForeignKey(p,
+        pk_field = "id", on_delete = "SET_DEFAULT", null = true, related_name = "od_sd_bad"))
+    sd_err = _set_models_error(sd_bad)
+    @test sd_err isa PormG.ModelDefinitionError
+    @test occursin("SET_DEFAULT", sprint(showerror, sd_err))
+    @test occursin("default", sprint(showerror, sd_err))
+
+    # Discrimination: a guard that fires on everything proves nothing. The same two shapes with
+    # the contradiction resolved must still register cleanly.
+    sn_ok = _on_delete_mod(:od_set_null_ok, p -> PormG.Models.ForeignKey(p,
+        pk_field = "id", on_delete = "SET_NULL", null = true, related_name = "od_sn_ok"))
+    @test PormG.Models.set_models(sn_ok, "mock_sl_path") === nothing
+
+    sd_ok = _on_delete_mod(:od_set_default_ok, p -> PormG.Models.ForeignKey(p,
+        pk_field = "id", on_delete = "SET_DEFAULT", default = 1, null = true, related_name = "od_sd_ok"))
+    @test PormG.Models.set_models(sd_ok, "mock_sl_path") === nothing
+end
+
 # ── #64: db_column on M2M / CTE join keys (DB-free render asserts) ─────────────────────────
 @testset "M2M join honors db_column on renamed PKs (#64)" begin
     # Both participating models' PKs are renamed (driver code→driver_pk, sponsor code→sponsor_pk).

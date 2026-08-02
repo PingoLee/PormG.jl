@@ -136,7 +136,8 @@ WHERE "Tb"."raceid" IN (
 
 ## Cascade Deletion
 
-If your models are configured with `on_delete="CASCADE"` (the default for `ForeignKey` fields), PormG or the database (depending on the adapter) will automatically remove related records to maintain integrity.
+A `ForeignKey` declared `on_delete="CASCADE"` makes PormG's deletion collector remove the related
+records too, in dependency order and inside the same transaction.
 
 ```julia
 # This will also delete related Result records if they reference this Race
@@ -145,11 +146,33 @@ query.filter("name" => "Cancelled Grand Prix")
 delete(query)
 ```
 
+!!! warning "`CASCADE` is **not** the default — an unset `on_delete` cascades nothing"
+    Omitting `on_delete` leaves it unset, which is a distinct state from `CASCADE`. PormG emits no
+    statement for that relation, and the column renders `ON DELETE NO ACTION` in DDL. What happens
+    when you delete the parent then depends entirely on the backend:
+
+    | Backend | Deleting a parent whose child FK has an unset `on_delete` |
+    |---|---|
+    | PostgreSQL | `NO ACTION` is enforced — the delete fails with a foreign-key violation |
+    | SQLite | the delete succeeds and **silently leaves the child orphaned** |
+
+    Declare the behaviour you want explicitly on every `ForeignKey`.
+
+!!! warning "SQLite does not enforce foreign keys at all"
+    SQLite defaults `PRAGMA foreign_keys` to **off** and PormG does not turn it on, so on SQLite no
+    FK constraint is enforced at runtime — the database will neither cascade a delete nor block one.
+    PormG's own deletion collector is the only thing that acts on `on_delete` there, which means an
+    `on_delete` PormG does not handle (unset, or `DO_NOTHING`) is a no-op rather than an error.
+
+    PostgreSQL enforces the constraint normally, so the same schema and the same `delete()` call can
+    succeed on SQLite and fail on PostgreSQL. Test destructive paths against the backend you deploy on.
+
 **Generated SQL (PostgreSQL):**
 ```sql
 DELETE FROM "race" AS "Tb" 
 WHERE "Tb"."name" = $1
--- Note: Dependent rows in "result" are removed by DB FOREIGN KEY CASCADE or ORM cascade
+-- Note: dependent rows in "result" are removed by PormG's deletion collector, which emits their
+-- DELETE separately in the same transaction (see the counts in the returned per-table Dict)
 -- Parameters: ["Cancelled Grand Prix"]
 ```
 
@@ -171,9 +194,17 @@ WHERE "Tb"."name" = $1
     reassign the dependents. The check is existence-driven: it only fires when referencing rows
     are actually present.
 
-!!! note "Limitation: `SET_NULL` requires a nullable FK"
-    Declaring `on_delete = SET_NULL` on a field that is also `null = false` is a contradiction the
-    schema cannot satisfy. The delete raises `ModelDefinitionError` — declare the FK with
-    `null = true`, or choose a different `on_delete`.
+!!! note "`SET_NULL` requires a nullable FK, `SET_DEFAULT` requires a default"
+    Both are contradictions the schema cannot satisfy, and both raise `ModelDefinitionError`:
+
+    - `on_delete = SET_NULL` on a field that is also `null = false` — declare the FK `null = true`,
+      or choose a different `on_delete`.
+    - `on_delete = SET_DEFAULT` on a field with no `default` — give the FK a `default =`, or choose
+      a different `on_delete`. Before this was enforced the delete emitted `SET <column> = NULL`,
+      so `SET_DEFAULT` silently behaved as `SET_NULL` and then violated the column's constraint.
+
+    The error is raised at model registration (`set_models` / `@import_models`), so a contradictory
+    schema fails as soon as the models load rather than at the first delete. `delete()` keeps its own
+    copy of both checks as a backstop for models built without going through registration.
 
 See [Models and Fields](../fields.md) for more details on configuring deletion behavior (CASCADE, PROTECT, SET_NULL, etc.).

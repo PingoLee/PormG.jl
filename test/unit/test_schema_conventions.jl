@@ -52,6 +52,8 @@ _fk_ddl(; fk_kw...) = PormG.Dialect.create_table(MockSLConv(),
         @test occursin("ON DELETE RESTRICT",  _fk_ddl(on_delete = "RESTRICT"))
         @test occursin("ON DELETE RESTRICT",  _fk_ddl(on_delete = "PROTECT"))         # PROTECT → RESTRICT
         @test occursin("ON DELETE SET NULL",  _fk_ddl(on_delete = "SET_NULL", null = true))
+        # SET_DEFAULT was the one action missing from this frozen list (#287).
+        @test occursin("ON DELETE SET DEFAULT", _fk_ddl(on_delete = "SET_DEFAULT", default = 1))
         @test occursin("ON DELETE NO ACTION", _fk_ddl(on_delete = "DO_NOTHING"))      # DO_NOTHING → NO ACTION
         # And the backend-neutral renderer itself maps an unset on_delete to NO ACTION.
         @test PormG.Dialect._foreign_key_on_delete_sql(nothing) == "NO ACTION"

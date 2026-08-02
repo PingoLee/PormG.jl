@@ -259,9 +259,14 @@ The `on_delete` parameter controls what happens when the referenced object is de
 - `RESTRICT`: Prevent deletion of referenced object if this object exists
 - `SET_NULL`: Set this field to NULL (requires `null=true`)
 - `SET_DEFAULT`: Set this field to its default value (requires `default` to be set)
-- `SET`: Set this field to a specific value
 - `PROTECT`: Raise an error to prevent deletion
 - `DO_NOTHING`: Take no action (may cause database integrity errors)
+
+Omitting `on_delete` is also valid and is the default: PormG then emits no statement for the relation
+and renders `ON DELETE NO ACTION`, leaving the reference to the database's own constraint.
+
+The two "requires" above are enforced, not advisory — `set_models` raises `ModelDefinitionError` for a
+`SET_NULL` field declared `null=false` or a `SET_DEFAULT` field with no `default` (#287).
 
 # Examples
 
@@ -382,9 +387,25 @@ function _get_on_delete_mode(on_delete::Nothing)
   return nothing
 end
 function _get_on_delete_mode(on_delete::AbstractString)
-  on_delete = uppercase(strip(on_delete))
+  raw = strip(on_delete)
+  on_delete = uppercase(raw)
   on_delete = replace(on_delete, r"\s+" => "_")
-  if contains(on_delete, "CASCADE")
+  # Django's callable sentinel, e.g. `models.SET(get_sentinel_user)` (#287). PormG's `on_delete`
+  # holds a bare sentinel with nowhere to carry a value, so the callable cannot be represented.
+  # Until #287 this fell through to a `contains(…, "SET")` branch that silently discarded the
+  # callable and produced a FK emitting the invalid `ON DELETE SET`.
+  #
+  # This is checked FIRST, before the substring branches: the callable's name is arbitrary text,
+  # so `models.SET(protect_sentinel)` matches `contains(…, "PROTECT")` and
+  # `models.SET(set_default_team)` matches `contains(…, "SET_DEFAULT")`. Ordering it last made the
+  # branch unreachable for exactly the plausible sentinel names and reinstated the silent
+  # mistranslation. Safe at the top: no legitimate input contains `(` — introspection emits
+  # CASCADE / SET NULL / NO ACTION / RESTRICT / SET DEFAULT, the Django importer emits `models.<NAME>`.
+  if occursin(r"\bSET_*\(", on_delete)
+    throw(_fielderr("The on_delete value \e[4m\e[31m$(raw)\e[0m is not supported: Django's SET(...) " *
+      "sentinel carries a value or callable, which PormG's on_delete cannot represent. Use " *
+      "SET_DEFAULT together with a `default=` on the field, or SET_NULL if the column is nullable."))
+  elseif contains(on_delete, "CASCADE")
     return CASCADE
   elseif contains(on_delete, "RESTRICT")
     return RESTRICT
@@ -394,19 +415,17 @@ function _get_on_delete_mode(on_delete::AbstractString)
     return SET_DEFAULT
   elseif contains(on_delete, "NO_ACTION") || contains(on_delete, "DO_NOTHING")
     return DO_NOTHING
-  elseif contains(on_delete, "SET")
-    return SET
   elseif contains(on_delete, "PROTECT")
     return PROTECT
   else
-    throw(_fielderr("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
+    throw(_fielderr("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING or PROTECT"))
   end
 end
 function _get_on_delete_mode(on_delete::Function)
   # check if the function is one of the valid functions
   check_function = on_delete |> string |> uppercase
-  if !(check_function in ["CASCADE", "RESTRICT", "SET_NULL", "SET_DEFAULT", "SET", "DO_NOTHING", "PROTECT"])
-    throw(_fielderr("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING or PROTECT"))
+  if !(check_function in ["CASCADE", "RESTRICT", "SET_NULL", "SET_DEFAULT", "DO_NOTHING", "PROTECT"])
+    throw(_fielderr("The on_delete parameter must be CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING or PROTECT"))
   end
   return on_delete
 end
@@ -551,9 +570,14 @@ The `on_delete` parameter controls what happens when the referenced object is de
 - `RESTRICT`: Prevent deletion of referenced object if this object exists
 - `SET_NULL`: Set this field to NULL (requires `null=true`)
 - `SET_DEFAULT`: Set this field to its default value (requires `default` to be set)
-- `SET`: Set this field to a specific value
 - `PROTECT`: Raise an error to prevent deletion
 - `DO_NOTHING`: Take no action (may cause database integrity errors)
+
+Omitting `on_delete` is also valid and is the default: PormG then emits no statement for the relation
+and renders `ON DELETE NO ACTION`, leaving the reference to the database's own constraint.
+
+The two "requires" above are enforced, not advisory — `set_models` raises `ModelDefinitionError` for a
+`SET_NULL` field declared `null=false` or a `SET_DEFAULT` field with no `default` (#287).
 
 # Examples
 

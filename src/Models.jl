@@ -17,7 +17,7 @@ import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
 #                          field constructors in src/models/fields.jl to check a `default=` kwarg.
 import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
 import PormG: PormGSettings, config, Configuration
-import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING, PROTECT
+import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
 using Decimals
 
@@ -264,12 +264,16 @@ function set_models(_module::Module, path::String)::Nothing
           end
         end        
         
-        # check on_delete
+        # check on_delete — a schema that contradicts itself is rejected at registration (#287).
+        # These were `@error` logs until #287: they named the problem and then let the broken model
+        # through, so the contradiction resurfaced later as a mangled UPDATE or a database-level
+        # constraint violation. The delete collector keeps its own copies of both guards for models
+        # that never pass through `set_models`; this is the layer that catches them at declaration.
         if field.on_delete == SET_NULL && field.null == false
-          @error("The field $field_name in the model $(model.name) has on_delete SET_NULL and null false, this is not allowed")
+          throw(ModelDefinitionError("The field \e[4m\e[31m$(field_name)\e[0m in the model \e[4m\e[31m$(model.name)\e[0m declares on_delete SET_NULL but has null=false — the schema contradicts itself. Declare the field with null=true or use a different on_delete."))
         end
         if field.on_delete == SET_DEFAULT && field.default === nothing
-          @error("The field $field_name in the model $(model.name) has on_delete SET_DEFAULT and default nothing, this is not allowed")
+          throw(ModelDefinitionError("The field \e[4m\e[31m$(field_name)\e[0m in the model \e[4m\e[31m$(model.name)\e[0m declares on_delete SET_DEFAULT but has no default — the schema contradicts itself. Give the field a default= or use a different on_delete."))
         end
                  
       elseif is_many_to_many_field(field)

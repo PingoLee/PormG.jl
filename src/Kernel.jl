@@ -285,7 +285,7 @@ export sqlite_type_map, postgres_type_map, sqlite_type_map_reverse, postgres_typ
        sqlite_date_format_map, sqlite_ignore_schema, postgres_ignore_table
 
 # on_delete handlers
-export CASCADE, RESTRICT, PROTECT, SET_NULL, SET_DEFAULT, SET, DO_NOTHING
+export CASCADE, RESTRICT, PROTECT, SET_NULL, SET_DEFAULT, DO_NOTHING
 
 # `register_ignore_tables!` is exported by constants.jl itself (it is part of the documented
 # downstream-extension surface), so it needs no re-listing here.

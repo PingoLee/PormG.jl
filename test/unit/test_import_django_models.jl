@@ -329,11 +329,20 @@ class Bm2_map_aliq_am(models.Model):
         generated = read(generated_path, String)
         # The foreign key still imports, keeping its non-null options...
         @test occursin("plan_id = Models.ForeignKey(\"Bm2_map_ext_am\"", generated)
-        @test occursin("on_delete=SET_DEFAULT", generated)
         @test occursin("db_constraint=false", generated)
         # ...but None must never surface as a literal default value.
         @test !occursin("default=None", generated)
         @test !occursin("default=\"None\"", generated)
+
+        # #287: Django's `SET_DEFAULT, default=None` on a nullable FK denotes "set the FK to
+        # NULL", which is SET_NULL. It used to import verbatim as SET_DEFAULT-with-no-default —
+        # a combination PormG now rejects at set_models, so the generated file would not load at
+        # all, and regenerating produced the same broken file. The importer translates it.
+        # Registering the old output raised ModelDefinitionError, so the generated module could
+        # not be used at all; that rejection is pinned in test_alignment_sqlite.jl. Here we pin
+        # the other half: the importer no longer produces that shape.
+        @test occursin("on_delete=SET_NULL", generated)
+        @test !occursin("on_delete=SET_DEFAULT", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

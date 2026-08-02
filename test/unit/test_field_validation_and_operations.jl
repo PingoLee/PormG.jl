@@ -1475,6 +1475,46 @@ end
         @test string(sql_style_set_default.on_delete) == "SET_DEFAULT"
         @test string(sql_style_no_action.on_delete) == "DO_NOTHING"
 
+        # Test 5c (#287): the removed `SET` sentinel. `_get_on_delete_mode` used to end with a
+        # `contains(on_delete, "SET")` fallback, so anything vaguely SET-shaped that missed the
+        # exact SET_NULL / SET_DEFAULT substrings silently became a sentinel that no branch of
+        # handle_on_delete! implements and that renders the invalid `ON DELETE SET` in DDL.
+        # Those inputs must be rejected at construction now.
+        @test_throws PormG.FieldValidationError Models.ForeignKey("User", null=true, on_delete="SET")
+        # A near-miss typo: the hyphen is not whitespace, so it never normalized to SET_NULL and
+        # fell through to the old fallback. This is the case that made the fallback dangerous.
+        @test_throws PormG.FieldValidationError Models.ForeignKey("User", null=true, on_delete="SET-NULL")
+        @test_throws PormG.FieldValidationError Models.ForeignKey("User", null=true, on_delete="SETNULL")
+
+        # Django's callable sentinel gets its own message rather than the generic option list —
+        # it used to be swallowed by the same fallback, discarding the callable and producing a
+        # FK that emitted `ON DELETE SET`.
+        django_set_err = try
+            Models.ForeignKey("User", null=true, on_delete="models.SET(get_sentinel_user)")
+            nothing
+        catch e
+            e
+        end
+        @test django_set_err isa PormG.FieldValidationError
+        @test occursin("SET(...)", sprint(showerror, django_set_err))
+        @test occursin("SET_DEFAULT", sprint(showerror, django_set_err))
+
+        # The SET(...) check must run BEFORE the substring branches. The callable's name is
+        # arbitrary text, so a sentinel getter called `protect_sentinel` or `set_default_team`
+        # matches `contains(…, "PROTECT")` / `contains(…, "SET_DEFAULT")` first. With the check
+        # ordered last, every one of these silently returned a wrong action instead of raising —
+        # the exact mistranslation #287 removes. These names are all plausible in real Django code.
+        for callable_name in ("protect_sentinel", "set_default_team", "cascade_to_default",
+                              "restrict_fn", "do_nothing")
+            @test_throws PormG.FieldValidationError Models.ForeignKey(
+                "User", null=true, on_delete="models.SET($(callable_name))")
+        end
+
+        # Discrimination: the valid tokens must still be accepted, including the bare sentinel
+        # form, so the removal did not over-reach.
+        @test string(Models.ForeignKey("User", null=true, on_delete=Models.SET_NULL).on_delete) == "SET_NULL"
+        @test string(Models.ForeignKey("User", null=true, on_delete="set_null").on_delete) == "SET_NULL"
+
         # Test 6: ForeignKey field contains related_name when specified
         @test editor_field.related_name == "edited_posts"
 

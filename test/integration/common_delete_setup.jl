@@ -123,15 +123,17 @@ Set_null_guard_parent_scratch = Models.Model("set_null_guard_parent_scratch",
     name = Models.CharField()
 )
 
-# Intentionally invalid: SET_NULL on a non-null FK. set_models emits a
-# warning at registration time; the model exists only to exercise the
-# pre-mutation guard in the delete collector.
+# Declared VALID (null = true) so registration succeeds, then flipped to null = false below.
+# Since #287 `set_models` throws ModelDefinitionError on SET_NULL + null=false, so a model
+# declared contradictory here would fail at module load and take the whole Deletes suite with
+# it. Flipping after registration is also the more faithful fixture: the delete-collector guard
+# exists precisely for models that reach delete() in a state `set_models` never vetted.
 Set_null_guard_child_scratch = Models.Model("set_null_guard_child_scratch",
     id        = Models.IDField(),
     parent_id = Models.ForeignKey(Set_null_guard_parent_scratch,
                     pk_field     = "id",
                     on_delete    = "SET_NULL",
-                    null         = false,
+                    null         = true,
                     related_name = "nonnull_children"),
     label     = Models.CharField(null = true)
 )
@@ -140,5 +142,41 @@ end
 
 if !@isdefined(SetNullGuardM)
     Models.set_models(set_null_guard_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    # Introduce the contradiction the delete collector must catch, after set_models (which would
+    # now reject it). Only the ORM-side view of the field changes; the table DDL is hand-written
+    # in test_deletes.jl's _reset_set_null_guard_scratch_schema! and already says NOT NULL.
+    set_null_guard_scratch_models.Set_null_guard_child_scratch.fields["parent_id"].null = false
     const SetNullGuardM = set_null_guard_scratch_models
+end
+
+module set_default_guard_scratch_models
+import PormG.Models
+
+Set_default_guard_parent_scratch = Models.Model("set_default_guard_parent_scratch",
+    id   = Models.IDField(),
+    name = Models.CharField()
+)
+
+# Mirror of the SET_NULL guard fixture above, for the SET_DEFAULT contradiction (#287).
+# Declared VALID (default = 1) so set_models accepts it, then the default is stripped below.
+# Before #287 the missing default flowed into update_field as a bare NULL, so SET_DEFAULT
+# silently behaved as SET_NULL; now the collector refuses before any SQL is sent.
+Set_default_guard_child_scratch = Models.Model("set_default_guard_child_scratch",
+    id        = Models.IDField(),
+    parent_id = Models.ForeignKey(Set_default_guard_parent_scratch,
+                    pk_field     = "id",
+                    on_delete    = "SET_DEFAULT",
+                    default      = 1,
+                    null         = true,
+                    related_name = "no_default_children"),
+    label     = Models.CharField(null = true)
+)
+
+end
+
+if !@isdefined(SetDefaultGuardM)
+    Models.set_models(set_default_guard_scratch_models, joinpath(@__DIR__, PORMG_DB_FOLDER))
+    # Strip the default after registration to create the contradiction the collector must catch.
+    set_default_guard_scratch_models.Set_default_guard_child_scratch.fields["parent_id"].default = nothing
+    const SetDefaultGuardM = set_default_guard_scratch_models
 end

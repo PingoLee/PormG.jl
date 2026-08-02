@@ -279,5 +279,4 @@ function RESTRICT end
 function PROTECT end
 function SET_NULL end
 function SET_DEFAULT end
-function SET end
 function DO_NOTHING end

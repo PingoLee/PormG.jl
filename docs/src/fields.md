@@ -830,9 +830,15 @@ Team_radio = Models.Model(
 - `CASCADE`: Delete this record when target is deleted
 - `RESTRICT`: Prevent deletion of target if this record exists
 - `SET_NULL`: Set field to NULL (requires `null=true`)
-- `SET_DEFAULT`: Set to default value
+- `SET_DEFAULT`: Set to the field's default value (requires `default=`)
 - `PROTECT`: Raise error to prevent deletion
 - `DO_NOTHING`: No action (may cause integrity errors)
+
+Omitting `on_delete` is also valid and is the default — PormG then emits no statement for the
+relation and the column renders `ON DELETE NO ACTION`, so the dependent row is **not** cascaded.
+
+The two "requires" above are enforced, not advisory: registering a model with `SET_NULL` on a
+`null=false` field, or `SET_DEFAULT` with no `default`, raises `ModelDefinitionError`.
 
 ### OneToOneField(to_model)
 

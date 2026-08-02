@@ -120,6 +120,23 @@ ways, and the choice is forced by whether the method takes keywords:
 So adding a keyword to a `ChainCaller`-backed method means **converting it to a closure**; leaving it
 as a `ChainCaller` makes the keyword throw. Coverage: `test/unit/test_fluent_parity_208.jl`.
 
+**A `ChainCaller`-backed helper carries no docstring.** `docs/src/api.md` builds `@autodocs` over the
+whole `QueryBuilder` module with **no `Private` key**, so Documenter's `Private = true` default
+publishes *any* docstring in the module as a public API heading — for a function no user can name.
+Three had drifted in (`up_filter!`, `up_values!`, `order_by!`) before #281; `page` had it until #280.
+Put the contract on the `object` docstring's `.method(...)` bullet and use a `#` comment on the
+helper. `test_docstring_coverage.jl` enforces it, scoped to the `ChainCaller(helper, q)` branches —
+widening it to every `sym === :name` branch is not possible, because the closure branches route to
+`first`/`last`/`get`/`deepcopy`, whose bindings resolve to `Base` and are documented there.
+
+**That guard covers the ChainCaller set only — it is not the whole leak.** 41 documented
+QueryBuilder-owned bindings are exported from neither `QueryBuilder` nor `PormG`, and `@autodocs`
+publishes every one (`_solve_field`, `get_filter_query`, `set_context!`, `quote_identifier`,
+`CTEDict`, …). Do not assume a docstring you add to an internal here stays private just because the
+guard is green. Closing the rest needs a deliberate call rather than a flag flip: those same 41 also
+include `delete`, `list`, `earliest`, `latest`, `cjoin`, `save` and `ObjectHandler`, which are
+genuinely user-facing, so `Private = false` would delete real documentation.
+
 New fluent method? `test/unit/test_docstring_coverage.jl` scans the `sym === :name` branches and
 requires each one documented in **both** the `object` docstring and `docs/src/api.md`.
 

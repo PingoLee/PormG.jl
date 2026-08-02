@@ -1165,10 +1165,13 @@ the [API reference](api.md)) is where to look them up.
 
 Each mutates the handler and returns it, so calls can be chained or accumulated on a variable.
 
-- `.filter(pairs...)` — add `WHERE` conditions. Repeated calls **accumulate** (ANDed), unlike
-  `.values`/`.order_by`, which replace their previous call (#199)
-- `.values(fields...)` — choose/annotate the selected columns; `"*"` selects the main table
-- `.order_by(fields...)` — sort; prefix `-` for descending
+- `.filter(pairs...)` — add `WHERE` conditions. Each argument may be a `Pair`, a `Q`/`Qor`, an
+  operator expression, an `F` expression, or an `Exists(subquery)`. Repeated calls **accumulate**
+  (ANDed), unlike `.values`/`.order_by`, which replace their previous call (#199)
+- `.values(fields...)` — choose/annotate the selected columns; `"*"` selects the main table.
+  **Replaces** its previous call, last-call-wins (#199)
+- `.order_by(fields...)` — sort; prefix `-` for descending. **Replaces** its previous call, matching
+  Django's *each `order_by()` clears previous ordering* (#199)
 - `.limit(n)` / `.offset(n)` — pagination, one clause each
 - `.page(limit)` / `.page(limit, offset)` — pagination in one call; `.page(n)` sets the limit only
   and leaves any offset already on the handler in place. Those are the only two arities — anything

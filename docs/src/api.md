@@ -615,7 +615,9 @@ end
 - `:poll` (default) — Client-side polling with interval
 - `:block` — Server-side blocking via `pg_advisory_lock`
 
-SQLite: No-op (executes the block without locking).
+SQLite: no-op — the block executes without locking. It warns once per lock key;
+`on_missing_lock=:ignore` accepts that silently, `on_missing_lock=:error` raises
+`BackendCapabilityError` rather than running unprotected.
 
 See [Advisory Locks](advisory_lock.md) for the full reference.
 
@@ -711,7 +713,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter (or another unsafe shape). |
 | `ProtectedError` | A `delete()` was refused because rows reference the target through a `ForeignKey` with `on_delete = PROTECT`/`RESTRICT` — the data forbids it; delete or reassign the referencing rows first. |
-| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, or a too-old SQLite library. Change the query or the backend. |
+| `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, or a too-old SQLite library. Change the query or the backend. |
 | `InvalidValueError` | A **value** failed coercion/type validation on insert/update, an identifier failed the safety check, or an interval/duration could not be parsed. |
 | `WritesDisabledError` | The connection is not permitted to insert/update/delete — `change_data: false` in `connection.yml`, which is why it lives under `ConfigurationError`. (Renamed from `PermissionError` in the pre-publish naming pass.) |
 | `UnsupportedConnectionError` | A connection object that is neither PostgreSQL nor SQLite reached an execution path — an internal PormG dispatch bug; please report it. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |

@@ -42,7 +42,7 @@ end
 ```
 
 - **PostgreSQL** uses `pg_advisory_lock` / `pg_try_advisory_lock`.
-- **SQLite** does not support advisory locks, so `with_advisory_lock` is a **no-op** — the block still runs, just without cross-process locking. This is deliberate, so the same code is correct in production and in SQLite tests.
+- **SQLite** does not support advisory locks, so `with_advisory_lock` is a **no-op** — the block still runs, just without cross-process locking. This is deliberate, so the same code is correct in production and in SQLite tests. It warns once per lock key; `on_missing_lock = :ignore` accepts that silently and `on_missing_lock = :error` raises `BackendCapabilityError` rather than running unprotected.
 
 Waiting strategies (`:poll` vs `:block`), timeouts, and async safety: **[Advisory Locks](advisory_lock.md)**.
 
@@ -95,7 +95,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 |------|-----------|--------|
 | **Bind placeholders** | `$1`, `$2`, … | `?` |
 | **Bulk load** | `bulk_copy()` (COPY) | `bulk_insert()` (no COPY) |
-| **Advisory locks** | real (`pg_advisory_lock`) | no-op |
+| **Advisory locks** | real (`pg_advisory_lock`) | no-op (warns once per key; `on_missing_lock=:error` raises) |
 | **PK allocation** | real sequences (`nextval`) | emulated via `sqlite_sequence` high-water mark |
 | **Drop a constraint (migrations)** | `ALTER TABLE … DROP CONSTRAINT` | full table rebuild (SQLite has no `DROP CONSTRAINT`) |
 | **`ON CONFLICT`** | supported | supported (SQLite ≥ 3.24) — same syntax |

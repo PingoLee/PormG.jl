@@ -93,7 +93,7 @@ end
 ### Key Technical Details
 - **Hashing:** Keys are hashed using MD5 to provide a 64-bit bigint identifier.
 - **Cleanup:** PostgreSQL releases the lock automatically if the session drops.
-- **SQLite Limitation:** SQLite does not support advisory locks; the helper is a **silent no-op** on that backend — the body runs unprotected, no warning is logged, and the wait/timeout keyword arguments are ignored. See [Advisory Locks](../advisory_lock.md).
+- **SQLite Limitation:** SQLite does not support advisory locks; the helper is a **no-op** on that backend — the body runs unprotected and the wait/timeout keyword arguments are ignored. It warns once per lock key; pass `on_missing_lock = :ignore` to accept the no-op silently, or `on_missing_lock = :error` to raise `BackendCapabilityError` instead of running unprotected. See [Advisory Locks](../advisory_lock.md).
 
 ---
 

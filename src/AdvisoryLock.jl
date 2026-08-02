@@ -11,7 +11,7 @@ import PormG.ConnectionPool: acquire_connection, release_connection
 # database-error boundary (#268) or `with_advisory_lock` would be the last public entry point
 # still leaking raw `LibPQ.Errors.*`.
 import PormG.ConnectionPool: _as_database_error
-import PormG: PormGError, OperationalError
+import PormG: PormGError, OperationalError, BackendCapabilityError, InvalidValueError
 
 import PormG: @pormg_debug
 export with_advisory_lock
@@ -22,6 +22,11 @@ const TRY_SQL = "SELECT pg_try_advisory_lock($(ADVISORY_KEY_EXPR)) AS ok"
 # Workaround for pg_advisory_lock returning void: select true from the void function call
 const BLOCK_SQL = "SELECT true AS ok FROM (SELECT pg_advisory_lock($(ADVISORY_KEY_EXPR))) AS _"
 const UNLOCK_SQL = "SELECT pg_advisory_unlock($(ADVISORY_KEY_EXPR)) AS ok"
+
+# Ceiling on how many distinct lock keys the SQLite no-op warning tracks (#277). Declared up here,
+# ahead of the docstring below that interpolates it — a docstring is a plain string literal
+# evaluated in file order, so a const defined further down would be an UndefVarError at load.
+const SQLITE_LOCK_WARN_CAP = 64
 
 """
 Execute a lock/unlock query on a held connection and return boolean result.
@@ -46,7 +51,7 @@ function _exec_lock_query(pool::PormGPostgres, conn, sql::String, key::AbstractS
 end
 
 """
-    with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; wait::Bool=false, timeout_ms::Int=5_000, strategy::Symbol=:poll)
+    with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; wait::Bool=false, timeout_ms::Int=5_000, interval_ms::Int=100, strategy::Symbol=:poll, on_missing_lock::Symbol=:warn)
 
 Execute a function `f` while holding a PostgreSQL session-level advisory lock identified by `key`.
 
@@ -64,6 +69,31 @@ Advisory locks are an application-level locking mechanism provided by PostgreSQL
     - `:poll`: (Default) Periodically retries lock acquisition from the Julia client. Safe and recommended for most cases.
     - `:block`: Uses PostgreSQL's server-side blocking mechanism. Efficient but holds a connection and uses `statement_timeout`.
 - `interval_ms::Int=100`: Retry interval for the `:poll` strategy.
+- `on_missing_lock::Symbol=:warn`: What to do on a backend that cannot lock. Ignored on
+  PostgreSQL, which always takes a real lock — it exists for the SQLite path (see below).
+  An unrecognised value raises `InvalidValueError` on **both** backends, so a typo cannot lie in
+  wait until you run on SQLite.
+
+# SQLite
+
+SQLite has no advisory locks, so `with_advisory_lock` **runs the body with no mutual exclusion**.
+That is deliberate: it lets the same source run against PostgreSQL in production and SQLite in
+tests, exactly as [`select_for_update`](@ref) does. Unlike `select_for_update`, though, what
+degrades here is a *guarantee* rather than a query that still returns correct rows — so the SQLite
+path is not silent. `on_missing_lock` selects what happens (#277):
+
+| `on_missing_lock` | On SQLite |
+| :--- | :--- |
+| `:warn` (default) | Body runs; warns once per key |
+| `:ignore` | Body runs silently — you have accepted the no-op |
+| `:error` | Throws `BackendCapabilityError`; the body does **not** run |
+
+The other keywords (`wait`, `timeout_ms`, `strategy`, `interval_ms`) are accepted and ignored on
+SQLite, and the contention path cannot fire there, so `OperationalError` is never raised.
+
+The warning is emitted once per distinct key, tracked in-process, for up to
+`$(SQLITE_LOCK_WARN_CAP)` keys — the message says so when that cap is reached, rather than going
+quiet without saying.
 
 # Examples
 ```julia
@@ -75,11 +105,20 @@ PormG.with_advisory_lock(M.Constructor.objects.object.model.connect_key, "update
 end
 ```
 """
-function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; 
-                            wait::Bool = false, 
-                            timeout_ms::Int = 5_000, 
-                            interval_ms::Int = 100, 
-                            strategy::Symbol = :poll)
+function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString;
+                            wait::Bool = false,
+                            timeout_ms::Int = 5_000,
+                            interval_ms::Int = 100,
+                            strategy::Symbol = :poll,
+                            # Accepted and ignored: PostgreSQL always takes a real lock, so there is
+                            # no "missing lock" case to have a policy about. It exists so the same
+                            # call site can carry `on_missing_lock` and still run on both backends —
+                            # on SQLite it is what turns the no-op into a warning or an error
+                            # (#277). Without it here, `on_missing_lock = :error` would be a
+                            # MethodError on the one backend that satisfies it. Still validated, so
+                            # a typo fails on PostgreSQL too rather than lying in wait for SQLite.
+                            on_missing_lock::Symbol = :warn)
+  _validate_on_missing_lock(on_missing_lock)
   conn = acquire_connection(pool)
   got_lock = false
   old_timeout = nothing
@@ -153,16 +192,25 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       end
     end
     
-    # Restore statement_timeout if we changed it
+    # Restore statement_timeout if we changed it.
+    #
+    # `Base.wait`, NOT a bare `wait` — the `wait::Bool` KEYWORD above shadows `Base.wait` inside
+    # this method, so `wait(...)` evaluated as `false(...)` and raised `MethodError: objects of
+    # type Bool are not callable`. The empty `catch` blocks below swallowed it, so this restore
+    # had never once completed: Julia evaluates the argument first, so the SET was dispatched
+    # asynchronously and then never awaited before `release_connection` returned the connection to
+    # the pool — which could hand back a connection still carrying the modified statement_timeout.
+    # The comment that used to sit here ("wait() is enough…") documented an intent that never ran.
+    # Found while working #277; the empty `catch`es stay, because restoring a timeout is genuinely
+    # best-effort, but a MethodError must no longer be one of the things they hide.
     if old_timeout !== nothing
       try
-        # wait() is enough for the async result when we don't need the output
-        wait(backend_execute_async(pool, conn, "SET statement_timeout = '$(old_timeout)'", nothing))
+        Base.wait(backend_execute_async(pool, conn, "SET statement_timeout = '$(old_timeout)'", nothing))
       catch
       end
     elseif strategy == :block
       try
-        wait(backend_execute_async(pool, conn, "SET statement_timeout TO DEFAULT", nothing))
+        Base.wait(backend_execute_async(pool, conn, "SET statement_timeout TO DEFAULT", nothing))
       catch
       end
     end
@@ -176,8 +224,81 @@ end
 with_advisory_lock(f::Function, settings::PormGSettings, key::AbstractString; kwargs...) =
   with_advisory_lock(f, settings.connections, key; kwargs...)
 
-# SQLite no-op (advisory locks not supported)
-with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString; kwargs...) = f()
+# ==============================================================================
+# SQLite: no advisory locks exist, so the body runs UNPROTECTED (#277)
+# ==============================================================================
+#
+# Staying a no-op rather than throwing is what lets one source target PostgreSQL in production and
+# SQLite in tests, exactly as `select_for_update` does. But this degrades a mutual-exclusion
+# GUARANTEE, not a query that still returns correct rows, and the failure mode is a race visible
+# only under concurrency — the hardest class to notice in testing. So the caller chooses, by value:
+#
+#   :warn   (default) → run the body, warn once per key
+#   :ignore           → run the body silently; the caller has read the docs and accepted the no-op
+#   :error            → throw, rather than hand back a guarantee this backend cannot provide
+#
+# Dedup is an explicit Set rather than `@warn ... maxlog=1`. Two reasons, both found in review:
+#   1. `maxlog` is honoured only by loggers that implement it (SimpleLogger/ConsoleLogger/
+#      TestLogger). Under a custom application sink — common in Genie apps and LoggingExtras
+#      stacks — it degrades to warning on EVERY call, which is the log flood the dedup exists to
+#      prevent, for callers who never opted in.
+#   2. `_id=Symbol(..., key)` interns a Symbol per key, and Julia never frees Symbols. The docs
+#      teach `"driver_update_$(driver_id)"`, i.e. unbounded key cardinality, so that is a genuine
+#      slow leak (~4.5 MiB retained at 50k keys, measured).
+#
+# The Set is plain DATA in a module body, which is safe under cached precompilation — the #203 trap
+# is about side EFFECTS (atexit, hook registration), not container state. Same shape as
+# ConnectionPool's `leak_warned` monitor.
+const _SQLITE_LOCK_WARNED = Set{String}()
+const _SQLITE_LOCK_WARNED_LOCK = ReentrantLock()
+# The set is bounded by SQLITE_LOCK_WARN_CAP (declared at the top of this file) so a caller minting
+# a key per entity cannot grow it without limit. Reaching the cap is announced, not swallowed.
+
+# Test seam: the ledger is process-wide, so a suite asserting warn-once needs a way to re-arm.
+# Directly callable for the same reason `ConnectionPool._leak_check!` is.
+_reset_sqlite_lock_warnings!() = Base.@lock _SQLITE_LOCK_WARNED_LOCK empty!(_SQLITE_LOCK_WARNED)
+
+# :warn → warn now; :final → warn now AND say we are going quiet; :silent → already covered.
+function _claim_sqlite_lock_warning(key::AbstractString)::Symbol
+  Base.@lock _SQLITE_LOCK_WARNED_LOCK begin
+    key in _SQLITE_LOCK_WARNED && return :silent
+    length(_SQLITE_LOCK_WARNED) >= SQLITE_LOCK_WARN_CAP && return :silent
+    push!(_SQLITE_LOCK_WARNED, key)
+    return length(_SQLITE_LOCK_WARNED) == SQLITE_LOCK_WARN_CAP ? :final : :warn
+  end
+end
+
+function _validate_on_missing_lock(on_missing_lock::Symbol)
+  on_missing_lock in (:warn, :ignore, :error) && return nothing
+  throw(InvalidValueError(
+    "Invalid on_missing_lock: $(repr(on_missing_lock)). Expected :warn (default), :ignore or :error."))
+end
+
+# `kwargs...` still swallows wait/timeout_ms/strategy/interval_ms so the PostgreSQL call shape stays
+# portable — that tolerance is the whole point of the no-op.
+function with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString;
+                            on_missing_lock::Symbol = :warn, kwargs...)
+  _validate_on_missing_lock(on_missing_lock)
+
+  if on_missing_lock === :error
+    throw(BackendCapabilityError(
+      "with_advisory_lock(on_missing_lock = :error) cannot be honoured on SQLite — it has no " *
+      "advisory locks, so the body for '$key' would run with no mutual exclusion. Use PostgreSQL, " *
+      "or pass on_missing_lock = :ignore to accept the no-op."))
+  end
+
+  if on_missing_lock === :warn
+    outcome = _claim_sqlite_lock_warning(key)
+    if outcome !== :silent
+      tail = outcome === :final ?
+        " Reached $(SQLITE_LOCK_WARN_CAP) distinct keys; further advisory-lock warnings are suppressed." : ""
+      @warn "Advisory locks are a no-op on SQLite: this body runs with NO mutual exclusion. Pass " *
+            "on_missing_lock=:ignore to accept that silently, or :error to refuse it." * tail key=key
+    end
+  end
+
+  return f()
+end
 
 # Wrapper to use by database name string
 function with_advisory_lock(f::Function, db::String, key::AbstractString; kwargs...)

@@ -106,11 +106,12 @@ mutable struct MockSQLitePool139 <: PormG.PormGSQLite
   executed::Vector{String}
   available_at_rollback::Union{Nothing, Bool}
   conn_at_rollback::Any
+  foreign_keys::Bool   # #276: mock session state, so the pragma read-back is honest
 end
 MockSQLitePool139(; fail_commit::Bool = false, rollback_error_msg::Union{Nothing, String} = nothing) =
   MockSQLitePool139(Any[FakeConn139(1)], [true], "mock://sqlite", 1, false, 1, 0,
                     ReentrantLock(), ReentrantLock(), fail_commit, rollback_error_msg, 1,
-                    String[], nothing, nothing)
+                    String[], nothing, nothing, true)
 
 PormG.backend_is_alive(::MockSQLitePool139, conn) = conn isa FakeConn139 && !conn.closed
 PormG.backend_connect(pool::MockSQLitePool139; read_only::Bool = false) = FakeConn139(pool.next_id += 1)
@@ -125,6 +126,15 @@ function PormG.backend_execute(pool::MockSQLitePool139, conn, sql::String, param
   pool.fail_commit && startswith(sql, "COMMIT") && error("mock: commit refused")
   if pool.rollback_error_msg !== nothing && startswith(sql, "ROLLBACK")
     error(pool.rollback_error_msg)
+  end
+  # #276: answer the pragma read-back honestly. The migration lifecycle suspends FK enforcement
+  # before BEGIN and then ASSERTS it took (`_assert_foreign_keys_suspended`). Returning the generic
+  # empty result for this query would make that guard pass without proving anything — with the
+  # fail-closed reading it now throws instead, and either way the assertion would be untested here.
+  # Track the mock's own state so the lifecycle's `= OFF` is what makes the guard pass.
+  if startswith(sql, "PRAGMA foreign_keys")
+    occursin("=", sql) && (pool.foreign_keys = occursin(r"=\s*ON"i, sql))
+    return occursin("=", sql) ? NamedTuple[] : [(foreign_keys = pool.foreign_keys ? 1 : 0,)]
   end
   return NamedTuple[]
 end
@@ -396,5 +406,12 @@ end
   @test any(s -> startswith(s, "COMMIT"),   pool.executed)
   @test any(s -> startswith(s, "ROLLBACK"), pool.executed)
   @test pool.available[1] === true
-  @test pool.connections[1] === old
+
+  # #276 changed this one line, and only on SQLite (the PG twin above still asserts `=== old`).
+  # The SQLite lifecycle suspends `PRAGMA foreign_keys` on its connection before BEGIN, so it now
+  # finalizes with `renew = true` unconditionally — a released-as-is handle would carry enforcement
+  # OFF back into the pool. The #139 guarantees this testset exists for are unaffected and still
+  # asserted above: the connection stays leased until ROLLBACK has run on it.
+  @test pool.connections[1] !== old       # renewed, not released as-is
+  @test old.closed === true               # …and the suspended handle is closed, so nothing can reuse it
 end

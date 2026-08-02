@@ -619,3 +619,60 @@ settings = PormG.config[PORMG_DB_FOLDER]
   end
 
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #276: a transaction may be transiently FK-inconsistent on BOTH backends
+#
+# PormG creates every PostgreSQL foreign key DEFERRABLE INITIALLY DEFERRED (Dialect.add_foreign_key),
+# so PG checks referential integrity at COMMIT, not per statement — writing a child before its
+# parent inside one transaction is legal there and always has been. #276 turned on SQLite's
+# `PRAGMA foreign_keys`, which checks per statement, so without a matching deferral that same block
+# would have started raising on SQLite ONLY: a new backend divergence created by the fix meant to
+# remove one. `run_in_transaction`/`delete()` therefore issue `PRAGMA defer_foreign_keys = ON`.
+#
+# This test exists because the mechanism is invisible when it breaks: SQLite silently IGNORES an
+# unrecognized pragma, so a typo, a rename, or deleting the line reverts the fix with no error and
+# every other test still green. Assert the behaviour, not the statement.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "FK checks are deferred to COMMIT inside a transaction (#276)" begin
+  parent_id = 940_001
+  child_id  = 940_002
+  orphan_id = 940_003
+
+  cleanup() = begin
+    for i in (child_id, orphan_id)
+      try; M.Just_a_nested_roll_back.objects.filter("id" => i).delete(); catch; end
+    end
+    try; M.Just_a_test_deletion.objects.filter("id" => parent_id).delete(); catch; end
+  end
+  cleanup()
+
+  try
+    # Child first, parent second — inconsistent between the two statements, consistent at COMMIT.
+    PormG.run_in_transaction(PORMG_DB_FOLDER) do
+      M.Just_a_nested_roll_back.objects.create(
+        "id" => child_id, "test" => parent_id, "description" => "deferred fk #276")
+      M.Just_a_test_deletion.objects.create("id" => parent_id, "name" => "deferred fk #276")
+    end
+
+    @test M.Just_a_nested_roll_back.objects.filter("id" => child_id).exists()
+    @test M.Just_a_test_deletion.objects.filter("id" => parent_id).exists()
+
+    # …and deferral is not a licence to commit a violation: a child whose parent never arrives must
+    # still fail, just at COMMIT rather than at the INSERT. Without this half the testset would pass
+    # even if enforcement were off entirely.
+    err = try
+      PormG.run_in_transaction(PORMG_DB_FOLDER) do
+        M.Just_a_nested_roll_back.objects.create(
+          "id" => orphan_id, "test" => 949_999, "description" => "orphan #276")
+      end
+      nothing
+    catch e
+      e
+    end
+    @test err isa PormG.IntegrityError
+    @test !M.Just_a_nested_roll_back.objects.filter("id" => orphan_id).exists()   # rolled back
+  finally
+    cleanup()
+  end
+end

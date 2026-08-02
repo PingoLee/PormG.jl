@@ -154,18 +154,20 @@ delete(query)
     | Backend | Deleting a parent whose child FK has an unset `on_delete` |
     |---|---|
     | PostgreSQL | `NO ACTION` is enforced — the delete fails with a foreign-key violation |
-    | SQLite | the delete succeeds and **silently leaves the child orphaned** |
+    | SQLite | `NO ACTION` is enforced — the delete fails the same way (#276) |
 
     Declare the behaviour you want explicitly on every `ForeignKey`.
 
-!!! warning "SQLite does not enforce foreign keys at all"
-    SQLite defaults `PRAGMA foreign_keys` to **off** and PormG does not turn it on, so on SQLite no
-    FK constraint is enforced at runtime — the database will neither cascade a delete nor block one.
-    PormG's own deletion collector is the only thing that acts on `on_delete` there, which means an
-    `on_delete` PormG does not handle (unset, or `DO_NOTHING`) is a no-op rather than an error.
+!!! note "Both backends enforce foreign keys"
+    PormG issues `PRAGMA foreign_keys = ON` on every SQLite connection (#276), so a delete the
+    database should refuse is refused on both. Before that, SQLite defaulted the pragma to **off**
+    and enforced nothing: an `on_delete` PormG's own collector did not handle (unset, or
+    `DO_NOTHING`) silently orphaned the child there while raising on PostgreSQL, so the same schema
+    and the same `delete()` could pass a SQLite test run and fail in production.
 
-    PostgreSQL enforces the constraint normally, so the same schema and the same `delete()` call can
-    succeed on SQLite and fail on PostgreSQL. Test destructive paths against the backend you deploy on.
+    PormG's deletion collector still applies `on_delete` itself — that is what makes `CASCADE` and
+    `SET_NULL` behave identically across backends — but the database is now a real backstop rather
+    than a formality.
 
 **Generated SQL (PostgreSQL):**
 ```sql

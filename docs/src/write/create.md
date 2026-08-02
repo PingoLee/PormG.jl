@@ -385,16 +385,24 @@ end
 was rejected there; a value PormG rejects before sending raises `InvalidValueError` instead (see
 the null-field example above).
 
-!!! warning "SQLite does not enforce foreign keys"
-    SQLite ships with `PRAGMA foreign_keys` **off**, and PormG does not turn it on. The insert
-    above therefore **succeeds** on SQLite, storing a row that references a `circuitid` which does
-    not exist — no error, no warning. `UNIQUE` and `PRIMARY KEY` violations *are* enforced on both
-    backends and raise `IntegrityError` as described.
+!!! note "Foreign keys are enforced on both backends"
+    The insert above raises `IntegrityError` on SQLite as well as PostgreSQL: PormG issues
+    `PRAGMA foreign_keys = ON` on every SQLite connection (#276). SQLite itself defaults the pragma
+    to **off**, which used to mean a dangling reference stored silently there while failing in
+    production PostgreSQL — a bug shape that passed its own test suite.
 
-    The practical consequence: referential integrity you rely on in production PostgreSQL is not
-    reproduced by a SQLite test run, so a dangling-FK bug can pass its tests. Declare the
-    relationship on the model either way — `on_delete` cascade handling is applied by the ORM and
-    works on both backends — but do not treat a green SQLite suite as proof the constraint holds.
+    Enforcement is **not retroactive**: rows already dangling in an existing database stay as they
+    are, and only new statements are checked.
+
+    **Inside a transaction the check happens at `COMMIT`, not at the statement**, on both backends
+    (PostgreSQL foreign keys are `DEFERRABLE INITIALLY DEFERRED`; SQLite matches with
+    `PRAGMA defer_foreign_keys`). So a block that writes children before their parents commits
+    normally — the inconsistency only has to be gone by the end. The example above is autocommit, so
+    it raises immediately.
+
+    For the rarer case where a violation must actually persist — a repair, or a load too large for
+    one transaction — [`without_foreign_keys`](@ref) suspends enforcement for a block on a single
+    pinned connection and verifies the result with `PRAGMA foreign_key_check` before committing.
 
 **Generated SQL (PostgreSQL):**
 ```sql

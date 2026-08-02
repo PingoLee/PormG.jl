@@ -269,8 +269,23 @@ end
   # `occursin("limit") && occursin("offset")` would have passed before and after the fix.
   # Keys follow call order, so this is deterministic.
   msg = _p208_error(() -> qk.page(limit = 20, offset = 40))
-  @test occursin("here: limit, offset", msg)
+  @test occursin("got: limit, offset", msg)
   @test occursin("positional", msg)
+
+  # …and it names the method the CALLER typed, recovered from the internal helper (#281). Before
+  # this the message could only say "here", leaving the user to find which link of a long chain it
+  # meant. Cover both prefix shapes: `.filter`/`.values` go through `up_*!` helpers, `.order_by`
+  # and `.page` do not — a strip that handled only one would pass on half the family.
+  @test occursin("page()", _p208_error(() -> qk.page(limit = 20)))
+  @test occursin("filter()", _p208_error(() -> qk.filter(code = "HAM")))
+  @test occursin("values()", _p208_error(() -> qk.values(fields = "code")))
+  @test occursin("order_by()", _p208_error(() -> qk.order_by(field = "points")))
+  # The internal spelling must NOT leak — that is the whole point (`up_filter`, `filter!`).
+  # Match the exact internal spellings, not a bare "!": punctuation added to the sentence later
+  # would fail that without anything being wrong.
+  fmsg = _p208_error(() -> qk.filter(code = "HAM"))
+  @test !occursin("up_", fmsg)
+  @test !occursin("filter!", fmsg)
 
   # Rejected before the mutator runs: nothing is half-applied.
   @test qk.object.limit == 0

@@ -16,12 +16,13 @@ function _up_values(str::String)
   end
 end
 
-"""
-  up_values!(q::SQLObject, values)
-
-Set the query projection. Each `.values(...)` call **replaces** the previous one
-(last-call-wins, Django parity, #199) — unlike `.filter(...)`, which accumulates.
-"""
+# Backs `query.values(...)` through ChainCaller. Each call RESETS `q.values` — last-call-wins,
+# Django parity (#199) — unlike `up_filter!`, which accumulates.
+#
+# No docstring on purpose (#281): `docs/src/api.md` builds `@autodocs` over the whole QueryBuilder
+# module with no `Private` key, so Documenter's `Private = true` default publishes any docstring
+# here as a public API heading — for a function no user can name. The user-facing contract lives on
+# the `object` docstring's `.values(...)` bullet; `test_docstring_coverage.jl` enforces both halves.
 function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []
@@ -211,15 +212,12 @@ function up_get_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query::
   return _get_or_create(q; target_fields = lookup_keys, show_query = show_query)
 end
 
-"""
-  up_filter!(q::SQLObject, filter)
-  Add filters to the SQLObject query.
-# Arguments
-- `q::SQLObject`: The SQL object to add filters to.
-- `filter`: A collection of filters to add. Each filter can be a `Pair`, `SQLTypeQ`, `SQLTypeQor`, `SQLTypeOper`, or `SQLTypeF`.
-# Returns
-- The modified SQLObject with the new filters added.
-"""
+# Backs `query.filter(...)` through ChainCaller. Each element of the packed tuple may be a `Pair` or
+# any `FilterType` — `SQLTypeQ`, `SQLTypeQor`, `SQLTypeOper`, `SQLTypeF`, `ExistsObject` (types.jl).
+# Calls ACCUMULATE (ANDed) — unlike `up_values!`/`order_by!`, which replace.
+#
+# No docstring on purpose (#281) — see the note on `up_values!` above. The accepted argument kinds
+# are documented on the `object` docstring's `.filter(...)` bullet.
 function up_filter!(q::SQLObject, filter)
   for v in filter
     if isa(v, FilterType)
@@ -300,13 +298,12 @@ function _query_select(array::Vector{SQLTypeField}, connection)
 end
 
 
-"""
-  order_by!(q::SQLObject, values)
-
-Set the query ordering. Each `.order_by(...)` call **replaces** the previous one
-(last-call-wins, matching Django's "each order_by() call clears previous ordering",
-#199) — unlike `.filter(...)`, which accumulates.
-"""
+# Backs `query.order_by(...)` through ChainCaller. Each call RESETS `q.order` — last-call-wins,
+# matching Django's "each order_by() call clears previous ordering" (#199) — unlike `up_filter!`,
+# which accumulates.
+#
+# No docstring on purpose (#281) — see the note on `up_values!` above. The user-facing contract
+# lives on the `object` docstring's `.order_by(...)` bullet.
 function order_by!(q::SQLObject, values::NTuple{N,Union{String,SQLTypeOrder}} where N)
   q.order = [] # every call of order_by, reset the order
   for v in values
@@ -342,6 +339,14 @@ struct ChainCaller{F,T}
   handler::T
 end
 
+# The fluent name the CALLER typed, recovered from the internal helper behind it: `up_filter!` →
+# "filter", `order_by!` → "order_by", `page!` → "page". Without this the kwarg error below could
+# only say "here", leaving the user to find which link of a long chain it meant (#281). The `up_`
+# alternative is what made #280 decline this — `nameof` alone yields `up_filter`, an internal
+# spelling that appears nowhere in the caller's code. Stripping both markers covers every current
+# helper, and the leading `_` branch keeps it correct if the internals are ever `_`-prefixed.
+_fluent_name(f) = replace(string(nameof(f)), r"^(up_|_)" => "", r"!$" => "")
+
 # When called (e.g., query.filter(...)), it executes and returns the handler itself.
 #
 # `kwargs...` is slurped only to REJECT it. Without it a keyword call dies on this functor with a
@@ -353,7 +358,7 @@ end
 # positional tuple, so a keyword has nowhere to go and must fail loudly rather than obscurely.
 function (c::ChainCaller)(args...; kwargs...)
   isempty(kwargs) || throw(QueryBuildError(
-    "Keyword arguments are not accepted here: $(join(keys(kwargs), ", ")). The chainable query methods take positional arguments only — e.g. page(20, 40), limit(20), order_by(\"-points\")."))
+    "Keyword arguments are not accepted by $(_fluent_name(c.func))() — got: $(join(keys(kwargs), ", ")). The chainable query methods take positional arguments only — e.g. page(20, 40), limit(20), order_by(\"-points\")."))
   c.func(c.handler.object, args)
   return c.handler
 end

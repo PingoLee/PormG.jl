@@ -30,6 +30,22 @@ const DOCCOV_API_MD = joinpath(DOCCOV_REPO_ROOT, "docs", "src", "api.md")
 # #228). Normalize before matching or every assertion below becomes platform-dependent.
 _doccov_read(path) = replace(read(path, String), "\r\n" => "\n")
 
+# Isolate the body of `Base.getproperty(q::ObjectHandler, …)` — shared by the two scans below.
+# The file holds a SECOND getproperty (on `Models.Model_Type`, for `.objects`) whose branches are
+# not fluent query methods, so a whole-file scan would demand docs for `:objects` and fail wrongly.
+# The `"\nend\n"` stop works only because every nested `end` inside the chain is indented.
+# Returns "" when either anchor is missing, so the callers' floors turn a broken scan into a
+# failure instead of a vacuous pass.
+function _doccov_getproperty_body()
+    source = _doccov_read(DOCCOV_OBJECT_MANAGER)
+    start_idx = findfirst("function Base.getproperty(q::ObjectHandler", source)
+    start_idx === nothing && return ""
+    rest = source[first(start_idx):end]
+    stop_idx = findfirst("\nend\n", rest)
+    stop_idx === nothing && return ""
+    return rest[1:first(stop_idx)]
+end
+
 @testset "Docstring coverage (#212)" begin
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -95,17 +111,8 @@ _doccov_read(path) = replace(read(path, String), "\r\n" => "\n")
     # moment it is added, before anyone can execute it.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "fluent methods are documented on `object` and in api.md" begin
-        source = _doccov_read(DOCCOV_OBJECT_MANAGER)
-
-        # Isolate Base.getproperty(q::ObjectHandler, …). The file holds a SECOND getproperty (on
-        # Models.Model_Type, for `.objects`) whose branches are not fluent query methods, so a
-        # whole-file scan would demand docs for `:objects` and fail wrongly.
-        start_idx = findfirst("function Base.getproperty(q::ObjectHandler", source)
-        @test start_idx !== nothing
-        rest = source[first(start_idx):end]
-        stop_idx = findfirst("\nend\n", rest)
-        @test stop_idx !== nothing
-        body = rest[1:first(stop_idx)]
+        body = _doccov_getproperty_body()
+        @test !isempty(body)
 
         fluent = unique([m.captures[1] for m in eachmatch(r"sym === :(\w+)", body)])
         # Sanity floor: the chain had 29 branches at the time of writing. A regex that silently
@@ -139,5 +146,71 @@ _doccov_read(path) = replace(read(path, String), "\r\n" => "\n")
     # ─────────────────────────────────────────────────────────────────────────
     @testset "ChainCaller carries no docstring" begin
         @test !Base.Docs.hasdoc(PormG.QueryBuilder, :ChainCaller)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # …and neither do the helpers it dispatches to (#281)
+    # `api.md`'s `@autodocs` block sets no `Private` key, so Documenter's `Private = true` default
+    # publishes EVERY docstring in `PormG.QueryBuilder` as a public API heading. A docstring on
+    # `up_filter!` therefore ships a heading for a function no user can name — the same defect the
+    # ChainCaller guard above exists to prevent, one level down. Three had drifted in
+    # (`up_filter!`, `up_values!`, `order_by!`) before #281; `page` had it until #280.
+    #
+    # SCOPED TO `ChainCaller(helper, q)` BRANCHES ON PURPOSE — do not "fix" this by widening it to
+    # every `sym === :name` branch. That rule is not satisfiable: the closure branches route to
+    # `first`/`last`/`get`/`deepcopy`, whose bindings resolve to **Base**, so `hasdoc` is
+    # permanently true for them; and to `delete`/`earliest`/`latest`/`list`/`inspect_query`/
+    # `cjoin`/`With`, which are legitimately documented. The ChainCaller set is exactly the set
+    # with no user-facing binding to attach docs to.
+    #
+    # This is NOT the whole leak. 41 documented QueryBuilder-owned bindings are exported from
+    # neither `QueryBuilder` nor `PormG`, and `@autodocs` publishes every one of them
+    # (`_solve_field`, `get_filter_query`, `set_context!`, `quote_identifier`, `CTEDict`, …).
+    # Closing that needs a deliberate call, not a flag flip: the same 41 also contains `delete`,
+    # `list`, `earliest`, `latest`, `cjoin`, `save` and `ObjectHandler`, which are genuinely
+    # user-facing, so `Private = false` would drop real documentation. Tracked separately.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "ChainCaller-backed helpers carry no docstring (#281)" begin
+        body = _doccov_getproperty_body()
+        @test !isempty(body)
+
+        # `sym === :name` → any comment/blank lines → `return ChainCaller(helper, q)`.
+        # Comment-tolerant deliberately: `:select_for_update` already carries two comment lines
+        # between its `elseif` and its `return`, so a strict two-line pattern would silently stop
+        # matching the first time someone annotates a ChainCaller branch.
+        pattern = r"sym === :\w+\s*\n(?:[ \t]*#[^\n]*\n|[ \t]*\n)*[ \t]*return ChainCaller\((\w+!?), q\)"
+        matches = collect(eachmatch(pattern, body))
+        helpers = unique([m.captures[1] for m in matches])
+
+        # Guard the guard, two ways. The equality is self-calibrating — it proves the regex matched
+        # EVERY ChainCaller construction rather than a lucky subset, without hard-coding a count
+        # that a legitimate new method would have to bump. The floor catches both regexes failing
+        # together, which equality alone would report as a vacuous pass.
+        #
+        # Count over a COMMENT-STRIPPED copy, and keep the count regex shape-agnostic. Both halves
+        # are load-bearing, and the obvious simplifications each break one:
+        #   - stripping comments stops a mere mention of `ChainCaller(...)` — this file's own header
+        #     has one, and object_manager.jl is heavily commented — inflating the count into a bogus
+        #     "8 == 9" that reads like a missing branch.
+        #   - the count must NOT be anchored to `return ChainCaller(` the way `pattern` is. Sharing
+        #     a lexical shape makes both regexes blind to the same thing, so a construction written
+        #     any other way (`sym === :x; return ChainCaller(…)` on one line, or assigned to a local
+        #     first) passes silently — which is exactly the leak this guard exists to catch.
+        #   - compare `matches`, not `helpers`: two branches legitimately routing to one helper
+        #     (an alias) would otherwise fail as "7 == 8". `unique` matters only for the doc loop.
+        code = replace(body, r"^[ \t]*#[^\n]*$"m => "")
+        n_constructions = length(collect(eachmatch(r"ChainCaller\(", code)))
+        @test length(matches) == n_constructions
+        @test n_constructions >= 8
+
+        # `hasdoc` alone is NOT enough: it resolves the binding through to its defining module, so
+        # it returns true for anything named after a documented `Base` function. Require the
+        # docstring to be owned by QueryBuilder before calling it a leak.
+        documented = filter(helpers) do name
+            sym = Symbol(name)
+            Base.Docs.hasdoc(PormG.QueryBuilder, sym) &&
+                Base.Docs.Binding(PormG.QueryBuilder, sym).mod === PormG.QueryBuilder
+        end
+        @test documented == String[]
     end
 end

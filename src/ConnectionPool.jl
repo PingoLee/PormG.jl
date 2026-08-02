@@ -1812,25 +1812,33 @@ import .models as M
 result = run_in_transaction(pool) do
   driver_query = M.Driver |> object
   new_driver = driver_query.create(
+    "driverref" => "alice_lane",
+    "code" => "ALA",
     "forename" => "Alice",
     "surname" => "Lane",
+    "dob" => "1998-04-12",
     "nationality" => "British",
-    "driverref" => "alice_lane"
+    "url" => "https://example.com/alice_lane"
   )
 
   race_query = M.Race |> object
   race_query.create(
     "year" => 2025,
     "round" => 1,
+    "circuitid" => 1,
     "name" => "Gran Turismo",
-    "circuitid" => 1
+    "date" => "2025-03-16",
+    "url" => "https://example.com/gran_turismo"
   )
 
-  # Keep counting or aggregate inside the transaction if needed
-  driver_count = driver_query |> do_count
+  # Keep counting or aggregating inside the transaction if needed
+  driver_count = driver_query.count()
   return (new_driver[:driverid], driver_count)
 end
 ```
+
+Every column above is one the F1 models declare `null = false`; omitting any of them raises at
+`create()` before the statement is built.
 """
 function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite})
   # Reentrancy (#26): a nested run_in_transaction / atomic on the SAME pool becomes a

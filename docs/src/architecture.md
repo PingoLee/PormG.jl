@@ -16,7 +16,7 @@ flowchart TD
 
   subgraph API["Public API"]
     OBJ["object(model) → ObjectHandler<br/>wraps SQLObjectQuery (query state)<br/>querybuilder/types.jl"]
-    CHAIN["fluent methods: filter! / values!<br/>order_by! / annotate! / with! ...<br/>querybuilder/object_manager.jl"]
+    CHAIN["fluent methods: .filter() / .values()<br/>.order_by() / .limit() / .with() ...<br/>querybuilder/object_manager.jl"]
   end
 
   subgraph QB["QueryBuilder — src/querybuilder/"]

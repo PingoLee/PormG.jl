@@ -97,10 +97,10 @@ makedocs(
 
         assets = String[],
         # api.md is one comprehensive page: hand-written reference plus an @autodocs dump of every
-        # module. It renders to ~510 KiB as of #274 (measured, not estimated — the previous "~340
-        # KiB" note dated from before #212/#213/#274 added ~45 docstrings). Raised 600 → 900 KiB so
-        # the next batch of docstrings does not fail the build; re-measure `docs/build/api.html`
-        # and update this number whenever a PR adds a significant number of docstrings.
+        # module. It renders to ~438 KiB as of #289 (measured, not estimated — down from ~510 KiB
+        # because `Private = false` stopped publishing ~75 internal docstrings). Raised 600 → 900
+        # KiB so the next batch of docstrings does not fail the build; re-measure
+        # `docs/build/api.html` and update this number whenever a PR moves it materially.
         size_threshold = 900 * 1024,
         # Documenter warns at 100 KiB by default, which api.md passed long ago and will never go
         # back under — so that warning was pure noise. Move the warn limit to 700 KiB: below the
@@ -108,7 +108,11 @@ makedocs(
         # page is approaching the ceiling instead of on every single build.
         size_threshold_warn = 700 * 1024,
     ),
-    checkdocs = :exports,
+    # `:public`, not `:exports`, so this agrees with api.md's `@autodocs Private = false` (#289):
+    # both then use `Base.ispublic`, which covers `export`ed names AND ones declared `public`
+    # (Julia 1.11+). Under `:exports` a `public`-but-unexported name could have a docstring that
+    # never reaches the manual without anything complaining.
+    checkdocs = :public,
 )
 
 # Deploydocs: Sets up automatic upload to the gh-pages branch

@@ -19,10 +19,12 @@ end
 # Backs `query.values(...)` through ChainCaller. Each call RESETS `q.values` — last-call-wins,
 # Django parity (#199) — unlike `up_filter!`, which accumulates.
 #
-# No docstring on purpose (#281): `docs/src/api.md` builds `@autodocs` over the whole QueryBuilder
-# module with no `Private` key, so Documenter's `Private = true` default publishes any docstring
-# here as a public API heading — for a function no user can name. The user-facing contract lives on
-# the `object` docstring's `.values(...)` bullet; `test_docstring_coverage.jl` enforces both halves.
+# No docstring on purpose (#281). Since #289 `api.md`'s `@autodocs` sets `Private = false`, so an
+# un-`public` name no longer reaches the site regardless — but the rule still stands here: there is
+# no USER-FACING binding to attach docs to — `.values(...)` is synthesized by `getproperty`, and
+# nobody reaches `up_values!` by name — so a docstring here would only ever be read by someone
+# already in this file. The user-facing contract lives on the `object` docstring's `.values(...)`
+# bullet; `test_docstring_coverage.jl` enforces both halves.
 function up_values!(q::SQLObject, values)
   # every call of values, reset the values
   q.values = []

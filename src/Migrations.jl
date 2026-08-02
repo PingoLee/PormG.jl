@@ -68,6 +68,13 @@ export get_migration_plan
 export init_migrations, status, dry_run
 export migrate_to, mark_applied, mark_failed, remove_migration_record, discard_pending_migration
 export MigrationStatus, DryRunResult
+
+# `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/migrations/stability.md`
+# tells users to read `PormG.Migrations.MIGRATION_FORMAT_VERSION` to check plan compatibility.
+# Required for it to survive `Private = false`; see the note in QueryBuilder.jl. Note this is a
+# `const`, so `api.md`'s `@autodocs` `Order` must also include `:constant` or it is filtered out
+# of the page while `checkdocs` still demands it.
+public MIGRATION_FORMAT_VERSION
 export compute_checksum, is_destructive, total_statements, detect_destructive_actions
 export DestructiveMigrationError
 

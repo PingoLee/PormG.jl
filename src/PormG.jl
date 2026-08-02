@@ -187,7 +187,10 @@ export pool_stats  # connection-pool health snapshot (#127)
 export with_tx_context, in_transaction_context  # Transaction context helpers
 # setup / install_ai_skills are deliberately NOT exported (#201): maximally generic names for
 # one-off lifecycle helpers — call them qualified (`PormG.setup()`, `PormG.install_ai_skills()`),
-# which is how every doc and README example already shows them.
+# which is how every doc and README example already shows them. They ARE public API though, and
+# `docs/src/api.md` says so — `public` (Julia 1.11+) records that without putting them in scope on
+# a bare `using PormG`, and keeps them on the API page under `Private = false` (#289).
+public setup, install_ai_skills
 export upgrade_guide  # version-scoped UPGRADING.md emitter (#216)
 
 include("Migrations.jl")

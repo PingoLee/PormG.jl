@@ -724,7 +724,13 @@ Race_photo = Models.Model(
 
 **Purpose**: Binary data storage for files and encrypted content.
 
-**Database Type**: `BYTEA`
+**Database Type**: `TEXT` on both backends today — **not** `BYTEA`/`BLOB`.
+
+!!! warning "Incomplete"
+    `BinaryField` is not finished: it renders as `TEXT`, `default=` raises for every non-`nothing`
+    value, and `max_length` never reaches the DDL (it is checked on write, as a *character* count on
+    string values only). Use `TextField`/`CharField` with your own encoding until that is fixed.
+    See the `BinaryField` docstring in the [API reference](api.md).
 
 **Use Cases**: File storage, encrypted data, binary documents.
 

@@ -899,7 +899,14 @@ The terminal `list()` methods return a documented, stable shape:
 
 ## Auto-Generated API Docs
 
-The following section contains auto-generated documentation from docstrings in the source code:
+The following section contains auto-generated documentation from docstrings in the source code.
+
+!!! note "What appears here"
+    `Private = false` means this section lists only names each module marks as API — `export`ed, or
+    declared `public` (Julia 1.11+). Internal helpers keep their docstrings in the source but stay
+    off this page (#289). Note Documenter tests `Base.ispublic` against the module a docstring was
+    *written in*, not `PormG`'s re-export list, so a user-facing name defined in a submodule needs a
+    `public` declaration **there** — see the note above `public` in `src/QueryBuilder.jl`.
 
 ```@autodocs
 Modules = [
@@ -913,5 +920,6 @@ Modules = [
     PormG.ConnectionPool,
     PormG.Utils,
 ]
-Order = [:module, :type, :function, :macro]
+Order = [:module, :constant, :type, :function, :macro]
+Private = false
 ```

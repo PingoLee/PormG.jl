@@ -16,6 +16,11 @@ export env, Settings, connection, close_pool!, get_settings
 export with_tx_context, in_transaction_context, current_transaction_depth, register_connection, unregister_connection, set_connection_resolver
 export set_before_connect_hook, ensure_before_connect!
 
+# `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/api.md` gives these their
+# own "Configuration API" section and `configuration/server.md` calls them qualified. Required for
+# them to survive `Private = false` in the api.md `@autodocs` block; see the note in QueryBuilder.jl.
+public is_loaded, load_many, ping, status, get_tx_connection
+
 const _REDACT_CONNECTION_STRING_RE = Regex("(?i)(password|user)=[^\\s]+")
 
 # Dynamic connection resolver hook

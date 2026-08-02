@@ -798,10 +798,11 @@ end
 # drifting apart is exactly what #272 was. `test_fluent_parity_208.jl` now pins them equal; keep
 # that test passing rather than editing one side alone.
 #
-# No docstring on purpose — `docs/src/api.md` builds an `@autodocs` page over the whole QueryBuilder
-# module with `Private = true`, so a docstring here publishes `page` in the public API reference as
-# if the function form were supported surface. The `.page(...)` reference lives on the `object`
-# docstring and in `docs/src/api.md` (the split that test_docstring_coverage.jl enforces).
+# No docstring on purpose. Since #289 `api.md`'s `@autodocs` sets `Private = false`, so a docstring
+# here would no longer reach the site by itself — but adding one would still present the function
+# form as supported surface to anyone reading the source, and would invite a `public` declaration to
+# "fix" its absence from the page. The `.page(...)` reference lives on the `object` docstring and in
+# `docs/src/api.md` (the split that test_docstring_coverage.jl enforces).
 
 # Sets BOTH clauses (offset falls back to its 0 default). Unreachable from the chain: `ChainCaller`
 # forwards positional arguments only, so no keyword can arrive on the fluent path.

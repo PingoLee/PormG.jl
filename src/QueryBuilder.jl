@@ -1,6 +1,10 @@
 module QueryBuilder
 
 import DataFrames, Tables, JSON, CSV, OrderedCollections
+# `DataFrame` by name, not just the module: `query |> DataFrame` has its docstring attached here, and
+# the `public DataFrame` below (#289) needs a BINDING to mark — `public` on a name this module cannot
+# resolve creates a public-but-undefined entry, which Aqua's `test_undefined_exports` rightly fails.
+import DataFrames: DataFrame
 using Dates, TimeZones, Decimals, UUIDs
 
 import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey, sManyToManyField
@@ -109,6 +113,26 @@ export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, Filt
   QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # do_count and do_exists are now strictly used as functors (query.count(), query.exists())
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+
+# ---
+# `public` (Julia 1.11+) — user-facing but deliberately NOT exported (#289).
+#
+# These are real API: `docs/src/api.md` gives them tables and headings, and users reach them through
+# the fluent surface (`query.delete()`, `query.list()`, `q |> DataFrame`) rather than by importing a
+# name, which is why exporting them would only pollute a bare `using`. `public` says "this is API"
+# without changing what `using` dumps into scope.
+#
+# It is also load-bearing for the docs build: `docs/src/api.md`'s `@autodocs` sets `Private = false`,
+# and Documenter decides public/private with `Base.ispublic(mod, name)` against the module the
+# docstring was attached in — never PormG's export list. Anything user-facing here that is not
+# `public` silently vanishes from the API reference. `show_query`/`inspect_query` are the sharp case:
+# exported from `PormG`, but defined here, so only this declaration keeps them on the page.
+public cjoin, delete, list, save, earliest, latest, ObjectHandler, inspect_query, show_query
+
+# Foreign bindings whose docstrings live in this module's meta: the `.first()` / `.last()` terminals
+# and `query |> DataFrame`. `public` works on an imported name (it marks the binding in THIS module),
+# and does not touch `Base`/`DataFrames`.
+public first, last, DataFrame
 
 include("documentation/querybuilder.jl")
 

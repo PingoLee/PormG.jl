@@ -59,13 +59,10 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
 - **SQLite**: `with_advisory_lock` is a **no-op** — see the warning below.
 - **Async Safety**: `with_advisory_lock` uses `LibPQ.async_execute` and `fetch()` to ensure that the Julia task yields while waiting for the database, keeping the event loop unblocked.
 
-!!! warning "Advisory locks are a silent no-op on SQLite"
-    On a SQLite connection `with_advisory_lock(f, conn, key; kwargs...)` is defined as `f()` —
-    nothing more. The body runs **unprotected**, and:
-
-    - `wait`, `timeout_ms`, `strategy` and `interval_ms` are accepted and silently ignored.
-    - **No warning is logged.** Nothing in the output distinguishes a held lock from no lock.
-    - The contention path cannot fire, so code that reacts to `OperationalError` never sees one.
+!!! warning "Advisory locks are a no-op on SQLite"
+    On a SQLite connection the body of `with_advisory_lock` runs with **no mutual exclusion at
+    all**. `wait`, `timeout_ms`, `strategy` and `interval_ms` are accepted and ignored, and the
+    contention path cannot fire, so code that reacts to `OperationalError` never sees one there.
 
     SQLite's own writer serialization (`BEGIN IMMEDIATE`) is per-database-file and per-process; it
     is not a substitute for a named application lock, and it protects nothing for the non-SQL
@@ -73,6 +70,47 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
     scheduled jobs. Treat SQLite as single-instance, exactly as
     [migrations do](migrations/index.md), and rely on advisory locks only where PostgreSQL is the
     production backend.
+
+### Choosing what SQLite does: `on_missing_lock`
+
+The no-op stays the default — it is what lets one codebase run PostgreSQL in production and SQLite
+in tests. But because what degrades here is a *guarantee* rather than a query, the SQLite path is
+not silent, and `on_missing_lock` lets you pick (#277):
+
+| `on_missing_lock` | On SQLite | Use it when |
+| :--- | :--- | :--- |
+| `:warn` (default) | Body runs; **warns once per key** | You want to be told, but not stopped |
+| `:ignore` | Body runs, silently | You have read this page and accepted the no-op |
+| `:error` | Raises [`BackendCapabilityError`](errors.md); the body does **not** run | The exclusion is genuinely required for correctness |
+
+The same call site works on both backends — that is the point of the keyword:
+
+```julia
+# Default: a real lock on PostgreSQL, a warning once per key on SQLite.
+PormG.with_advisory_lock(connection_key, "driver_update_$(driver_id)") do
+    # rebuild this driver's standings
+end
+
+# SQLite gives no protection here and that is acceptable — stay quiet.
+PormG.with_advisory_lock(connection_key, "circuit_cache_warm"; on_missing_lock = :ignore) do
+    # …
+end
+
+# This MUST be exclusive. Refuse to run on a backend that cannot promise it.
+PormG.with_advisory_lock(connection_key, "season_points_recalc"; on_missing_lock = :error) do
+    # never reached on SQLite — BackendCapabilityError is raised instead
+end
+```
+
+On PostgreSQL `on_missing_lock` is accepted and ignored: a real lock is always taken, so there is
+no missing-lock case to have a policy about. An unrecognised value raises `InvalidValueError` on
+**both** backends, so a typo cannot lie in wait until you happen to run on SQLite.
+
+The warning fires once per distinct lock key, tracked in-process and independently of the logger in
+use, so a scheduled job taking the same lock in a loop logs one line rather than one per iteration.
+Tracking is capped at 64 distinct keys — a fair ceiling for a genuinely per-entity key like
+`"driver_update_$(driver_id)"` — and the warning that reaches the cap says so rather than going
+quiet without telling you.
 
 ## API Reference
 

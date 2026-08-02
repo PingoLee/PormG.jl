@@ -34,7 +34,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `row.driverid` on an unprojected FK | `LazyTraversalError` | PormG never lazily loads a relation — project it with `values(...)` |
 | any filter or `values` | `UnknownFieldError` | The field name does not exist on the model (lookups are case-sensitive) |
 | any filter | `FilterError` | The predicate itself is malformed |
-| PostgreSQL-only features on SQLite | `BackendCapabilityError` | e.g. `iunaccent_*`, JSONB containment, window `frame=` |
+| PostgreSQL-only features on SQLite | `BackendCapabilityError` | e.g. `iunaccent_*`, JSONB containment, window `frame=`, `with_advisory_lock(...; on_missing_lock = :error)` |
 | anything else about query shape | `QueryBuildError` | The long-tail default |
 
 ### Writing
@@ -58,6 +58,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | any query, pool saturated | `PoolTimeoutError` | Raise `pool_size`/`pool_timeout` — see [Advanced Configuration](configuration/advanced.md) |
 | any query, database unreachable | `PoolConnectError` | Carries the `cause` and a redacted connection string |
 | `with_advisory_lock(...; wait = false)` | `OperationalError` | Lock held elsewhere. **Never raised on SQLite** — see [Advisory Locks](advisory_lock.md) |
+| `with_advisory_lock(...; on_missing_lock = :error)` on SQLite | `BackendCapabilityError` | SQLite has no advisory locks; the body would run unprotected, so it is refused instead |
 
 ### Configuration and migrations
 

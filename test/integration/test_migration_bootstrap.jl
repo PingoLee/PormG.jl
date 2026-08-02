@@ -1952,10 +1952,18 @@ if adapter_name == "SQLite"
       @test "added_on" in column_names(pool82, "indexchild82")
       @test user_idx(index_names(pool82, "indexchild82")) == idx_before   # add-field rebuild kept the index
 
-      # (f) the FK-check GATE fires: enforcement is off by default, so we can plant an orphan row, and the
-      #     next rebuild's PRAGMA foreign_key_check must abort the migration (rollback) rather than commit.
-      PormG.ConnectionPool.fetch(pool82,
-        """INSERT INTO "indexchild82" ("code", "parent_id", "payload", "added_on") VALUES ('orphan', 999, 'x', '2024-01-01')""")
+      # (f) the FK-check GATE fires: plant an orphan row, and the next rebuild's
+      #     PRAGMA foreign_key_check must abort the migration (rollback) rather than commit.
+      #
+      #     #276: enforcement is ON now, so the orphan goes in through the documented escape hatch.
+      #     check_on_exit = false because the orphan IS the fixture — the whole point is to hand the
+      #     rebuild a violation and prove the gate catches it. This still works because
+      #     `PRAGMA foreign_key_check` reports orphans regardless of whether enforcement is on, which
+      #     is also why suspending it during migrations costs the gate nothing.
+      PormG.without_foreign_keys(pool82; check_on_exit = false) do
+        PormG.ConnectionPool.fetch(pool82,
+          """INSERT INTO "indexchild82" ("code", "parent_id", "payload", "added_on") VALUES ('orphan', 999, 'x', '2024-01-01')""")
+      end
       write82("""
       IndexParent82 = Models.Model(
           id = Models.IDField(),
@@ -2074,3 +2082,94 @@ if adapter_name == "SQLite"
   end
 end
 
+
+# ── SQLite: a rebuild of a PARENT table must not cascade-delete its children (#276) ──
+#
+# Logic: PormG now enables `PRAGMA foreign_keys` on every SQLite connection. The table rebuild
+#        (CREATE new → INSERT…SELECT → DROP old → RENAME) drops the OLD table, and with enforcement
+#        on that DROP performs an implicit DELETE which fires child ON DELETE actions. For a CASCADE
+#        child that deletes its rows permanently; the parent is then renamed back, so the parent
+#        survives and the children do not — and the migration COMMITs successfully.
+# Why:   this is the one silent-data-loss path in #276, and the existing #82 gate cannot see it:
+#        `PRAGMA foreign_key_check` looks for ORPHANS, and after a cascade there are none — the
+#        children are simply gone. The migration lifecycle therefore suspends enforcement before
+#        BEGIN (SQLite's own documented step 1 of the ALTER procedure). Without that suspension this
+#        testset fails by finding zero child rows.
+#        Note #82 rebuilds the CHILD; this one rebuilds the PARENT, which is what fires the cascade.
+if adapter_name == "SQLite"
+  @testset "SQLite rebuild of a parent does not cascade-delete children (#276)" begin
+    db276 = "db_test_migration_276"
+    db276_path = joinpath(@__DIR__, db276)
+    write276(content::String) = open(joinpath(db276_path, "models.jl"), "w") do f
+      write(f, "module models\nimport PormG.Models\n", content, "\nend")
+    end
+
+    try
+      try; PormG.Configuration.close_pool!(db276_path); catch; end
+      try; ispath(db276_path) && rm(db276_path, recursive=true); catch; end
+      PormG.Generator.create_db_folder_and_yml(path=db276_path, adapter="SQLite")
+      yml = joinpath(db276_path, "connection.yml")
+      yml_content = replace(read(yml, String), "database: database.sqlite" => "database: migration_276.sqlite")
+      open(yml, "w") do f; write(f, yml_content); end
+      PormG.Configuration.load(db276_path)
+      pool276 = PormG.Configuration.get_settings(db276_path).connections
+
+      # Parent carries an unrelated field we will alter to force ITS rebuild; child cascades.
+      write276("""
+      Parent276 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField(),
+          note = Models.CharField(null=true)
+      )
+      Child276 = Models.Model(
+          id = Models.IDField(),
+          label = Models.CharField(),
+          parent_id = Models.ForeignKey(Parent276, pk_field="id", on_delete="CASCADE")
+      )
+      """)
+      makemigrations(db276_path, interactive=false)
+      migrate(db276_path, interactive=false, destructive=true)
+
+      PormG.ConnectionPool.fetch(pool276, """INSERT INTO "parent276" ("name", "note") VALUES ('p1', 'n')""")
+      PormG.ConnectionPool.fetch(pool276, """INSERT INTO "child276" ("label", "parent_id") VALUES ('c1', 1)""")
+      PormG.ConnectionPool.fetch(pool276, """INSERT INTO "child276" ("label", "parent_id") VALUES ('c2', 1)""")
+      child_count() = DataFrame(PormG.ConnectionPool.fetch(pool276, """SELECT COUNT(*) AS n FROM "child276" """))[1, :n]
+      @test child_count() == 2
+
+      # Enforcement really is on — this is the premise the whole testset rests on, so assert it
+      # rather than assume it (a dangling insert must be refused).
+      @test_throws PormG.IntegrityError PormG.ConnectionPool.fetch(pool276,
+        """INSERT INTO "child276" ("label", "parent_id") VALUES ('orphan', 999)""")
+
+      # Alter an unrelated field on the PARENT (note: null=true → NOT NULL) → rebuilds parent276.
+      write276("""
+      Parent276 = Models.Model(
+          id = Models.IDField(),
+          name = Models.CharField(),
+          note = Models.CharField(default="d")
+      )
+      Child276 = Models.Model(
+          id = Models.IDField(),
+          label = Models.CharField(),
+          parent_id = Models.ForeignKey(Parent276, pk_field="id", on_delete="CASCADE")
+      )
+      """)
+      makemigrations(db276_path, interactive=false)
+      migrate(db276_path, interactive=false, destructive=true)
+
+      # THE ASSERTION: the children survived the parent's rebuild.
+      @test child_count() == 2
+      parents = DataFrame(PormG.ConnectionPool.fetch(pool276, """SELECT COUNT(*) AS n FROM "parent276" """))
+      @test parents[1, :n] == 1
+
+      # And the migration did not leave an enforcement-disabled connection in the pool: a fresh
+      # dangling insert must still be refused after the migration ran.
+      @test_throws PormG.IntegrityError PormG.ConnectionPool.fetch(pool276,
+        """INSERT INTO "child276" ("label", "parent_id") VALUES ('orphan2', 999)""")
+    finally
+      try; PormG.Configuration.close_pool!(db276_path); catch; end
+      try; delete!(PormG.config, db276_path); catch; end
+      try; ispath(db276_path) && rm(db276_path, recursive=true); catch; end
+    end
+  end
+end

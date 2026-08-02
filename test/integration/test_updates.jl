@@ -977,9 +977,11 @@ end
         # back too. Before the fix this wrap was gated to PostgreSQL only, so on SQLite
         # each chunk auto-committed and chunk-K's failure left chunks 1…K-1 persisted.
         #
-        # Trigger choice: a UNIQUE index, not an FK. The runtime SQLite connection does
-        # not enable PRAGMA foreign_keys, so an FK violation is not a reliable mid-chunk
-        # failure there; a UNIQUE index is enforced by default. And unlike a pre-flight
+        # Trigger choice: a UNIQUE index, not an FK. UNIQUE has always been enforced on both
+        # backends, which is what makes it a reliable mid-chunk failure. (Before #276 an FK was
+        # additionally unusable here because SQLite did not enforce foreign keys at all; it does
+        # now, so an FK would also work — UNIQUE is kept because it needs no parent-row fixture.)
+        # And unlike a pre-flight
         # validation error (bad length / wrong type), a UNIQUE collision passes
         # validation (999 is a valid integer) and only fails once the chunk hits the DB —
         # which is exactly the transactional path under test. On PostgreSQL this passes

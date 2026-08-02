@@ -305,8 +305,11 @@ end
     manager.add(sponsor_a, sponsor_b, sponsor_c)
     expected = Set(["RollbackA", "RollbackB", "RollbackC"])
 
-    # Force remove to fail inside set's run_in_transaction (SQLite does not enforce
-    # FK at runtime unless PRAGMA foreign_keys=ON, so bogus IDs are not reliable).
+    # Force remove to fail inside set's run_in_transaction. Flipping `change_data`, not a bogus FK
+    # id: the trigger has to fire on both backends, and it needs to be independent of *why* a write
+    # is refused. (This used to say bogus IDs were unusable because SQLite did not enforce FKs —
+    # true until #276, which turned enforcement on. The workaround is still the right one; the
+    # reason is no longer.)
     orig_change_data = PormG.config[PORMG_DB_FOLDER].change_data
     try
         PormG.config[PORMG_DB_FOLDER].change_data = false

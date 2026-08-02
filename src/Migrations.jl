@@ -15,6 +15,10 @@ import OrderedCollections: OrderedDict
 import Random: randstring
 import SHA
 import PormG.ConnectionPool: fetch, with_transaction, with_sqlite_write_lock, finalize_transaction_connection!
+# #276: the SQLite lifecycle acquires its connection explicitly so it can suspend FK enforcement
+# before BEGIN, and asserts the suspension took. Both must be on this list — an export from
+# ConnectionPool alone is an UndefVarError here, and only the migration path would hit it.
+import PormG.ConnectionPool: acquire_connection, _assert_foreign_keys_suspended
 import PormG.Configuration
 import PormG.Configuration: get_settings
 using Logging

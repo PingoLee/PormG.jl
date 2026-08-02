@@ -455,8 +455,9 @@ end
     # ─────────────────────────────────────────────────────────────────────────
     # DO_NOTHING should not be preemptively handled by the collector.  The ORM
     # attempts the parent delete directly and defers the final outcome to the
-    # backend: PostgreSQL rejects the FK violation, while SQLite may allow the
-    # delete when PRAGMA foreign_keys is not set.
+    # backend — and since #276 both backends reject the FK violation, so there is
+    # no longer an adapter branch here. (SQLite used to permit it: PormG never set
+    # PRAGMA foreign_keys, so the delete succeeded and orphaned the child.)
     # ─────────────────────────────────────────────────────────────────────────
     @testset "Delete with DO_NOTHING: ORM Defers to Database" begin
         parent_id = 920001
@@ -484,8 +485,7 @@ end
             @test inspection[:operation] == :delete
             @test occursin("delete from do_nothing_parent_scratch", lowercase(inspection[:sql_text]))
 
-            # Live delete — outcome is adapter-dependent.
-            pool = PormG.config[PORMG_DB_FOLDER].connections
+            # Live delete — the database refuses it on both backends since #276.
             delete_q = DoNothingM.Do_nothing_parent_scratch.objects
             delete_q.filter("id" => parent_id)
 
@@ -495,16 +495,14 @@ end
                 e
             end
 
-            if pool isa PormG.PormGPostgres
-                # PostgreSQL enforces the FK at execute time and returns an error.
-                @test delete_result !== nothing
-                @test !(delete_result isa Tuple)
-                @test DoNothingM.Do_nothing_parent_scratch.objects.filter("id" => parent_id).exists()
-            else
-                # SQLite without PRAGMA foreign_keys permits the dangling row.
-                @test delete_result == (1, Dict("do_nothing_parent_scratch" => 1))
-                @test !DoNothingM.Do_nothing_parent_scratch.objects.filter("id" => parent_id).exists()
-            end
+            # #276: both backends now enforce the FK at execute time, so the branch is gone. SQLite
+            # used to permit the dangling row (`PRAGMA foreign_keys` defaults OFF and PormG never
+            # turned it on), which meant a DO_NOTHING delete quietly orphaned children on SQLite and
+            # failed on PostgreSQL — the divergence #276 removed. The ORM defers to the database
+            # either way; the difference was only whether the database bothered to check.
+            @test delete_result isa PormG.IntegrityError   # the constraint, not merely "something threw"
+            @test !(delete_result isa Tuple)               # pre-#276 SQLite returned (1, Dict(...))
+            @test DoNothingM.Do_nothing_parent_scratch.objects.filter("id" => parent_id).exists()
 
             # The child must still be present — the ORM did not touch it.
             @test DoNothingM.Do_nothing_child_scratch.objects.filter("id" => child_id).exists()

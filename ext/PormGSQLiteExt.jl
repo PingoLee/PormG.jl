@@ -58,6 +58,17 @@ function _create_sqlite_connection(connection_string::String; read_only::Bool = 
   SQLite.execute(new_conn, "PRAGMA synchronous = NORMAL;")
   SQLite.execute(new_conn, "PRAGMA busy_timeout = 30000;")
   SQLite.execute(new_conn, "PRAGMA case_sensitive_like = ON;")
+  # #276: SQLite defaults `foreign_keys` OFF for backwards compatibility, so PormG's own REFERENCES
+  # clauses were declared and never enforced — a dangling FK inserted fine on SQLite and raised
+  # IntegrityError on PostgreSQL. That inverts what a test backend is for: the bug passes the SQLite
+  # suite and only surfaces in production.
+  #
+  # It is per-connection, so it belongs here rather than anywhere in core: this is the ONLY
+  # `SQLite.DB(` in the repo, and both `backend_connect` and `backend_renew_connection` route
+  # through it — which is also what lets a suspended connection be made safe again by renewing it
+  # (see `finalize_transaction_connection!(…; renew = true)`). Suspend it for a block with
+  # `without_foreign_keys`; migrations do so around the table rebuild.
+  SQLite.execute(new_conn, "PRAGMA foreign_keys = ON;")
   if read_only
     SQLite.execute(new_conn, "PRAGMA query_only = ON;")
   end

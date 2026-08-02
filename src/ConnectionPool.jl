@@ -13,6 +13,10 @@ import PormG: PormGError, PoolError
 # Throw sites (#239): a bad acquire mode is a value error, an unresolvable pool is a config error,
 # and atomic(durable=true) nesting is transaction-API misuse (#268 — was QueryBuildError).
 import PormG: InvalidValueError, InvalidConfigurationError, TransactionError
+# #276: `without_foreign_keys` refuses to commit a block that left orphaned rows. Export alone is not
+# enough — a submodule needs the name on an explicit import list or it is an UndefVarError at the
+# throw site, which no unit test that avoids the path would catch.
+import PormG: UnsafeMutationError
 # The database-error boundary (#268). This module owns the wrap: every driver failure leaving the
 # pool passes `_as_database_error` and arrives as one of these instead of a raw
 # `SQLite.SQLiteException` / `LibPQ.Errors.*`.
@@ -24,6 +28,10 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, atomic, with_savepoint
+# #276. Exported HERE as well as from PormG: `src/PormG.jl` reaches this module via a bare
+# `using .ConnectionPool`, which imports only exported names — so a top-level `export` of a name this
+# module keeps to itself produces a public-but-undefined binding (Aqua's undefined_exports).
+export without_foreign_keys
 export acquire_connection, release_connection, finalize_transaction_connection!
 export PoolTimeoutError, PoolConnectError
 export pool_stats
@@ -1268,9 +1276,18 @@ Call this from a single terminal `finally`, exactly as `run_in_transaction` does
 never releases its connection to the pool before its ROLLBACK has run on it — the release-then-
 rollback use-after-release race of #139. Never throws: it runs while the transaction's original
 error is propagating.
+
+Pass `renew=true` when the lifecycle mutated per-connection **session state** that releasing cannot
+undo — today only SQLite's `PRAGMA foreign_keys = OFF`, which migrations and
+[`without_foreign_keys`](@ref) use to suspend enforcement (#276). Renewal re-runs the driver's
+connect path, which sets the pragma back ON by construction, and it is the *renewed* handle that
+returns to the slot; the suspended one is closed. Restoring the pragma with a statement instead
+would be unsound: `PRAGMA foreign_keys` is silently ignored while a transaction is open, so a failed
+COMMIT *and* failed ROLLBACK would leave enforcement off with the restore reporting success.
 """
-function finalize_transaction_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; rollback_error = nothing)
-  if rollback_error !== nothing && !_is_benign_rollback_error(pool, rollback_error)
+function finalize_transaction_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn;
+                                          rollback_error = nothing, renew::Bool = false)
+  if renew || (rollback_error !== nothing && !_is_benign_rollback_error(pool, rollback_error))
     _renew_or_discard_connection!(pool, conn)
   else
     release_connection(pool, conn)
@@ -1278,8 +1295,8 @@ function finalize_transaction_connection!(pool::Union{PormGPostgres, PormGSQLite
   return nothing
 end
 # PormGSettings overload — delegates to the underlying pool, mirroring with_transaction(::PormGSettings).
-finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = nothing) =
-  finalize_transaction_connection!(pool.connections, conn; rollback_error = rollback_error)
+finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = nothing, renew::Bool = false) =
+  finalize_transaction_connection!(pool.connections, conn; rollback_error = rollback_error, renew = renew)
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
@@ -1792,6 +1809,162 @@ with_sqlite_write_lock(f::Function, pool::PormGSQLite) = Base.lock(f, pool.write
 with_sqlite_write_lock(f::Function, pool::PormGPostgres) = f()
 with_sqlite_write_lock(f::Function, settings::PormGSettings) = with_sqlite_write_lock(f, settings.connections)
 
+# Read `PRAGMA foreign_keys` back off a specific connection. Returns the *actual* session state, not
+# what was requested — the distinction matters because SQLite silently ignores `PRAGMA foreign_keys`
+# while a transaction is open (verified: setting OFF inside a BEGIN leaves the read-back at 1, with
+# no error). Anything that suspends enforcement must therefore confirm it took (#276).
+function sqlite_foreign_keys_enabled(pool::PormGSQLite, conn)::Bool
+  rows, _ = with_transaction(pool, "PRAGMA foreign_keys;", conn = conn)
+  # Fail CLOSED. A real SQLite always answers this with exactly one row, so an empty result means
+  # something unexpected answered — and the caller is a guard whose whole job is to refuse to
+  # continue unless suspension is *proven*. Reporting "not enabled" on no evidence would let the
+  # rebuild proceed with enforcement possibly live, which is the silent-cascade path.
+  isempty(rows) && return true
+  return first(rows).foreign_keys != 0
+end
+
+# Throws if enforcement is still on. Used by the migration runner and `without_foreign_keys` right
+# after issuing the suspension.
+function _assert_foreign_keys_suspended(pool::PormGSQLite, conn)
+  sqlite_foreign_keys_enabled(pool, conn) && throw(InvalidConfigurationError(
+    "PRAGMA foreign_keys is still ON on this connection after being asked to suspend it — the \
+     statement was almost certainly issued inside a transaction, where SQLite ignores it silently. \
+     Refusing to continue: a SQLite table rebuild would cascade-delete child rows and still commit (#276)."))
+  return nothing
+end
+
+"""
+    without_foreign_keys(f::Function, db; check_on_exit::Bool = true) -> result
+
+Run `f()` in a transaction with foreign-key enforcement **suspended**, on a single pinned connection.
+
+**Try a plain [`atomic`](@ref) first.** Inside a transaction PormG already defers foreign-key checks
+to `COMMIT` on both backends, so a block that is *transiently* inconsistent — writing children before
+their parents — commits without any special handling. Reach for this only when that is not enough:
+a load too large for one transaction, a repair that must leave a violation in place, or a test that
+plants one deliberately.
+
+`db` may be a pool, a `PormGSettings`, or a db-key `String`, like [`atomic`](@ref). Every query
+inside `f()` reuses the pinned connection, and a nested [`atomic`](@ref) becomes a `SAVEPOINT`.
+
+**This block must be the outermost transaction on its pool.** It cannot nest inside
+`run_in_transaction`/`atomic` and raises `TransactionError` if you try: suspension works by setting
+`PRAGMA foreign_keys = OFF`, which SQLite silently ignores while a transaction is open, so a nested
+call could not suspend anything.
+
+With `check_on_exit = true` (the default) a `PRAGMA foreign_key_check` runs before `COMMIT` and
+rolls the block back if it finds an orphaned row, raising `UnsafeMutationError` — so the escape hatch
+cannot quietly commit a corrupt database.
+
+Note the check is **whole-database, not scoped to what `f()` touched**: on a database that already
+contains orphans, it will abort a block that did nothing wrong. That is deliberate (it is the same
+`PRAGMA foreign_key_check` the migration rebuild gate uses, and narrowing it would mean guessing
+which rows the block touched), but it means a repair run against an already-inconsistent database
+wants `check_on_exit = false` — as does deliberately planting a violation.
+
+The connection is **renewed**, not returned as-is, so a suspended handle can never serve another
+caller (#276).
+
+# Example
+```julia
+# A load too large to hold in one transaction: commit each chunk, tolerating the inconsistency
+# between them, and let the exit check prove the finished result is sound.
+without_foreign_keys(pool) do
+    for chunk in Iterators.partition(eachrow(results_df), 50_000)
+        bulk_insert(M.Result, DataFrame(chunk))
+    end
+    bulk_insert(M.Race, races_df)
+end
+
+# For a merely transient inconsistency, a plain transaction is enough — and cheaper, since it does
+# not have to renew the connection afterwards:
+atomic(pool) do
+    bulk_insert(M.Result, results_df)   # children
+    bulk_insert(M.Race,   races_df)     # parents — checked at COMMIT, on both backends
+end
+```
+
+!!! note "Backend divergence"
+    SQLite genuinely suspends enforcement for the block. On PostgreSQL there is no equivalent — this
+    issues `SET CONSTRAINTS ALL DEFERRED`, which *defers* checks to `COMMIT` rather than skipping
+    them, so a violation still surfaces, just later. `check_on_exit` is SQLite-only.
+
+See also [`atomic`](@ref), [`run_in_transaction`](@ref).
+"""
+function without_foreign_keys(f::Function, pool::PormGSQLite; check_on_exit::Bool = true)
+  # Must be the OUTERMOST transaction on this pool. `run_in_transaction` degrades a nested call to a
+  # SAVEPOINT, but that is not available here: the whole point is `PRAGMA foreign_keys = OFF`, which
+  # SQLite ignores inside an open transaction — a nested block could not suspend anything. Worse, it
+  # would not fail fast: it re-enters the (reentrant) write lock, then acquires a SECOND connection
+  # whose `BEGIN IMMEDIATE` contends with the outer transaction's, and sits there until the busy
+  # timeout × retry budget expires (measured: ~11 minutes to `database is locked`, or a
+  # `PoolTimeoutError` on a split pool). Refuse immediately instead.
+  if in_transaction_context() && get_tx_pool() === pool
+    throw(TransactionError(
+      "without_foreign_keys must be the outermost transaction on this pool — it cannot nest inside \
+       run_in_transaction/atomic, because PRAGMA foreign_keys is silently ignored while a \
+       transaction is open. Move the block outside, or drop the surrounding transaction."))
+  end
+  # Lock BEFORE acquiring, matching run_in_transaction (write lock → writer slot). The reverse order
+  # deadlocks against it under split_read_write, where there is exactly one writer slot.
+  with_sqlite_write_lock(pool) do
+    conn = acquire_connection(pool; mode = :write)
+    local rollback_error = nothing
+    try
+      # Outside the transaction — see sqlite_foreign_keys_enabled for why the order is load-bearing.
+      with_transaction(pool, "PRAGMA foreign_keys = OFF;", conn = conn)
+      _assert_foreign_keys_suspended(pool, conn)
+      # A real transaction, not just the pragma: without one, a nested atomic/with_savepoint would
+      # issue SAVEPOINT with nothing enclosing it — savepoint semantics for a caller who asked for
+      # transaction semantics — and the block would not be atomic.
+      with_transaction(pool, "BEGIN IMMEDIATE TRANSACTION;", conn = conn)
+      try
+        result = with_tx_context(pool, conn) do
+          f()
+        end
+        if check_on_exit
+          violations, _ = with_transaction(pool, "PRAGMA foreign_key_check;", conn = conn)
+          # UnsafeMutationError, not IntegrityError: the database did not refuse anything — PormG
+          # detected the orphans itself and is refusing to commit them. IntegrityError is reserved
+          # for a driver exception it wraps as `.cause` (#268).
+          isempty(violations) || throw(UnsafeMutationError(
+            "without_foreign_keys left $(length(violations)) orphaned foreign-key row(s); rolling back. \
+             Pass check_on_exit = false if the violation is intentional."))
+        end
+        with_transaction(pool, "COMMIT;", conn = conn, release_conn = false)
+        return result
+      catch e
+        try
+          with_transaction(pool, "ROLLBACK;", conn = conn, release_conn = false)
+        catch rollback_err
+          rollback_error = rollback_err
+          @error "Failed to rollback without_foreign_keys block" exception=rollback_err
+        end
+        rethrow(e)
+      end
+    finally
+      # renew=true: this handle has enforcement OFF and must never go back to the pool as-is.
+      finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = true)
+    end
+  end
+end
+
+function without_foreign_keys(f::Function, pool::PormGPostgres; check_on_exit::Bool = true)
+  # PostgreSQL has no per-session "skip FK checks". PormG creates its foreign keys
+  # DEFERRABLE INITIALLY DEFERRED (Dialect.add_foreign_key), so deferring to COMMIT is the closest
+  # equivalent and is what the docstring promises. `check_on_exit` is meaningless here: COMMIT is
+  # itself the check.
+  run_in_transaction(pool) do
+    fetch(pool, "SET CONSTRAINTS ALL DEFERRED;")
+    f()
+  end
+end
+
+without_foreign_keys(f::Function, settings::PormGSettings; check_on_exit::Bool = true) =
+  without_foreign_keys(f, settings.connections; check_on_exit = check_on_exit)
+without_foreign_keys(f::Function, db::String; check_on_exit::Bool = true) =
+  without_foreign_keys(f, get_settings(db); check_on_exit = check_on_exit)
+
 """
     run_in_transaction(f::Function, pool::PormGPostgres) -> result
 
@@ -1903,6 +2076,19 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
         # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks and ensure
         # write lock is acquired early for multi-threaded scenarios.
       task = sqlite_execute_async(pool, conn, "BEGIN IMMEDIATE TRANSACTION;", nothing)
+      _await_tx_statement(pool, task)
+      # The transaction is open from here on, so mark it BEFORE anything else can throw — otherwise
+      # a failure below skips the ROLLBACK in the catch and releases a connection with an open
+      # transaction back to the pool, which the acquire liveness probe cannot detect (#71).
+      tx_started = true
+      # #276: match PostgreSQL's timing, not just its strictness. `Dialect.add_foreign_key` creates
+      # every PG foreign key DEFERRABLE INITIALLY DEFERRED, so PG checks at COMMIT and a transaction
+      # may be transiently inconsistent — insert a child, then its parent, and it commits. SQLite's
+      # `foreign_keys` pragma checks per statement, so turning it on alone would make that same
+      # block raise on SQLite only: a NEW divergence, in the direction #276 exists to remove.
+      # `defer_foreign_keys` is per-transaction and resets itself at COMMIT and ROLLBACK, so it
+      # needs no renewal — unlike `foreign_keys`, which is why migrations suspend rather than defer.
+      task = sqlite_execute_async(pool, conn, "PRAGMA defer_foreign_keys = ON;", nothing)
       _await_tx_statement(pool, task)
     end
     tx_started = true

@@ -946,47 +946,76 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
   # `BEGIN IMMEDIATE`s would race and deadlock the single async worker. No-op on
   # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
   with_sqlite_write_lock(connection) do
-    # Begin transaction (IMMEDIATE for SQLite)
-    _, conn = with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;")
+    # #276: acquire EXPLICITLY rather than letting `with_transaction` acquire at BEGIN. SQLite
+    # ignores `PRAGMA foreign_keys` inside a transaction — silently, returning success — so
+    # enforcement has to be suspended on this exact handle BEFORE the BEGIN. Acquired inside the
+    # write lock to keep the lock→slot order `run_in_transaction` uses; the reverse order deadlocks
+    # against it under split_read_write, where there is exactly one writer slot.
+    conn = acquire_connection(connection; mode = :write)
     # Single terminal finally releases/renews the connection exactly once, so a failed COMMIT
     # never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
     local rollback_error = nothing
 
     try
-      # Execute all SQL statements
-      _execute_statements_sqlite(connection, ordered_statements; conn=conn)
+      # #276: the SQLite table-rebuild drops the old table, and with enforcement on that implicit
+      # DELETE fires child ON DELETE actions — a CASCADE child's rows are deleted, the parent is
+      # renamed back, and the migration COMMITs. The per-table `PRAGMA foreign_key_check` gate
+      # cannot see it (after a cascade there are no orphans left, only missing children). This is
+      # step 1 of SQLite's own documented ALTER procedure. `foreign_key_check` still works while
+      # suspended, so the #82 gate keeps its full detection power.
+      with_transaction(connection, "PRAGMA foreign_keys = OFF;", conn=conn)
+      _assert_foreign_keys_suspended(connection, conn)
 
-      # Record in history table (within same transaction)
-      _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
+      # Begin transaction (IMMEDIATE for SQLite)
+      with_transaction(connection, "BEGIN IMMEDIATE TRANSACTION;", conn=conn)
 
-      # Commit — release_conn=false: the finally owns the single release.
-      with_transaction(connection, "COMMIT;", conn=conn, release_conn=false)
-      @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
-    catch e
-      # Roll back on the still-leased connection; capture a rollback failure so the finally
-      # renews/discards the dirty connection instead of releasing it (#71), then rethrow.
+      # Inner try scoped to "a transaction is actually open" (#276). Kept separate from the outer
+      # one on purpose: folding them together would make a failed PRAGMA or BEGIN run the ROLLBACK
+      # and write a spurious `failed` history row for a transaction that never started.
       try
-        with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=false)
-      catch rollback_err
-        rollback_error = rollback_err
-        @error "Failed to rollback transaction" exception=rollback_err
-      end
+        # Execute all SQL statements
+        _execute_statements_sqlite(connection, ordered_statements; conn=conn)
 
-      # Record failed status outside the (now rolled-back) transaction, reusing the transaction's
-      # own connection (conn=conn): it is still leased until the finally, and acquiring a fresh
-      # writer would deadlock on SQLite's single writer slot. Trade-off: if the ROLLBACK above also
-      # failed, `conn` is dirty and this INSERT fails too (logged and skipped, then the finally
-      # renews it) — so the `failed` row is not recorded in that rare double-failure.
-      try
-        _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn=conn)
-      catch record_err
-        @error "Failed to record migration failure in history table" exception=record_err
-      end
+        # Record in history table (within same transaction)
+        _record_migration(connection, version, name, checksum, all_sql, "applied", has_destructive; conn=conn)
 
-      @error "Error applying migrations" exception=e
-      rethrow(e)
+        # Commit — release_conn=false: the finally owns the single release.
+        with_transaction(connection, "COMMIT;", conn=conn, release_conn=false)
+        @info(_emsg("\e[32mMigrations applied successfully. Version: $version\e[0m"))
+      catch e
+        # Roll back on the still-leased connection; capture a rollback failure so the finally
+        # renews/discards the dirty connection instead of releasing it (#71), then rethrow.
+        try
+          with_transaction(connection, "ROLLBACK;", conn=conn, release_conn=false)
+        catch rollback_err
+          rollback_error = rollback_err
+          @error "Failed to rollback transaction" exception=rollback_err
+        end
+
+        # Record failed status outside the (now rolled-back) transaction, reusing the transaction's
+        # own connection (conn=conn): it is still leased until the finally, and acquiring a fresh
+        # writer would deadlock on SQLite's single writer slot. Trade-off: if the ROLLBACK above also
+        # failed, `conn` is dirty and this INSERT fails too (logged and skipped, then the finally
+        # renews it) — so the `failed` row is not recorded in that rare double-failure.
+        try
+          _record_migration(connection, version, name, checksum, all_sql, "failed", has_destructive; conn=conn)
+        catch record_err
+          @error "Failed to record migration failure in history table" exception=record_err
+        end
+
+        @error "Error applying migrations" exception=e
+        rethrow(e)
+      end
     finally
-      finalize_transaction_connection!(connection, conn; rollback_error=rollback_error)
+      # renew=true (#276): this handle has FK enforcement OFF and must never go back to the pool as
+      # it stands. Renewal re-runs the connect path, which sets the pragma back ON by construction;
+      # the suspended handle is closed, so it cannot reach another borrower. A `PRAGMA foreign_keys
+      # = ON` here would be unsound — it is silently ignored if a transaction is still open.
+      #
+      # `rollback_error` is now redundant here (renew=true already short-circuits the helper's
+      # classification) — kept deliberately so this call still reads the same as its PG twin and the
+      # delete lifecycle, and stays correct if renew ever becomes conditional.
+      finalize_transaction_connection!(connection, conn; rollback_error=rollback_error, renew=true)
     end
   end
   

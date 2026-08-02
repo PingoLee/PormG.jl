@@ -181,6 +181,7 @@ export PoolError, error_message, DefinitionError
 export DatabaseError, IntegrityError, OperationalError, StatementError, TransactionError
 export with_advisory_lock  # try_advisory_lock / release_advisory_lock removed (not implemented)
 export fetch_async, await_result, FetchTask, run_in_transaction, atomic, with_savepoint  # Async-first API
+export without_foreign_keys  # #276: suspend FK enforcement for a block (data repair, out-of-order loads)
 export PoolTimeoutError  # thrown by acquire_connection when the pool is saturated (#37)
 export PoolConnectError  # thrown by acquire_connection when a connection can't be opened (#72)
 export pool_stats  # connection-pool health snapshot (#127)

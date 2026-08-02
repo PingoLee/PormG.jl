@@ -50,6 +50,9 @@ const EXPECTED_TOPLEVEL = Set([
     :run_in_transaction, :atomic, :with_savepoint, :with_tx_context, :in_transaction_context,
     # Locking
     :with_advisory_lock,
+    # #276: SQLite now enforces foreign keys; this is the supported way to suspend that for a block
+    # (data repair, out-of-order bulk loads, planting a deliberate violation in a test).
+    :without_foreign_keys,
     # Utilities & lifecycle
     :upgrade_guide, :register_ignore_tables!,
     Symbol("@import_models"), Symbol("@models_module"), Symbol("@pormg_debug"),

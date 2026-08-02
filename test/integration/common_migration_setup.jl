@@ -34,11 +34,23 @@ function _reset_sqlite!(pool::PormG.PormGSQLite)
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
   df = DataFrame(rows)
   if nrow(df) > 0
-    PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_keys = OFF;")
-    for tbl in df.name
-      PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"$(tbl)\";")
+    # #276: dropping tables in `sqlite_master` order means dropping parents before children, which
+    # enforcement refuses (or, for a CASCADE child, silently empties). Suspend it for the block.
+    #
+    # This used to bracket the loop with two bare `fetch(pool, "PRAGMA …")` calls — which never
+    # worked: every `fetch` acquires its OWN pooled connection, `PRAGMA foreign_keys` is
+    # per-connection, and `_sqlite_is_read_query` even classifies PRAGMA as a *read*, so under
+    # split_read_write it routed to a reader while the DROPs went to the writer. The trailing
+    # `= ON` then stuck permanently on whichever slot ran it. Inert while enforcement was off
+    # everywhere; a live corruption of pool state the moment it is not. `without_foreign_keys`
+    # pins one connection for the whole block and renews it afterwards.
+    #
+    # check_on_exit = false: we are deleting every table, so a mid-teardown FK check is meaningless.
+    PormG.without_foreign_keys(pool; check_on_exit = false) do
+      for tbl in df.name
+        PormG.ConnectionPool.fetch(pool, "DROP TABLE IF EXISTS \"$(tbl)\";")
+      end
     end
-    PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_keys = ON;")
   end
 end
 

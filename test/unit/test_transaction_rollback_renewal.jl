@@ -311,3 +311,34 @@ end
   @test pool.connections[1] isa FakeConn71            # pool untouched
   @test pool.available[1] === true
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #276: `renew = true` renews unconditionally, even on the clean path
+# The SQLite migration lifecycle and `without_foreign_keys` suspend `PRAGMA foreign_keys` on their
+# connection. That is per-connection session state a release cannot undo, and it CANNOT be undone by
+# a restoring statement either: `PRAGMA foreign_keys` is silently ignored while a transaction is
+# open, so a failed COMMIT + failed ROLLBACK would leave enforcement off with the restore reporting
+# success. Renewal is the structural fix — the suspended handle is closed, so nothing can reuse it.
+#
+# The distinction this pins: `renew = true` must renew even when `rollback_error === nothing`, which
+# is exactly the case the pre-#276 signature treated as "clean, safe to release".
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "finalize_transaction_connection!(…; renew = true) renews on the clean path (#276)" begin
+  pool = MockSQLitePool71()
+  old  = pool.connections[1]
+
+  CP.finalize_transaction_connection!(pool, old; rollback_error = nothing, renew = true)
+
+  @test pool.connections[1] !== old        # renewed, not released as-is
+  @test old.closed === true                # the suspended handle is gone for good
+  @test pool.available[1] === true          # and the slot is usable again
+
+  # Control: the default is unchanged — a clean lifecycle still releases the same handle, so this
+  # testset cannot pass merely because renewal became unconditional.
+  pool2 = MockSQLitePool71()
+  keep  = pool2.connections[1]
+  CP.finalize_transaction_connection!(pool2, keep; rollback_error = nothing)
+  @test pool2.connections[1] === keep
+  @test keep.closed === false
+  @test pool2.available[1] === true
+end

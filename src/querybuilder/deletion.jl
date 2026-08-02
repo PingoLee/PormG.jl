@@ -222,6 +222,17 @@ function delete(objct::SQLObjectHandler;
       # COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
       local rollback_error = nothing
       try
+        # #276: same deferral as run_in_transaction — PormG's PG foreign keys are DEFERRABLE
+        # INITIALLY DEFERRED, so the collector's intermediate states (a child DELETEd before its
+        # parent, a SET_NULL applied mid-sweep) are legal there. Defer on SQLite too, or enforcement
+        # would reject an ordering PostgreSQL accepts. Resets at COMMIT; no-op on PostgreSQL.
+        #
+        # INSIDE the try, not between it and the BEGIN: `with_transaction(…, conn=conn)` releases
+        # nothing on failure (conn_acquired = false), so a throw in that gap would skip the terminal
+        # finally entirely and strand this connection out of the pool holding an open
+        # BEGIN IMMEDIATE — i.e. the database write lock. The #139/#71 class.
+        connection isa PormGSQLite &&
+          with_transaction(settings, "PRAGMA defer_foreign_keys = ON;", conn=conn)
         with_tx_context(settings.connections, conn) do
           run_deletions(conn)
         end

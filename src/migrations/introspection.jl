@@ -5,6 +5,91 @@
 # ==============================================================================
 
 # ---
+# Shared FK helpers (both backends)
+# ---
+
+# A foreign key's column default, coerced to what `ForeignKey`/`OneToOneField` accept, or `nothing`.
+#
+# FAILURE POLICY (#292): introspection NEVER throws over a default it cannot represent. The field
+# constructors run `validate_default(default, Union{Int64, Nothing}, …, format2int64)`, which raises
+# `FieldValidationError` on anything non-numeric — a text default on a text FK column, a PostgreSQL
+# expression default like `nextval(...)`. Letting that escape would abort an entire
+# `convert_schema_to_models` run over one odd column, with no way to skip past it. So: warn, naming
+# the table, column and raw value, and emit the FK without a `default=`.
+#
+# THE RESIDUAL, stated rather than hidden. This policy covers the *default*, not a self-contradictory
+# *action*, so `set_models` still rejects two shapes — deliberately, because the database really is
+# in a state PormG cannot express and silently dropping the action would hide it:
+#
+#   1. `SET_DEFAULT` on a column with no default (or an unrepresentable one) — #287's guard.
+#   2. `SET_NULL` on a NOT NULL column — #287's other guard.
+#
+# Both are legal DDL on both backends (the action is only enforced at delete time), and PostgreSQL
+# reaches them for the first time as of #292, because before it the PostgreSQL path never emitted
+# `on_delete` at all and so could not contradict anything. The `@warn` above is what names the
+# column for case 1; case 2 surfaces at registration with the model and field named. See the
+# `## Unreleased` entry in UPGRADING.md.
+#
+# Shared by all three FK branches — the two SQLite ones and the PostgreSQL one. Before #292 the
+# SQLite branches dropped the default silently and PostgreSQL passed it through unguarded, so this
+# closes an existing PostgreSQL exposure as well as the SQLite gap it was written for.
+function _fk_default_or_warn(default_val, table_name, column_name)
+  default_val === nothing && return nothing
+  ismissing(default_val) && return nothing
+
+  try
+    # `Bool <: Integer`, so a SQLite 0/1 boolean default converts to 0/1 — which is what the
+    # column actually stores. Inside the `try` on purpose: `Int64(::UInt64)` past `typemax(Int64)`
+    # raises `InexactError`, and the whole point of this helper is that no input escapes as a throw.
+    default_val isa Integer && return Int64(default_val)
+    return Models.format2int64(default_val)
+  catch e
+    # Program-state failures are not "this default is unrepresentable" — same carve-out the
+    # `Model_to_str` render-failure path uses (Models.jl), so Ctrl-C during a large
+    # `convert_schema_to_models` run aborts instead of being reported as a bad default.
+    (e isa InterruptException || e isa StackOverflowError) && rethrow()
+    # The value is shown as introspection received it. On PostgreSQL that is the column regex's
+    # already-cleaned form, so an expression default can appear truncated at a `::` cast — enough
+    # to identify the column, not a faithful reproduction of the DDL.
+    @warn "Foreign key default could not be represented as a field default; emitting the relation without it." table = string(table_name) column = string(column_name) default = string(default_val)
+    return nothing
+  end
+end
+
+# PormG's `on_delete === nothing` and `DO_NOTHING` both render as SQL `ON DELETE NO ACTION`
+# (`_foreign_key_on_delete_sql`, Dialect.jl), so a "NO ACTION" read back out of a database is
+# ambiguous — and `NO ACTION` is also what a backend stores when no action was declared at all.
+# Introspecting it as `DO_NOTHING` would therefore stamp an explicit `on_delete=DO_NOTHING` onto
+# EVERY plain foreign key in every generated model. Mapping it to `nothing` is lossless (the
+# re-emitted DDL is identical either way) and keeps the two backends agreeing: PostgreSQL stores
+# `confdeltype = 'a'` for the same two cases.
+#
+# `PROTECT` is not recoverable — it renders as SQL `RESTRICT`, so a round trip can only ever return
+# `RESTRICT`. One-way by construction, not an oversight.
+#
+# PostgreSQL stores the action as a single char in `pg_constraint.confdeltype`. `'a'` (NO ACTION)
+# maps to `nothing` for the reason above; an empty/unknown code does too, so a schema-query result
+# predating #292 degrades to today's behaviour instead of erroring.
+function _pg_confdeltype_to_on_delete(code)
+  code === nothing && return nothing
+  ismissing(code) && return nothing
+  c = strip(string(code))
+  c == "c" && return "CASCADE"
+  c == "r" && return "RESTRICT"
+  c == "n" && return "SET NULL"
+  c == "d" && return "SET DEFAULT"
+  return nothing   # 'a' (NO ACTION) and anything unrecognised
+end
+
+function _normalize_introspected_on_delete(action)
+  action === nothing && return nothing
+  ismissing(action) && return nothing
+  normalized = uppercase(replace(strip(string(action)), r"\s+" => "_"))
+  (isempty(normalized) || normalized == "NO_ACTION") && return nothing
+  return normalized
+end
+
+# ---
 # SQLite Introspection
 # ---
 
@@ -128,8 +213,15 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
     if haskey(pk_map, column_name)
       field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
     elseif haskey(fk_map, column_name)
-      field_instance = Models.ForeignKey(uppercasefirst(fk_map[column_name]["fk_table"] |> string); pk_field=fk_map[column_name]["fk_column"] |> string, on_delete=fk_map[column_name]["on_delete"], 
-      on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing))
+      # `default=` was computed above but never reached this branch before #292, so an FK declared
+      # ON DELETE SET DEFAULT introspected to `SET_DEFAULT` with no default — which since #287
+      # throws `ModelDefinitionError` at `set_models`, and regenerating produced the identical
+      # broken file. Routed through `_fk_default_or_warn` so an unrepresentable default warns
+      # rather than throwing from inside introspection.
+      field_instance = Models.ForeignKey(uppercasefirst(fk_map[column_name]["fk_table"] |> string); pk_field=fk_map[column_name]["fk_column"] |> string,
+      on_delete=_normalize_introspected_on_delete(fk_map[column_name]["on_delete"]),
+      on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing),
+      default=_fk_default_or_warn(normalized_default, table_name, column_name))
     else
       field_instance = getfield(Models, type_sym)(null=!(nullable === nothing), default=normalized_default)
     end
@@ -172,7 +264,14 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         field = Models.IDField(null=false, primary_key=true, auto_increment=(base_type == "INTEGER"))
     elseif haskey(fk_map, col_name)
         fk_info = fk_map[col_name]
-        field = Models.ForeignKey(uppercasefirst(fk_info.table); pk_field=fk_info.to, on_delete=fk_info.on_delete, null=nullable)
+        # Same #292 gap as the DDL-regex path above: `default_val` was in scope and used two
+        # branches down, but never passed to the FK. This is the path the live
+        # `convert_schema_to_models(::PormGSQLite)` actually reaches. The FK column's declared type
+        # drives normalization the same way a non-FK column's does.
+        fk_type_sym = get(type_map, base_type, :TextField)
+        field = Models.ForeignKey(uppercasefirst(fk_info.table); pk_field=fk_info.to,
+            on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
+            default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
     else
         type_sym = get(type_map, base_type, :TextField)
         # Handle decimal precision if present
@@ -297,7 +396,12 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             array_to_string(array_agg(quote_ident(cf.relname)), ', ') AS fk_tables,
             array_to_string(array_agg(quote_ident(pk_att.attname)), ', ') AS referenced_primary_keys,
             array_to_string(array_agg(con.condeferrable::text), ', ') AS deferrable,
-            array_to_string(array_agg(con.condeferred::text), ', ') AS initially_deferred
+            array_to_string(array_agg(con.condeferred::text), ', ') AS initially_deferred,
+            -- #292: the referential action was never selected, so every introspected PostgreSQL FK
+            -- came back claiming no ON DELETE. Single-char codes: a=NO ACTION, r=RESTRICT,
+            -- c=CASCADE, n=SET NULL, d=SET DEFAULT. Aggregated in the same order as fk_cols so the
+            -- zip in convertSQLToModel stays aligned.
+            array_to_string(array_agg(con.confdeltype::text), ', ') AS delete_rules
         FROM pg_constraint con
         JOIN pg_attribute att2 ON att2.attnum = ANY(con.conkey) AND att2.attrelid = con.conrelid
         JOIN pg_class cf ON cf.oid = con.confrelid
@@ -355,6 +459,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         fk.referenced_primary_keys AS referenced_primary_keys,
         fk.deferrable AS deferrable,
         fk.initially_deferred AS initially_deferred,
+        fk.delete_rules AS delete_rules,
         ix.index_columns AS index_columns,
         ix.index_names AS index_names
     FROM pg_class c
@@ -377,7 +482,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
       $(table === nothing ? "" : "AND c.relname = '$(table)'")
       AND a.attnum > 0
       AND NOT a.attisdropped
-    GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, fk.referenced_primary_keys, fk.deferrable, fk.initially_deferred, ix.index_columns, ix.index_names, u.unique_cols, nn.check_cols
+    GROUP BY n.nspname, c.relname, pk.pk_cols, fk.fk_cols, fk.fk_tables, fk.referenced_primary_keys, fk.deferrable, fk.initially_deferred, fk.delete_rules, ix.index_columns, ix.index_names, u.unique_cols, nn.check_cols
     ORDER BY table_schema, table_name;
     """
 
@@ -622,13 +727,22 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   pk_set = ismissing(row[:primary_keys]) ? Set{String}() : Set(split(row[:primary_keys], ", "))
     
   # Extract foreign key constraints
-  fk_map = Dict{String, Tuple{String, String}}()
+  # Widened past `(table, pk)` for #292 to carry the referential action, which the schema query
+  # never selected — so every introspected FK claimed no ON DELETE and a migration generated from
+  # it silently dropped the action from the schema.
+  fk_map = Dict{String, NamedTuple{(:table, :pk, :on_delete), Tuple{String, String, Union{String, Nothing}}}}()
   if row[:foreign_keys] |> !ismissing
     fk_columns = split(row[:foreign_keys], ", ")
     fk_tables = split(row[:foreign_tables], ", ")
-    fk_pk_columns = split(row[:referenced_primary_keys], ", ")  
-    for (fk_col, fk_table, fk_pk) in zip(fk_columns, fk_tables, fk_pk_columns)
-        fk_map[fk_col] = (fk_table, fk_pk) 
+    fk_pk_columns = split(row[:referenced_primary_keys], ", ")
+    # `delete_rules` is absent on a schema-query result produced before #292 (and on the synthetic
+    # rows some unit tests build), so degrade to "no action recorded" rather than throwing.
+    delete_rules = (:delete_rules in propertynames(row) && !ismissing(row[:delete_rules])) ?
+      split(row[:delete_rules], ", ") : fill("", length(fk_columns))
+    for (i, (fk_col, fk_table, fk_pk)) in enumerate(zip(fk_columns, fk_tables, fk_pk_columns))
+        rule = i <= length(delete_rules) ? delete_rules[i] : ""
+        fk_map[fk_col] = (table = String(fk_table), pk = String(fk_pk),
+                          on_delete = _pg_confdeltype_to_on_delete(rule))
     end
   end
 
@@ -732,12 +846,19 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       field = if primary_key
           Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       elseif haskey(fk_map, col_name)
-        fk_table, fk_column = fk_map[col_name]
-        fk_table = uppercasefirst(fk_table)
+        fk_info = fk_map[col_name]
+        fk_table = uppercasefirst(fk_info.table)
+        fk_column = fk_info.pk
+        # #292: `on_delete` is now carried (it was never even queried), and `default_value` goes
+        # through the shared failure policy — this branch passed it unguarded, so a column default
+        # that cannot be an Int64 raised FieldValidationError from inside introspection.
+        # `OneToOneField` had the identical omission and is fixed with `ForeignKey`.
+        fk_default = _fk_default_or_warn(default_value, table_name, col_name)
+        fk_on_delete = _normalize_introspected_on_delete(fk_info.on_delete)
         if unique
-          Models.OneToOneField(fk_table, pk_field=fk_column, null=!not_null, default=default_value, db_index=true)
+          Models.OneToOneField(fk_table, pk_field=fk_column, null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         else
-          Models.ForeignKey(fk_table, pk_field=fk_column, null=!not_null, default=default_value, db_index=true)
+          Models.ForeignKey(fk_table, pk_field=fk_column, null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         end
       else
         field_type(unique=unique, null=!not_null, default=default_value, db_index=db_index)

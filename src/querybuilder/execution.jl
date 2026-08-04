@@ -347,7 +347,7 @@ show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(deepcopy(q); show_q
 # Count or check if exists
 #
 
-function do_count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = nothing, distinct::Bool = false,
+function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = nothing, distinct::Bool = false,
                   table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   # Column form: COUNT([DISTINCT] column). Reuse the Count() aggregate so column
   # resolution, joins and dialect rendering are shared with values(Count(...)); we
@@ -359,7 +359,7 @@ function do_count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} =
     cq.object.distinct = false      # DISTINCT belongs to COUNT(col), not the row set
     cq.object.limit = 0
     cq.object.offset = 0
-    up_values!(cq.object, Any["__pormg_count" => Count(String(column); distinct = distinct)])
+    _values!(cq.object, Any["__pormg_count" => Count(String(column); distinct = distinct)])
     show_query !== :execute && return query(cq; table_alias = table_alias, show_query = show_query)
     rows = list(cq, Val(:dict))
     return isempty(rows) ? 0 : Base.first(values(Base.first(rows)))
@@ -429,9 +429,9 @@ end
 
 # Whole-queryset aggregation (#208). Django's aggregate(): compute one or more aggregate scalars
 # over the ENTIRE queryset (no GROUP BY) and return them as a single-row NamedTuple keyed by alias.
-# Built on the same column-form path as do_count() — inject the aggregate projections via values(),
+# Built on the same column-form path as _count() — inject the aggregate projections via values(),
 # read the single row back — but generalized to multiple aggregates and a dot-accessible result.
-function do_aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
+function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
   isempty(pairs) &&
     throw(QueryBuildError("aggregate() requires at least one \"alias\" => AggregateFunction(...) pair, e.g. aggregate(\"total\" => Sum(\"points\"))."))
   # aggregate() is whole-queryset only. If the caller already projected grouping columns via
@@ -457,8 +457,8 @@ function do_aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute
   cq.object.distinct = false
   # Inject the aggregate projections through the shared values() path (column resolution, joins and
   # dialect rendering stay identical to values(Sum(...))). With ONLY aggregates projected, no
-  # non-aggregate column is present, so the builder emits no GROUP BY (same as do_count).
-  up_values!(cq.object, collect(Any, pairs))
+  # non-aggregate column is present, so the builder emits no GROUP BY (same as _count).
+  _values!(cq.object, collect(Any, pairs))
 
   if show_query !== :execute
     return query(cq; show_query=show_query)
@@ -470,7 +470,7 @@ function do_aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute
   return NamedTuple{Tuple(aliases)}(Tuple(get(row, a, nothing) for a in aliases))
 end
 
-function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
+function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   try
     # Resolve settings
     settings, connection, conn_key = get_settings(oq)
@@ -521,7 +521,12 @@ function do_exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAli
     # Silently returning false would mask connection failures, SQL errors, and
     # permission errors as "does not exist", which is incorrect and dangerous.
     # The only legitimate false return is from `length(result) > 0` above.
-    @error "Error in do_exists for model $(oq.object.model.name): $e"
+    # Names the fluent method the caller typed, not the `_exists` helper behind it — the same
+    # reason the helpers are `_`-prefixed at all (#281): an internal spelling in a log line sends
+    # the reader looking for something that appears nowhere in their code. Structured form per
+    # AGENTS.md; `(e, catch_backtrace())` rather than a bare `e` because only the tuple form logs a
+    # backtrace, matching the sibling catch in object_manager.jl.
+    @error "Error in exists()" model=oq.object.model.name exception=(e, catch_backtrace())
     rethrow(e)
   end
 end
@@ -694,7 +699,7 @@ end
 # Dialect.on_conflict_clause), and returns `(PormGRow, created::Bool)`.
 #
 # `target_fields` (the lookup keys) and `set_fields` (defaults + auto_now) are LOGICAL field names,
-# resolved to quoted physical columns here (like bulk_insert). Caller (up_update_or_create!) has
+# resolved to quoted physical columns here (like bulk_insert). Caller (_update_or_create!) has
 # already merged lookup+defaults into real_obj.insert and validated the fields.
 #
 # created detection per backend:
@@ -1581,7 +1586,7 @@ function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   # "model" into q.object.ctes; doing that on `objct` would give .list()/.first()
   # a hidden write side effect and make .copy() aliasing corrupt re-execution.
   # deepcopy(SQLObjectQuery) now clones CTE state independently (see _copy_ctes),
-  # so the copy is fully isolated. Mirrors do_count/do_exists/get, which already copy.
+  # so the copy is fully isolated. Mirrors _count/_exists/get, which already copy.
   q = deepcopy(objct)
   sql = query(q, connection=connection, show_query=show_query)
   if show_query !== :execute
@@ -1897,7 +1902,7 @@ function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
   # #199: copy-first — inline filters and the limit(2) probe apply to the copy only,
   # so they never leak into the caller's handler.
   q = deepcopy(objct)
-  !isempty(filters) && up_filter!(q.object, filters)
+  !isempty(filters) && _filter!(q.object, filters)
   q = q.limit(2)
 
   if show_query !== :execute

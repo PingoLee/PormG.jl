@@ -134,7 +134,7 @@ end
     end
 
     # ─────────────────────────────────────────────────────────────────────────
-    # `ChainCaller` stays undocumented — the `@doc "…" ChainCaller(up_filter!, q)` trap
+    # `ChainCaller` stays undocumented — the `@doc "…" ChainCaller(_filter!, q)` trap
     # That form does not document `.filter`: the docsystem does not evaluate the expression, it
     # reads it as a signature and binds the text to `ChainCaller(::Any, ::Any)`, which then shows up
     # under a `filter(args...)` heading that belongs to nothing. It looked like it worked for as
@@ -153,8 +153,9 @@ end
     # …and neither do the helpers it dispatches to (#281)
     # Before #289, `api.md`'s `@autodocs` set no `Private` key, so Documenter's `Private = true`
     # default published EVERY docstring in `PormG.QueryBuilder` as a public API heading — a docstring
-    # on `up_filter!` shipped a heading for a function no user can name. Three had drifted in
-    # (`up_filter!`, `up_values!`, `order_by!`) before #281; `page` had it until #280. `Private =
+    # on one of these helpers shipped a heading for a function no user can name. Three had drifted
+    # in — under their pre-#281 spellings `up_filter!`, `up_values!` and `order_by!` (the rename to
+    # `_filter!`/`_values!`/`_order_by!` came later, with the rest of #281); `page` had it until #280. `Private =
     # false` now filters by `ispublic`, so this testset is no longer the thing keeping them off the
     # site — it is the sharper rule that they should carry no docstring at all, since there is no
     # USER-FACING binding to attach docs to (the helper is reachable by name, but only from inside
@@ -215,6 +216,100 @@ end
                 Base.Docs.Binding(PormG.QueryBuilder, sym).mod === PormG.QueryBuilder
         end
         @test documented == String[]
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # The `getproperty` helpers follow one naming rule (#281)
+    #
+    #   Of the helpers PormG ITSELF OWNS, one is `_`-prefixed unless it is API in its own
+    #   right — unless `Base.ispublic(QueryBuilder, name)`.
+    #
+    # #281 unified four conventions (`up_*!`, bare `verb!`, `do_*`, plain) into this one. Without a
+    # guard the rule is prose, and the drift it prevents is silent: `_fluent_name` recovers the
+    # method the CALLER typed by stripping `^_` and `!$`, so a new helper named `do_thing` or
+    # `up_thing!` makes the kwarg-rejection message report the internal spelling — exactly the #272
+    # complaint #280/#281 closed. Nothing else catches that; the testset above is scoped to
+    # ChainCaller branches and `PUBLIC_SURFACE` below asserts the converse (no `_` name is public),
+    # which a new BARE helper passes trivially.
+    #
+    # The ownership scope ("a name PormG can rename") is explained where it is implemented, at
+    # `pormg_owned` below — deliberately in ONE place, since the accounting behind this rule has
+    # already gone stale in a second copy once. The canonical statement lives above
+    # `Base.getproperty` in `src/querybuilder/object_manager.jl`.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "getproperty helpers follow the #281 naming rule" begin
+        body = _doccov_getproperty_body()
+        # Two independent completeness checks on the extraction, because a count alone cannot tell
+        # a full scan from a truncated one: `_doccov_getproperty_body()` stops at the first
+        # column-0 `end`, and a body truncated as early as the `:first` branch still clears the
+        # floor below with 22 names. The anchor is what proves the scan reached the end.
+        #
+        # Anchored on the `else` fallthrough, not on the last branch. `sym === :delete` is last
+        # today, but only positionally — appending a branch after it would leave that anchor
+        # passing while it no longer proved end-of-scan. `getfield(q, sym)` is the final statement
+        # of the method by construction and cannot be outflanked.
+        @test !isempty(body)
+        @test occursin("return getfield(q, sym)", body)
+
+        code = replace(body, r"^[ \t]*#[^\n]*$"m => "")   # comments name old spellings on purpose
+        # Drop `:symbol` literals BEFORE scanning. The branch CONDITIONS (`sym === :page`,
+        # `sym === :update`) are not helper references, and both of those names also happen to be
+        # real QueryBuilder-owned, non-public functions — the parallel `page(::SQLObjectHandler)`
+        # (functions.jl) and `update(::SQLObject)` (execution.jl) function forms, which this rule
+        # does not govern because the chain routes to `_page!`/`_update!` instead. Leaving them in
+        # reported both as offenders. Also removes `:execute`/`:sql`/`:Symbol` noise.
+        # The strip is POSITIONAL — it deletes `:name`, never a bare `name` — so a helper called as
+        # `name(...)` still gets scanned even if `:name` appears elsewhere in the body.
+        code = replace(code, r":[A-Za-z_][A-Za-z0-9_]*" => "")
+
+        # Every identifier the branch bodies mention, narrowed to the ones that are functions PormG
+        # can actually rename. Deliberately broader than "parse each branch's target": branches take
+        # several shapes (`ChainCaller(f, q)`, `(args...) -> f(q, args...)`,
+        # `(; kw...) -> (f(q.object; kw...); q)`), and a shape-specific regex would go blind to a
+        # new one — which is how a helper would slip in unchecked.
+        #
+        # Ownership is rooted at PormG, not at QueryBuilder, and the difference is load-bearing in
+        # both directions. Base-owned bindings (`first`, `last`, `get`, `deepcopy` — all reached
+        # from closure branches) must be excluded: the rule cannot ask anyone to rename
+        # `Base.deepcopy`. But a helper defined in a SIBLING PormG module and imported here is
+        # renameable and must stay in scope — a `QueryBuilder`-only test passes a branch routing to,
+        # say, `PormG.Models.capitalize_symbol`, and if that branch were ChainCaller-backed
+        # `_fluent_name` would leak the internal spelling, which is the whole regression this guards.
+        pormg_owned(mod) = mod === PormG || startswith(string(mod), "PormG.")
+        idents = unique(m.match for m in eachmatch(r"[A-Za-z_][A-Za-z0-9_]*!?", code))
+        owned = filter(idents) do name
+            sym = Symbol(name)
+            isdefined(PormG.QueryBuilder, sym) || return false
+            getfield(PormG.QueryBuilder, sym) isa Function || return false
+            pormg_owned(Base.Docs.Binding(PormG.QueryBuilder, sym).mod)
+        end
+        # Floor: proves the extraction found the surface at all. 16 `_`-prefixed helpers + the
+        # bare owned ones; a regex that silently matched nothing would otherwise pass everything.
+        # Paired with the anchor above — neither is sufficient alone.
+        @test length(owned) >= 20
+
+        offenders = filter(n -> !startswith(n, "_") && !Base.ispublic(PormG.QueryBuilder, Symbol(n)), owned)
+
+        # `on` and `cjoin_on` are the two known exceptions, documented in `object_manager.jl` above
+        # `Base.getproperty`: they are the `SQLObjectHandler` overloads of the `ctes.jl` join family
+        # whose siblings `cjoin`/`With` ARE public, so prefixing only these two would trade one
+        # inconsistency for a worse one. The real fix is a `public` declaration (#289 territory) —
+        # if you make it, DELETE the name from this list rather than widening the list.
+        #
+        # EQUALITY, not `issubset`, on purpose: a subset check would pass silently once the list
+        # rots to `[]`, so it could never force that deletion.
+        #
+        # If a name lands here that is NOT a chain helper — a local, a kwarg name, a struct field
+        # that happens to shadow a non-public PormG function — exclude it from EXTRACTION the way
+        # `:symbol` literals are stripped above. Do NOT append it to this list: that converts the
+        # assertion into an allowlist and defeats it. (`page` and `update` were exactly this case.
+        # `object` and `show_query` reach `owned` incidentally too, via `q.object` and the kwarg
+        # name, and pass only because both are public — the next such name may not be.)
+        #
+        # The short, collision-prone PormG-owned names now in scope, worth recognising on sight:
+        # `add`, `build`, `clear`, `insert`, `page`, `query`, `remove`, `set`, `update`, `OP`. Any
+        # of them used as a local or kwarg in a future branch lands here without being a helper.
+        @test sort(offenders) == ["cjoin_on", "on"]
     end
 
     # ─────────────────────────────────────────────────────────────────────────

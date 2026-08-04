@@ -2437,7 +2437,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Subquery (#92) - error paths: the one-column contract (0 or ≥2 projected
 # columns throw), alias is mandatory (bare Subquery in values throws), and the
-# up_values! silent-drop fix (an unsupported "alias" => value pair now throws
+# _values! silent-drop fix (an unsupported "alias" => value pair now throws
 # instead of silently vanishing from the projection).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Subquery projection (#92) - error paths" begin

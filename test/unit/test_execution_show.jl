@@ -307,9 +307,9 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# do_exists error-propagation contract
+# _exists error-propagation contract
 #
-# Before the fix, do_exists caught ALL exceptions and returned false — meaning
+# Before the fix, _exists caught ALL exceptions and returned false — meaning
 # a connection failure, SQL error, or permission denial was silently reported
 # as "does not exist". That masks real infrastructure problems.
 #
@@ -318,14 +318,14 @@ end
 #   • Rethrow every other exception so the caller can handle real failures.
 #
 # The MockPostgres connection registered in this file has no real backend, so
-# any fetch() call inside do_exists will raise an exception. Before the fix,
+# any fetch() call inside _exists will raise an exception. Before the fix,
 # .exists() would swallow that and return false. After the fix, it rethrows.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "do_exists rethrows database errors instead of returning false" begin
+@testset "_exists rethrows database errors instead of returning false" begin
   q = TestDriver.objects.filter("forename" => "Lewis")
 
   # The MockPostgres backend has no real connection, so fetch() inside
-  # do_exists raises a backend exception (not an ArgumentError).
+  # _exists raises a backend exception (not an ArgumentError).
   # The fixed implementation must propagate that exception rather than
   # swallowing it and returning false.
   err = try
@@ -344,7 +344,7 @@ end
   @test !(err isa ArgumentError)
 end
 
-@testset "do_exists propagates ArgumentError from ORM validation" begin
+@testset "_exists propagates ArgumentError from ORM validation" begin
   # An __@in subquery that projects two columns is caught by ORM validation
   # and raises ArgumentError. Both the old and new code must propagate this.
   # This test ensures the fix did not inadvertently swallow ArgumentErrors.

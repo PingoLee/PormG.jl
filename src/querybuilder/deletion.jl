@@ -154,7 +154,7 @@ function delete(objct::SQLObjectHandler;
   end
   
   # If no objects to delete, return early (unless we're just inspecting the query)
-  if show_query === :execute && objct |> !do_exists
+  if show_query === :execute && objct |> !_exists
     return 0, Dict{String, Integer}()
   end
 
@@ -380,7 +380,7 @@ function find_related_objects!(collector::DeletionCollector, model::PormGModel, 
     # PROTECT/RESTRICT do not raise false positives. Mock/unit-test connections keep
     # the previous behavior and assume related rows exist because no database is available.
     should_check_existence = collector.show_query === :execute || should_check_related_existence(collector)
-    should_check_existence && (_query |> !do_exists) && continue
+    should_check_existence && (_query |> !_exists) && continue
      
     # @info _query |> query
 
@@ -514,7 +514,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     objct = keys[1][:objct]
     isempty(objct.object.filter) || throw(QueryBuildError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
 
-    deleted_counter[model.name] = show_query === :execute ? (objct |> do_count) : 0
+    deleted_counter[model.name] = show_query === :execute ? (objct |> _count) : 0
     sql = "DELETE FROM $(model.name |> lowercase)"
 
     if show_query !== :execute
@@ -537,7 +537,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   end
   sql::String = ""
   if size(keys, 1) == 1
-    deleted_counter[model.name] = show_query === :execute ? (keys[1][:objct] |> do_count) : 0
+    deleted_counter[model.name] = show_query === :execute ? (keys[1][:objct] |> _count) : 0
     sql = "DELETE FROM $(model.name |> lowercase) WHERE $(join(_where, " OR "))"
   else
     # Multi-path merge: all entries for the same model share the same resolved key field.
@@ -553,7 +553,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
       push!(or_object, "$(pk_field)__@in" => key[:objct])
     end
     _query.filter(or_object)
-    deleted_counter[model.name] = show_query === :execute ? (_query |> do_count) : 0
+    deleted_counter[model.name] = show_query === :execute ? (_query |> _count) : 0
     _query.values(pk_field) # Ensure the query is built
     @pormg_debug false
     sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"

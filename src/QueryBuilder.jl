@@ -111,7 +111,8 @@ export PormGRow, pk, DoesNotExist, MultipleObjectsReturned
 # Semantic error taxonomy (#231): every query-builder misuse throws a PormGError subtype.
 export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, FilterError,
   QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
-# do_count and do_exists are now strictly used as functors (query.count(), query.exists())
+# _count and _exists are un-exported (#202); the public form is the fluent query.count() /
+# query.exists(). They still have internal callers — deletion.jl uses both.
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 
 # ---

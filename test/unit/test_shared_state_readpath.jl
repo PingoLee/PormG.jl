@@ -6,7 +6,7 @@ broke that:
 
 1. The read path (`query()` → `query_list`) wrote `q.object.parameters` back onto the
    caller and materialized the per-build CTE `"model"` into the caller's `ctes` dict — so
-   a plain `.list()` had a hidden write side effect (`do_count`/`do_exists`/`get` already
+   a plain `.list()` had a hidden write side effect (`_count`/`_exists`/`get` already
    `deepcopy` first; `.list()` did not).
 2. `deepcopy(::SQLObjectQuery)` shallow-copied `ctes` (`copy(obj.ctes)`), so `.copy()` and
    its inner `CTEDict` values were shared by reference — materializing the CTE model on one
@@ -146,7 +146,7 @@ end
 
   # ─────────────────────────────────────────────────────────────────────────────
   # count()/exists() build the CTE via build_cte_clause on their OWN deepcopy
-  # (do_count/do_exists), a DIFFERENT path than query_list. Pre-#43 that deepcopy was
+  # (_count/_exists), a DIFFERENT path than query_list. Pre-#43 that deepcopy was
   # shallow for ctes, so _build_cte_custom_model still wrote the transient "model" into
   # the caller's shared inner CTEDict. :dict mode short-circuits before fetch, so this
   # is deterministic without a live database.

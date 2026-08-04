@@ -595,7 +595,7 @@ end
 
   @testset "page functor with limit only (#272)" begin
     # #272: `query.page(n)` — the single-argument form the docs had always advertised — raised a
-    # bare MethodError, because only page!(::SQLObject, ::Tuple{Integer, Integer}) existed. It sets
+    # bare MethodError, because only _page!(::SQLObject, ::Tuple{Integer, Integer}) existed. It sets
     # LIMIT and must leave any OFFSET already on the handler alone.
     query = M.Result.objects
     query.filter("statusid__status" => "Finished")

@@ -48,7 +48,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # values() misuse → QueryBuildError (projection-shape misuse)
-# Three rejection paths in up_values!/_up_values: a non-String pair key, an
+# Three rejection paths in _values!/_values_field: a non-String pair key, an
 # operator suffix inside a projection, and a value of an unsupported type.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "values() misuse is QueryBuildError" begin
@@ -63,7 +63,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # order_by() misuse → QueryBuildError
-# Both order_by! rejection paths: an operator suffix inside an ordering field,
+# Both _order_by! rejection paths: an operator suffix inside an ordering field,
 # and an argument that is neither String nor SQLTypeOrder.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "order_by() misuse is QueryBuildError" begin
@@ -86,7 +86,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # update() keyword misuse → QueryBuildError
-# up_update! validates keywords BEFORE any build/DB work, so a typo'd kwarg
+# _update! validates keywords BEFORE any build/DB work, so a typo'd kwarg
 # (only :show_query is supported) is rejected with no settings needed.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "update() bad keyword is QueryBuildError" begin

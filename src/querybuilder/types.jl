@@ -241,7 +241,7 @@ Base.deepcopy(x::SQLTypeOrder) = SQLOrder(x.field, x.order, x.orientation, x._as
 # #26: row-level locking clause carried on a SELECT. `nothing` on the query means no lock;
 # a `ForUpdateClause` renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]` on PostgreSQL and is a
 # silent no-op on SQLite (which has no row-level locking). Immutable/set-once — the
-# `select_for_update!` mutator always builds a fresh clause, so it is shared by reference on copy.
+# `_select_for_update!` mutator always builds a fresh clause, so it is shared by reference on copy.
 # (An `OF <table>` target is a deferred follow-up: it must name the query's generated FROM alias,
 # which is not yet exposed — see the row-locking follow-up issue.)
 struct ForUpdateClause
@@ -1258,7 +1258,7 @@ mutable struct DeletionCollector{T}
   field_updates::Dict{Tuple{String,Any},Dict{PormGModel,Dict{Symbol,T}}}  # Field updates for SET_NULL etc.
   fast_deletes::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
-  show_query::Symbol  # Controls whether to execute or inspect; skips do_exists during inspection
+  show_query::Symbol  # Controls whether to execute or inspect; skips _exists during inspection
 
   DeletionCollector(model, settings, show_query=:execute) = new{Union{String,SQLObjectHandler}}(
     model,

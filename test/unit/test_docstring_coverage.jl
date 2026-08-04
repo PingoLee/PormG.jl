@@ -283,21 +283,22 @@ end
             getfield(PormG.QueryBuilder, sym) isa Function || return false
             pormg_owned(Base.Docs.Binding(PormG.QueryBuilder, sym).mod)
         end
-        # Floor: proves the extraction found the surface at all. 16 `_`-prefixed helpers + the
+        # Floor: proves the extraction found the surface at all. 20 `_`-prefixed helpers + the
         # bare owned ones; a regex that silently matched nothing would otherwise pass everything.
         # Paired with the anchor above — neither is sufficient alone.
         @test length(owned) >= 20
 
         offenders = filter(n -> !startswith(n, "_") && !Base.ispublic(PormG.QueryBuilder, Symbol(n)), owned)
 
-        # `on` and `cjoin_on` are the two known exceptions, documented in `object_manager.jl` above
-        # `Base.getproperty`: they are the `SQLObjectHandler` overloads of the `ctes.jl` join family
-        # whose siblings `cjoin`/`With` ARE public, so prefixing only these two would trade one
-        # inconsistency for a worse one. The real fix is a `public` declaration (#289 territory) —
-        # if you make it, DELETE the name from this list rather than widening the list.
+        # EMPTY, and that is the whole point. `on` and `cjoin_on` used to sit here as named
+        # exceptions, because prefixing them alone would have split the `ctes.jl` join family whose
+        # siblings `cjoin`/`With` were public. #305 removed the split at the source by withdrawing
+        # the free-function form of the entire family, so the rule now covers all four and needs no
+        # exception list at all.
         #
-        # EQUALITY, not `issubset`, on purpose: a subset check would pass silently once the list
-        # rots to `[]`, so it could never force that deletion.
+        # If a name ever appears here, the fix is to make the code satisfy the rule — rename it, or
+        # declare it `public` if it is genuinely API. Do NOT re-add names to this list: that turns
+        # the assertion into an allowlist and defeats it.
         #
         # If a name lands here that is NOT a chain helper — a local, a kwarg name, a struct field
         # that happens to shadow a non-public PormG function — exclude it from EXTRACTION the way
@@ -309,7 +310,7 @@ end
         # The short, collision-prone PormG-owned names now in scope, worth recognising on sight:
         # `add`, `build`, `clear`, `insert`, `page`, `query`, `remove`, `set`, `update`, `OP`. Any
         # of them used as a local or kwarg in a future branch lands here without being a helper.
-        @test sort(offenders) == ["cjoin_on", "on"]
+        @test offenders == String[]
     end
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -328,7 +329,7 @@ end
     @testset "the `public`-but-unexported surface is exactly the declared set" begin
         expected = Dict(
             PormG              => [:install_ai_skills, :setup],
-            PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :cjoin, :delete, :earliest, :first,
+            PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :delete, :earliest, :first,
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
             # Models: the 27 field constructors #289 declared, plus the three entry points #295
             # added (`Model`, `set_models`, `UniqueConstraint`) = 30. `Model_Type` is deliberately

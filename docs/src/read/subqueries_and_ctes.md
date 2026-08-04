@@ -252,23 +252,6 @@ The `.with()` method:
 2. Creates a `LEFT JOIN stats ON result.driverid = stats.driverid`.
 3. Makes `stats__total_results` available for selection via `values()`.
 
-!!! note "Functional form: `With(...)`"
-    `.with("name" => subquery; join_field=...)` is the idiomatic fluent form. The same CTE
-    can also be added with the free `With` function, which lives in `PormG.QueryBuilder` (it
-    is **not** part of the top-level `using PormG` surface). Bring it into scope explicitly:
-
-    ```julia
-    using PormG.QueryBuilder: With
-
-    mq = M.Result.objects   # a fresh handler (the CTE is added exactly once)
-    With(mq.object, "stats", driver_stats, join_field="driverid" => "driverid")
-    # …identical to:
-    # mq.with("stats" => driver_stats, join_field="driverid" => "driverid")
-    ```
-
-    Note the functional form takes `mq.object` (the underlying `SQLObject`) as its first
-    argument and returns it, whereas `.with()` operates on the handler directly.
-
 ---
 
 ## Correlating a CTE with `F()` (no `join_field`)

@@ -15,7 +15,7 @@ using Test
 using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list
 using PormG
 using PormG.Models
-using PormG.QueryBuilder: object, Q, Qor, With
+using PormG.QueryBuilder: object, Q, Qor
 
 const QB = PormG.QueryBuilder
 

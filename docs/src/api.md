@@ -873,17 +873,6 @@ The library in full — the same index `?PormG.Functions` prints in the REPL:
 
 **Type / value** — `Cast`, `Extract`, `ToChar`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
 
-### Functional CTE constructor: `PormG.QueryBuilder.With`
-
-The `With` (CTE) constructor lives in the `PormG.QueryBuilder` submodule and is **not** part
-of the top-level `using PormG` surface. In everyday code prefer the fluent `.with(...)` method
-(see [Subqueries and CTEs](read/subqueries_and_ctes.md)); reach for the free-function form only
-when you want the functional style. Import it explicitly:
-
-```julia
-using PormG.QueryBuilder: With        # or qualify: PormG.QueryBuilder.With(...)
-```
-
 ### Result-shape contract for `list()`
 
 The terminal `list()` methods return a documented, stable shape:

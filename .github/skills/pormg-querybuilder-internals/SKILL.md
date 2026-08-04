@@ -18,7 +18,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 - Editing `src/Dialect.jl` when the change affects SQL clause or function rendering
 - Fixing SQL rendering regressions
 - Fixing parameter ordering and bucket routing
-- Fixing `With`, `cjoin`, `on`, `having`, alias promotion, and join planning internals
+- Fixing `.with`, `.cjoin`, `.on`, `having`, alias promotion, and join planning internals
 - Working with `inspect_query`, `show_query`, and builder metadata
 
 ## Core entry points
@@ -125,13 +125,13 @@ as a `ChainCaller` makes the keyword throw. Coverage: `test/unit/test_fluent_par
 > Of the helpers **PormG itself owns**, one is `_`-prefixed unless the name is API in its own
 > right — i.e. unless `Base.ispublic(QueryBuilder, name)`.
 
-The 29 branches route to 29 targets: **16** `_`-prefixed (`_filter!`, `_db!`, `_values!`,
-`_order_by!`, `_limit!`, `_offset!`, `_page!`, `_distinct!`, `_select_for_update!`, `_create!`,
-`_update!`, `_update_or_create!`, `_get_or_create!`, `_count`, `_aggregate`, `_exists` — matching the
-`_` marker the rest of `src/` already uses for an internal, `_query_select`, `_validate_identifier`,
-…), **7** bare and public (`list`, `delete`, `earliest`, `latest`, `inspect_query`, `With`, `cjoin`),
-**2** bare exceptions (below), and **4** Base-owned and out of scope (`first`, `last`, `get`,
-`deepcopy`).
+The 29 branches route to 29 targets, and since #305 there is **no exception list**: **20**
+`_`-prefixed (`_filter!`, `_db!`, `_values!`, `_order_by!`, `_limit!`, `_offset!`, `_page!`,
+`_distinct!`, `_select_for_update!`, `_create!`, `_update!`, `_update_or_create!`,
+`_get_or_create!`, `_count`, `_aggregate`, `_exists`, `_with`, `_cjoin`, `_cjoin_on`, `_on` —
+matching the `_` marker the rest of `src/` already uses for an internal, `_query_select`,
+`_validate_identifier`, …), **5** bare and public (`list`, `delete`, `earliest`, `latest`,
+`inspect_query`), and **4** Base-owned and out of scope (`first`, `last`, `get`, `deepcopy`).
 
 **The ownership clause is load-bearing, not a hedge** — read it as *"a name PormG can rename"*. The
 chain routes to `first`, `last`, `get` and `deepcopy`, whose bindings resolve to `Base`; an unscoped
@@ -142,18 +142,19 @@ Ownership sets the scope; `ispublic` decides what is in it. It is rooted at **Po
 QueryBuilder, so a helper defined in a sibling module and imported here stays covered — it is
 renameable, and just as able to leak through `_fluent_name`.
 
-**Two names do not fit, and that is stated rather than hidden.** `on` and `cjoin_on` are PormG's and
-`ispublic == false`, so the rule says prefix them. They stay bare because they are
-the `SQLObjectHandler` overloads of the `ctes.jl` join family whose siblings `cjoin` and `With` *are*
-public; splitting one family's spelling trades this inconsistency for a worse one. The rule's own
-second clause points at the real fix — declare them `public`, since both are documented in
-`docs/src/api.md` and `docs/src/read/custom_joins.md` — which is a #289 docs-surface decision, not a
-rename. If you pick that up, the frozen `public` set in `test_docstring_coverage.jl` moves with it,
-and so does the two-name exception list in its `getproperty helpers follow the #281 naming rule`
-testset — **delete the name from that list, do not widen it.**
+**The join/CTE family used to be the exception (#305).** `With` was exported and `cjoin` was
+`public` because each had a documented free-function form, which left their siblings `on`/`cjoin_on`
+as two hard-coded exceptions — prefixing only those two would have split one family's spelling.
+#305 removed the split at its source by withdrawing the free-function form entirely: the fluent
+`.with` / `.cjoin` / `.cjoin_on` / `.on` are the only public surface, so all four are internals and
+the rule covers them like any other helper. `_with` is lowercase for consistency with every
+other helper — the capital `W` only existed because the name was user-facing. Not a `_fluent_name`
+argument: all four are closure-backed, so they never reach `ChainCaller`.
 
-The rule is enforced, not just documented: that testset extracts every QueryBuilder-owned function
-named in the `getproperty` body and asserts the only non-`_`, non-public ones are those two.
+The rule is enforced, not just documented: that testset extracts every PormG-owned function named in
+the `getproperty` body and asserts the non-`_`, non-public set is **empty**. If a name ever shows up
+there, make the code satisfy the rule — rename it, or declare it `public` if it is genuinely API.
+**Do not re-add names to that list**; it becomes an allowlist and stops guarding anything.
 
 The rule is about the **name**, not about call sites. `_count`/`_exists` (`deletion.jl`) and
 `_values!`/`_filter!` (`execution.jl`) are all called from elsewhere inside `src/querybuilder/`;
@@ -241,7 +242,7 @@ Prefer unit tests when the question is:
 - Did the SQL text render correctly?
 - Did parameters land in the right bucket and order?
 - Did alias promotion happen in the right clause?
-- Did `cjoin`, `With`, or custom join wiring produce the intended internal metadata?
+- Did `.cjoin`, `.with`, or custom join wiring produce the intended internal metadata?
 
 ### Integration tests
 

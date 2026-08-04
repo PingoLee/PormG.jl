@@ -190,9 +190,10 @@ const EXPECTED_FUNCTIONS = Set([
 
     # #202 — the `PormG.QueryBuilder` submodule surface.
     #
-    # Decision: `With` (CTE) is documented-via-import — it stays EXPORTED by `PormG.QueryBuilder`
-    # (reach it with `using PormG.QueryBuilder: With`) but is NOT promoted onto the top-level
-    # `using PormG` surface. `OP` (operator) is INTERNAL — unexported and undocumented; the public
+    # Decision: `With` WAS exported here as the documented functional CTE form. #305 withdrew that
+    # form — the fluent `.with(...)` is now the only public surface — so the binding is gone from
+    # the submodule entirely, renamed to the internal `_with` under #281's naming rule.
+    # `OP` (operator) is INTERNAL — unexported and undocumented; the public
     # way to build operator predicates is the `"field__@op"` string lookup. The generic names
     # `query`/`update`/`page` were also un-exported so a bare `using PormG.QueryBuilder` stops
     # dumping them into scope.
@@ -210,12 +211,22 @@ const EXPECTED_FUNCTIONS = Set([
             @test isdefined(PormG.QueryBuilder, n)  # …but still reachable by explicit import
         end
 
-        # `With` stays exported by the submodule (the documented functional CTE form).
-        @test :With in qb_exports
-        @test isdefined(PormG.QueryBuilder, :With)
+        # #305: the whole join/CTE free-function family is internal now. `With` in particular is
+        # GONE as a name — not merely un-exported — because #281's rule renames a non-public helper
+        # behind `getproperty`. Asserting `!isdefined` rather than just "not exported" is what keeps
+        # a future `_with` -> `With` revert from passing silently.
+        for n in (:With, :cjoin, :cjoin_on, :on)
+            @test !(n in qb_exports)
+            @test !isdefined(PormG.QueryBuilder, n)
+        end
+        # …and the renamed internals do exist, so the family was renamed rather than deleted.
+        for n in (:_with, :_cjoin, :_cjoin_on, :_on)
+            @test isdefined(PormG.QueryBuilder, n)
+            @test !(n in qb_exports)
+        end
 
-        # Neither is promoted onto the top-level surface (kept off `using PormG`). These are the
-        # load-bearing guards: they fail the moment `With`/`OP` are re-homed at top level.
+        # Not promoted onto the top-level surface either (kept off `using PormG`). Load-bearing:
+        # fails the moment `With`/`OP` are re-homed at top level.
         @test !isdefined(PormG, :With)
         @test !isdefined(PormG, :OP)
     end

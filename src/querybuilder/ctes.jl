@@ -20,7 +20,7 @@ function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
   return table
 end
 
-function With(q::SQLObject, name::String, query::SQLObjectHandler;
+function _with(q::SQLObject, name::String, query::SQLObjectHandler;
   join_field::Union{Pair{String,String},Nothing}=nothing,
   join_type::String="LEFT")
   cte_fields = _preset_cte_fields(name, query, join_field=join_field, join_type=join_type)
@@ -31,28 +31,18 @@ function With(q::SQLObject, name::String, query::SQLObjectHandler;
   q.ctes[name] = cte_fields
   return q
 end
-With(o::SQLObjectHandler, name::String, query::SQLObjectHandler;
+_with(o::SQLObjectHandler, name::String, query::SQLObjectHandler;
   join_field::Union{Pair{String,String},Nothing}=nothing,
-  join_type::String="LEFT") = With(o.object, name, query, join_field=join_field, join_type=join_type)
+  join_type::String="LEFT") = _with(o.object, name, query, join_field=join_field, join_type=join_type)
 
-"""
-Pair-accepting overload for `With`, enabling the functor-style API:
-
-```julia
-# Django-idiomatic chain:
-races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
-q = M.Result.objects
-  .with("r91" => races_91, join_field="raceid" => "raceid")
-  .filter("positionorder" => 1)
-```
-
-The `Pair` first argument maps the CTE name to its sub-query handler.
-All keyword arguments are forwarded to the underlying `With` implementation.
-"""
-function With(o::SQLObjectHandler, pair::Pair{String,<:SQLObjectHandler};
+# Pair-accepting overload behind the fluent `.with("name" => subquery; join_field=...)`.
+# The `Pair` first argument maps the CTE name to its sub-query handler; keyword arguments are
+# forwarded to the `SQLObject` method above. No docstring on purpose (#305) — see the note on
+# `_cjoin` below; the CTE guide is `docs/src/read/subqueries_and_ctes.md`.
+function _with(o::SQLObjectHandler, pair::Pair{String,<:SQLObjectHandler};
   join_field::Union{Pair{String,String},Nothing}=nothing,
   join_type::String="LEFT")
-  With(o.object, pair.first, pair.second, join_field=join_field, join_type=join_type)
+  _with(o.object, pair.first, pair.second, join_field=join_field, join_type=join_type)
   return o
 end
 
@@ -189,7 +179,7 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
 
     if field !== nothing
       if !hasproperty(field, :to) || field.to === nothing
-        throw(QueryBuildError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use cjoin(..., field=...) first if this path depends on a custom link."))
+        throw(QueryBuildError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use .cjoin(..., field=...) first if this path depends on a custom link."))
       end
 
       current_model = field.to isa PormGModel ? field.to : getfield(current_module, Symbol(String(field.to)))
@@ -212,7 +202,7 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
   return current_model
 end
 
-function on(q::SQLObject, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
+function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
   target_model = _resolve_join_target_model(q, join_path)
   parsed_filters = Vector{FilterType}()
 
@@ -253,49 +243,29 @@ function on(q::SQLObject, join_path::String, filters::AbstractVector; join_type:
   return q
 end
 
-# Concrete overload resolves the ambiguity with on(::SQLObject, ::String, ::AbstractVector)
+# Concrete overload resolves the ambiguity with _on(::SQLObject, ::String, ::AbstractVector)
 # that Aqua detects when q is a SQLObjectHandler (subtype matching is ambiguous otherwise).
-function on(q::SQLObjectHandler, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
-  on(q.object, join_path, filters; join_type=join_type)
+function _on(q::SQLObjectHandler, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
+  _on(q.object, join_path, filters; join_type=join_type)
   return q
 end
 
-function on(q::SQLObjectHandler, join_path::String, args...; filters=nothing, join_type::Union{String,Nothing}=nothing)
+function _on(q::SQLObjectHandler, join_path::String, args...; filters=nothing, join_type::Union{String,Nothing}=nothing)
   positional_filters = _collect_join_filters(collect(args))
   kw_filters = _collect_join_filters(filters)
   combined_filters = vcat(positional_filters, kw_filters)
 
-  on(q.object, join_path, combined_filters; join_type=join_type)
+  _on(q.object, join_path, combined_filters; join_type=join_type)
   return q
 end
 
 
-"""
-Add a custom join to the query object that does not have to follow the model's foreign key relationships.
-
-# Arguments
- - `q::SQLObject`: The SQL object to add the custom join to
- - `main_join::Pair{String, String}`: A pair where the first element is the field in the main model to join on, and the second element is the related model name to join with
- - `filters::AbstractVector`: (Optional) An array of filters (Pair, Q, Qor, OP, F) to apply to the join condition
- - `join_type::Union{String, Nothing}`: (Optional) The type of join
-
-# Examples
-```julia
-  query = M.New_join_position |> object;
-  cjoin(query, "result" => "Result");
-  query.values("result__statusid__status", "description", "result");
-
-  @info query |> show_query
-  ┌ Info: SELECT
-  │    "Tb_2"."status" as result__statusid__status,
-  │   "Tb"."description" as description,
-  │   "Tb"."result" as result
-  │ FROM "new_join_position" as "Tb"
-  │  LEFT JOIN "result" AS "Tb_1" ON "Tb"."result" = "Tb_1"."resultid"
-  └  LEFT JOIN "status" AS "Tb_2" ON "Tb_1"."statusid" = "Tb_2"."statusid"
-```
-"""
-function cjoin(
+# Adds a custom join that does not have to follow the model's foreign-key relationships.
+#
+# No docstring on purpose (#305). The public surface is the fluent `.cjoin(...)`, whose contract
+# lives on the `object` docstring's bullet and in `docs/src/api.md`; there is no user-facing binding
+# here to attach docs to. The worked examples live in `docs/src/read/custom_joins.md`.
+function _cjoin(
   q::SQLObject,
   main_join::Union{Pair{String,String},Nothing},
   filters::AbstractVector,
@@ -334,7 +304,7 @@ function cjoin(
 
     # Compare case-insensitively since model names may be capitalized differently
     if existing_target !== nothing && lowercase(existing_target) != lowercase(main_join.second)
-      throw(QueryBuildError("Field '$(main_join.first)' is already a ForeignKey pointing to '$(existing_target)', but cjoin attempted to join with '$(main_join.second)'. To add ON conditions to an existing FK, the target model must match. Use cjoin(query, \"$(main_join.first)\" => \"$(existing_target)\", filters=[...]) instead."))
+      throw(QueryBuildError("Field '$(main_join.first)' is already a ForeignKey pointing to '$(existing_target)', but cjoin attempted to join with '$(main_join.second)'. To add ON conditions to an existing FK, the target model must match. Use query.cjoin(\"$(main_join.first)\" => \"$(existing_target)\", filters=[...]) instead."))
     end
   end
 
@@ -410,7 +380,7 @@ function cjoin(
 end
 
 # Convenience function for ObjectHandler
-function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing}; kwargs...)
+function _cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing}; kwargs...)
   accepted = Set([:filters, :field, :join_type, :warn])
   for k in keys(kwargs)
     if !(k in accepted)
@@ -429,10 +399,10 @@ function cjoin(q::SQLObjectHandler, main_join::Union{Pair{String,String},Nothing
 
   @pormg_debug false
 
-  cjoin(q.object, main_join, _filters, field, join_type, warn)
+  _cjoin(q.object, main_join, _filters, field, join_type, warn)
   return q
 end
-cjoin(q::SQLObjectHandler; kwargs...) = cjoin(q, nothing; kwargs...)
+_cjoin(q::SQLObjectHandler; kwargs...) = _cjoin(q, nothing; kwargs...)
 
 # #45 — anchor-less, full-control custom join.
 #
@@ -444,8 +414,8 @@ cjoin(q::SQLObjectHandler; kwargs...) = cjoin(q, nothing; kwargs...)
 # Reference convention inside `on`:
 #   * bare `F("col")`        → the BASE/main table (b1)
 #   * `F("<alias>.col")`     → the joined copy declared here (b2)
-# A self-join is `cjoin_on(q, "<BaseModelName>"; alias="b2", on=[...])`.
-function cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
+# A self-join is `_cjoin_on(q, "<BaseModelName>"; alias="b2", on=[...])`.
+function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias::String, join_type::Union{String,Nothing}="INNER")
   isempty(strip(target_model)) && throw(QueryBuildError("cjoin_on requires a target model name."))
   # Fail-closed identifier check on the user alias (it is interpolated into SQL as a quoted alias).
   _validate_identifier(alias)
@@ -482,8 +452,8 @@ function cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias:
   return q
 end
 
-function cjoin_on(q::SQLObjectHandler, target_model::String; alias::String, on::AbstractVector, join_type::Union{String,Nothing}="INNER")
-  cjoin_on(q.object, target_model, on; alias=alias, join_type=join_type)
+function _cjoin_on(q::SQLObjectHandler, target_model::String; alias::String, on::AbstractVector, join_type::Union{String,Nothing}="INNER")
+  _cjoin_on(q.object, target_model, on; alias=alias, join_type=join_type)
   return q
 end
 

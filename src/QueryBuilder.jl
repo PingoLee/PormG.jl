@@ -82,7 +82,6 @@ export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, Case, Cas
 export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim
 export Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
-export With
 
 
 # TODO: finish this function to get the joins from filters
@@ -128,13 +127,12 @@ export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
 # docstring was attached in — never PormG's export list. Anything user-facing here that is not
 # `public` silently vanishes from the API reference. `show_query`/`inspect_query` are the sharp case:
 # exported from `PormG`, but defined here, so only this declaration keeps them on the page.
-public cjoin, delete, list, save, earliest, latest, ObjectHandler, inspect_query, show_query
+public delete, list, save, earliest, latest, ObjectHandler, inspect_query, show_query
 
 # Foreign bindings whose docstrings live in this module's meta: the `.first()` / `.last()` terminals
 # and `query |> DataFrame`. `public` works on an imported name (it marks the binding in THIS module),
 # and does not touch `Base`/`DataFrames`.
 public first, last, DataFrame
 
-include("documentation/querybuilder.jl")
 
 end

@@ -379,28 +379,29 @@ end
 # QueryBuilder so that a helper defined in a sibling module and imported here — renameable, and
 # just as capable of leaking through `_fluent_name` — stays covered.
 #
-# The 29 branches below route to 29 targets, accounted for exhaustively:
+# The 29 branches below route to 29 targets, accounted for exhaustively — and since #305 the rule
+# has NO exception list:
 #
-#   16  `_`-prefixed, all `ispublic == false`: `_filter!`, `_db!`, `_values!`, `_order_by!`,
+#   20  `_`-prefixed, all `ispublic == false`: `_filter!`, `_db!`, `_values!`, `_order_by!`,
 #       `_limit!`, `_offset!`, `_page!`, `_distinct!`, `_select_for_update!`, `_create!`,
-#       `_update!`, `_update_or_create!`, `_get_or_create!`, `_count`, `_aggregate`, `_exists`
-#    7  bare and public, so the rule admits them: `list`, `delete`, `earliest`, `latest`,
-#       `inspect_query`, `With`, `cjoin`
-#    2  bare and NOT public — the stated exceptions, next paragraph: `on`, `cjoin_on`
+#       `_update!`, `_update_or_create!`, `_get_or_create!`, `_count`, `_aggregate`, `_exists`,
+#       `_with`, `_cjoin`, `_cjoin_on`, `_on`
+#    5  bare and public, so the rule admits them: `list`, `delete`, `earliest`, `latest`,
+#       `inspect_query`
 #    4  Base-owned, out of scope: `first`, `last`, `get`, `deepcopy`
 #
-# `ispublic` decides those 7 + 2 mechanically, which is the point: since #289 it is also the test
+# `ispublic` decides those five mechanically, which is the point: since #289 it is also the test
 # Documenter applies, so the rule is checkable rather than a matter of taste — and
-# `test/unit/test_docstring_coverage.jl` does check it, exceptions and all.
+# `test/unit/test_docstring_coverage.jl` does check it, asserting the offender set is EMPTY.
 #
-# **The two that do not fit, stated rather than hidden:** `on` and `cjoin_on` are PormG's and
-# `ispublic == false`, so the rule says prefix them. They stay bare because they are the
-# `SQLObjectHandler` overloads of the `ctes.jl` join-construction family, and their siblings `cjoin`
-# and `With` are public — splitting one family's spelling would trade this inconsistency for a worse
-# one. The rule's own second clause suggests the real fix is to declare them `public` (they are
-# documented in `docs/src/api.md` and `docs/src/read/custom_joins.md`); that is a docs-surface
-# decision in #289's territory, not a rename, so it is deliberately not made here. Those two are the
-# named exceptions in the guard.
+# `_with`/`_cjoin`/`_cjoin_on`/`_on` were the two exceptions plus their two public siblings until
+# #305 withdrew the free-function form of the whole join/CTE family. `With` was exported and `cjoin`
+# was `public` because each had a documented function form; the fluent methods are now the only
+# public surface, so all four became internals and the rule covers them like any other helper.
+# `_with` is lowercase deliberately: the capital only existed because the name was user-facing,
+# and every other helper here is lowercase. Note this is consistency, NOT a `_fluent_name` argument
+# — these four are closure-backed (they take keywords), so they never reach `ChainCaller` and
+# `_fluent_name` never sees them.
 #
 # Note the rule is about the NAME, not about call sites: `_count`/`_exists` (deletion.jl),
 # `_values!`/`_filter!` (execution.jl) are all called from elsewhere inside `src/querybuilder/`.
@@ -438,17 +439,17 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :with
     # Chainable: query.with("cte_name" => sub_query; join_field=..., join_type=...)
     # Uses closure (not ChainCaller) so keyword arguments are forwarded correctly.
-    return (args...; kwargs...) -> (With(q, args...; kwargs...); q)
+    return (args...; kwargs...) -> (_with(q, args...; kwargs...); q)
   elseif sym === :cjoin
     # Chainable: query.cjoin("field" => "Model"; filters=[...], join_type=...)
-    return (args...; kwargs...) -> (cjoin(q, args...; kwargs...); q)
+    return (args...; kwargs...) -> (_cjoin(q, args...; kwargs...); q)
   elseif sym === :on
     # Chainable: query.on("join_path", "field" => value; join_type="INNER")
-    return (args...; kwargs...) -> (on(q, args...; kwargs...); q)
+    return (args...; kwargs...) -> (_on(q, args...; kwargs...); q)
   elseif sym === :cjoin_on
     # Chainable: query.cjoin_on("Model"; alias="b2", on=[Qor(...)], join_type="INNER")
     # Anchor-less full-control join (#45): the `on` expressions are the ENTIRE ON clause.
-    return (args...; kwargs...) -> (cjoin_on(q, args...; kwargs...); q)
+    return (args...; kwargs...) -> (_cjoin_on(q, args...; kwargs...); q)
   elseif sym === :copy
     return () -> deepcopy(q)
 

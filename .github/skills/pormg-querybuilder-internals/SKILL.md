@@ -120,12 +120,57 @@ ways, and the choice is forced by whether the method takes keywords:
 So adding a keyword to a `ChainCaller`-backed method means **converting it to a closure**; leaving it
 as a `ChainCaller` makes the keyword throw. Coverage: `test/unit/test_fluent_parity_208.jl`.
 
+**Naming the helpers behind the chain (#281).** The rule:
+
+> Of the helpers **PormG itself owns**, one is `_`-prefixed unless the name is API in its own
+> right — i.e. unless `Base.ispublic(QueryBuilder, name)`.
+
+The 29 branches route to 29 targets: **16** `_`-prefixed (`_filter!`, `_db!`, `_values!`,
+`_order_by!`, `_limit!`, `_offset!`, `_page!`, `_distinct!`, `_select_for_update!`, `_create!`,
+`_update!`, `_update_or_create!`, `_get_or_create!`, `_count`, `_aggregate`, `_exists` — matching the
+`_` marker the rest of `src/` already uses for an internal, `_query_select`, `_validate_identifier`,
+…), **7** bare and public (`list`, `delete`, `earliest`, `latest`, `inspect_query`, `With`, `cjoin`),
+**2** bare exceptions (below), and **4** Base-owned and out of scope (`first`, `last`, `get`,
+`deepcopy`).
+
+**The ownership clause is load-bearing, not a hedge** — read it as *"a name PormG can rename"*. The
+chain routes to `first`, `last`, `get` and `deepcopy`, whose bindings resolve to `Base`; an unscoped
+rule would demand renaming `Base.deepcopy`. And it is *not* "Base's names are exempt": `first`/`last`
+pass `ispublic` only because `src/QueryBuilder.jl:135` declares `public first, last` and `get`
+because `:105` exports it, while `deepcopy` and `copy` are equally Base's and are `ispublic == false`.
+Ownership sets the scope; `ispublic` decides what is in it. It is rooted at **PormG**, not
+QueryBuilder, so a helper defined in a sibling module and imported here stays covered — it is
+renameable, and just as able to leak through `_fluent_name`.
+
+**Two names do not fit, and that is stated rather than hidden.** `on` and `cjoin_on` are PormG's and
+`ispublic == false`, so the rule says prefix them. They stay bare because they are
+the `SQLObjectHandler` overloads of the `ctes.jl` join family whose siblings `cjoin` and `With` *are*
+public; splitting one family's spelling trades this inconsistency for a worse one. The rule's own
+second clause points at the real fix — declare them `public`, since both are documented in
+`docs/src/api.md` and `docs/src/read/custom_joins.md` — which is a #289 docs-surface decision, not a
+rename. If you pick that up, the frozen `public` set in `test_docstring_coverage.jl` moves with it,
+and so does the two-name exception list in its `getproperty helpers follow the #281 naming rule`
+testset — **delete the name from that list, do not widen it.**
+
+The rule is enforced, not just documented: that testset extracts every QueryBuilder-owned function
+named in the `getproperty` body and asserts the only non-`_`, non-public ones are those two.
+
+The rule is about the **name**, not about call sites. `_count`/`_exists` (`deletion.jl`) and
+`_values!`/`_filter!` (`execution.jl`) are all called from elsewhere inside `src/querybuilder/`;
+internal reuse does not make a helper API, being declared API does.
+
+This is diagnostic, not cosmetic: these names are what a user sees when a chain misfires (#272 surfaced
+as `no method matching page!(::SQLObjectQuery, ::Tuple{Int64})`), and the prefix is the signal that the
+spelling is one they could not have typed. `_fluent_name` in `object_manager.jl` is the exact inverse
+of this rule — it strips `^_` and `!$` to recover the method the caller wrote — so **adding a helper
+that does not follow the rule silently degrades the kwarg-rejection message.**
+
 **A `ChainCaller`-backed helper carries no docstring.** Not because it would be published — since
 #289 `api.md` sets `Private = false`, so an un-`public` name stays off the site either way — but
 because there is no **user-facing** binding to attach docs to — the fluent `.values(...)` a reader
-would `?` is synthesized by `getproperty` and has none, and nobody reaches `up_values!` by name — so
-the text would only ever be seen by someone already in the file. Three had drifted in (`up_filter!`, `up_values!`, `order_by!`) before
-#281; `page` had it until #280. Put the contract on the `object` docstring's `.method(...)` bullet
+would `?` is synthesized by `getproperty` and has none, and nobody reaches `_values!` by name — so
+the text would only ever be seen by someone already in the file. Three had drifted in — under their
+pre-#281 spellings `up_filter!`, `up_values!` and `order_by!`; `page` had it until #280. Put the contract on the `object` docstring's `.method(...)` bullet
 and use a `#` comment on the helper. `test_docstring_coverage.jl` enforces it, scoped to the
 `ChainCaller(helper, q)` branches —
 widening it to every `sym === :name` branch is not possible, because the closure branches route to
@@ -160,7 +205,7 @@ Focus on:
 - `execution.jl`
 - `deletion.jl`
 
-Gotcha — `do_count` (`execution.jl`): it clears `.values`/`.order` before rendering, so `count()` cannot reuse a `.values()` select. `COUNT(DISTINCT *)` is **invalid SQL on both PostgreSQL and SQLite**, so the count forms diverge:
+Gotcha — `_count` (`execution.jl`): it clears `.values`/`.order` before rendering, so `count()` cannot reuse a `.values()` select. `COUNT(DISTINCT *)` is **invalid SQL on both PostgreSQL and SQLite**, so the count forms diverge:
 
 - `count()` → `COUNT(*)`.
 - query-level distinct (`.distinct().count()` / `count(distinct=true)`) → wrap `SELECT DISTINCT *` in an **outer `COUNT(*)` subquery** (so `count() == length(distinct list())`).

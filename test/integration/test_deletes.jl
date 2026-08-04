@@ -308,7 +308,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────
     # A filtered delete that matches no rows should short-circuit cleanly and
     # report zero work instead of warning, mutating state, or building a bogus
-    # deletion plan. This covers the execute-time do_exists early return.
+    # deletion plan. This covers the execute-time _exists early return.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "Delete with No Matches: Returns Empty Count" begin
         # This slug cannot exist because the cleanup runs first and no seed

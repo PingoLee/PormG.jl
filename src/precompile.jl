@@ -157,7 +157,7 @@ if ccall(:jl_generating_output, Cint, ()) == 1
       Base.precompile(Tuple{getfield(QB, Symbol("#9#10")), QB.SQLTypeQ})          # 0.09 s
     Base.precompile(Tuple{typeof(QB._get_filter_query), QB.QorObject, QB.InstructionObject})  # 0.11 s
     Base.precompile(Tuple{typeof(QB.deepcopy), QB.QObject})                       # 0.08 s
-    Base.precompile(Tuple{QB.ChainCaller{typeof(QB.order_by!), QB.ObjectHandler}, String, Vararg{String}})  # 0.04 s
+    Base.precompile(Tuple{QB.ChainCaller{typeof(QB._order_by!), QB.ObjectHandler}, String, Vararg{String}})  # 0.04 s
     Base.precompile(Tuple{typeof(QB.F), String})                                  # 0.01 s
     Base.precompile(Tuple{typeof(*), QB.FExpression, Float64})                    # 0.02 s
     Base.precompile(Tuple{typeof(QB._get_join_filters), QB.SQLObjectQuery, String})       # 0.005 s

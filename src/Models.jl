@@ -43,10 +43,55 @@ public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, DateFie
   IntegerField, JSONField, ManyToManyField, OneToOneField, PasswordField, PositiveIntegerField,
   PositiveSmallIntegerField, SlugField, TextField, TimeField, URLField, UUIDField
 
+# The module's ENTRY POINTS (#295), declared separately because they are a different category from
+# the field constructors above: a field is a column, these define and register the model itself.
+#
+# The trap worth naming, since it costs nothing to fall into: under #289's rule a docstring alone
+# publishes NOTHING. `Model` is the first call in essentially every example in `docs/src`, and
+# writing its docstring without this line would leave it invisible on the API reference exactly as
+# before. The two steps move together — and so does the frozen set in
+# `test/unit/test_docstring_coverage.jl`, which fails if this line and that literal disagree.
+#
+# `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
+# named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
+# the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
+public Model, UniqueConstraint, set_models
+
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Core Types
 #═══════════════════════════════════════════════════════════════════════════════
+"""
+    Model_Type <: PormGModel
+
+The concrete model object — what [`Model`](@ref) returns and what `M.Driver` is. It is the only
+concrete subtype of `PormGModel`, and it is reached by *holding* one, not by naming it: build models
+with `Model(...)` rather than calling this constructor.
+
+Construction fills `name`, `fields` and `field_names`; the remaining slots are populated later by
+[`set_models`](@ref) (directly or through `@import_models`), which is why a model used before
+registration has `connect_key === nothing` and no reverse relations.
+
+| Slot | Filled by | Holds |
+|---|---|---|
+| `name` | `Model(...)`, or `set_models` from the Julia binding | The table name — verbatim from the positional argument, or lowercased when derived from the binding |
+| `fields` | `Model(...)` | Declared field name → `PormGField`, including many-to-many fields |
+| `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
+| `related_objects` | `set_models` | Reverse accessors installed by foreign keys pointing *at* this model |
+| `_module` / `connect_key` | `set_models` | The defining module and the connection key it registered under |
+| `cache` | `set_models`, `Model(constraints = …)` | Derived metadata: many-to-many relations, declared unique constraints |
+
+`deepcopy` **shares** rather than clones (`deepcopy(model) === model`): a model is resolved schema
+state treated as an immutable shared reference, and recursion would otherwise descend into
+`_module::Module` and throw. The query builder relies on this — copying a query copies its state but
+keeps the same model.
+
+`verbose_name` is inert: no `Model` method accepts it, and nothing consumes it — it is only ever
+copied from one model to another. It does not reach the DDL and does not appear in generated model
+files.
+
+See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref).
+"""
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
   verbose_name::Union{String, Nothing} = nothing
@@ -193,6 +238,67 @@ function get_model_name(model::PormGModel, settings::PormGSettings, symbol::Bool
 end
 
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
+#
+# NOTE: keep this comment ABOVE the docstring. A comment between a docstring and the definition it
+# documents silently detaches it — `@doc` binds to the next expression, and the comment is not one,
+# so the string becomes a no-op and `?set_models` answers nothing. Nothing catches that: the package
+# still precompiles, and `checkdocs = :public` only verifies that docstrings which EXIST reach the
+# manual. It cost a debugging round in #295.
+"""
+    set_models(_module::Module, path::String) -> nothing
+
+Register every model defined in `_module` against the database configuration folder `path`, and
+resolve the relationships between them. This is the manual model-loading path; prefer
+`PormG.@import_models` (or `PormG.@models_module` for inline definitions), which call it for you and
+also handle precompilation and Revise reloads.
+
+Until a model is registered it is inert: it has no connection and no reverse relations. Building a
+query still appears to work — `M.Driver.objects.filter(...)` returns a handler — but rendering or
+executing it raises `InvalidConfigurationError`.
+
+Registration does four things:
+
+1. **Names the unnamed.** A model declared without a positional table name carries `name == ""`; it
+   is filled in here from the Julia binding, lowercased (`Race = Model(...)` → table `race`).
+2. **Binds the connection.** `path` is matched against the configured folders to find the connection
+   key. A folder that is not loaded yet is loaded implicitly — which also fixes the environment, so
+   call `PormG.Configuration.load(path; env = ...)` first when you need a specific one, and expect
+   `MissingConfigurationError` from that implicit load if `path` holds no `connection.yml`.
+3. **Resolves relationships.** Each `ForeignKey`/`OneToOneField` target is resolved (a target given
+   as a model-name `String` is replaced by the model object), `pk_field` defaults are applied, and
+   the reverse accessor is installed on the target. With two foreign keys to the same model, an
+   omitted `related_name` is auto-derived and logged. `ManyToManyField`s get their join-table
+   metadata built and cached.
+4. **Rejects contradictions.** `on_delete = SET_NULL` on a `null = false` field, or `SET_DEFAULT`
+   with no `default`, raises `ModelDefinitionError` here — at declaration, rather than later as a
+   mangled `UPDATE`. An unresolvable foreign-key target and a duplicate `related_name` raise the
+   same type.
+
+Calling it again is safe and is the supported way to pick up edits: reverse relations and
+many-to-many caches are cleared before being rebuilt, so a reload cannot accumulate duplicates.
+
+# Examples
+```julia
+module f1_models
+import PormG.Models
+
+Circuit = Models.Model(
+  circuitid = Models.IDField(),
+  name      = Models.CharField(max_length = 100),
+)
+
+Race = Models.Model(
+  raceid    = Models.IDField(),
+  year      = Models.IntegerField(),
+  circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "CASCADE"),
+)
+
+Models.set_models(@__MODULE__, "db")   # tables `circuit` / `race`; Circuit gains a `race` accessor
+end
+```
+
+See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
+"""
 function set_models(_module::Module, path::String)::Nothing
   @pormg_debug false
   models = get_all_models(_module)  
@@ -565,6 +671,55 @@ end
 # `name === nothing` ⇒ the planner derives `<table>_<cols>_uniq` (mirrors the M2M
 # auto-index naming convention). This is NOT a `PormGField` — it carries no column of
 # its own; it references existing fields by name.
+"""
+    UniqueConstraint(; fields, name = nothing)
+
+Require a combination of columns to be unique together — Django's `Meta.unique_together`, spelled as
+a named constraint object. Pass it to [`Model`](@ref) through `constraints =`; a single-column rule
+is the field option `unique = true` instead.
+
+`fields` names fields **on this model** — one name, or an iterable of them. Foreign keys are
+referenced by their field name and resolved to the physical column (honoring `db_column`), and the
+declared case is preserved, so name each field exactly as it was declared.
+
+`name` is the index name. Omitted, the migration planner derives `<table>_<cols>_uniq`, matching the
+automatic many-to-many index convention. Pass an explicit one when the derived name would exceed
+PostgreSQL's 63-byte identifier limit, which Postgres silently truncates — truncation can collide two
+constraints into one index.
+
+Invalid declarations raise `ModelDefinitionError` as early as they can be detected: no fields, a
+repeated field, or a blank `name` fails here in the constructor; a field that does not exist on the
+model, a `ManyToManyField` (it owns no column), or two constraints sharing a name fail when the
+model is built.
+
+!!! note "Materialized when the table is created"
+    Each constraint becomes a `CREATE UNIQUE INDEX` — identical on PostgreSQL and SQLite — emitted
+    when its table is **first created**. Adding or removing one on a table that already exists is
+    not yet detected by `makemigrations`; it needs composite-index introspection PormG does not have
+    (tracked as a follow-up). Declare composite uniqueness with the model, or add the index by hand.
+
+# Examples
+```julia
+Constructor_engine = Models.Model("constructor_engines",
+  id                  = Models.IDField(),
+  constructorid       = Models.ForeignKey(Constructor, pk_field = "constructorid", on_delete = "CASCADE"),
+  year                = Models.IntegerField(),
+  engine_manufacturer = Models.CharField(max_length = 50),
+  constraints = [
+    Models.UniqueConstraint(fields = ("constructorid", "year"), name = "uniq_constructor_year"),
+  ],
+)
+```
+
+which migrates to:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_constructor_year"
+  ON "constructor_engines" ("constructorid", "year");
+```
+
+See also [`Model`](@ref).
+"""
 struct UniqueConstraint
   fields::Vector{String}
   name::Union{String, Nothing}
@@ -644,6 +799,90 @@ end
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
+"""
+    Model(; constraints = nothing, fields...)
+    Model(name; constraints = nothing, fields...)
+
+Define a model — one database table, described by its fields. Returns a `Model_Type`: the object the
+query builder starts from, as in `M.Driver.objects`.
+
+Every keyword other than `constraints` declares a field: `field_name = FieldType(...)`, where the
+field types are the constructors in this module ([`IDField`](@ref), [`CharField`](@ref),
+[`ForeignKey`](@ref), …). Declaring a keyword whose value is not a field raises
+`ModelDefinitionError` — see the note below, which is the usual reason that happens.
+
+The **table name** comes from the positional string when given, and otherwise from the Julia binding
+the model is assigned to, filled in when [`set_models`](@ref) (or `@import_models`) registers the
+module. Both forms are idiomatic and `Race = Model(...)` and `Race = Model("race", ...)` name the
+same table, because a binding-derived name is lowercased as it is filled in. Reach for the
+positional form when the binding name is not the table name you want.
+
+!!! warning "Give the positional name in lowercase"
+    A positional name is stored **verbatim**, and the two code paths that consume it disagree about
+    case: `makemigrations` lowercases it, while the query builder quotes it as declared. So
+    `Model("Driver_Profile", …)` migrates a table named `driver_profile`, and then every
+    `SELECT`/`INSERT`/`UPDATE` it builds addresses `"Driver_Profile"` — a table that does not exist
+    on a backend where a quoted identifier is case-sensitive, as it is on PostgreSQL.
+
+    Mapping a model to a fixed mixed-case table is
+    [issue #59](https://github.com/PingoLee/PormG.jl/issues/59); until it lands, declare table names
+    in lowercase.
+
+**Field names keep the case you declare** and are case-sensitive in queries, so a legacy `driverId`
+column is addressed as `driverId`. One leading underscore is stripped as the escape hatch for names
+that are Julia keywords or SQL reserved words (`_end = ...` declares the column `end`); a name
+containing `__` is rejected, since that is the lookup separator.
+
+A `ManyToManyField` is stored on the model but owns no column of its own, so it is absent from
+`field_names` and from the created table.
+
+`constraints` takes [`UniqueConstraint`](@ref) objects — one, or a collection — for uniqueness
+spanning more than one column. It is the **only** model-level option.
+
+!!! note "PormG has no Django `Meta` block"
+    There is no model-level `db_table`, `ordering`, or `verbose_name`. Each of those is a keyword
+    like any other, so it is read as a field declaration and raises:
+
+    ```julia
+    Models.Model("race", ordering = ["-year"], raceid = Models.IDField())
+    # ModelDefinitionError: All fields must be of type PormGField, exemple: …
+    ```
+
+    Instead: order at query time with `order_by()` — there is no per-model default sort; pin the
+    table name with the positional argument, subject to the lowercase warning above; and set
+    `verbose_name` per field, where it is accepted, rather than per model.
+
+# Examples
+```julia
+Circuit = Models.Model(                       # table `circuit`, inferred from the binding
+  circuitid = Models.IDField(),
+  name      = Models.CharField(max_length = 100),
+  country   = Models.CharField(max_length = 50),
+)
+
+Race = Models.Model(
+  raceid    = Models.IDField(),
+  year      = Models.IntegerField(),
+  round     = Models.IntegerField(),
+  circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "CASCADE"),
+  date      = Models.DateField(),
+  time      = Models.TimeField(null = true),
+  constraints = [                             # no two races share a (year, round)
+    Models.UniqueConstraint(fields = ("year", "round"), name = "race_year_round_uniq"),
+  ],
+)
+```
+
+See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`ForeignKey`](@ref).
+"""
+function Model(name::AbstractString; constraints = nothing, fields...)
+  # Peel `constraints` off BEFORE the `fields...` slurp — otherwise it would flow into the
+  # `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19). Generated
+  # model files (Model_to_str) reload through this kwargs form, so this is the round-trip seam.
+  model = Model(name, Tuple(pairs(fields)))
+  return _apply_unique_constraints!(model, constraints)
+end
+
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
 function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
@@ -658,13 +897,6 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   end
   # println(fields_dict)
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
-end
-function Model(name::AbstractString; constraints = nothing, fields...)
-  # Peel `constraints` off BEFORE the `fields...` slurp — otherwise it would flow into the
-  # `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19). Generated
-  # model files (Model_to_str) reload through this kwargs form, so this is the round-trip seam.
-  model = Model(name, Tuple(pairs(fields)))
-  return _apply_unique_constraints!(model, constraints)
 end
 function Model(name::AbstractString, dict::Dict{String, PormGField})
   field_names::Vector{String} = []

@@ -235,13 +235,17 @@ end
             PormG              => [:install_ai_skills, :setup],
             PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :cjoin, :delete, :earliest, :first,
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
+            # Models: the 27 field constructors #289 declared, plus the three entry points #295
+            # added (`Model`, `set_models`, `UniqueConstraint`) = 30. `Model_Type` is deliberately
+            # absent — it is documented but NOT public: users hold one as `M.Driver`, never name it.
             PormG.Models       => [:AutoField, :BigIntegerField, :BinaryField, :BooleanField,
                                    :CharField, :DateField, :DateTimeField, :DecimalField,
                                    :DurationField, :EmailField, :FileField, :FloatField,
                                    :ForeignKey, :IDField, :ImageField, :IntegerField, :JSONField,
-                                   :ManyToManyField, :OneToOneField, :PasswordField,
+                                   :ManyToManyField, :Model, :OneToOneField, :PasswordField,
                                    :PositiveIntegerField, :PositiveSmallIntegerField, :SlugField,
-                                   :TextField, :TimeField, :URLField, :UUIDField],
+                                   :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,
+                                   :set_models],
             PormG.Migrations   => [:MIGRATION_FORMAT_VERSION],
             PormG.Configuration => [:get_tx_connection, :is_loaded, :load_many, :ping, :status],
         )
@@ -259,6 +263,41 @@ end
                 # a worktree without it runs green while CI fails. Check it where it belongs.
                 undefined = filter(s -> !isdefined(mod, s), actual)
                 @test undefined == Symbol[]
+
+                # …and every one of them must actually ANSWER `?` (#295).
+                #
+                # `public` without a docstring is the mirror image of #289's bug: the name is
+                # advertised as API, `?` says "No documentation found", and the API reference shows
+                # a bare heading. NOTHING else catches it — `checkdocs = :public` only verifies that
+                # docstrings which EXIST are reachable from the manual, so a name with none at all
+                # is invisible to it.
+                #
+                # The failure mode is not hypothetical or limited to forgetting. A docstring
+                # separated from its definition by a COMMENT silently detaches (`@doc` binds to the
+                # next expression; a comment is not one), so the string is written, reviewed,
+                # committed — and documents nothing. That happened while writing `set_models` in
+                # #295 and was invisible until this assertion existed.
+                #
+                # `Base.Docs.hasdoc` is NOT the right predicate here — the same trap the fluent-method
+                # scan hits at :209-216. It resolves through to the defining module and then searches
+                # every loaded module, so it is true for any name that merely SHARES A SPELLING with a
+                # documented `Base` binding: `hasdoc(Models, :sort)`, `:first`, `:reduce` are all true
+                # and PormG documents none of them. Declaring `public sort` would satisfy it while
+                # documenting nothing.
+                #
+                # Nor is the stricter `Binding(mod,s).mod === mod` form from :215 usable: three names
+                # already in the frozen set are legitimately FOREIGN bindings — `QueryBuilder`'s
+                # `Base.first`/`Base.last` and `DataFrames.DataFrame`, whose docstrings PormG owns and
+                # stores in its OWN doc dict. That form would fail them wrongly.
+                #
+                # Membership in the module's own `Docs.meta` is exactly right for both: it is where
+                # `@doc` files a docstring written in this module, whichever module the binding
+                # belongs to, and it is empty for a name PormG never documented.
+                own = let d = Base.Docs.meta(mod; autoinit = false)
+                    d === nothing ? Set{Symbol}() : Set(b.var for b in keys(d))
+                end
+                undocumented = filter(s -> !(s in own), actual)
+                @test undocumented == Symbol[]
             end
         end
 

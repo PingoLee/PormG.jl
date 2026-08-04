@@ -4,6 +4,11 @@ Documented error types are the public contract (#239) — CI-enforced half.
 Every user-facing *"this raises `X`"* claim in `docs/src` that can be triggered at query-build
 time is asserted here by running the documented failure and checking the type actually raised.
 
+A **docstring** claim counts as `docs/src` for this purpose (#295): since #289, `docs/src/api.md`
+renders every `public` docstring onto the API reference, so a sentence written in `src/` is
+published to exactly the same page and goes stale exactly the same way. Reference such a case by
+its source location, e.g. `"src/Models.jl — Model docstring: …"`.
+
 Why this exists: 26 such claims went stale and shipped in `0.3.0` because the only thing tying a
 doc sentence to a throw site was someone remembering. Its sibling
 `test/unit/test_docs_error_type_drift.jl` catches a page naming the *retired* `ArgumentError`;
@@ -21,7 +26,7 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField
+using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField, UniqueConstraint
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
 # SQL and to fire the backend-capability guards. No DB, no pool.
@@ -145,6 +150,22 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RESULT_PG.objects.page("20", "10"),
     ),
+    # ── Definition-time claims from the Models docstrings (#295) ──────────────
+    # These are not query-build failures, but they are published on the same api.md page and rot
+    # the same way. The first is the load-bearing one: the `Model` docstring tells users PormG has
+    # no Django `Meta` block, and the whole reason that sentence is safe to write is that a
+    # model-level option is indistinguishable from a field declaration. If a future PR ever peels
+    # a second name off the `fields...` slurp, this case stops throwing and says so.
+    (
+        "src/Models.jl — Model docstring: no Django `Meta` block, so `ordering =` reads as a field",
+        ModelDefinitionError,
+        () -> Model("docerr_meta_probe", ordering = ["-year"], raceid = IDField()),
+    ),
+    (
+        "src/Models.jl — UniqueConstraint docstring: no fields is rejected in the constructor",
+        ModelDefinitionError,
+        () -> UniqueConstraint(fields = ()),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,4 +192,26 @@ const DOCERR_CASES = [
             @test !(err isa ArgumentError)
         end
     end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quoted error TEXT stays accurate (#295)
+# The table above pins types, not wording — deliberately, since messages are free to be reworded.
+# But a docstring that QUOTES a message is making a second, finer claim, and a reword would leave
+# the quote stale with every type assertion still green. `Model`'s "no Django `Meta` block" note
+# shows the message verbatim, because it is the string a user lands on and searches for. Pin the
+# part that is quoted, not the whole sentence, so the surrounding wording stays free to change.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Quoted error text in docstrings (#295)" begin
+    err = try
+        Model("docerr_text_probe", ordering = ["-year"], raceid = IDField())
+        nothing
+    catch e
+        e
+    end
+    # Same guard order as the harness above: a claim whose failure stopped happening is drift too,
+    # and without this `error_message(nothing)` would report a MethodError instead of the reason.
+    @test err !== nothing
+    @test err isa ModelDefinitionError
+    @test occursin("All fields must be of type PormGField", error_message(err))
 end

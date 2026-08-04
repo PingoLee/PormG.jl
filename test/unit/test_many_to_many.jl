@@ -95,6 +95,111 @@ end
   @test occursin("CREATE UNIQUE INDEX", through_sql)
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField migration synthesis: `strip_many_to_many_fields` returns a physical-only clone
+# Every model in `current_schema` passes through this helper before the planner diffs it
+# (`get_migration_plan` → `synthesize_many_to_many_through_models`, first loop), because a
+# ManyToManyField owns no column and must never reach CREATE TABLE. So it owes two things: rebuild
+# `fields`/`field_names` filtered, and carry the untouched slots onto the clone the planner then
+# works from — `name`, `related_objects`, `_module`, `connect_key` and `cache`. The one carried
+# slot with a proven downstream reader is `cache`: `_add_unique_constraints`
+# (`src/migrations/planner.jl:206`) pulls `cache["unique_constraints"]` off this returned model, so
+# dropping the copy silently deletes every user-declared UniqueConstraint from the CREATE TABLE plan
+# — a regression `test_unique_constraints.jl` catches and this file's assertions below also trip.
+# It must also leave its input alone: that input is the user's live registered model, which the
+# session treats as immutable shared schema state (`deepcopy` SHARES it, #157).
+# The function had no direct test until #299 removed the dead `verbose_name` slot from its copy list.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "strip_many_to_many_fields returns a physical-only clone" begin
+  source = M2M.Driver_championship
+
+  # Preconditions — plus one explicit vacuity note. Without these, assertions below would pass
+  # vacuously: a "preserved" connect_key proves nothing if both sides are `nothing`.
+  @test haskey(source.fields, "drivers")      # there IS a M2M field to drop
+  @test source._module !== nothing            # set_models ran, so the carried slots hold real values
+  @test source.connect_key !== nothing
+  # The relation cache is populated. This key is query-builder state, NOT something the planner
+  # reads — planner code touches only "many_to_many_auto", "unique_constraints" and "index".
+  @test haskey(source.cache, "many_to_many")
+  # This model's `related_objects` is EMPTY: nothing points an FK at `driver_championships`, and a
+  # M2M installs its reverse accessor on the *related* model (`src/Models.jl:1733`), i.e. on `Driver`.
+  # So any `related_objects` assertion here would pass vacuously — the honest carry-over check for
+  # that slot is on the `Driver` side below, and this precondition is what says so out loud.
+  @test isempty(source.related_objects)
+  names_before = copy(source.field_names)
+
+  stripped = Models.strip_many_to_many_fields(source)
+
+  # ── The M2M field is dropped from `fields` (an `identity` implementation fails right here) ──
+  @test !haskey(stripped.fields, "drivers")
+  @test haskey(stripped.fields, "id")
+  @test haskey(stripped.fields, "name")
+  @test length(stripped.fields) == length(source.fields) - 1
+
+  # ── `field_names` holds exactly the physical columns ──
+  # It never contained "drivers" to begin with (`Model(...)` excludes M2M at construction), so this
+  # pins the invariant, not the drop; the drop itself is exercised on a dirty input further down.
+  @test Set(stripped.field_names) == Set(["id", "name"])
+  @test all(n -> haskey(stripped.fields, n), stripped.field_names)
+
+  # ── Every remaining slot is carried onto the clone ──
+  @test stripped.name == "driver_championships"
+  @test stripped._module === source._module
+  @test stripped.connect_key === source.connect_key
+  # `copy(model.cache)` is shallow, so the inner relation table is the SAME object — which is why the
+  # relation still resolves off the stripped model even though the field that declared it is gone.
+  # (The through table itself does NOT depend on this: the second loop of
+  # `synthesize_many_to_many_through_models` rebuilds it from the ORIGINAL unstripped model and sets
+  # `cache["many_to_many_auto"]` on a freshly-built through model. Nor does `_add_unique_constraints`
+  # depend on identity — it needs only that the outer Dict was copied at all. Inner-table identity is
+  # what the next two assertions pin, and nothing else.)
+  @test stripped.cache["many_to_many"] === source.cache["many_to_many"]
+  @test Models.get_many_to_many_relation(stripped, "drivers") ===
+        Models.get_many_to_many_relation(source, "drivers")
+
+  # ── It is a clone: distinct model, distinct containers ──
+  # `related_objects` is deliberately absent here — empty on this model, so `!==` would hold for any
+  # freshly-allocated Dict and prove nothing. It is checked on the populated `Driver` side below.
+  @test stripped !== source
+  @test stripped.fields !== source.fields
+  @test stripped.field_names !== source.field_names
+  @test stripped.cache !== source.cache      # outer Dict copied; inner tables shared, asserted above
+
+  # ── …and the live input is untouched ──
+  @test sort(collect(keys(source.fields))) == ["drivers", "id", "name"]
+  @test source.field_names == names_before
+
+  # ── The target side: no M2M field of its own, but the reverse accessor must survive the copy ──
+  # `Driver` holds the reverse relation in `related_objects["championships"]` rather than in `cache`,
+  # so this is the only place the `related_objects` copy can be checked non-vacuously. Nothing under
+  # `src/migrations/` reads `related_objects` today; this pins the clone's fidelity, so a caller that
+  # keeps hold of a stripped model still resolves the same reverse accessor as the original.
+  driver_stripped = Models.strip_many_to_many_fields(M2M.Driver)
+  @test haskey(M2M.Driver.related_objects, "championships")             # precondition
+  @test driver_stripped.related_objects !== M2M.Driver.related_objects  # copied container…
+  @test driver_stripped.related_objects["championships"] ===
+        M2M.Driver.related_objects["championships"]                     # …sharing the relation object
+  @test Models.has_many_to_many_accessor(driver_stripped, "championships")
+  @test Set(driver_stripped.field_names) == Set(["id", "surname"])      # nothing to drop on this side
+  @test driver_stripped._module === M2M.Driver._module
+
+  # ── The `field_names` filter itself, on an input only a hand-built model can produce ──
+  # The filter keeps a name by membership in the SURVIVING `fields`, it does not re-test the field
+  # type. No production path puts a M2M name into `field_names` (`Model(...)` and `add_field!` both
+  # exclude it), so without this synthetic input the filter itself is never exercised: every
+  # `field_names` *content* assertion above holds just as well for a function that drops the filter
+  # and copies `field_names` verbatim. This is the assertion that catches that.
+  dirty = Models.Model_Type(
+    name = "dirty_championships",
+    fields = copy(source.fields),
+    field_names = ["id", "drivers", "name"],
+  )
+  dirty_stripped = Models.strip_many_to_many_fields(dirty)
+  @test dirty_stripped.field_names == ["id", "name"]    # dropped in place, surrounding order kept
+  @test !haskey(dirty_stripped.fields, "drivers")
+  @test dirty.field_names == ["id", "drivers", "name"]  # the input is still untouched
+end
+
 @testset "add_field! ManyToManyField registration" begin
   orphan = Models.Model("orphan_team",
     id = Models.IDField(),

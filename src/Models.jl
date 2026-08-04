@@ -86,15 +86,10 @@ state treated as an immutable shared reference, and recursion would otherwise de
 `_module::Module` and throw. The query builder relies on this — copying a query copies its state but
 keeps the same model.
 
-`verbose_name` is inert: no `Model` method accepts it, and nothing consumes it — it is only ever
-copied from one model to another. It does not reach the DDL and does not appear in generated model
-files.
-
 See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref).
 """
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
-  verbose_name::Union{String, Nothing} = nothing
   fields::Dict{String, PormGField}
   field_names::Vector{String} = [] # needed to create sql queries with joins
   related_objects::Dict{String, Any} = Dict{String, Any}() # needed to create sql queries with joins
@@ -1766,7 +1761,6 @@ function strip_many_to_many_fields(model::PormGModel)::PormGModel
   physical_field_names = [field_name for field_name in model.field_names if haskey(physical_fields, field_name)]
   return Model_Type(
     name=model.name,
-    verbose_name=model.verbose_name,
     fields=physical_fields,
     field_names=physical_field_names,
     related_objects=copy(model.related_objects),

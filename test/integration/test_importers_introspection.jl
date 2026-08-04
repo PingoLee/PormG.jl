@@ -29,7 +29,10 @@
   is_pg = adapter_name == "PostgreSQL"
 
   ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
-  fixtures = ("pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored")
+  # Child before parent: since #276 SQLite enforces foreign keys, so dropping the parent while the
+  # child still references it raises instead of silently succeeding.
+  fixtures = ("pormg_it_fk_child", "pormg_it_fk_parent",
+              "pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored")
   drop_fixtures() = for t in fixtures
     try; ddl("DROP TABLE IF EXISTS \"$(t)\""); catch; end
   end
@@ -47,10 +50,39 @@
     """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note VARCHAR(50))""" :
     """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note TEXT)"""
 
+  # #292 fixture: one parent plus a child carrying one FK per referential action. The SET DEFAULT
+  # column has a REAL column default, which is the combination #287 made a hard failure and #291
+  # documented a hand-edit remedy for. `fk_o2o` is UNIQUE so the PostgreSQL path builds an
+  # OneToOneField — it had the identical on_delete omission as ForeignKey.
+  fk_parent_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_fk_parent" (id BIGINT PRIMARY KEY, label VARCHAR(50))""" :
+    """CREATE TABLE "pormg_it_fk_parent" (id INTEGER PRIMARY KEY, label TEXT)"""
+  fk_child_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_fk_child" (
+         id            BIGINT PRIMARY KEY,
+         fk_cascade    BIGINT REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE,
+         fk_restrict   BIGINT REFERENCES "pormg_it_fk_parent"(id) ON DELETE RESTRICT,
+         fk_setnull    BIGINT REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET NULL,
+         fk_setdefault BIGINT DEFAULT 1 REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET DEFAULT,
+         fk_plain      BIGINT REFERENCES "pormg_it_fk_parent"(id),
+         fk_o2o        BIGINT UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
+       )""" :
+    """CREATE TABLE "pormg_it_fk_child" (
+         id            INTEGER PRIMARY KEY,
+         fk_cascade    INTEGER REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE,
+         fk_restrict   INTEGER REFERENCES "pormg_it_fk_parent"(id) ON DELETE RESTRICT,
+         fk_setnull    INTEGER REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET NULL,
+         fk_setdefault INTEGER DEFAULT 1 REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET DEFAULT,
+         fk_plain      INTEGER REFERENCES "pormg_it_fk_parent"(id),
+         fk_o2o        INTEGER UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
+       )"""
+
   drop_fixtures()                      # clean slate if a prior run aborted mid-test
   ddl(natural_pk_ddl)
   ddl(numeric_pk_ddl)
   ddl(ignored_ddl)
+  ddl(fk_parent_ddl)
+  ddl(fk_child_ddl)
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -79,6 +111,100 @@
 
     @test "pormg_it_natural_key" in names2     # ordinary table still imported
     @test !("pormg_it_ignored" in names2)      # registered table skipped on the real path
+
+    # ── 3. FK round-trip: on_delete AND the column default survive (#292) ────
+    # The two halves of the bug were mirror images. PostgreSQL never QUERIED the delete rule, so
+    # every FK introspected as "no action" and a migration generated from the model silently
+    # dropped the cascade. SQLite carried the action but dropped the default, so a SET DEFAULT FK
+    # produced a model that #287 rejects at `set_models` — and regenerating produced the identical
+    # broken file. Run against a real engine on both backends because the PostgreSQL half is a SQL
+    # query change that nothing hermetic can exercise.
+    fk_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_fk_parent", "pormg_it_fk_child"])
+    fk_by_name = Dict(lowercase(string(m.name)) => m for m in fk_models)
+    @test haskey(fk_by_name, "pormg_it_fk_child")
+    child = fk_by_name["pormg_it_fk_child"]
+
+    # Each declared action comes back as the PormG sentinel it was declared with.
+    @test child.fields["fk_cascade"].on_delete === PormG.Models.CASCADE
+    @test child.fields["fk_restrict"].on_delete === PormG.Models.RESTRICT
+    @test child.fields["fk_setnull"].on_delete === PormG.Models.SET_NULL
+    @test child.fields["fk_setdefault"].on_delete === PormG.Models.SET_DEFAULT
+
+    # A foreign key that declared NO action must not gain one. Both backends store this
+    # indistinguishably from an explicit NO ACTION, so introspecting it as DO_NOTHING would stamp
+    # an on_delete onto every plain FK in every regenerated model file.
+    @test child.fields["fk_plain"].on_delete === nothing
+
+    # The SQLite half: SET DEFAULT keeps the column default, which is exactly what makes the pair
+    # self-consistent enough to register.
+    @test child.fields["fk_setdefault"].default == 1
+
+    # OneToOneField had the identical omission and is fixed with ForeignKey. PostgreSQL-only: the
+    # SQLite PRAGMA path does not read UNIQUE, so `fk_o2o` stays a plain ForeignKey there — a
+    # pre-existing divergence this issue does not change.
+    if is_pg
+      @test child.fields["fk_o2o"] isa PormG.Models.sOneToOneField
+      @test child.fields["fk_o2o"].on_delete === PormG.Models.CASCADE
+    end
+
+    # ── 4. The regenerated module registers via set_models (#287/#291) ───────
+    # THE regression assertion. Before #292 this threw ModelDefinitionError ("declares on_delete
+    # SET_DEFAULT but has no default"), with no way out but editing the generated source by hand —
+    # the remedy #291 had to document. Goes through `Model_to_str`, so it also proves the default
+    # and the action survive the model → source → module round trip a user actually performs.
+    instructions = [PormG.Models.Model_to_str(fk_by_name[t], settings)
+                    for t in ("pormg_it_fk_parent", "pormg_it_fk_child")]
+    src = join(instructions, "\n\n")
+    @test occursin("SET_DEFAULT", src)          # the action reached the generated source…
+    @test occursin(r"default\s*=\s*1", src)     # …and so did the default that makes it valid
+
+    mod_name = "PormGIt292Models"
+    generated = include_string(Main, """
+      module $(mod_name)
+      import PormG.Models
+      import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
+      $(src)
+      end
+      """)
+    try
+      # EVERY access to the generated module goes through `invokelatest`, and that is load-bearing
+      # rather than decoration. `include_string` defined the module DURING this call, so its
+      # bindings are newer than the world age this block is running in — the same world-age
+      # constraint `set_models` handles internally and that pins the Julia 1.12 floor (#211).
+      #
+      # Getting this wrong is silent, not loud. Without `invokelatest` here, `set_models`'
+      # `get_all_models(generated)` sees ZERO models, so it iterates nothing, validates nothing and
+      # returns `nothing` anyway — the assertion passes while checking absolutely nothing. Verified
+      # by mutation: with a plain call, deleting the `default=` fix from the SQLite FK branch left
+      # this line green.
+      #
+      # `set_models` is where #287's SET_DEFAULT guard lives, so this is the real check rather than
+      # a re-implementation of it: it must not throw.
+      @test Base.invokelatest(PormG.Models.set_models, generated, PORMG_DB_FOLDER) === nothing
+
+      # …and registration preserved the action rather than merely tolerating it. `Model_to_str`
+      # emits the binding as `uppercasefirst(model.name)`, so derive the name from the model
+      # rather than hard-coding a spelling that would drift.
+      registered = Base.invokelatest(getglobal, generated, Symbol(uppercasefirst(child.name)))
+
+      # PROOF THAT `set_models` ACTUALLY RAN OVER THESE MODELS, asserted through side effects it
+      # leaves behind. A separate `get_all_models(generated)` call cannot do this job: it resolves
+      # in the latest world either way and returns 2 even when `set_models` iterated nothing, so it
+      # would pass while the assertion above was still vacuous. Both fields below are `nothing`/
+      # `false` on a no-op registration and set on a real one — measured both ways.
+      @test registered.connect_key == PORMG_DB_FOLDER
+      # Doubles as coverage for `resolve_fk_target!`: registration resolves the FK's string target
+      # to the actual parent model object.
+      @test registered.fields["fk_cascade"].to isa PormG.PormGModel
+      @test registered.fields["fk_setdefault"].on_delete === PormG.Models.SET_DEFAULT
+      @test registered.fields["fk_setdefault"].default == 1
+      @test registered.fields["fk_cascade"].on_delete === PormG.Models.CASCADE
+    finally
+      # `set_models` records the module for lazy self-healing; drop it so a later test in the same
+      # session cannot resolve models through this throwaway module.
+      delete!(PormG.Models.REGISTERED_MODULES, generated)
+    end
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved_ignore   # never leak registry state
     drop_fixtures()

@@ -20,7 +20,7 @@ PormG.config["mock_sl_key"] = MockSettings
 include("../integration/db_sl/models.jl")
 import .models as M
 PormG.Models.set_models(M, "mock_sl_path")
-import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, Concat, inspect_query, Case, When, Sum, Avg, Value, Round, With
+import PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, Concat, inspect_query, Case, When, Sum, Avg, Value, Round, _with
 
 @testset "SQLite Parameter Alignment Verification (Real Models)" begin
     # 1. Positional Cross-Check with Real Schema
@@ -239,7 +239,7 @@ end
     q = M.Result.objects.filter("positionorder" => 1)
 
     # Add CTE
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
 
     insp = q |> inspect_query
 
@@ -323,8 +323,8 @@ end
     winning_races = M.Race.objects.filter("year" => 1991).values("raceid")
 
     q = M.Result.objects
-    With(q, "br_drivers", brazilian_drivers, join_field="driverid" => "driverid")
-    With(q, "races_91", winning_races, join_field="raceid" => "raceid")
+    _with(q, "br_drivers", brazilian_drivers, join_field="driverid" => "driverid")
+    _with(q, "races_91", winning_races, join_field="raceid" => "raceid")
     q.filter("positionorder" => 1)
 
     insp = q |> inspect_query
@@ -460,7 +460,7 @@ end
     races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
 
     q = M.Result.objects.filter("positionorder" => 1)
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
 
     insp = q |> inspect_query
 
@@ -811,7 +811,7 @@ end
     races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
 
     q = M.Result.objects
-    With(q, "races_1991", races_91, join_field="raceid" => "raceid")
+    _with(q, "races_1991", races_91, join_field="raceid" => "raceid")
 
     q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
     q.filter("points" => 10)
@@ -840,8 +840,8 @@ end
     cte2 = M.Constructor.objects.filter("nationality" => "British").values("constructorid")
 
     q = M.Result.objects
-    With(q, "uk_drivers", cte1, join_field="driverid" => "driverid")
-    With(q, "uk_constructors", cte2, join_field="constructorid" => "constructorid")
+    _with(q, "uk_drivers", cte1, join_field="driverid" => "driverid")
+    _with(q, "uk_constructors", cte2, join_field="constructorid" => "constructorid")
 
     insp = q |> inspect_query
 
@@ -1155,7 +1155,7 @@ end
     races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
 
     q = M.Result.objects
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
     q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
     q.filter("points" => 10)
     q.values("driverid__surname")
@@ -1372,7 +1372,7 @@ end
     q = M.Result.objects
 
     # 1. Provide CTE parameter (should go to :cte)
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
 
     # 2. Provide JOIN parameter (should go to :join)
     q.cjoin("driverid" => "Driver", filters=["nationality" => "Brazilian"], warn=false)
@@ -1432,8 +1432,8 @@ end
     drivers_br = M.Driver.objects.filter("nationality" => "Brazilian").values("driverid")
 
     q = M.Result.objects
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
-    With(q, "drivers_br", drivers_br, join_field="driverid" => "driverid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "drivers_br", drivers_br, join_field="driverid" => "driverid")
 
     # 2. Outer JOIN Elements (Order: Italian -> VET -> MSC)
     q.cjoin("driverid" => "Driver", filters=[
@@ -1680,7 +1680,7 @@ end
     races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
 
     q = M.Result.objects
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
 
     # Subquery in WHERE filter
     italian_circuits = M.Circuit.objects.filter("country" => "Italy").values("circuitid")
@@ -2378,7 +2378,7 @@ end
     p1_standings.values("t" => Count("driverstandingsid"))
 
     q = M.Result.objects
-    With(q, "r91", races_91, join_field="raceid" => "raceid")
+    _with(q, "r91", races_91, join_field="raceid" => "raceid")
     q.filter("positionorder" => 1)
     q.values("driverid", "n_p1" => Subquery(p1_standings))
 

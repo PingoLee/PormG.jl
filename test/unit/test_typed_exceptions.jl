@@ -19,7 +19,7 @@ No database is required: every assertion fires at query-build/validation time.
 using Test
 using PormG
 using PormG.Models
-using PormG.QueryBuilder: object, Q, Qor, With
+using PormG.QueryBuilder: object, Q, Qor, _with
 
 const QB = PormG.QueryBuilder
 
@@ -108,16 +108,16 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Duplicate CTE name via With() → QueryBuildError
-# Registering two CTEs under one alias would render invalid SQL; With() rejects
+# Duplicate CTE name via .with() → QueryBuildError
+# Registering two CTEs under one alias would render invalid SQL; the CTE builder rejects
 # the second registration at the call site (integration twin lives in
-# test/integration/test_cte.jl "With() duplicate CTE name is rejected").
+# test/integration/test_cte.jl "with() duplicate CTE name is rejected").
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "With() duplicate CTE name is QueryBuildError" begin
+@testset "with() duplicate CTE name is QueryBuildError" begin
     q = object(typed_errs_model)
     sub = object(typed_errs_model)
-    With(q, "dup", sub)
-    @test_throws PormG.QueryBuildError With(q, "dup", sub)
+    _with(q, "dup", sub)
+    @test_throws PormG.QueryBuildError _with(q, "dup", sub)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

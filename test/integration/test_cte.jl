@@ -333,13 +333,13 @@ end
         @test_throws PormGError q.on("driver_cte", "driverid__@lte" => 5)
     end
 
-    @testset "With() duplicate CTE name is rejected" begin
+    @testset "with() duplicate CTE name is rejected" begin
         # Two CTEs with the same alias on the same query would produce invalid SQL.
         # The ORM catches this at the with() call site.
         q = M.Result.objects
         sub = M.Driver.objects.filter("driverid__@lte" => 5).values("driverid")
         q.with("dup" => sub, join_field="driverid" => "driverid")
-        # #197: With() now throws a typed ArgumentError (was a raw String, which no
+        # #197: the CTE builder now throws a typed ArgumentError (was a raw String, which no
         # `catch e; e isa Exception` could see).
         @test_throws PormGError q.with("dup" => sub, join_field="driverid" => "driverid")
     end

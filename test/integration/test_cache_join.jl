@@ -25,7 +25,7 @@ end
     # "driverid__surname" refers to the 'surname' field in the table joined via 'driverid'
     # Initially, 'driverid__surname' is NOT in the cache of the main query.
     # The WITH call will trigger the join building.
-    With(query.object, "driver_stats", cte_source, 
+    PormG.QueryBuilder._with(query.object, "driver_stats", cte_source, 
          join_field="driverid__surname" => "surname",
          join_type="INNER")
 
@@ -66,7 +66,7 @@ end
     query = M.Result.objects
     # Join Result to Case stats via circuit name
     # raceid__circuitid__name
-    With(query.object, "circuit_info", cte_circuit,
+    PormG.QueryBuilder._with(query.object, "circuit_info", cte_circuit,
          join_field="raceid__circuitid__name" => "name")
     
     query.filter("raceid__year" => 2021)

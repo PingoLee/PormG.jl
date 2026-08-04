@@ -316,7 +316,7 @@ This documentation is organized into the following sections:
 | **Reading** | |
 |  [Overview](read/index.md) | Query execution, output formats, and query styles. |
 |  [Values and Joins](read/values_and_joins.md) | Column selection, `__` join traversal, aliases. |
-|  [Custom Joins](read/custom_joins.md) | `cjoin()` for runtime join conditions and `on()` for ON-clause predicates. |
+|  [Custom Joins](read/custom_joins.md) | `.cjoin()` for runtime join conditions and `.on()` for ON-clause predicates. |
 |  [Filters and Aggregates](read/filters_and_aggregates.md) | Lookup operators, grouping, and `HAVING`. |
 |  [Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
 |  [Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries and `.with(...)` CTEs. |

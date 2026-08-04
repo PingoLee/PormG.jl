@@ -74,7 +74,7 @@ registration has `connect_key === nothing` and no reverse relations.
 
 | Slot | Filled by | Holds |
 |---|---|---|
-| `name` | `Model(...)`, or `set_models` from the Julia binding | The table name — verbatim from the positional argument, or lowercased when derived from the binding |
+| `name` | `Model(...)`, or `set_models` from the Julia binding | The table name. For a model you *declare* it is always lowercase — a positional name is rejected unless already lowercase (#300), a binding-derived one is lowercased as it is filled in. A model built by `inspectdb` introspection or the Django importer instead keeps the name read from its source, mixed case and all |
 | `fields` | `Model(...)` | Declared field name → `PormGField`, including many-to-many fields |
 | `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
 | `related_objects` | `set_models` | Reverse accessors installed by foreign keys pointing *at* this model |
@@ -554,6 +554,30 @@ function format_model_name(name::PormGModel)::String
   return name.name |> format_model_name
 end
 
+# A POSITIONAL model name must already be lowercase (#300). It is the one identifier in a `Model(...)`
+# call that nothing normalizes: the two callers that FILL `Model_Type.name` run it through
+# `format_model_name` but guard on `attr.name == ""`, so they only ever reach a binding-derived name
+# (`src/Models.jl` `get_all_models`, `src/migrations/planner.jl` `get_all_models`). Field names, by
+# contrast, are normalized by `format_fild_name` inside the constructor itself. Left unchecked, a
+# mixed-case name SPLITS the schema — `makemigrations` lowercases it into the DDL while the query
+# builder quotes it as declared — so the model migrates one table and then queries another: silent on
+# SQLite, fatal on PostgreSQL.
+#
+# Scope: this checks CASE only. It is NOT `format_model_name`, whose other callers re-normalize the
+# STORED name at render time (FK `REFERENCES`, model-reference comparison), and it applies no
+# identifier-shape validation — a reserved word or a name with a space still renders invalid bare DDL.
+#
+# Reject rather than fold. PormG has no model-level `db_table` yet (#59), so quietly lowercasing would
+# discard a stated intent with no way to express it and no signal that it happened.
+function _validate_positional_model_name(name::AbstractString)::Nothing
+  name == lowercase(name) && return nothing
+  throw(ModelDefinitionError(
+    "The model name '$(name)' must be lowercase; PormG lowercases table names when generating DDL " *
+    "but quotes them as declared in queries, so this model would migrate the table " *
+    "'$(lowercase(name))' and then query '$(name)'. Declare it as '$(lowercase(name))'. " *
+    "Mapping a model to a fixed mixed-case table is issue #59."))
+end
+
 # Physical SQL column for a field given its declared identity `name` (#50). Returns
 # `db_column` when the field carries a non-empty one, else the field name. The
 # default (column == field name) keeps every existing schema unchanged; only fields
@@ -812,12 +836,14 @@ module. Both forms are idiomatic and `Race = Model(...)` and `Race = Model("race
 same table, because a binding-derived name is lowercased as it is filled in. Reach for the
 positional form when the binding name is not the table name you want.
 
-!!! warning "Give the positional name in lowercase"
-    A positional name is stored **verbatim**, and the two code paths that consume it disagree about
-    case: `makemigrations` lowercases it, while the query builder quotes it as declared. So
-    `Model("Driver_Profile", …)` migrates a table named `driver_profile`, and then every
-    `SELECT`/`INSERT`/`UPDATE` it builds addresses `"Driver_Profile"` — a table that does not exist
-    on a backend where a quoted identifier is case-sensitive, as it is on PostgreSQL.
+!!! warning "A positional name must be lowercase"
+    `Model("Driver_Profile", …)` raises `ModelDefinitionError`. A positional name is stored
+    **verbatim**, and the two groups of consumers disagree about case: `makemigrations` lowercases it
+    into the DDL, while the query builder quotes it as declared. Left unchecked, that model migrated
+    a table named `driver_profile` and then addressed `"Driver_Profile"` in every
+    `SELECT`/`INSERT`/`UPDATE` — a table that does not exist on a backend where a quoted identifier
+    is case-sensitive, as it is on PostgreSQL. Rejecting the name at declaration (#300) turns that
+    silent production failure into an error you get at load time.
 
     Mapping a model to a fixed mixed-case table is
     [issue #59](https://github.com/PingoLee/PormG.jl/issues/59); until it lands, declare table names
@@ -844,7 +870,7 @@ spanning more than one column. It is the **only** model-level option.
     ```
 
     Instead: order at query time with `order_by()` — there is no per-model default sort; pin the
-    table name with the positional argument, subject to the lowercase warning above; and set
+    table name with the positional argument, which must be lowercase (see the warning above); and set
     `verbose_name` per field, where it is accepted, rather than per model.
 
 # Examples
@@ -880,6 +906,15 @@ end
 
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
 function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
+  # #300. An EMPTY name is the no-positional form: `set_models` (or the migration loader) fills it
+  # from the Julia binding later, lowercasing through `format_model_name`, so there is nothing to
+  # check here. A non-empty name came from the user positionally and is never normalized anywhere —
+  # this is its only gate. Checked before the field loop so a bad name reports before field errors.
+  #
+  # Deliberately NOT on the two `Dict`-taking `Model` methods below: those are how `inspectdb`
+  # introspection and the Django importer build a model from a name they read out of a live database
+  # or a Python class, where mixed case is legitimate and must pass through untouched.
+  isempty(name) || _validate_positional_model_name(name)
   fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)

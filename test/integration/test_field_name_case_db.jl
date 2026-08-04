@@ -16,7 +16,8 @@ end
 # them case-sensitively — the headline #57 capability, verified beyond the unit
 # layer (where everything renders before any DB round-trip).
 #
-# Table/model names stay lowercase (frozen #33); only the columns are mixed-case.
+# Table/model names stay lowercase — enforced at declaration since #300, not merely
+# conventional (frozen #33); only the columns are mixed-case.
 # ─────────────────────────────────────────────────────────────────────────────
 
 @testset "Case preservation: physical columns are mixed-case" begin

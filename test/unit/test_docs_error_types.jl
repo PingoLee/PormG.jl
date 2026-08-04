@@ -166,6 +166,11 @@ const DOCERR_CASES = [
         ModelDefinitionError,
         () -> UniqueConstraint(fields = ()),
     ),
+    (
+        "schema_conventions.md + src/Models.jl — Model docstring: a positional name must be lowercase (#300)",
+        ModelDefinitionError,
+        () -> Model("Driver_Profile", driverid = IDField()),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

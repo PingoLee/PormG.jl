@@ -7,8 +7,10 @@ case-sensitively, and the migration diff compares case-correctly. This is what l
 faithfully target mixed-case / uppercase DB columns (e.g. legacy Django schemas).
 
 Table/model names stay LOWERCASE (frozen schema convention, #33) — only field/column
-names preserve case. The PormG-internal house style is lowercase snake_case (#58); this
-file deliberately uses a mixed-case mechanics model to exercise the preservation path.
+names preserve case. Since #300 that is enforced rather than conventional: a positional
+model name containing uppercase is rejected at declaration. The PormG-internal house style
+is lowercase snake_case (#58); this file deliberately uses a mixed-case mechanics model —
+mixed-case COLUMNS on a lowercase table — to exercise the preservation path.
 
 All assertions render via a mock PostgreSQL connection (no live database required).
 """
@@ -105,7 +107,7 @@ LegacyEntryCase.connect_key = "default"
     @test occursin("\"driverId\"", ddl)
     @test occursin("\"foreName\"", ddl)
     @test occursin("\"raceId\"", ddl)
-    @test occursin("legacy_entry_case_scratch", ddl)   # table name lowercased
+    @test occursin("legacy_entry_case_scratch", ddl)   # table name is lowercase (enforced, #300)
     @test !occursin("\"driverid\"", ddl)               # no lowercased columns leak in
     @test !occursin("\"forename\"", ddl)
   end

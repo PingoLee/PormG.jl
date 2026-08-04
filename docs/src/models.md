@@ -40,7 +40,7 @@ Status = Models.Model(
   status = Models.CharField()
 )
 
-Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the names of models.
+Circuit = Models.Model( # You can create a model like a Django model for each table so that you can define a huge number of tables at once in just one file. Please capitalize the Julia BINDING (`Circuit`) — it is lowercased to derive the table name. A positional table name, when you give one, must itself be lowercase: `Models.Model("Circuit", …)` raises ModelDefinitionError.
   circuitid = Models.IDField(), # House style: declare field names in lowercase snake_case. PormG preserves the case you declare (so mixed-case/uppercase legacy columns are supported) and field lookups are case-sensitive — query fields in the same case you declared them.
   circuitref = Models.CharField(),
   name = Models.CharField(),

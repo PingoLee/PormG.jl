@@ -26,12 +26,23 @@ _fk_ddl(; fk_kw...) = PormG.Dialect.create_table(MockSLConv(),
 
 @testset "Schema Conventions Freeze (#33)" begin
 
-    # Table name = model.name lowercased, VERBATIM — no pluralization, no Inflector. Using "Driver"
-    # checks the lowercasing; asserting the absence of "drivers" checks no pluralization.
-    @testset "Table name is the lowercased model name" begin
-        ddl = PormG.Dialect.create_table(MockSLConv(), Models.Model("Driver", driverid = Models.IDField()))
+    # Table name = model.name VERBATIM — no pluralization, no Inflector.
+    #
+    # This testset used to declare `Model("Driver", …)` to prove the DDL folded the case. Since #300
+    # that declaration is rejected outright: a positional name must already be lowercase, because
+    # only the DDL folded it while the query builder quoted it as declared, so a mixed-case model
+    # migrated one table and queried another. The convention is unchanged — a model name is lowercase
+    # in the DDL — but it is now guaranteed at declaration instead of by folding downstream.
+    @testset "Table name is the model name, verbatim and unpluralized" begin
+        ddl = PormG.Dialect.create_table(MockSLConv(), Models.Model("driver", driverid = Models.IDField()))
         @test occursin("CREATE TABLE IF NOT EXISTS driver (", ddl)
-        @test !occursin("drivers", ddl)
+        @test !occursin("drivers", ddl)   # no pluralization, no Inflector
+    end
+
+    # The other half of the same convention, post-#300: a name that WOULD have needed folding is a
+    # declaration-time error rather than a schema that half-works.
+    @testset "A non-lowercase positional name is rejected (#300)" begin
+        @test_throws PormG.ModelDefinitionError Models.Model("Driver", driverid = Models.IDField())
     end
 
     # FK column = the declared field name, verbatim. PormG never appends `_id` (that is the Django

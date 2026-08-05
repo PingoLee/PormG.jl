@@ -188,7 +188,12 @@ Field_validation_scratch = Models.Model("field_validation_scratch",
   uuid_token=Models.UUIDField(unique=true),
   canonical_url=Models.URLField(max_length=500),
   slug=Models.SlugField(max_length=120, unique=true),
-  payload=Models.JSONField(null=true)
+  payload=Models.JSONField(null=true),
+  # #296: real BLOB/BYTEA storage. `blob_payload` is unbounded so arbitrary byte sequences can be
+  # round-tripped; `bounded_blob` carries a byte bound so the DDL CHECK is exercised against a live
+  # database rather than only asserted as SQL text.
+  blob_payload=Models.BinaryField(null=true),
+  bounded_blob=Models.BinaryField(null=true, max_length=8)
 )
 
 # Mirrors the column types Django generates for DateTimeField/DateField/DecimalField.

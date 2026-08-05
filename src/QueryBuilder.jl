@@ -7,10 +7,11 @@ import DataFrames, Tables, JSON, CSV, OrderedCollections
 import DataFrames: DataFrame
 using Dates, TimeZones, Decimals, UUIDs
 
-import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey, sManyToManyField
+import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey, sManyToManyField, sBinaryField
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField
+import PormG: PormGBytes  # binary payloads bind as one blob, not as an array of values (#296)
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
 # `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels
 # (`_unsupported_conn`, `_write_not_allowed`) live in `querybuilder/error_funnels.jl`.

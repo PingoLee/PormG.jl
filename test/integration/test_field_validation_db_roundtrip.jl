@@ -381,5 +381,139 @@ end
             _cleanup_field_validation_scratch_rows!([original_slug, conflicting_slug])
         end
     end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # BinaryField: raw bytes survive a real BYTEA/BLOB round-trip (#296)
+    # Nothing exercised this before: the field rendered as TEXT on both backends, so a
+    # binary payload was never actually stored as binary. The payloads below are chosen
+    # to fail loudly if the column is text again — an embedded 0x00 (which truncates a
+    # C-string parameter), a 0xFF high byte, and the C3 28 pair, which is invalid UTF-8
+    # and cannot survive a text encode/decode cycle.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Scratch Fields: BinaryField Byte Round-Trip" begin
+        scratch_slug = "binary-field-roundtrip-990507"
+        # PNG magic + a NUL + a high byte + an invalid-UTF-8 sequence.
+        payload = UInt8[0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xC3, 0x28]
+        updated_payload = UInt8[0x00, 0x01, 0xFE, 0xFF]
+
+        try
+            _seed_field_validation_scratch!(
+                uuid_token=string(uuid4()),
+                canonical_url="https://example.com/f1/binary-field",
+                slug=scratch_slug,
+                payload=Dict("kind" => "binary")
+            )
+
+            scratch_query = M.Field_validation_scratch.objects
+            scratch_query.filter("slug" => scratch_slug)
+            scratch_query.update("blob_payload" => payload)
+
+            seeded_row = scratch_query.values("blob_payload").list() |> first
+            stored = seeded_row[:blob_payload]
+
+            # The contract is raw bytes out — not a String, not a hex/Base64 rendering.
+            @test stored isa AbstractVector{UInt8}
+            # Byte-for-byte identity is the whole point; a length check alone would pass
+            # even if every byte were mangled.
+            @test collect(stored) == payload
+
+            # Update to a different payload and re-read, so the UPDATE bind path is covered
+            # as well as INSERT.
+            scratch_query.update("blob_payload" => updated_payload)
+            updated_row = scratch_query.values("blob_payload").list() |> first
+            @test collect(updated_row[:blob_payload]) == updated_payload
+
+            # An empty payload is distinct from NULL.
+            scratch_query.update("blob_payload" => UInt8[])
+            empty_row = scratch_query.values("blob_payload").list() |> first
+            @test collect(empty_row[:blob_payload]) == UInt8[]
+
+            # NULL still round-trips as nothing/missing on a null=true column.
+            scratch_query.update("blob_payload" => nothing)
+            null_row = scratch_query.values("blob_payload").list() |> first
+            @test null_row[:blob_payload] === nothing || ismissing(null_row[:blob_payload])
+
+            # A String is stored as its UTF-8 code units — the form that keeps a column
+            # which used to render as TEXT writable without an app edit.
+            scratch_query.update("blob_payload" => "Senna")
+            text_row = scratch_query.values("blob_payload").list() |> first
+            @test collect(text_row[:blob_payload]) == collect(codeunits("Senna"))
+        finally
+            _cleanup_field_validation_scratch_rows!([scratch_slug])
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # BinaryField max_length is a BYTE bound, enforced in two independent places
+    # The ORM rejects an oversize payload before any SQL is built, and the DDL CHECK
+    # (octet_length on PostgreSQL, length on SQLite) is the backstop. The ORM assertions
+    # alone would pass even if the constraint never reached the database, so the last
+    # block deliberately goes around the ORM to prove the constraint is really there.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "Scratch Fields: BinaryField byte bound" begin
+        scratch_slug = "binary-field-bound-990508"
+
+        try
+            _seed_field_validation_scratch!(
+                uuid_token=string(uuid4()),
+                canonical_url="https://example.com/f1/binary-bound",
+                slug=scratch_slug,
+                payload=Dict("kind" => "binary-bound")
+            )
+
+            scratch_query = M.Field_validation_scratch.objects
+            scratch_query.filter("slug" => scratch_slug)
+
+            # Exactly at the bound is accepted and round-trips.
+            at_bound = UInt8[1, 2, 3, 4, 5, 6, 7, 8]
+            scratch_query.update("bounded_blob" => at_bound)
+            @test collect((scratch_query.values("bounded_blob").list() |> first)[:bounded_blob]) == at_bound
+
+            # One byte over is rejected by the ORM before the query is built. Assert the concrete
+            # type, not the abstract PormGError root — a typo'd field name also raises a PormGError,
+            # so the root would pass for the wrong reason.
+            oversize = UInt8[1, 2, 3, 4, 5, 6, 7, 8, 9]
+            @test_throws PormG.InvalidValueError scratch_query.update("bounded_blob" => oversize)
+            err = try
+                scratch_query.update("bounded_blob" => oversize); nothing
+            catch e
+                e
+            end
+            @test occursin("max_length is 8 bytes", err.msg)
+
+            # A 5-character string that is 10 UTF-8 bytes must also be rejected: the bound counts
+            # bytes, and the pre-#296 check counted characters — which would have let this through.
+            over_by_bytes = "ééééé"
+            @test length(over_by_bytes) == 5 && ncodeunits(over_by_bytes) == 10
+            @test_throws PormG.InvalidValueError scratch_query.update("bounded_blob" => over_by_bytes)
+
+            # The stored value is untouched by the rejected writes.
+            @test collect((scratch_query.values("bounded_blob").list() |> first)[:bounded_blob]) == at_bound
+
+            # ── The DDL CHECK itself ──────────────────────────────────────────────
+            # Bypass the ORM validator with raw SQL so the database is the only thing that can
+            # reject this. Without the CHECK in the schema the 9-byte write would simply succeed.
+            # This is the one place raw SQL is warranted: the assertion IS about the DDL.
+            settings = PormG.config[PORMG_DB_FOLDER]
+            pool = settings.connections
+            raw_failed = false
+            try
+                if pool isa PormG.PormGPostgres
+                    PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = \$1 WHERE slug = \$2",
+                                ["\\x010203040506070809", scratch_slug])
+                else
+                    PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = ? WHERE slug = ?",
+                                [oversize, scratch_slug])
+                end
+            catch
+                raw_failed = true
+            end
+            @test raw_failed          # the constraint exists in the live schema
+            # And the row is unchanged, so the failed statement wrote nothing.
+            @test collect((scratch_query.values("bounded_blob").list() |> first)[:bounded_blob]) == at_bound
+        finally
+            _cleanup_field_validation_scratch_rows!([scratch_slug])
+        end
+    end
 end
 

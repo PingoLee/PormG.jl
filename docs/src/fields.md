@@ -722,36 +722,64 @@ Race_photo = Models.Model(
 
 ### BinaryField()
 
-**Purpose**: Binary data storage for files and encrypted content.
+**Purpose**: Raw binary data — images, compressed blobs, encrypted content.
 
-**Database Type**: `TEXT` on both backends today — **not** `BYTEA`/`BLOB`.
-
-!!! warning "Incomplete"
-    `BinaryField` is not finished: it renders as `TEXT`, `default=` raises for every non-`nothing`
-    value, and `max_length` never reaches the DDL (it is checked on write, as a *character* count on
-    string values only). Use `TextField`/`CharField` with your own encoding until that is fixed.
-    See the `BinaryField` docstring in the [API reference](api.md).
+**Database Type**: 
+- **PostgreSQL**: `BYTEA`
+- **SQLite**: `BLOB`
 
 **Use Cases**: File storage, encrypted data, binary documents.
 
+**Handling**: Raw bytes in, raw bytes out — write a `Vector{UInt8}` and read a `Vector{UInt8}` back.
+Arbitrary byte sequences round-trip intact, including `0x00` and payloads that are not valid UTF-8.
+An `AbstractString` is also accepted on write and stored as its **UTF-8 code units**; to store the
+*decoded* bytes of an encoded string, decode it yourself with `hex2bytes(s)` or `base64decode(s)`.
+
+**Key Parameters**:
+- `max_length::Union{Int, Nothing} = nothing`: maximum payload size in **bytes**, not characters.
+  Enforced before the query is built *and* by a `CHECK` constraint in the schema
+  (`octet_length` on PostgreSQL, `length` on SQLite). `nothing` means unbounded.
+- `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
+  (`'\xdeadbeef'::bytea` / `X'deadbeef'`). Must be a `Vector{UInt8}` — a `String` raises
+  `FieldValidationError` rather than guessing between its code units and a decoded encoding.
+
 ```julia
 # Document storage
-Technical_document = Models.Model(
+Technical_document = Models.Model("technical_document",
     _id = Models.IDField(),
     name = Models.CharField(max_length=200),
-    file_data = Models.BinaryField(),
+    file_data = Models.BinaryField(max_length=5_000_000),   # ≤ 5 MB
     mime_type = Models.CharField(max_length=100),
     file_size = Models.IntegerField()
 )
 
+Technical_document.objects.create(
+    "name"      => "2024 Monza aero package",
+    "file_data" => read("aero.pdf"),        # Vector{UInt8}
+    "mime_type" => "application/pdf",
+    "file_size" => filesize("aero.pdf")
+)
+
+row = Technical_document.objects.filter("name" => "2024 Monza aero package").
+    values("file_data").list() |> first
+write("roundtrip.pdf", row[:file_data])     # Vector{UInt8}, byte-identical
+
 # Encryption and security
-Encrypted_telemetry = Models.Model(
+Encrypted_telemetry = Models.Model("encrypted_telemetry",
     _id = Models.IDField(),
     team_member = Models.ForeignKey("Team_member"),
     encrypted_content = Models.BinaryField(),
     encryption_key_hash = Models.CharField(max_length=64)
 )
 ```
+
+!!! note "Migrating a column created by an earlier PormG"
+    Earlier versions rendered `BinaryField` as `TEXT` on both backends. The next `makemigrations`
+    after upgrading proposes a type change — `ALTER … TYPE bytea USING convert_to(…, 'UTF8')` on
+    PostgreSQL, a table rebuild with `CAST(… AS BLOB)` on SQLite — which reinterprets the existing
+    text as its UTF-8 bytes. If the column actually held *encoded* text (hex, Base64), substitute
+    `decode(col, 'hex')` / `decode(col, 'base64')` in the generated plan before applying it. See
+    [`UPGRADING.md`](https://github.com/PingoLee/PormG.jl/blob/main/UPGRADING.md).
 
 ---
 

@@ -6,6 +6,7 @@ using UUIDs
 import JSON
 import PormG: PormGField, PormGModel, reserved_words, Migration
 import PormG: DATETIME_FORMAT
+import PormG: PormGBytes  # binary-payload wrapper the parameter collectors bind as one blob (#296)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
 # Semantic error taxonomy (#239). Models raises TWO different categories, and the split is by
 # *when* the failure happens, not by which file the helper lives in:
@@ -1181,7 +1182,43 @@ function format_text_sql(value::AbstractArray)
 end
 function format_text_sql(value::Time)
   return string(value)
-end  
+end
+
+"""
+    format_binary_sql(value) -> PormGBytes
+
+Coerce a `BinaryField` value into the [`PormGBytes`](@ref) wrapper the parameter collectors bind
+as a single blob (#296).
+
+Accepts raw bytes (`Vector{UInt8}`, and any other `AbstractVector{UInt8}` such as the
+`Base.CodeUnits` returned by `codeunits`) and an `AbstractString`, which is stored as its
+**UTF-8 code units**. The string form is what keeps a column that used to be `TEXT` writable
+without an app edit, and it matches the `convert_to(col, 'UTF8')` cast the PostgreSQL migration
+uses — so text written before and after the migration lands as the same bytes.
+
+Deliberately *not* routed through `format_text_sql`: its `AbstractArray` method maps itself over
+the elements, which throws on `UInt8`, and `ImageField`/`FileField` share `BinaryField`'s `"BLOB"`
+type string while storing paths as text.
+
+Raises `InvalidValueError` for anything else — this is the insert/update path, so a bad *value*
+is the caller's mistake. Contrast the `BinaryField(default = …)` constructor, which raises
+`FieldValidationError` because there the mistake is in the model *definition*.
+"""
+function format_binary_sql(value::AbstractVector{UInt8})
+  return PormGBytes(collect(UInt8, value))
+end
+function format_binary_sql(value::PormGBytes)
+  return value
+end
+function format_binary_sql(value::AbstractString)
+  return PormGBytes(collect(UInt8, codeunits(value)))
+end
+function format_binary_sql(value::Union{Missing, Nothing})
+  return missing
+end
+function format_binary_sql(value)
+  throw(InvalidValueError("A BinaryField value must be raw bytes (`Vector{UInt8}`) or a String, which is stored as its UTF-8 code units. Got: $(typeof(value)). For a hex or Base64 string, decode it first — e.g. `hex2bytes(s)` or `base64decode(s)`."))
+end
 
 function _duration_to_nanoseconds(value::Period)::Int64
   if value isa Week

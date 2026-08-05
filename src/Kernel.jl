@@ -60,6 +60,34 @@ abstract type PormGSQLite <: PormGBackend end
 abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
 abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
 abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
+
+"""
+    PormGBytes(bytes::Vector{UInt8})
+
+A binary payload on its way to the database — the wrapper `BinaryField`'s formatter puts around
+a byte vector so the parameter collectors can recognize it (#296).
+
+It exists because a bare `Vector{UInt8}` is indistinguishable from "a list of values", and both
+backends get that wrong in opposite ways:
+
+- **PostgreSQL** — `add_parameter!(::PormGPostgresParam, ::AbstractArray)` pushes the vector
+  through to LibPQ, which binds *every* parameter in text format and renders any vector as a
+  PostgreSQL **array literal**. `UInt8[0x00, 0xFF]` reaches the server as the five characters
+  `{0,255}`, and `bytea`'s escape-format input parser accepts that string literally — so the
+  column silently stores the ASCII of `{0,255}` instead of the two bytes. No error is raised.
+- **SQLite** — `add_parameter!(::PormGSQLiteParam, ::AbstractArray)` expands an array into one
+  `?` per element, so an *n*-byte payload becomes *n* placeholders and the statement fails on
+  a column-count mismatch.
+
+Dispatching on the wrapper instead of on `Vector{UInt8}` keeps `filter("x__in" => UInt8[1, 2])`
+expanding into an `IN` list as it always has — only values that came through a binary field are
+treated as one opaque blob.
+
+Layer 1 on purpose: `Models` produces it and `QueryBuilder` consumes it, so neither can own it.
+"""
+struct PormGBytes <: PormGAbstractType
+  bytes::Vector{UInt8}
+end
 """
     SQLObject <: PormGAbstractType
 
@@ -178,6 +206,10 @@ const config::Dict{String,PormGSettings} = Dict()
 function get_constraints_pk end
 function get_constraints_unique end
 function get_constraints_check end
+# BinaryField's byte-length CHECK (#296). A separate generic from `get_constraints_check`, which
+# matches only the `>= 0` clause of a positive-integer field — the two constraints can coexist on
+# one table and must never be mistaken for each other when a column type transitions.
+function get_constraints_byte_length_check end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Error-message helper
@@ -240,7 +272,7 @@ include("constants.jl")
 
 # Type hierarchy
 export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite,
-       AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam,
+       AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes,
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
        SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE,
@@ -266,7 +298,8 @@ export PormGError,
        TransactionError
 
 # Shared state / generics
-export config, get_constraints_pk, get_constraints_unique, get_constraints_check
+export config, get_constraints_pk, get_constraints_unique, get_constraints_check,
+       get_constraints_byte_length_check
 
 # Paths and file-name constants
 export DBDF_FOLDER_NAME, CONFIG_PATH, ENV_PATH, LOG_PATH, APP_PATH, RESOURCES_PATH,

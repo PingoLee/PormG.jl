@@ -97,6 +97,7 @@ end
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
+    @testset "BinaryField Byte Storage (#296)" include("unit/test_binary_field_bytes.jl")
     @testset "alter_field Constraint DROPs (#283, #284)" include("unit/test_alter_field_constraint_drops.jl")
     @testset "Error Message ANSI (TTY-aware)" include("unit/test_error_message_ansi.jl")
     @testset "SQLite Advisory-Lock Signalling (#277)" include("unit/test_advisory_lock_sqlite.jl")

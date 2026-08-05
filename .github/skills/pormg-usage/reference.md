@@ -28,7 +28,7 @@ Supporting file for [`SKILL.md`](SKILL.md). Read this when **defining models** o
 | `OneToOneField(model)` | `BIGINT` UNIQUE + FK | `on_delete` |
 | `PasswordField()` | `VARCHAR(128)` | `auto_hash=true` — never stores plaintext |
 | `ImageField()` | `VARCHAR` | stores file path |
-| `BinaryField()` | `BYTEA` | — |
+| `BinaryField()` | `BYTEA` / `BLOB` | `Vector{UInt8}` in and out; `max_length` is a **byte** bound |
 
 **Common parameters (all fields):** `null=false`, `blank=false`, `unique=false`, `default=nothing`, `db_index=false`, `db_column=nothing`, `editable=true`
 

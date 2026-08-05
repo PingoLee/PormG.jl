@@ -131,6 +131,9 @@ const postgres_type_map = Dict{String, Symbol}(
   "float" => :FloatField,
   "time" => :TimeField,
   "interval" => :DurationField,
+  # PostgreSQL's format_type() reports `bytea`; it never reports "blob". The "blob" key below is
+  # unreachable in practice and kept only so a hand-written mapping does not regress (#296).
+  "bytea" => :BinaryField,
   "blob" => :BinaryField,
   "double_precision" => :FloatField,
   "uuid" => :UUIDField,
@@ -192,6 +195,9 @@ const postgres_type_map_reverse = Dict{String, String}(
   "CHAR" => "char",
   "VARCHAR" => "varchar",
   "TEXT" => "text",
+  # BinaryField's canonical `field.type` is the SQLite spelling "BLOB"; PostgreSQL renders it as
+  # `bytea` (#296). "BYTEA" is kept as an alias so an explicitly-BYTEA-typed field still maps.
+  "BLOB" => "bytea",
   "BYTEA" => "bytea",
   "TIMESTAMPTZ" => "timestamptz",
   "TIMESTAMP" => "timestamp",

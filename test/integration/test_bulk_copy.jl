@@ -236,6 +236,85 @@ end
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# bulk_copy: binary payloads survive the CSV COPY stream byte-for-byte (#296)
+# bulk_copy does not bind parameters — it formats each cell and streams CSV into
+# `COPY … FROM STDIN`. A binary payload therefore takes a completely different route to
+# the database than create()/bulk_insert, and reaches it as text: PostgreSQL's hex input
+# syntax, which survives FORMAT CSV because backslash is not a CSV escape character. This
+# asserts the two routes agree, which a shape-only check could not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_copy: BinaryField payloads round-trip byte-for-byte" begin
+    slug = "bulk-copy-binary-990601"
+    # NUL, a high byte, and an invalid-UTF-8 pair — none of which survive a text round-trip.
+    payload = UInt8[0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xC3, 0x28]
+
+    cleanup = M.Field_validation_scratch.objects
+    cleanup.filter("slug" => slug)
+    cleanup.exists() && cleanup.delete()
+
+    try
+        df = DataFrames.DataFrame(
+            uuid_token = ["bbbbbbbb-0000-0000-0000-000000009601"],
+            canonical_url = ["https://example.com/f1/bulk-copy-binary"],
+            slug = [slug],
+            blob_payload = [payload]
+        )
+        bulk_copy(M.Field_validation_scratch, df)
+
+        stored = M.Field_validation_scratch.objects.filter("slug" => slug).
+            values("blob_payload").list() |> first
+
+        @test stored[:blob_payload] isa AbstractVector{UInt8}
+        # Byte identity, not just "a row arrived" — the whole point is that COPY did not
+        # mangle the payload into the Julia literal or a text encoding of it.
+        @test collect(stored[:blob_payload]) == payload
+    finally
+        final_cleanup = M.Field_validation_scratch.objects
+        final_cleanup.filter("slug" => slug)
+        final_cleanup.exists() && final_cleanup.delete()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bulk_update: BinaryField columns survive the UPDATE … FROM (VALUES …) CTE (#296)
+# bulk_update casts each source column as `source."col"::<field.type lowercased>`, and
+# BinaryField's `.type` is "BLOB" — the one field whose canonical type string is not a real
+# PostgreSQL type, so the statement failed with `type "blob" does not exist`. This is the
+# last write path; create/bulk_insert/bulk_copy are covered elsewhere.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_update: BinaryField payloads round-trip byte-for-byte" begin
+    slug = "bulk-update-binary-990602"
+    payload = UInt8[0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xC3, 0x28]
+
+    cleanup = M.Field_validation_scratch.objects
+    cleanup.filter("slug" => slug)
+    cleanup.exists() && cleanup.delete()
+
+    try
+        M.Field_validation_scratch.objects.create(
+            "uuid_token" => "cccccccc-0000-0000-0000-000000009602",
+            "canonical_url" => "https://example.com/f1/bulk-update-binary",
+            "slug" => slug,
+            "blob_payload" => UInt8[0x01]
+        )
+
+        df = DataFrames.DataFrame(slug = [slug], blob_payload = [payload])
+        bulk_update(M.Field_validation_scratch, df; columns = ["blob_payload", "slug"], match_on = ["slug"])
+
+        stored = M.Field_validation_scratch.objects.filter("slug" => slug).
+            values("blob_payload").list() |> first
+        @test stored[:blob_payload] isa AbstractVector{UInt8}
+        # Byte identity, and specifically NOT the single 0x01 seeded above — proving the
+        # update actually landed rather than silently doing nothing.
+        @test collect(stored[:blob_payload]) == payload
+    finally
+        final_cleanup = M.Field_validation_scratch.objects
+        final_cleanup.filter("slug" => slug)
+        final_cleanup.exists() && final_cleanup.delete()
+    end
+end
+
 @testset "bulk_copy: empty DataFrame is a no-op" begin
     query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)

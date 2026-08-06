@@ -185,8 +185,6 @@ guards, declined findings, scope you widened and on whose say-so.
 ## 7. Close out
 
 - Confirm the merge: `git merge-base --is-ancestor <sha> origin/main`, and that the issue closed.
-- **Watch CI on `main`**, not just the PR checks — a merge does not wait for them, and the docs build
-  is often the only thing exercising your `docs/` edits.
 - File follow-ups for anything deferred, using
   [`pormg-issue-management`](../pormg-issue-management/SKILL.md). A single targeted issue the user
   asked for can be created directly; anything bulk gets drafted and confirmed first.

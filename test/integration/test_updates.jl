@@ -837,6 +837,48 @@ end
         end
 
         # ─────────────────────────────────────────────────────────────────────────────
+        # Bulk Update: ImageField/FileField source column casts correctly (#309)
+        #
+        # `bulk_update`'s CTE used to cast every source column to `field.type` lowercased.
+        # ImageField/FileField's `.type` is "BLOB" (shared with BinaryField) but the column
+        # itself renders as TEXT — casting to the literal `::blob` fails outright on
+        # PostgreSQL with `type "blob" does not exist`. This reproduces that statement
+        # end-to-end; SQLite emits no cast at all, so it was never affected and must keep
+        # passing unchanged.
+        # ─────────────────────────────────────────────────────────────────────────────
+        @testset "Bulk Update casts an ImageField/FileField source column correctly" begin
+            _clear_bulk_update_scratch_rows!()
+
+            try
+                required_ids, _ = _seed_bulk_update_scratch_parents!(["req-photo"], String[])
+
+                row = M.Bulk_update_payload_scratch.objects.create(
+                    "label" => "payload-photo",
+                    "required_parent_id" => required_ids["req-photo"],
+                    "photo" => "uploads/before.jpg",
+                )
+
+                update_df = DataFrame(
+                    id = [row[:id]],
+                    photo = ["uploads/after.jpg"],
+                )
+
+                bulk_update(
+                    M.Bulk_update_payload_scratch.objects,
+                    update_df,
+                    columns = ["photo"],
+                    match_on = ["id"],
+                )
+
+                persisted = M.Bulk_update_payload_scratch.objects.order_by("id").list()
+                by_id = Dict(Int64(persisted_row[:id]) => persisted_row for persisted_row in persisted)
+                @test by_id[row[:id]][:photo] == "uploads/after.jpg"
+            finally
+                _clear_bulk_update_scratch_rows!()
+            end
+        end
+
+        # ─────────────────────────────────────────────────────────────────────────────
         # Bulk Update: chunk_size splits one payload across multiple statements
         #
         # The production call uses chunk_size=500. This regression forces the same code

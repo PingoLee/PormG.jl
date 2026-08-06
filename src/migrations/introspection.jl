@@ -107,11 +107,56 @@ function _strip_sqlite_default_wrapper(default_val)
   return stripped
 end
 
+"""
+    _sqlite_blob_literal_bytes(s) -> Union{Vector{UInt8}, Nothing}
+
+Decode SQLite's `X'0102'` blob-literal syntax into bytes, or `nothing` if `s` is not one.
+
+Normalizing here rather than loosening `BinaryField(default = …)` is deliberate: introspection is
+the import layer, and the repo's rule is to normalize dirty inputs there instead of weakening a
+field contract to accept them.
+"""
+function _sqlite_blob_literal_bytes(s::AbstractString)::Union{Vector{UInt8}, Nothing}
+  m = match(r"^[Xx]'([0-9A-Fa-f]*)'$", strip(s))
+  m === nothing && return nothing
+  hex = m.captures[1]
+  isodd(length(hex)) && return nothing   # malformed; treat as "no recoverable default"
+  return hex2bytes(hex)
+end
+
+"""
+    _pg_bytea_literal_bytes(s) -> Union{Vector{UInt8}, Nothing}
+
+Decode PostgreSQL's hex `bytea` output form (`\\x0102`) into bytes, or `nothing` if `s` is not one.
+
+The PostgreSQL twin of [`_sqlite_blob_literal_bytes`](@ref); see there for why the normalization
+belongs in introspection rather than in the field constructor.
+"""
+function _pg_bytea_literal_bytes(s::AbstractString)::Union{Vector{UInt8}, Nothing}
+  m = match(r"^\\\\?x([0-9A-Fa-f]*)$", strip(s))
+  m === nothing && return nothing
+  hex = m.captures[1]
+  isodd(length(hex)) && return nothing
+  return hex2bytes(hex)
+end
+
 function _normalize_sqlite_default(default_val, type_sym::Symbol)
   stripped = _strip_sqlite_default_wrapper(default_val)
   stripped === nothing && return nothing
 
   uppercase(stripped) == "NULL" && return nothing
+
+  # A BinaryField default is written as `X'…'` and must come back as bytes (#296). Before this,
+  # every branch below returned a String, and `BinaryField(default = <String>)` raises — so
+  # introspecting a BLOB column with a DEFAULT would have crashed the whole schema read. That was
+  # unreachable only while PormG never emitted a BLOB column.
+  #
+  # An unrecognized literal degrades to `nothing` (no default) rather than raising: a hand-written
+  # or foreign table must stay introspectable, matching how `Model_to_str` degrades a field it
+  # cannot render instead of failing the run.
+  if type_sym == :BinaryField
+    return _sqlite_blob_literal_bytes(stripped)
+  end
 
   if type_sym == :BooleanField
     lowered = lowercase(replace(stripped, "'" => "", "\"" => ""))
@@ -196,11 +241,24 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   end
 
   
+  # Byte bounds for BinaryField columns, read from the CHECK clauses in the same DDL text (#296).
+  byte_bounds = _sqlite_byte_length_bounds(sql)
+
   # Extend regex to capture PRIMARY KEY and FOREIGN KEY constraints.
   # The type group allows a trailing UNSIGNED so the two-word declared type of
   # PositiveIntegerField ("INTEGER UNSIGNED") round-trips instead of degrading
   # to IntegerField.
-  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+(?: UNSIGNED)?)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[^,]*))?", sql)
+  #
+  # The DEFAULT alternation enumerates the literal shapes explicitly instead of using a catch-all,
+  # because a column can be followed by a CHECK clause with no comma between them: in
+  # `"c" BLOB NOT NULL DEFAULT X'0102' CHECK (length("c") <= 4)` the previous `[^,]*` branch
+  # swallowed ` CHECK (length("c") <= 4)` into the default (#296).
+  #
+  # The branches, in order: a quoted string; a blob literal; a parenthesized expression (SQLite
+  # allows `DEFAULT (expr)`, e.g. `(datetime('now'))`, which `_strip_sqlite_default_wrapper` exists
+  # to unwrap — one nesting level is enough for every form SQLite emits); then a bare token. The
+  # bare-token branch must exclude `(` so it cannot run into a trailing CHECK.
+  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+(?: UNSIGNED)?)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[Xx]'[0-9A-Fa-f]*'|\([^()]*(?:\([^()]*\)[^()]*)*\)|[^,()\s]+))?", sql)
   # Initialize fields dictionary
   fields_dict = Dict{Symbol, Any}()
   str_fields_dict = Dict{String, Any}()
@@ -224,8 +282,12 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       default=_fk_default_or_warn(normalized_default, table_name, column_name))
     else
       field_instance = getfield(Models, type_sym)(null=!(nullable === nothing), default=normalized_default)
+      # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
+      if type_sym == :BinaryField && haskey(byte_bounds, column_name)
+        field_instance.max_length = byte_bounds[column_name]
+      end
     end
-            
+
     fields_dict[Symbol(column_name)] = field_instance
   end
 
@@ -236,11 +298,39 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   return Models.Model(table_name, fields_dict)
 end
 
+"""
+    _sqlite_byte_length_bounds(create_sql) -> Dict{String, Int}
+
+Recover each column's BinaryField byte bound from the `CHECK (length("col") <= n)` clauses in a
+table's `CREATE TABLE` text (#296).
+
+`PRAGMA table_info` — which `convertSQLToModel` otherwise relies on — does not report CHECK
+constraints at all, and `max_length` is part of the field state the migration planner diffs. Without
+this, every `makemigrations` against a bounded BinaryField would see the live column as unbounded
+and propose the same ALTER forever. On SQLite that is especially costly: any field alteration
+rebuilds the whole table.
+"""
+function _sqlite_byte_length_bounds(create_sql::Union{AbstractString, Nothing})::Dict{String, Int}
+  bounds = Dict{String, Int}()
+  create_sql === nothing && return bounds
+  for m in eachmatch(r"CHECK\s*\(\s*length\s*\(\s*\"([^\"]+)\"\s*\)\s*<=\s*(\d+)\s*\)", create_sql)
+    bounds[m.captures[1]] = parse(Int, m.captures[2])
+  end
+  return bounds
+end
+
 function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{String, Symbol} = sqlite_type_map)
   # Use PRAGMA instead of Regex for more reliable introspection
   cols = fetch(db, "PRAGMA table_info(\"$table_name\")") |> DataFrame
   fks = fetch(db, "PRAGMA foreign_key_list(\"$table_name\")") |> DataFrame
-  
+
+  # PRAGMA cannot see CHECK constraints, so the byte bounds come from the stored DDL text (#296).
+  # Parameterized, not interpolated: `table_name` is caller-supplied (convertSQLToModel is public),
+  # and unlike the PRAGMA calls above — which interpolate into a *quoted identifier* — this value
+  # lands inside a single-quoted literal, where an embedded `'` would break out.
+  _bounds_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
+  byte_bounds = _sqlite_byte_length_bounds(nrow(_bounds_rows) == 0 || ismissing(_bounds_rows[1, :sql]) ? nothing : _bounds_rows[1, :sql])
+
   fields_dict = Dict{Symbol, Any}()
   fk_map = Dict{String, Any}()
   if !isempty(fks)
@@ -281,6 +371,10 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
             if m !== nothing
                 field.max_length = parse(Int, m.captures[1])
             end
+        elseif type_sym == :BinaryField && haskey(byte_bounds, col_name)
+            # Byte bound recovered from the CHECK clause — `BLOB` carries no length suffix, so it
+            # cannot come from `col_type` the way CharField's does (#296).
+            field.max_length = byte_bounds[col_name]
         end
     end
     fields_dict[Symbol(col_name)] = field
@@ -432,6 +526,38 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
           AND array_length(con.conkey, 1) = 1
           AND pg_get_constraintdef(con.oid) LIKE '%>= 0%'
         GROUP BY con.conrelid
+    ),
+    -- BinaryField byte bounds (#296). Unlike non_negative_checks this is per-COLUMN and carries a
+    -- VALUE, because `max_length` is part of the field state the planner diffs — a boolean marker
+    -- would leave every makemigrations proposing the same ALTER forever. `bytea` has no length
+    -- parameter, so the CHECK is the only place the bound exists in the schema.
+    byte_length_checks AS (
+        SELECT
+            con.conrelid AS table_oid,
+            a.attname AS col_name,
+            -- pg_get_constraintdef renders it as `CHECK ((octet_length(col) <= 4))`. Matching on
+            -- digits after `<=` avoids backslash escapes surviving both Julia and SQL quoting.
+            --
+            -- `substring(… from …)` rather than `regexp_match`: the latter is PostgreSQL 10+, and
+            -- this CTE sits in the schema query that EVERY introspection runs, so depending on it
+            -- would break `makemigrations`/`inspectdb` wholesale on 9.x — not just for binary
+            -- columns. `substring` with a capturing group returns the same first capture and has
+            -- been available since long before any version this package targets.
+            --
+            -- min() collapses to ONE row per (table, column). This CTE is joined per-column, not
+            -- per-table like non_negative_checks above, so without the GROUP BY two matching CHECKs
+            -- on the same column (a hand-written extra bound, or a stale one) would fan the outer
+            -- row out and emit that column twice into the string_agg — after which the recovered
+            -- max_length would depend on row order, which is exactly the drift this CTE prevents.
+            -- min() also picks the tightest bound, which is the one actually enforced.
+            min(substring(pg_get_constraintdef(con.oid) from '<= ([0-9]+)')::bigint) AS byte_limit
+        FROM pg_constraint con
+        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+        WHERE con.contype = 'c'
+          AND array_length(con.conkey, 1) = 1
+          AND pg_get_constraintdef(con.oid) LIKE '%octet_length%'
+          AND pg_get_constraintdef(con.oid) ~ '<= [0-9]+'
+        GROUP BY con.conrelid, a.attname
     )
     SELECT
         n.nspname AS table_schema,
@@ -450,6 +576,13 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             || CASE
                 WHEN nn.check_cols IS NOT NULL
                      AND a.attname = ANY(nn.check_cols) THEN ' NON_NEGATIVE_CHECK'
+                ELSE ''
+               END
+            -- Space-delimited and comma-free by construction: the caller splits this aggregate on
+            -- ", " to get columns and then on " " to get tokens, so a marker containing either
+            -- separator would corrupt the parse.
+            || CASE
+                WHEN bl.byte_limit IS NOT NULL THEN ' BYTE_LIMIT_' || bl.byte_limit
                 ELSE ''
                END
         ), ', ') AS columns,
@@ -477,6 +610,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     LEFT JOIN indexes ix ON ix.table_oid = c.oid
     LEFT JOIN unique_constraints u ON u.table_oid = c.oid
     LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
+    LEFT JOIN byte_length_checks bl ON bl.table_oid = c.oid AND bl.col_name = a.attname
     WHERE c.relkind = 'r'
       $(schema === nothing ? "" : "AND n.nspname = '$(schema)'")
       $(table === nothing ? "" : "AND c.relname = '$(table)'")
@@ -700,6 +834,47 @@ function get_constraints_check(conn::PormGPostgres, table_name::String, field_na
   return result[1, :constraint_name]
 end
 
+# Find the byte-length CHECK backing a bounded BinaryField (#296) — the `octet_length` sibling of
+# `get_constraints_check` above. `bytea` takes no length parameter, so `max_length` can only be a
+# CHECK, and on a transition away from a bounded BinaryField the migration engine needs the
+# auto-generated name to drop it. Matched on the clause rather than the name, for the same reason.
+#
+# Deliberately a separate generic rather than a parameter on `get_constraints_check`: a table can
+# carry both kinds, and matching the wrong one would drop a live constraint.
+function get_constraints_byte_length_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
+  # Parameterized, unlike the `get_constraints_*` siblings above, which interpolate. Those predate
+  # the parameterized-queries-only rule and are left alone here; a new query has no excuse to
+  # inherit the pattern, and both values land inside single-quoted literals where an embedded `'`
+  # would break out.
+  #
+  # `table_schema` is restricted to the search path: an unqualified table name in the DDL this
+  # feeds resolves the same way, so without it a same-named table in another schema can hand back
+  # a constraint name that does not exist on the target table, and the ALTER then fails.
+  #
+  # Residual ambiguity, deliberately left: a *hand-written* CHECK using `octet_length` on the same
+  # column is indistinguishable from PormG's own by clause alone. Matching the auto-generated name
+  # instead would be worse — the name is not stable across the paths that create it.
+  query = """
+  SELECT tc.constraint_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.constraint_column_usage ccu
+    ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+  JOIN information_schema.check_constraints cc
+    ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
+  WHERE tc.table_name = \$1
+    AND tc.constraint_type = 'CHECK'
+    AND ccu.column_name = \$2
+    AND tc.table_schema = ANY(current_schemas(false))
+    AND cc.check_clause ILIKE '%octet_length%'
+    AND cc.check_clause ~ '<= [0-9]+';
+  """
+  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
+  if nrow(result) == 0
+      return nothing
+  end
+  return result[1, :constraint_name]
+end
+
 # Same empty-result contract as `get_constraints_unique` above (#284).
 function get_sequence_name(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
   query = """
@@ -785,6 +960,13 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           max_length = parse(Int, max_length_match.captures[1])
           col_type = "varchar"
         end
+      elseif col_type == "bytea"
+        # A BinaryField's byte bound lives in its CHECK, not in the column type — the schema query
+        # surfaces it as a BYTE_LIMIT_<n> marker (#296).
+        byte_limit_match = match(r"BYTE_LIMIT_(\d+)", col)
+        if byte_limit_match !== nothing
+          max_length = parse(Int, byte_limit_match.captures[1])
+        end
       end
 
       # Extract max_digits and decimal_places if it exists
@@ -824,6 +1006,14 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           cleaned_default = replace(cleaned_default, r"^'(.+)'$" => s"\1")  # Remove quotes
           default_value = cleaned_default
         end
+      end
+
+      # A bytea DEFAULT survives the cleanup above as PostgreSQL's hex text (`\x0102`), and
+      # `BinaryField(default = <String>)` raises — so without this, introspecting any BLOB column
+      # that has a DEFAULT would abort the schema read (#296). Same import-layer normalization as
+      # `_normalize_sqlite_default`; an unrecognized literal degrades to "no default".
+      if default_value !== nothing && field_type === Models.BinaryField
+        default_value = _pg_bytea_literal_bytes(default_value)
       end
       if primary_key
         if occursin("GENE_BY_DEF_IDENTITY", col)
@@ -868,7 +1058,11 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # is mapped to an IDField (above), which has no max_length/max_digits — guard the
       # assignments so such columns don't raise FieldError during introspection.
       if max_length !== nothing && hasfield(typeof(field), :max_length)
-        if max_length > 255
+        if field isa Models.sBinaryField
+          # A BinaryField's bound is a BYTE count with no 255 ceiling — a 5 MB blob is ordinary, and
+          # the CharField fallback below would silently retype the column to TEXT (#296).
+          field.max_length = max_length
+        elseif max_length > 255
           # CharField only supports max_length <= 255, use TextField for longer strings
           field = Models.TextField(unique=unique, null=!not_null, default=default_value, db_index=db_index)
         else

@@ -205,6 +205,36 @@
       # session cannot resolve models through this throwaway module.
       delete!(PormG.Models.REGISTERED_MODULES, generated)
     end
+
+    # ── 5. BinaryField byte bounds survive the round trip (#296) ─────────────
+    # `bytea`/`BLOB` take no length parameter, so a BinaryField's `max_length` exists in the
+    # schema ONLY as a CHECK constraint. If introspection cannot read it back, every
+    # `makemigrations` proposes the same ALTER forever — the phantom drift this recovery exists
+    # to prevent.
+    #
+    # Deliberately routed through `convert_schema_to_models`, the entry point `makemigrations`
+    # actually calls. The unit coverage exercises the SQLite *string* parser
+    # (`convertSQLToModel(::String)`), which the production SQLite flow never reaches — it goes
+    # through the PRAGMA path instead. Only a live run covers the wiring on both backends: a
+    # `substring(… from '<= ([0-9]+)')` CTE on PostgreSQL, a regex over the stored CREATE TABLE
+    # text on SQLite. Two entirely separate implementations of one contract.
+    bin_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["field_validation_scratch"])
+    bin_by_name = Dict(lowercase(string(m.name)) => m for m in bin_models)
+    @test haskey(bin_by_name, "field_validation_scratch")
+    scratch_model = bin_by_name["field_validation_scratch"]
+
+    # Both columns come back as BinaryField — i.e. the column type itself round-trips, which is
+    # what a TEXT fallback would break.
+    @test scratch_model.fields["blob_payload"] isa PormG.Models.sBinaryField
+    @test scratch_model.fields["bounded_blob"] isa PormG.Models.sBinaryField
+
+    # The bound itself. `8` is the value declared on the model in db_2/db_sl models.jl; reading
+    # back anything else (including `nothing`) is exactly the phantom-drift failure.
+    @test scratch_model.fields["bounded_blob"].max_length == 8
+    # And an unbounded binary column must NOT acquire a bound — the mirror-image drift, where
+    # every regeneration would add a CHECK the user never asked for.
+    @test scratch_model.fields["blob_payload"].max_length === nothing
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved_ignore   # never leak registry state
     drop_fixtures()

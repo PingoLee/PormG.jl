@@ -943,6 +943,40 @@ bulk_insert(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_inser
 bulk_insert(df::DataFrames.DataFrame; kwargs...) = (objct) -> bulk_insert(objct, df; kwargs...)
 bulk_insert(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_insert(objct, df; kwargs...)
 
+"""
+    _bulk_copy_cell(value)
+
+Render one already-formatted value for the COPY stream.
+
+Only binary payloads need translating: a field formatter hands back a [`PormGBytes`](@ref), which
+`CSV.write` would serialize through `show` as the Julia literal `PormGBytes(UInt8[0x01, …])` (#296).
+The COPY statement uses `FORMAT CSV`, where backslash is *not* an escape character, so PostgreSQL's
+hex input syntax passes through the CSV layer untouched and `byteain` decodes it — the same wire
+form the parameterized `add_parameter!` path uses, so `bulk_copy` and `bulk_insert` store identical
+bytes.
+
+`bulk_copy` is PostgreSQL-only (guarded at the top of `bulk_copy`), so one dialect's spelling is all
+that is needed here.
+"""
+_bulk_copy_cell(value::PormGBytes) = "\\x" * bytes2hex(value.bytes)
+_bulk_copy_cell(value) = value
+
+"""
+    _pg_bulk_cast_type(field) -> String
+
+The PostgreSQL type name used to cast a `source.<col>` reference in `bulk_update`'s CTE.
+
+A field's `.type` is its canonical (SQLite-flavoured) spelling, and for every field except one it
+happens to lowercase into a real PostgreSQL type — `varchar`, `jsonb`, `timestamptz`, `decimal`,
+`interval`. `BinaryField` is the exception: its `.type` is `"BLOB"`, and `::blob` is not a
+PostgreSQL type at all, so the statement fails with *type "blob" does not exist* (#296).
+
+Deliberately keyed on `sBinaryField` rather than on the `"BLOB"` string: `ImageField` and
+`FileField` share that `.type` but render as `TEXT`, so mapping the string would cast a text column
+to `bytea`. Their own `::blob` cast is a separate pre-existing bug and is left alone here.
+"""
+_pg_bulk_cast_type(field)::String = field isa sBinaryField ? "bytea" : lowercase(field.type)
+
 # bulk_copy NULL sentinel (#86) — PostgreSQL's conventional NULL marker. Safe because bulk_copy
 # force-quotes every string value (CSV.write quotestrings=true): a genuine string equal to this
 # sentinel is written *quoted* and read back as the literal string, while a `missing`/`nothing`
@@ -1034,7 +1068,9 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           row_index = i + offset - 1
           try
             validate_field_data(model, field, value, "bulk_copy"; allow_primary_key = true)
-            model.fields[field].formatter(value)
+            # `_bulk_copy_cell` translates a binary payload into PostgreSQL's hex input syntax;
+            # every other value passes through unchanged (#296).
+            _bulk_copy_cell(model.fields[field].formatter(value))
           catch e
             e isa PormGError && rethrow()   # keep the taxonomy type (bulk_copy logs no per-row depuration; the message below carries the row index only for the wrapped case)
             throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name) failed validation or formatting: $(e)"))
@@ -1369,7 +1405,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       # VALUES/CTE source column list stay the field name (#50).
       quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)
       quoted_source_field = quote_identifier(field, connection)
-      field_type = model.fields[field].type |> lowercase
+      field_type = _pg_bulk_cast_type(model.fields[field])
       if connection isa PormGPostgres
         push!(safe_set_parts, "$quoted_field = source.$quoted_source_field::$field_type")
       else
@@ -1479,7 +1515,7 @@ function _bulk_update(model::PormGModel,
     # and the source column list stay the field name (#50).
     quoted_tb_field = quote_identifier(Models.field_db_column(model.fields[filter], filter), connection)
     quoted_source_field = quote_identifier(filter, connection)
-    field_type = model.fields[filter].type |> lowercase
+    field_type = _pg_bulk_cast_type(model.fields[filter])
     if connection isa PormGPostgres
       push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field::$field_type")
     else

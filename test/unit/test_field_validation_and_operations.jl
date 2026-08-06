@@ -95,9 +95,15 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
 
         @test validate_field_data(mock_str_model, "email", "test@example.com", "insert") === true
 
-        # Regression: a field whose `max_length` is `nothing` (e.g. BinaryField, the
-        # St_cruz.b1_n case) receiving a String value must SKIP the length check, not
-        # compare `length(value) > nothing` (which threw MethodError: isless(::Int, ::Nothing)).
+        # Regression: a field whose `max_length` is `nothing` (the St_cruz.b1_n case) must SKIP
+        # the length check, not compare `length(value) > nothing` (which threw
+        # MethodError: isless(::Int, ::Nothing)).
+        #
+        # BinaryField is the only field that can reach this state from a bare constructor —
+        # `sBinaryField.max_length` is the codebase's only `Union{Int, Nothing}`; sCharField,
+        # sPasswordField, sURLField and sSlugField all declare a plain `::Int` and default it.
+        # So this stays on BinaryField, and since #296 it also guards the byte-count arm of the
+        # check, which is the branch a binary value now takes.
         mock_unbounded_model = Models.Model_Type(
             name = "unbounded_len_test",
             fields = Dict(
@@ -107,8 +113,29 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
             field_names = ["id", "blob"]
         )
         @test mock_unbounded_model.fields["blob"].max_length === nothing
+        # Strings — accepted on the write path and stored as their UTF-8 code units (#296).
         @test validate_field_data(mock_unbounded_model, "blob", "36336", "update") === true
         @test validate_field_data(mock_unbounded_model, "blob", "x"^10_000, "insert") === true
+        # Byte vectors — the branch that did not exist before #296. Without the unbounded guard
+        # these compare a byte count against `nothing` and throw exactly as the string case did.
+        @test validate_field_data(mock_unbounded_model, "blob", UInt8[0x33, 0x36], "update") === true
+        @test validate_field_data(mock_unbounded_model, "blob", zeros(UInt8, 10_000), "insert") === true
+
+        # And the bound is enforced in BYTES once it is set — the pre-#296 check counted
+        # characters and skipped byte vectors entirely, so neither of these raised.
+        mock_bounded_model = Models.Model_Type(
+            name = "bounded_len_test",
+            fields = Dict(
+                "id" => Models.IDField(),
+                "blob" => Models.BinaryField(max_length = 4)
+            ),
+            field_names = ["id", "blob"]
+        )
+        @test validate_field_data(mock_bounded_model, "blob", UInt8[1, 2, 3, 4], "insert") === true
+        @test_throws PormGError validate_field_data(mock_bounded_model, "blob", UInt8[1, 2, 3, 4, 5], "insert")
+        # "héllo" is 5 characters but 6 UTF-8 bytes: a character count would let it through.
+        @test ncodeunits("héllo") == 6 && length("héllo") == 5
+        @test_throws PormGError validate_field_data(mock_bounded_model, "blob", "héllo", "insert")
     end
 
     @testset "Numeric Fields: Comprehensive Type Handling" begin

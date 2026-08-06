@@ -2,7 +2,7 @@ module Dialect
 using Dates, TimeZones
 using DataFrames
 import Tables
-import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGPostgres, PormGSQLite, PormGAbstractType
+import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 # Semantic error taxonomy (#239). Dialect raises three categories:
 #   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String").
@@ -12,7 +12,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
-import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check
+import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql
 
 import PormG: @pormg_debug
@@ -453,7 +453,23 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
+
+"""
+    _format_default_sql_value(default_value, conn) -> String
+
+Render a field's `default` as a SQL literal for `conn`'s dialect.
+
+Only binary payloads actually diverge, and they have no portable spelling: PostgreSQL wants
+`'\\x0102'::bytea`, SQLite wants `X'0102'` (#296). Everything else delegates to the
+backend-agnostic method — which must NOT be reached with a `Vector{UInt8}`, since its fallthrough
+is `string(default_value)` and would emit the literal SQL text `UInt8[0x01, 0x02]`.
+"""
+_format_default_sql_value(default_value::AbstractVector{UInt8}, ::PormGPostgres)::String =
+  "'\\x$(bytes2hex(default_value))'::bytea"
+_format_default_sql_value(default_value::AbstractVector{UInt8}, ::PormGSQLite)::String =
+  "X'$(bytes2hex(default_value))'"
+_format_default_sql_value(default_value, ::PormGBackend) = _format_default_sql_value(default_value)
 
 function _format_default_sql_value(default_value)
   if default_value isa AbstractString
@@ -470,6 +486,37 @@ function _format_default_sql_value(default_value)
   end
 
   return string(default_value)
+end
+
+"""
+    _postgres_bytea_cast_expression(field_name, old_field) -> String
+
+The `USING` expression for a column transitioning **into** `bytea` (#296).
+
+PostgreSQL has no assignment cast to `bytea`, so a bare `ALTER … TYPE bytea` fails outright with
+*"column cannot be cast automatically"*. Every app that used `BinaryField` before this change has a
+`text` column today (the field rendered as `TEXT` on both backends), so this path is the normal
+upgrade, not an edge case.
+
+`convert_to(col, 'UTF8')` reinterprets the text as its UTF-8 bytes. It is total (never raises) and
+NULL-preserving, and it agrees byte-for-byte with what `format_binary_sql` now writes for a
+`String` — so text stored before the migration and text written after it land as the same bytes.
+
+**It reinterprets; it does not decode.** A column holding hex or Base64 *text* becomes the bytes of
+those characters, not the payload they encode. PormG cannot tell the difference, so it emits the
+faithful-reinterpretation form and `UPGRADING.md` tells the operator to substitute
+`decode(col, 'base64')` / `decode(col, 'hex')` in the generated migration when that is what the
+column actually held. `makemigrations` writes a reviewable plan before anything runs, which is
+where that substitution belongs.
+"""
+function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
+  column_ref = "\"$(field_name)\""
+
+  if old_field isa Union{sCharField, sTextField, sImageField, sSlugField, sURLField}
+    return "convert_to($(column_ref), 'UTF8')"
+  end
+  # Already bytea, or a type with a real cast to it — let PostgreSQL apply its own.
+  return "$(column_ref)::bytea"
 end
 
 function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
@@ -528,6 +575,10 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa sJSONField
     return type_map[field.type]
+  elseif field isa sBinaryField
+    # `bytea` takes no length parameter — a BinaryField's `max_length` is a BYTE bound enforced by
+    # the CHECK constraint below, not by the column type (#296).
+    return type_map[field.type]
   elseif field isa sURLField
     max_len = hasproperty(field, :max_length) ? field.max_length : 200
     return "$(type_map[field.type])($max_len)"
@@ -573,6 +624,10 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sJSONField
     return sql_type
+  elseif field isa sBinaryField
+    # `BLOB` takes no length parameter (and SQLite would ignore one anyway — BLOB affinity means
+    # no affinity). The byte bound is the CHECK constraint below (#296).
+    return sql_type
   elseif field isa sURLField
     max_len = hasproperty(field, :max_length) ? field.max_length : 200
     return "$(sql_type)($max_len)"
@@ -594,6 +649,21 @@ _requires_non_negative_check(field::PormGField)::Bool = field isa Union{sPositiv
 # The non-negative CHECK clause emitted both at CREATE TABLE and when a column's
 # type transitions into a positive integer field on ALTER.
 _non_negative_check_clause(col_name)::String = "CHECK (\"$(col_name)\" >= 0)"
+
+# BinaryField's `max_length` is a BYTE bound, and neither `bytea` nor `BLOB` accepts a length
+# parameter — so unlike CharField's `varchar(n)` it can only be expressed as a CHECK (#296).
+# `nothing` means unbounded, so no clause is emitted at all.
+_requires_byte_length_check(field::PormGField)::Bool =
+  field isa sBinaryField && getfield(field, :max_length) !== nothing
+
+# The byte-length function diverges: PostgreSQL's `length()` on bytea would work but reads as a
+# character count, so `octet_length` states the intent; SQLite has no `octet_length`, and its
+# `length()` returns BYTES for a BLOB (characters only for TEXT — which is why the SQLite table
+# rebuild casts legacy TEXT values to BLOB, see `alter_field`).
+_byte_length_check_clause(col_name, max_length::Int, ::PormGPostgres)::String =
+  "CHECK (octet_length(\"$(col_name)\") <= $(max_length))"
+_byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
+  "CHECK (length(\"$(col_name)\") <= $(max_length))"
 
 function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any=nothing)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
@@ -620,7 +690,7 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   # Default value
   if field.default !== nothing || temporary_default !== nothing
     default_value = field.default !== nothing ? field.default : temporary_default
-    push!(constraints, "DEFAULT $(_format_default_sql_value(default_value))")
+    push!(constraints, "DEFAULT $(_format_default_sql_value(default_value, conn))")
   end
 
   # Generated by default as identity
@@ -635,6 +705,10 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   # Non-negative CHECK for positive integer fields. On ALTER, alter_field diffs this
   # against the old field and adds/drops the constraint so it tracks the model state.
   _requires_non_negative_check(field) && push!(constraints, _non_negative_check_clause(col_name))
+
+  # Byte-length CHECK for a bounded BinaryField — the only way `max_length` can reach a bytea
+  # column, which takes no length parameter (#296). Diffed on ALTER like the one above.
+  _requires_byte_length_check(field) && push!(constraints, _byte_length_check_clause(col_name, field.max_length, conn))
 
   # Combine everything into a single string: "col_name base_type constraints..."
   return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
@@ -669,12 +743,15 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   # Default value
   if field.default !== nothing || temporary_default !== nothing
     default_value = field.default !== nothing ? field.default : temporary_default
-    push!(constraints, "DEFAULT $(_format_default_sql_value(default_value))")
+    push!(constraints, "DEFAULT $(_format_default_sql_value(default_value, conn))")
   end
 
   # Non-negative CHECK for positive integer fields. SQLite's alter_field recreates the
   # table from current model state, so this clause is re-derived automatically on ALTER.
   _requires_non_negative_check(field) && push!(constraints, _non_negative_check_clause(col_name))
+
+  # Byte-length CHECK for a bounded BinaryField (#296) — likewise re-derived on every rebuild.
+  _requires_byte_length_check(field) && push!(constraints, _byte_length_check_clause(col_name, field.max_length, conn))
 
   # Combine everything into a single string: "col_name base_type constraints..."
   return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
@@ -838,6 +915,19 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(constraint)";""")
   end
 
+  # Byte-length CHECK diffing for BinaryField (#296), the `octet_length` analogue of the block
+  # above. It differs in one way that matters: the clause embeds the bound, so it must also be
+  # replaced when `max_length` merely CHANGES (4 → 8) with no type transition at all. Hence the
+  # trigger is `:type` *or* `:max_length`, and the DROP fires whenever an old bound existed and the
+  # new one differs, rather than only on the bounded → unbounded edge.
+  new_byte_bound = _requires_byte_length_check(new_field) ? new_field.max_length : nothing
+  old_byte_bound = (old_field !== nothing && _requires_byte_length_check(old_field)) ? old_field.max_length : nothing
+  byte_bound_changed = any(attr -> attr in colect_not_equal, [:type, :max_length]) && new_byte_bound != old_byte_bound
+  if byte_bound_changed && old_byte_bound !== nothing
+    constraint = get_constraints_byte_length_check(conn, string(table_name), string(field_name))
+    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(constraint)";""")
+  end
+
   # Alter column type
   if any(attr -> attr in colect_not_equal, [:type, :max_length, :max_digits, :decimal_places])
     if new_field isa sCharField
@@ -859,6 +949,14 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     elseif new_field isa sDurationField
       cast_expression = _postgres_interval_cast_expression(field_name, old_field)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE INTERVAL USING $cast_expression;""")
+    elseif new_field isa sBinaryField
+      # Only emit the TYPE change when the type actually moved. `max_length` alone lands in this
+      # block too (it is in the trigger list above), and a redundant `TYPE bytea USING …` would
+      # rewrite the whole table for nothing.
+      if :type in colect_not_equal
+        cast_expression = _postgres_bytea_cast_expression(field_name, old_field)
+        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE bytea USING $cast_expression;""")
+      end
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE $(_get_column_type(new_field, conn));""")
     end
@@ -868,6 +966,11 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # integer field (see the DROP counterpart above for the rationale and ordering).
   if :type in colect_not_equal && new_needs_check && !old_needs_check
     push!(sql_statements, """ALTER TABLE "$table_name" ADD $(_non_negative_check_clause(field_name));""")
+  end
+
+  # Add the byte-length CHECK after the type change, mirroring the DROP above (#296).
+  if byte_bound_changed && new_byte_bound !== nothing
+    push!(sql_statements, """ALTER TABLE "$table_name" ADD $(_byte_length_check_clause(field_name, new_byte_bound, conn));""")
   end
 
   # Set NOT NULL if specified
@@ -894,7 +997,7 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # Set default value if specified
   if :default in colect_not_equal
     if new_field.default !== nothing
-      default_value = _format_default_sql_value(new_field.default)
+      default_value = _format_default_sql_value(new_field.default, conn)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" SET DEFAULT $default_value;""")
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" DROP DEFAULT;""")
@@ -991,10 +1094,32 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   # INSERT simply doesn't mention it.
   # Physical column names (db_column when set) — both old and new tables use these,
   # so the column-aligned copy stays correct for db_column-mapped fields (#50).
-  model_cols = [field_db_column(f, string(k)) for (k, f) in model.fields]
-  cols_joined = join(["\"$c\"" for c in model_cols], ", ")
+  #
+  # The INSERT targets and the SELECT expressions are built in ONE pass so they cannot drift out of
+  # alignment — this is a positional column-to-column copy, and a mismatch would silently write
+  # every value into the wrong column.
+  #
+  # BinaryField columns are cast on the SELECT side (#296). A `BLOB`-declared column has BLOB
+  # affinity, which means *no* affinity — SQLite converts nothing on insert, so a plain copy would
+  # leave pre-migration rows with storage class TEXT while new writes land as BLOB. SQLite.jl infers
+  # a result column's Julia type from the first non-NULL row, so that mixed column reads back
+  # inconsistently: whichever class comes first wins and the rest are coerced through the wrong
+  # accessor (`sqlite3_column_text` on a blob truncates at the first 0x00).
+  #
+  # `CAST(x AS BLOB)` converts TEXT to its UTF-8 bytes — the same reinterpretation PostgreSQL's
+  # `convert_to(col,'UTF8')` applies — and is a no-op on a value that is already a blob, so this
+  # stays correct on every subsequent rebuild.
+  insert_cols = String[]
+  select_exprs = String[]
+  for (k, f) in model.fields
+    col = field_db_column(f, string(k))
+    push!(insert_cols, "\"$col\"")
+    push!(select_exprs, f isa sBinaryField ? "CAST(\"$col\" AS BLOB)" : "\"$col\"")
+  end
+  cols_joined = join(insert_cols, ", ")
+  select_joined = join(select_exprs, ", ")
 
-  insert_sql = """INSERT INTO "$new_table_name" ($cols_joined) SELECT $cols_joined FROM "$table_name";"""
+  insert_sql = """INSERT INTO "$new_table_name" ($cols_joined) SELECT $select_joined FROM "$table_name";"""
 
   return """DROP TABLE IF EXISTS "$new_table_name";
 $create_sql;

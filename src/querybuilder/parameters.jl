@@ -157,6 +157,33 @@ function add_parameter!(sq::PormGSQLiteParam, value; contains::Bool=false, opera
   return "?"  # SQLite positional style
 end
 
+# --- Binary payloads (#296) ---
+# A `PormGBytes` is one opaque blob, never a list of values, so these must beat the
+# `::AbstractArray` methods above — and they do, since `PormGBytes` is not an array at all.
+# Without them a binary value takes the array path and is silently mangled on both backends;
+# see the `PormGBytes` docstring in `Kernel.jl` for what each one does wrong.
+#
+# LibPQ binds every parameter in text format and offers no binary-parameter API, so the wire
+# form here is PostgreSQL's hex input syntax (`\x0102`). The server infers `bytea` from the
+# target column, `byteain` hex-decodes it, and the bytes land intact — including `0x00`, which
+# could never survive as a raw String parameter because LibPQ passes a NUL-terminated C string.
+function add_parameter!(pq::PormGPostgresParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  contains && throw(FilterError("Contains option is not supported for binary parameters"))
+  pq.parameter_count += 1
+  push!(pq.parameters, "\\x" * bytes2hex(value.bytes))
+  return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
+end
+
+# SQLite binds a `Vector{UInt8}` natively via sqlite3_bind_blob, so the bytes pass through
+# unwrapped. Unwrapping here is load-bearing: SQLite.jl's `bind!(::Any)` fallback silently
+# *Julia-serializes* an unrecognized value into a BLOB rather than raising, so a `PormGBytes`
+# that reached the driver would be stored as a serialized Julia object.
+function add_parameter!(sq::PormGSQLiteParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  contains && throw(FilterError("Contains option is not supported for binary parameters"))
+  push!(_current_bucket(sq), value.bytes)
+  return "?"
+end
+
 # --- SQLInstruction convenience (works for both backends) ---
 add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) = add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
 

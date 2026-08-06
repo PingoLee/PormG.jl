@@ -122,6 +122,14 @@ function _is_json_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("JSON", "JSONB")
 end
 
+# Keyed on the STRUCT, not on `f_meta.type`, unlike every predicate above (#296). `ImageField` and
+# `FileField` also carry `type == "BLOB"` — they are `sImageField` and store a filesystem *path* as
+# text — so a `type`-based test would route their string values into the byte validator and reject
+# them. `sBinaryField` is the only struct that actually holds bytes.
+function _is_binary_field(f_meta)::Bool
+    return f_meta isa sBinaryField
+end
+
 function _string_uses_scientific_notation(value::AbstractString)::Bool
     return occursin(r"^[+-]?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+$", strip(value))
 end
@@ -349,6 +357,23 @@ function _validate_json_value(model::PormGModel, field::String, value::Any, oper
     end
 end
 
+function _validate_binary_value(model::PormGModel, field::String, value::Any, operation::String)
+    # Raw bytes, or a String taken as its UTF-8 code units (#296). The string form is what keeps a
+    # column that used to render as TEXT writable without an app edit, and it agrees byte-for-byte
+    # with the `convert_to(col, 'UTF8')` cast the PostgreSQL migration applies to the old data.
+    if value isa AbstractVector{UInt8} || value isa AbstractString
+        return true
+    end
+    _type_mismatch_error(operation, model, field, value, "raw bytes (Vector{UInt8}) or a String stored as its UTF-8 code units";
+                         suggestion="for a hex or Base64 string, decode it first with hex2bytes(s) or base64decode(s)")
+end
+
+# Byte count for a BinaryField value, matching what the DDL CHECK measures on each backend.
+# `ncodeunits` is the UTF-8 byte length of a String — deliberately NOT `length`, which counts
+# characters and was the pre-#296 behavior this fixes.
+_binary_byte_length(value::AbstractVector{UInt8})::Int = length(value)
+_binary_byte_length(value::AbstractString)::Int = ncodeunits(value)
+
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])
         _validation_error(operation, model, field, "many-to-many relations are not physical columns"; suggestion="use the many-to-many manager add, remove, clear, or set methods")
@@ -399,11 +424,23 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
         _validate_uuid_value(model, field, value, operation)
     elseif _is_json_field(f_meta)
         _validate_json_value(model, field, value, operation)
+    elseif _is_binary_field(f_meta)
+        _validate_binary_value(model, field, value, operation)
     end
-    
-    # 6. Max length validation (Strings). A CharField with no max_length (nothing) is
+
+    # 6. Max length validation.
+    #
+    #    For a BinaryField the bound is a BYTE count (#296), and it applies to byte vectors too —
+    #    the AbstractString-only branch below would let a Vector{UInt8} past unchecked and would
+    #    measure a String in characters, neither of which matches the DDL CHECK the column carries.
+    if _is_binary_field(f_meta) && f_meta.max_length !== nothing
+        byte_length = _binary_byte_length(value)
+        if byte_length > f_meta.max_length
+            _validation_error(operation, model, field, "max_length is $(f_meta.max_length) bytes, but the provided value is $(byte_length) bytes")
+        end
+    #    For text fields it is a CHARACTER count. A CharField with no max_length (nothing) is
     #    unlimited (TEXT), so skip the check rather than comparing length against nothing.
-    if hasfield(typeof(f_meta), :max_length) && isa(value, AbstractString) && f_meta.max_length !== nothing
+    elseif hasfield(typeof(f_meta), :max_length) && isa(value, AbstractString) && f_meta.max_length !== nothing
         if length(value) > f_meta.max_length
             _validation_error(operation, model, field, "max_length is $(f_meta.max_length), but the provided value has length $(length(value))")
         end

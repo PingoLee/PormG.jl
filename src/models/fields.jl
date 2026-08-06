@@ -13,6 +13,35 @@
 # FieldValidationError so the whole constructor surface reports one category.
 _fielderr(msg::AbstractString) = FieldValidationError(msg)
 
+# ── BinaryField `default=` helpers (#296) ───────────────────────────────────
+# `_binary_default_bytes` is handed to `validate_default`, which only calls it when the value is
+# not already `Union{Vector{UInt8}, Nothing}` — so it normalizes the other byte-vector spellings
+# (`codeunits`, reinterpreted buffers, views) into a plain `Vector{UInt8}`. It must throw rather
+# than return a wrong type: `validate_default` does not re-check its converter's result, and
+# before #296 that hole let a `Vector{UInt8}` through into a `Union{String,Nothing}` field,
+# surfacing as a raw `MethodError` outside the error taxonomy.
+#
+# `BinaryField` rejects non-byte defaults itself, before calling `validate_default`, so that this
+# message survives — `validate_default`'s bare `catch` would otherwise replace it.
+# Composes the MESSAGE, not the exception: the call sites throw `_fielderr(...)` themselves, which
+# is the convention `test_docs_error_type_drift.jl` pins — a helper that merely maps a message to a
+# type is an alias, not an abstraction, and hiding the `throw` inside invites the mirror-image
+# mistake at a returning funnel.
+function _binary_default_message(value)::String
+  # A String gets the extra sentence: it is the near-miss worth explaining, because the write path
+  # DOES accept one and the two plausible readings (its own bytes vs. a decoded encoding) disagree.
+  hint = value isa AbstractString ?
+    " A String is not accepted here because its meaning is ambiguous — pass " *
+    "`Vector{UInt8}(codeunits(s))` for the text's own bytes, or `hex2bytes(s)` / " *
+    "`base64decode(s)` to store the decoded payload." : ""
+  return "BinaryField: 'default' must be a Vector{UInt8} or nothing, got $(typeof(value)).$hint"
+end
+
+function _binary_default_bytes(value)
+  value isa AbstractVector{UInt8} && return collect(UInt8, value)
+  throw(_fielderr(_binary_default_message(value)))
+end
+
 # ── Common keyword handling (#260) ──────────────────────────────────────────
 # Every field constructor used to open with the same four blocks copy-pasted: an `accepted` Set, an
 # unexpected-keyword `@warn` loop, a `get(kwargs, :x, default)` per keyword, and a type guard per
@@ -2291,7 +2320,7 @@ mutable struct sBinaryField <: PormGField
   null::Bool
   db_index::Bool
   db_column::Union{String, Nothing}
-  default::Union{String, Nothing}
+  default::Union{Vector{UInt8}, Nothing}
   editable::Bool
   type::String
   formatter::Function
@@ -2301,32 +2330,50 @@ end
 """
     BinaryField(; max_length = nothing, kwargs...)
 
-A column intended for binary payloads.
+A column for raw binary payloads — images, compressed blobs, encrypted content.
 
-!!! warning "Incomplete — verify before relying on it"
-    Measured against the current code, not the intent:
+**Database Type**: `BYTEA` on PostgreSQL, `BLOB` on SQLite.
 
-    - It renders as **`TEXT` on both PostgreSQL and SQLite**, not `BYTEA`/`BLOB` — `_get_column_type`
-      (`Dialect.jl`) has no `sBinaryField` branch, so it reaches the `else` fallthrough.
-    - **`default=` cannot be used.** Every non-`nothing` value raises: a `String` (even valid
-      Base64) fails validation, and a `Vector{UInt8}` cannot be stored in the field's
-      `Union{String,Nothing}`.
-    - `max_length` never reaches the DDL — the column is unbounded `TEXT`. It *is* enforced on the
-      write path, but as a **character** count on `AbstractString` values (the check is
-      `hasfield`-gated, not type-gated); a `Vector{UInt8}` bypasses it entirely.
+Values are **raw bytes in and raw bytes out**: write a `Vector{UInt8}` and read a `Vector{UInt8}`
+back. Arbitrary byte sequences round-trip intact, including `0x00` and payloads that are not valid
+UTF-8.
 
-    Prefer `TextField`/`CharField` with your own encoding until these are fixed. Documented here
-    rather than left silent because `docs/src/fields.md` advertises the `BYTEA` behavior.
+An `AbstractString` is also accepted on write and stored as its **UTF-8 code units** — the form
+that keeps a column which used to be `TEXT` writable without an app edit. To store the *decoded*
+bytes of an encoded string, decode it yourself: `hex2bytes(s)`, `base64decode(s)`.
+
+# Keyword Arguments
+- `max_length::Union{Int, Nothing} = nothing`: maximum payload size in **bytes** (not characters).
+  Enforced both before the query is built and by a `CHECK` constraint in the DDL —
+  `octet_length` on PostgreSQL, `length` on SQLite. `nothing` means unbounded.
+- `default::Union{Vector{UInt8}, Nothing} = nothing`: rendered into the DDL as a byte literal
+  (`'\\x…'::bytea` / `X'…'`). Must be a `Vector{UInt8}`; a `String` raises
+  `FieldValidationError` rather than guessing whether you meant its code units or a decoded
+  encoding. Keep it small — it is written verbatim into generated model files.
+- Plus the common field kwargs: `verbose_name`, `unique`, `blank`, `null`, `db_index`,
+  `db_column`, `editable`.
 
 # Examples
 ```julia
 Technical_document = Models.Model("technical_document",
   id        = Models.IDField(),
   name      = Models.CharField(max_length = 200),
-  file_data = Models.BinaryField(),          # renders TEXT today
+  file_data = Models.BinaryField(max_length = 5_000_000),   # BYTEA / BLOB, ≤ 5 MB
   mime_type = Models.CharField(max_length = 100),
 )
+
+Technical_document.objects.create(
+  "name"      => "2024 Monza aero package",
+  "file_data" => read("aero.pdf"),      # Vector{UInt8}
+  "mime_type" => "application/pdf",
+)
 ```
+
+!!! note "SQLite reads a blob written by another Julia process"
+    SQLite.jl stores unrecognized Julia values by serializing them into a BLOB, and its reader
+    deserializes any blob carrying that serialization header. A payload PormG wrote is returned
+    verbatim; one written by a different Julia program via `sqlserialize` may come back as the
+    original object instead of bytes. Inherent to the driver, not to PormG.
 
 See also [`FileField`](@ref), [`TextField`](@ref), [`CharField`](@ref).
 """
@@ -2337,8 +2384,20 @@ function BinaryField(; kwargs...)
   default = get(kwargs, :default, nothing)
   max_length = get(kwargs, :max_length, nothing)
 
-  # Validate default
-  default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", x -> Base64.decode(x))
+  # Validate default (#296). The reject case is checked HERE rather than left to
+  # `validate_default`, whose bare `catch` discards the converter's exception and substitutes a
+  # generic "Expected type: …" message — the same reason UUIDField and JSONField pre-check their
+  # string defaults. `validate_default` still runs, to normalize the other byte-vector spellings
+  # (`codeunits`, reinterpreted buffers, views) into a plain `Vector{UInt8}`.
+  #
+  # A String is rejected on purpose, even though the WRITE path accepts one as UTF-8 code units:
+  # here the caller is defining a model, and `default = "0102"` is far more likely to mean the two
+  # bytes `0x01 0x02` than the four characters. Guessing either way silently writes the wrong
+  # DEFAULT into the schema, so name the two decodings instead.
+  if !(default isa Union{Nothing, AbstractVector{UInt8}})
+    throw(_fielderr(_binary_default_message(default)))
+  end
+  default = validate_default(default, Union{Vector{UInt8}, Nothing}, "BinaryField", _binary_default_bytes)
   if max_length isa AbstractString
     if occursin(r"\d+", max_length)
       max_length = validate_default(max_length, Int, "BinaryField", format2int64)
@@ -2362,8 +2421,12 @@ function BinaryField(; kwargs...)
     db_column,
     default,
     editable,
+    # The canonical (SQLite) spelling. Each backend's reverse type map translates it —
+    # `sqlite_type_map_reverse["BLOB"] == "BLOB"`, `postgres_type_map_reverse["BLOB"] == "bytea"` —
+    # the same way "TIMESTAMPTZ" becomes DATETIME on SQLite. Keeping one canonical string is what
+    # lets the migration planner diff two BinaryFields without knowing the backend.
     "BLOB",
-    format_text_sql,
+    format_binary_sql,
     max_length
   )
 end

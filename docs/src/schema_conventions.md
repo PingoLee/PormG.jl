@@ -47,6 +47,22 @@ Models.Model("Driver_Profile", driverid = Models.IDField())
     `"Driver_Profile"` — two different tables on PostgreSQL. An explicit `db_table` option is
     [issue #59](https://github.com/PingoLee/PormG.jl/issues/59).
 
+A positional name given with a **leading underscore** is rejected the same way, and for a related
+reason (#306): a `ForeignKey` targeting the model renders its `REFERENCES` through
+`format_model_name`, which strips one leading underscore as the reserved-word escape hatch borrowed
+from field-name handling — but the table itself is created with the name as stored. `Model("_order",
+…)` would create table `_order` while a foreign key pointing at it referenced `order` instead:
+
+```julia
+Models.Model("_order", id = Models.IDField())
+# ModelDefinitionError: The model name '_order' starts with '_'; …
+```
+
+Unlike a field name, a positional model name is a plain string — never a Julia kwarg key — so it
+never needed the underscore escape hatch in the first place. That escape hatch is real for *field*
+names (`_end = ...` declares column `end`, documented on `Model`'s docstring) — it just does not
+extend to the model name itself.
+
 ### `django_prefix` interop
 
 A connection may set `django_prefix` in its `connection.yml` (default: unset). It is a convenience

@@ -555,28 +555,74 @@ function format_model_name(name::PormGModel)::String
   return name.name |> format_model_name
 end
 
-# A POSITIONAL model name must already be lowercase (#300). It is the one identifier in a `Model(...)`
-# call that nothing normalizes: the two callers that FILL `Model_Type.name` run it through
-# `format_model_name` but guard on `attr.name == ""`, so they only ever reach a binding-derived name
-# (`src/Models.jl` `get_all_models`, `src/migrations/planner.jl` `get_all_models`). Field names, by
-# contrast, are normalized by `format_fild_name` inside the constructor itself. Left unchecked, a
-# mixed-case name SPLITS the schema — `makemigrations` lowercases it into the DDL while the query
-# builder quotes it as declared — so the model migrates one table and then queries another: silent on
-# SQLite, fatal on PostgreSQL.
+# A POSITIONAL model name must already be lowercase (#300) and must not start with '_' (#306). It is
+# the one identifier in a `Model(...)` call that nothing normalizes: the two callers that FILL
+# `Model_Type.name` run it through `format_model_name` but guard on `attr.name == ""`, so they only
+# ever reach a binding-derived name (`src/Models.jl` `get_all_models`, `src/migrations/planner.jl`
+# `get_all_models`). Field names, by contrast, are normalized by `format_fild_name` inside the
+# constructor itself.
 #
-# Scope: this checks CASE only. It is NOT `format_model_name`, whose other callers re-normalize the
-# STORED name at render time (FK `REFERENCES`, model-reference comparison), and it applies no
-# identifier-shape validation — a reserved word or a name with a space still renders invalid bare DDL.
+# Left unchecked, a mixed-case name SPLITS the schema — `makemigrations` lowercases it into the DDL
+# while the query builder quotes it as declared — so the model migrates one table and then queries
+# another: silent on SQLite, fatal on PostgreSQL (#300).
 #
-# Reject rather than fold. PormG has no model-level `db_table` yet (#59), so quietly lowercasing would
-# discard a stated intent with no way to express it and no signal that it happened.
+# A leading underscore splits it differently: `format_model_name` (used to render an FK `REFERENCES`
+# target and to resolve a model reference by name) strips ONE leading underscore, inherited from
+# `format_fild_name`'s reserved-word escape hatch for FIELD names — but `create_table` writes the
+# stored name as-is. So `Model("_order", …)` creates table `_order` while a `ForeignKey` pointing at
+# it renders `REFERENCES "order"` — a different table, or a failed constraint if `order` doesn't
+# exist (#306). Unlike field names, a positional model name is a plain string literal, never a Julia
+# kwarg key, so it never had a syntactic reason to need that escape hatch in the first place — nothing
+# legitimate is lost by rejecting it.
+#
+# Scope: this checks CASE and a LEADING UNDERSCORE only. It is NOT `format_model_name`, whose other
+# callers re-normalize the STORED name at render time (FK `REFERENCES`, model-reference comparison),
+# and it applies no other identifier-shape validation — a reserved word or a name with a space still
+# renders invalid bare DDL.
+#
+# Reject rather than fold, in both cases. PormG has no model-level `db_table` yet (#59), so quietly
+# lowercasing or stripping would discard a stated intent with no way to express it and no signal that
+# it happened.
+#
+# Two message-accuracy subtleties, both about the SUGGESTED spelling rather than the rejection itself
+# (found on independent review of this fix):
+#
+# 1. A name can fail BOTH checks (`"_Driver_Scratch"`). If the case message suggested only
+#    `lowercase(name)`, that suggestion would still start with '_' and fail again on retry. `hint`
+#    below is computed underscore-aware so whichever check fires first, "Declare it as" already names
+#    a spelling that passes both.
+# 2. `format_model_name`/`format_fild_name` strip exactly ONE leading underscore, then reject if a
+#    second one remains (`^_` in `format_fild_name`'s own regex) — so a name with 2+ leading
+#    underscores, or a bare `"_"`, would not actually reach the "creates X, references Y" split this
+#    guard warns about: `format_model_name` would itself raise a different, unrelated error first.
+#    Claiming the split for those names would be describing behavior that can't happen, so they get a
+#    narrower message with no specific "declare it as" spelling instead of an unusable
+#    `"Declare it as ''."` (an all-underscore name strips to the empty string).
 function _validate_positional_model_name(name::AbstractString)::Nothing
-  name == lowercase(name) && return nothing
-  throw(ModelDefinitionError(
-    "The model name '$(name)' must be lowercase; PormG lowercases table names when generating DDL " *
-    "but quotes them as declared in queries, so this model would migrate the table " *
-    "'$(lowercase(name))' and then query '$(name)'. Declare it as '$(lowercase(name))'. " *
-    "Mapping a model to a fixed mixed-case table is issue #59."))
+  if startswith(name, "_") && (length(name) < 2 || name[2] == '_')
+    throw(ModelDefinitionError(
+      "The model name '$(name)' starts with '_'; PormG does not support a leading underscore in a " *
+      "model name — unlike a field name, where exactly one is the reserved-word escape hatch " *
+      "(`_end` declares column `end`). Remove the leading underscore(s)."))
+  end
+  hint = startswith(name, "_") ? lowercase(name[2:end]) : lowercase(name)
+  if name != lowercase(name)
+    throw(ModelDefinitionError(
+      "The model name '$(name)' must be lowercase; PormG lowercases table names when generating DDL " *
+      "but quotes them as declared in queries, so this model would migrate the table " *
+      "'$(lowercase(name))' and then query '$(name)'. Declare it as '$(hint)'. " *
+      "Mapping a model to a fixed mixed-case table is issue #59."))
+  end
+  if startswith(name, "_")
+    throw(ModelDefinitionError(
+      "The model name '$(name)' starts with '_'; a leading underscore is the escape hatch for FIELD " *
+      "names colliding with a reserved word, not model names. PormG's foreign-key REFERENCES target " *
+      "strips a leading underscore (format_model_name) but the table this creates keeps it verbatim, " *
+      "so this model would create table '$(name)' while a foreign key pointing at it references " *
+      "'$(hint)' instead — a different table if one exists, a failed constraint if it doesn't. " *
+      "Declare it as '$(hint)'."))
+  end
+  return nothing
 end
 
 # Physical SQL column for a field given its declared identity `name` (#50). Returns
@@ -837,7 +883,7 @@ module. Both forms are idiomatic and `Race = Model(...)` and `Race = Model("race
 same table, because a binding-derived name is lowercased as it is filled in. Reach for the
 positional form when the binding name is not the table name you want.
 
-!!! warning "A positional name must be lowercase"
+!!! warning "A positional name must be lowercase and may not start with '_'"
     `Model("Driver_Profile", …)` raises `ModelDefinitionError`. A positional name is stored
     **verbatim**, and the two groups of consumers disagree about case: `makemigrations` lowercases it
     into the DDL, while the query builder quotes it as declared. Left unchecked, that model migrated
@@ -846,14 +892,22 @@ positional form when the binding name is not the table name you want.
     is case-sensitive, as it is on PostgreSQL. Rejecting the name at declaration (#300) turns that
     silent production failure into an error you get at load time.
 
+    `Model("_order", …)` raises the same error, for a related reason (#306): a foreign key that
+    targets the model renders its `REFERENCES` through `format_model_name`, which strips a leading
+    underscore — but `create_table` writes the stored name as-is. So the model would create table
+    `_order` while any `ForeignKey` pointing at it referenced `order` instead — a different table, or
+    a failed constraint. Unlike a field name, a positional model name is a plain string, never a
+    Julia kwarg key, so it never needed the leading-underscore escape hatch described below.
+
     Mapping a model to a fixed mixed-case table is
     [issue #59](https://github.com/PingoLee/PormG.jl/issues/59); until it lands, declare table names
-    in lowercase.
+    in lowercase, without a leading underscore.
 
 **Field names keep the case you declare** and are case-sensitive in queries, so a legacy `driverId`
 column is addressed as `driverId`. One leading underscore is stripped as the escape hatch for names
-that are Julia keywords or SQL reserved words (`_end = ...` declares the column `end`); a name
-containing `__` is rejected, since that is the lookup separator.
+that are Julia keywords or SQL reserved words (`_end = ...` declares the column `end`) — this applies
+to field names only, not the model name above; a name containing `__` is rejected, since that is the
+lookup separator.
 
 A `ManyToManyField` is stored on the model but owns no column of its own, so it is absent from
 `field_names` and from the created table.

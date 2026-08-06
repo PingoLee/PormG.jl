@@ -72,7 +72,7 @@ function import_models_from_sqlite(db::String = "db";
   # Collect all create instructions
   Instructions::Vector{Any} = []
   for model in models_array
-    push!(Instructions, Models.Model_to_str(model, settings))
+    push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true))
   end
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
@@ -142,7 +142,7 @@ function import_models_from_postgres(db::String;
   # Convert each model to string representation
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model, settings))
+      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true))
   end
   
   # Generate the models file
@@ -180,7 +180,7 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   # Convert each model to string representation
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model, settings))
+      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true))
   end
   
   # Generate the models file

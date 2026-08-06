@@ -54,9 +54,9 @@ function _build_cjoin_on_row_join(config::Dict{String,Any}, join_path::String, i
   target_model = getfield(instruct.object.model._module, Symbol(config["target_model"]::String))::PormGModel
   user_alias = config["user_alias"]::String
   row_join = Dict{String,Union{String,Vector{FilterType}}}(
-    "a"         => instruct.object.model.name,
+    "a"         => Models.model_table_name(instruct.object.model),
     "alias_a"   => instruct.alias,
-    "b"         => target_model.name,
+    "b"         => Models.model_table_name(target_model),
     "alias_b"   => user_alias,
     "key_a"     => user_alias,   # dedup discriminator (never rendered for no_anchor)
     "key_b"     => "",
@@ -158,7 +158,9 @@ function _insert_many_to_many_joins(
   related_row["a"] = relation.through_model
   related_row["alias_a"] = through_alias
   related_row["key_a"] = relation.related_column
-  related_row["b"] = relation.related_model
+  # The related side's PHYSICAL table (db_table when set, #59). `relation.related_model` carries the
+  # LOGICAL name, which is what identifies the model — but this slot is rendered as a table.
+  related_row["b"] = Models.model_table_name(related_model)
   related_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
   related_row["key_b"] = Models.model_column(related_model, relation.related_pk)
   related_row["how"] = join_type
@@ -171,6 +173,16 @@ function _row_join_for_alias(row_join::Vector{Dict{String, Union{String, Vector{
     row["alias_b"] == alias && return row
   end
   error(_emsg("PormG internal error: join alias $(alias) was not found in row_join — this should not happen; please report it."))
+end
+
+# Physical table for a REVERSE join target (#59). The reverse path reaches its target through
+# `related_objects`, which stores the model's LOGICAL name — so the resolved model is the only place
+# a `db_table` can be read from, and it must win. Without an override this reproduces the previous
+# derivation byte for byte, including the `django_prefix` arm: a prefixed deployment's physical table
+# IS `<prefix>_<logical>`, which no model declares as `db_table`.
+function _reverse_join_table(reverse_model::PormGModel, logical_name::AbstractString, django)::String
+  Models.model_has_db_table(reverse_model) && return Models.model_table_name(reverse_model)
+  return django !== nothing ? string(django, lowercase(logical_name)) : lowercase(logical_name)
 end
 
 # Shared helper used at the four sites in `_build_row_join` where a many-to-many
@@ -279,7 +291,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         available = join(collect(keys(cte_model.fields)), ", ")
         throw(UnknownFieldError("CTE field '$(vector[2])' not found in '$(cte_name)'; available fields: $(available)"))
       end
-      row_join["a"] = instruct.object.model.name
+      row_join["a"] = Models.model_table_name(instruct.object.model)
       row_join["alias_a"] = instruct.alias
       row_join["b"] = cte_name  # CTE name becomes the table name
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -321,7 +333,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
       # Set up the join with the CTE
-      row_join["a"] = instruct.object.model.name
+      row_join["a"] = Models.model_table_name(instruct.object.model)
 
       row_join["b"] = cte_name  # CTE name becomes the table name
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
@@ -342,12 +354,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   elseif haskey(instruct.object.model.fields, first_column) && Models.is_many_to_many_field(instruct.object.model.fields[first_column])
     relation = Models.get_many_to_many_relation(instruct.object.model, first_column)
     tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-      relation, instruct, instruct.object.model.name, instruct.alias, join_path, vector
+      relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias, join_path, vector
     )
     foreign_table_name = foreign_model
     m2m_inserted = true
   elseif first_column in instruct.object.model.field_names || _get_join_field(instruct.object, join_path) !== nothing
-    row_join["a"] = instruct.object.model.name
+    row_join["a"] = Models.model_table_name(instruct.object.model)
     row_join["alias_a"] = instruct.alias
     # @pormg_debug
     first_field = _get_join_field(instruct.object, join_path) !== nothing ? _get_join_field(instruct.object, join_path) : instruct.object.model.fields[first_column]
@@ -357,7 +369,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if foreign_table_name === nothing
       throw(QueryBuildError("Invalid field path: the column $(first_column) does not have a foreign key"))
     elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = foreign_table_name.name
+      row_join["b"] = Models.model_table_name(foreign_table_name)
       size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
     else
       row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
@@ -373,7 +385,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if related_object isa Models.ManyToManyRelation
       relation = related_object::Models.ManyToManyRelation
       tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-        relation, instruct, instruct.object.model.name, instruct.alias, join_path, vector; reverse=true
+        relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias, join_path, vector; reverse=true
       )
       foreign_table_name = foreign_model
       m2m_inserted = true
@@ -383,7 +395,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     reverse_model = getfield(foreing_table_module, s_model)
     length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
-    row_join["a"] = instruct.object.model.name
+    row_join["a"] = Models.model_table_name(instruct.object.model)
     row_join["alias_a"] = instruct.alias
     join_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]
     row_join["how"] = _determine_join_type(join_field, second_fild_name= vector[2])
@@ -391,7 +403,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # After `|> String`, foreign_table_name is always a String — the old `=== nothing` and
     # `isa PormGModel` arms were type-impossible dead code (removed in the #197 review pass).
     foreign_table_name = instruct.object.model.related_objects[vector[1]][3] |> String
-    row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
+    row_join["b"] = _reverse_join_table(reverse_model, foreign_table_name, instruct.django)
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     # Reverse join: key_a is the parent's referenced column, key_b the child's FK
@@ -466,7 +478,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         # #197: this used to blame `vector[2]`, but the FK-less column is `first_column`.
         throw(QueryBuildError("Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target"))
       elseif isa(foreign_table_name, PormGModel)
-        row_join["b"] = foreign_table_name.name
+        row_join["b"] = Models.model_table_name(foreign_table_name)
         size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
       else
         row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
@@ -498,7 +510,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       # After `|> String`, foreign_table_name is always a String — the old `=== nothing` and
       # `isa PormGModel` arms were type-impossible dead code (removed in the #197 review pass).
       foreign_table_name = new_object.related_objects[vector[1]][3] |> String
-      row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
+      row_join["b"] = _reverse_join_table(reverse_model, foreign_table_name, instruct.django)
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
       # Reverse join: key_a is the parent's referenced column, key_b the child's FK

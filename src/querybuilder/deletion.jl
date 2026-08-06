@@ -515,7 +515,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     isempty(objct.object.filter) || throw(QueryBuildError("Delete on keyless model $(model.name) with filters is not supported; define a primary key or delete all rows explicitly"))
 
     deleted_counter[model.name] = show_query === :execute ? (objct |> _count) : 0
-    sql = "DELETE FROM $(model.name |> lowercase)"
+    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection))"
 
     if show_query !== :execute
       return _show_query_result(show_query, sql, connection, model, :delete, parameters=nothing)
@@ -538,7 +538,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
   sql::String = ""
   if size(keys, 1) == 1
     deleted_counter[model.name] = show_query === :execute ? (keys[1][:objct] |> _count) : 0
-    sql = "DELETE FROM $(model.name |> lowercase) WHERE $(join(_where, " OR "))"
+    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE $(join(_where, " OR "))"
   else
     # Multi-path merge: all entries for the same model share the same resolved key field.
     # Keyless (sentinel) models reaching this path are not supported.
@@ -556,7 +556,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     deleted_counter[model.name] = show_query === :execute ? (_query |> _count) : 0
     _query.values(pk_field) # Ensure the query is built
     @pormg_debug false
-    sql = "DELETE FROM $(model.name |> lowercase) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
+    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
   end
 
   sql == "" && error(_emsg("PormG internal error in delete(): the generated SQL is empty — this should not happen; please report it."))
@@ -578,7 +578,7 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
   # SET column and outer WHERE key both target the physical column (db_column) — #50.
-  sql = "UPDATE $(model.name |> lowercase) SET \"$(Models.model_column(model, field))\" = $(value_sql) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
+  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET \"$(Models.model_column(model, field))\" = $(value_sql) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

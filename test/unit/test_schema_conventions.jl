@@ -35,14 +35,26 @@ _fk_ddl(; fk_kw...) = PormG.Dialect.create_table(MockSLConv(),
     # in the DDL — but it is now guaranteed at declaration instead of by folding downstream.
     @testset "Table name is the model name, verbatim and unpluralized" begin
         ddl = PormG.Dialect.create_table(MockSLConv(), Models.Model("driver", driverid = Models.IDField()))
-        @test occursin("CREATE TABLE IF NOT EXISTS driver (", ddl)
+        # QUOTED since #59: `create_table` used to write the table identifier bare, which was
+        # indistinguishable from this while every table name was lowercase — but an unquoted
+        # mixed-case `db_table` would fold to lowercase on PostgreSQL and split the DDL from every
+        # (already-quoted) query-side site. The CONVENTION under freeze here is the NAME — verbatim,
+        # unpluralized — not the quoting style, which is now uniform with column identifiers.
+        @test occursin("CREATE TABLE IF NOT EXISTS \"driver\" (", ddl)
         @test !occursin("drivers", ddl)   # no pluralization, no Inflector
     end
 
     # The other half of the same convention, post-#300: a name that WOULD have needed folding is a
-    # declaration-time error rather than a schema that half-works.
+    # declaration-time error rather than a schema that half-works. Since #59 the escape valve is
+    # `db_table`, which carries the physical spelling while the positional name stays logical.
     @testset "A non-lowercase positional name is rejected (#300)" begin
         @test_throws PormG.ModelDefinitionError Models.Model("Driver", driverid = Models.IDField())
+
+        # …and `db_table` is how that intent is expressed instead (#59): one declaration, one table,
+        # spelled exactly as given.
+        pinned = Models.Model("driver_legacy", db_table = "Driver_Legacy", driverid = Models.IDField())
+        @test occursin("CREATE TABLE IF NOT EXISTS \"Driver_Legacy\" (",
+                       PormG.Dialect.create_table(MockSLConv(), pinned))
     end
 
     # FK column = the declared field name, verbatim. PormG never appends `_id` (that is the Django

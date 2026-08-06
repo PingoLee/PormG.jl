@@ -204,7 +204,7 @@ function query(q::SQLObjectHandler;
   end
   
   # Quote table name and alias to prevent SQL injection
-  safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)  
   
   io = IOBuffer()
@@ -385,7 +385,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
   
   # Quote table name and alias to prevent SQL injection
-  safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
   
   # Shared FROM / JOIN / WHERE / GROUP BY body for both count forms.
@@ -494,7 +494,7 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     offset_clause = q.object.offset > 0 ? "OFFSET $(q.object.offset)" : ""
     
     # Quote table name and alias to prevent SQL injection
-    safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+    safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
     safe_alias = quote_identifier(instruction.alias, instruction.connection)
     
     sql = """
@@ -632,7 +632,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     _prepare_row_insert!(real_obj, model, settings, connection, parameters)
 
   # construct the SQL statement
-  safe_table_name = safe_table_identifier(string(model.name), connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   sql = """
   INSERT INTO $(safe_table_name) (
     $(join(quoted_field_columns, ", "))
@@ -724,7 +724,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
   quoted_field_columns, param_values, pk_exist, pk_field =
     _prepare_row_insert!(real_obj, model, settings, connection, parameters)
 
-  safe_table_name = safe_table_identifier(string(model.name), connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
 
   # Logical → quoted physical (db_column-aware), exactly as bulk_insert renders its clause.
   qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
@@ -853,7 +853,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     set_context!(parameters, :select)
     quoted_field_columns, param_values, pk_exist, pk_field =
       _prepare_row_insert!(real_obj, model, settings, connection, parameters)
-    safe_table_name = safe_table_identifier(string(model.name), connection)
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
     qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
     clause  = Dialect.on_conflict_clause(:nothing, qtarget, String[], connection)
     sql = """
@@ -928,10 +928,25 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
   return do_goc()
 end
 
+# Escape a value for interpolation inside a single-quoted SQL literal (#59). `db_table` is
+# user-supplied and deliberately not shape-validated, so an embedded `'` would otherwise close the
+# literal early. A no-op for every name that does not contain one.
+_sql_literal(value::AbstractString)::String = replace(String(value), "'" => "''")
+
+# Quote an identifier WITHOUT charset validation (#59) — escape-only, unlike `quote_identifier`,
+# which also rejects anything outside SAFE_IDENTIFIER_PATTERN. For identifiers that come from the
+# database catalog (a `pg_sequences` row) or that PormG constructs itself: they are not user input,
+# and validating them would newly reject legacy names that previously worked.
+_quote_ident_raw(name::AbstractString)::String = "\"$(replace(String(name), "\"" => "\"\""))\""
+
 function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)
+  # `pg_get_serial_sequence` takes TEXT that it re-parses as an identifier, so an unquoted
+  # mixed-case table folds to lowercase and resolves to nothing. Pass the double-quoted form inside
+  # the literal — `'"Db_Table"'` — which is also correct for an all-lowercase name (#59).
+  table_literal = _sql_literal("\"$(replace(Models.model_table_name(model), "\"" => "\"\""))\"")
   sequence_df = fetch(
     connection,
-    "SELECT pg_get_serial_sequence('$(string(model.name))', '$(field)');";
+    "SELECT pg_get_serial_sequence('$(table_literal)', '$(_sql_literal(field))');";
     ignore_tx=ignore_tx,
   ) |> DataFrames.DataFrame
 
@@ -958,7 +973,10 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
       # scan pg_sequences for any sequence whose name starts with the table name.
       seqs_df = fetch(
         connection,
-        "SELECT sequencename FROM pg_sequences WHERE sequencename LIKE '$(string(model.name) |> lowercase)%'";
+        # NOT lowercased (#59): PostgreSQL names the implicit sequence for a quoted `"Db_Table"` as
+        # `Db_Table_id_seq`, and LIKE is case-sensitive — folding here would match nothing and the
+        # sequence would silently never sync. Matches `_fix_sequence_name`'s pattern below.
+        "SELECT sequencename FROM pg_sequences WHERE sequencename LIKE '$(_sql_literal(Models.model_table_name(model)))%'";
         ignore_tx=ignore_tx,
       ) |> DataFrames.DataFrame
       
@@ -967,7 +985,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
     end
 
     safe_field_name = quote_identifier(col, connection)
-    safe_table_name = safe_table_identifier(string(model.name), connection)
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
     fetch(
       connection,
       "SELECT setval('$sequence_name', COALESCE((SELECT MAX($safe_field_name) FROM $safe_table_name), 0) + 1, false)";
@@ -982,14 +1000,24 @@ function _fix_sequence_name(connection::PormGPostgres, model::PormGModel; ignore
   # after an indexing condition, so BoundsError always won and the guard could never fire.
   length(pk_field) == 0 && throw(QueryBuildError("Cannot fix the PK sequence for model $(model.name): the model does not define a primary key."))
   length(pk_field) > 1 && throw(QueryBuildError("Cannot fix the PK sequence for model $(model.name): composite primary keys are not supported here."))
+  # PostgreSQL names a table's implicit sequence after the table itself, so the pattern and the
+  # rename target both follow the RESOLVED physical name (db_table when set, #59). Byte-identical to
+  # the previous `model.name |> lowercase` for every already-lowercase model.
+  table_name = Models.model_table_name(model)
   sequences = fetch(connection, """SELECT *
       FROM pg_sequences
-      WHERE sequencename LIKE '$(model.name |> lowercase)%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame
+      WHERE sequencename LIKE '$(_sql_literal(table_name))%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame
   for (index, row) in enumerate(eachrow(sequences))
-    if index == 1 && row.sequencename != "$(model.name |> lowercase)_$(pk_field[1])_seq"
-      fetch(connection, "ALTER SEQUENCE $(row.sequencename) RENAME TO $(model.name |> lowercase)_$(pk_field[1])_seq;"; ignore_tx=ignore_tx)
+    if index == 1 && row.sequencename != "$(table_name)_$(pk_field[1])_seq"
+      # Both sequence names are IDENTIFIERS, so they are quoted rather than escaped as literals — but
+      # via `_quote_ident_raw`, NOT `quote_identifier`. The latter also *validates* the charset and
+      # throws, which would newly abort this call for a legacy sequence named with a `-`, a space or
+      # a leading digit that previously interpolated bare and worked. `row.sequencename` comes from
+      # the `pg_sequences` catalog, not from user input, so escaping is the correct posture here.
+      new_seq = _quote_ident_raw("$(table_name)_$(pk_field[1])_seq")
+      fetch(connection, "ALTER SEQUENCE $(_quote_ident_raw(row.sequencename)) RENAME TO $(new_seq);"; ignore_tx=ignore_tx)
     else
-      fetch(connection, "DROP SEQUENCE $(row.sequencename);"; ignore_tx=ignore_tx)
+      fetch(connection, "DROP SEQUENCE $(_quote_ident_raw(row.sequencename));"; ignore_tx=ignore_tx)
     end
   end
 end
@@ -1007,8 +1035,10 @@ end
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
   for field in pk_field
     safe_field_name = quote_identifier(Models.model_column(model, field), connection)  # db_column (#50)
-    safe_table_name = safe_table_identifier(string(model.name), connection)
-    safe_table_literal = replace(string(model.name |> lowercase), "'" => "''")
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+    # Matched against `sqlite_sequence.name`, which holds the table's ACTUAL name — so it must be
+    # the resolved physical name (db_table when set, #59), not a fold of the logical one.
+    safe_table_literal = replace(Models.model_table_name(model), "'" => "''")
     max_id_query = "SELECT MAX($(safe_field_name)) as m FROM $(safe_table_name);"
     # Execute query and convert to DataFrame to safely access the result
     df = fetch(connection, max_id_query) |> DataFrames.DataFrame
@@ -1341,7 +1371,7 @@ function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{St
   pk_field_sym = get_model_pk_field(instruction.object.model)
   pk_field_sym === nothing && return nothing
 
-  safe_table_name = safe_table_identifier(instruction.object.model.name, instruction.connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(instruction.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
   quoted_pk = quote_identifier(Models.model_column(instruction.object.model, String(pk_field_sym)), instruction.connection)  # db_column (#50)
 
@@ -1467,7 +1497,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   set_clause = join(set_clause_parts, ", ")   
 
   # Build secure UPDATE SQL with JOIN support
-  safe_table_name = safe_table_identifier(string(model.name), connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   safe_alias = quote_identifier(instruction.alias, connection)
   pk_field_sym = get_model_pk_field(model)
   

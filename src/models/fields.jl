@@ -519,7 +519,12 @@ function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
     to,
     through,
     related_name === nothing ? nothing : String(related_name),
-    db_table === nothing ? nothing : format_model_name(String(db_table)),
+    # Case-PRESERVING (#59): this used to run through `format_model_name`, which silently lowercased
+    # (and stripped a leading underscore from) a user-supplied physical through-table name — the
+    # opposite policy from model-level `db_table`, which carries an arbitrary legacy spelling
+    # verbatim. Both seams express the same intent ("this table is called X"), so they now behave the
+    # same way. Empty-string-as-unset mirrors `_apply_db_table!`.
+    db_table === nothing ? nothing : (isempty(String(db_table)) ? nothing : String(db_table)),
     source_field === nothing ? nothing : format_fild_name(source_field),
     target_field === nothing ? nothing : format_fild_name(target_field),
     "MANYTOMANY",

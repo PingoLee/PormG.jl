@@ -40,6 +40,99 @@ consuming app, `/pormg-cut-release` stamps every entry below with `0.4.0`, dates
 
 ---
 
+## Model-level `db_table`, and DDL now quotes the table identifier (#59)
+
+- **Version**: Unreleased
+- **PormG ref**: #59; `src/Kernel.jl`, `src/Models.jl`, `src/Dialect.jl`, `src/migrations/planner.jl`,
+  `src/querybuilder/{execution,build_joins,deletion,execution_bulk}.jl`, `src/Configuration.jl`,
+  `src/models/fields.jl`, `docs/src/schema_conventions.md`, `docs/src/fields.md`
+- **Recorded**: 2026-08-06
+- **Severity**: **mostly additive**, with two narrow behavior changes — a `ManyToManyField(db_table =
+  …)` that was relying on being silently lowercased, and generated model files for
+  **introspected mixed-case tables**. Neither requires a source edit for a schema that follows the
+  documented lowercase house style.
+
+### What changed
+
+**The feature (additive).** A model can now pin its physical table name:
+
+```julia
+DriverProfile = Models.Model("driver_profile",
+  db_table = "Driver_Profile_Legacy",   # ← the table that actually exists
+  driverid = Models.IDField(),
+)
+```
+
+The positional name stays the lowercase logical identifier; `db_table` carries the physical one,
+**verbatim** — no case fold, no leading-underscore strip. It is authoritative in DDL, in
+`SELECT`/`INSERT`/`UPDATE`/`DELETE`, in `JOIN` targets, in a `ForeignKey`'s `REFERENCES` target, and
+in migration add/drop/rename detection. A model that does not set it derives its table name exactly
+as before, so **no existing schema changes and nothing needs re-migrating**.
+
+This is the escape valve #300 and #306 were built to point at: a positional name that is mixed-case
+or underscore-prefixed is still rejected, and `db_table` is now where that intent goes.
+
+**DDL quotes the table identifier.** `CREATE TABLE IF NOT EXISTS driver (…)` is now
+`CREATE TABLE IF NOT EXISTS "driver" (…)`. Necessary for the feature — an unquoted mixed-case name
+folds to lowercase on PostgreSQL, which would have split the DDL from every (already-quoted)
+query-side site. Semantically identical for a lowercase name on both backends. Only affects code that
+**string-matches generated DDL**; migrations themselves are unchanged in effect.
+
+**`ManyToManyField(db_table = …)` now preserves case.** It previously ran the value through
+`format_model_name`, silently lowercasing it (and stripping a leading underscore) — the opposite
+policy from the new model-level option, for the same user intent. Both now carry the value verbatim.
+
+```julia
+Models.ManyToManyField(Driver, db_table = "Driver_Races")
+# before → through table `driver_races`
+# after  → through table `Driver_Races`
+```
+
+**Generated model files pin an introspected mixed-case table.** `inspectdb` on a table named
+`Driver_Profile` used to generate `Models.Model("driver_profile", …)` — a declaration addressing a
+*different* table than the one it was read from. It now also emits the original spelling:
+
+```julia
+Driver_profile = Models.Model("driver_profile", db_table = "Driver_Profile", …)
+```
+
+**A field named `db_table` must now use the underscore escape hatch.** `db_table` is peeled off
+before the `fields...` slurp (exactly like `constraints`), so it is read as the option:
+
+```julia
+# before — declared a column called `db_table`
+Models.Model("thing", id = Models.IDField(), db_table = Models.CharField())
+# after  → ModelDefinitionError: The 'db_table' option on model 'thing' must be a String or nothing,
+#          got PormG.Models.sCharField
+
+# migrate to the leading-underscore escape hatch — still the column `db_table`:
+Models.Model("thing", id = Models.IDField(), _db_table = Models.CharField())
+```
+
+It fails loudly at load time, never silently. A *table* named `db_table` is unaffected —
+`Models.Model("db_table", …)` needs no change.
+
+### How to find the calls to migrate
+
+```bash
+# 1. M2M through-table overrides whose value is not already lowercase — the only ones whose
+#    physical table name changes.
+rg -n 'ManyToManyField\([^)]*db_table\s*=\s*"[^"]*[A-Z_]' --glob '*.jl'
+
+# 2. Anything asserting on generated DDL text (the quoting change).
+rg -n 'CREATE TABLE IF NOT EXISTS [a-z_]' --glob '*.jl'
+
+# 3. A FIELD named db_table — now read as the model option. Matches `db_table = <something>(`,
+#    i.e. a field constructor rather than a string literal, so it does not flag legitimate uses.
+rg -n 'db_table\s*=\s*Models\.' --glob '*.jl'
+```
+
+An app whose M2M `db_table` values are already lowercase, and which does not string-match DDL, has
+nothing to change. If hit 1 returns a match, the through table it names is being renamed — either
+lowercase the value to keep the current table, or migrate the table to the new spelling.
+
+---
+
 ## The join/CTE free-function form is withdrawn — fluent only (#305)
 
 - **Version**: Unreleased
@@ -137,8 +230,10 @@ names when generating DDL but quotes them as declared in queries, so this model 
 table 'driver_profile' and then query 'Driver_Profile'. Declare it as 'driver_profile'.
 ```
 
-It rejects rather than silently lowercasing because PormG has no model-level `db_table` yet (#59):
-folding the name would discard a stated intent with no way to express it and no signal it happened.
+It rejects rather than silently lowercasing because folding the name would discard a stated intent
+with no signal it happened. At the time there was also no way to *express* that intent; #59 has since
+added model-level `db_table`, which is where it goes: `Model("driver_profile", db_table =
+"Driver_Profile", …)`.
 
 **Only the positional form is affected.** A name derived from the Julia binding
 (`Race = Models.Model(…)`) was already lowercased when `set_models` filled it in, and is unchanged.
@@ -231,9 +326,9 @@ so this model would create table '_order' while a foreign key pointing at it ref
 instead — a different table if one exists, a failed constraint if it doesn't. Declare it as 'order'.
 ```
 
-It rejects rather than silently stripping, for the same reason as #300: PormG has no model-level
-`db_table` yet (#59), so folding the name would discard a stated intent with no way to express it and
-no signal it happened.
+It rejects rather than silently stripping, for the same reason as #300: folding the name would
+discard a stated intent with no signal it happened. Model-level `db_table` (#59) has since landed as
+the way to express a physical name PormG's own naming rules would not produce.
 
 **Only the positional form is affected.** `inspectdb` introspection and the Django importer still
 accept a leading-underscore name — they read it from a live database or a Python class, where it is

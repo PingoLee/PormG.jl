@@ -13,7 +13,7 @@ import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map, postgres_type_map_reverse, sqlite_date_format_map, sqlite_type_map_reverse
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
-import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql
+import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
 
 import PormG: @pormg_debug
 
@@ -761,13 +761,30 @@ end
 # Functions to create migration queries
 #
 
+# Escape a table identifier for interpolation between double quotes (#59). `db_table` carries an
+# arbitrary user-supplied spelling and is deliberately not shape-validated (mirroring `db_column`), so
+# an embedded `"` would otherwise close the quoted identifier early. Doubling is the standard SQL
+# escape on both backends. A no-op for every name that does not contain a quote.
+#
+# NOTE for anyone adding a DDL renderer: this is applied at the interpolation site, so a NEW statement
+# that writes `"$table_name"` without it is unescaped again. The functions that emit several
+# statements (`alter_field`, the SQLite rebuild) escape ONCE into the local at the top for exactly
+# that reason — prefer that shape over sprinkling calls.
+_quote_table_ddl(table_name::AbstractString)::String = replace(String(table_name), "\"" => "\"\"")
+# Several renderers declare `table_name::Union{String,Symbol}` (the planner keys its plan by Symbol),
+# so accept both rather than making every call site stringify.
+_quote_table_ddl(table_name::Symbol)::String = _quote_table_ddl(String(table_name))
+
+# Quoted (#59) — table_name is rendered as given, no case fold. Previously bare/unquoted, which was
+# harmless while every table name was lowercase-enforced; an unquoted mixed-case db_table would
+# otherwise fold to lowercase on PostgreSQL, splitting DDL from every already-quoted query-side site.
 function create_table(conn::PormGPostgres, table_name::String, columns::Vector{String})
-  return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
+  return """CREATE TABLE IF NOT EXISTS "$(_quote_table_ddl(table_name))" (\n  $(join(columns, ",\n  "))
     );"""
 end
 
 function create_table(conn::PormGSQLite, table_name::String, columns::Vector{String})
-  return """CREATE TABLE IF NOT EXISTS $(table_name) (\n  $(join(columns, ",\n  "))
+  return """CREATE TABLE IF NOT EXISTS "$(_quote_table_ddl(table_name))" (\n  $(join(columns, ",\n  "))
     );"""
 end
 
@@ -799,7 +816,7 @@ function create_table(conn::PormGPostgres, model::PormGModel)
     push!(columns, field_to_column(field_name |> string, field, conn))
   end
 
-  return create_table(conn, model.name |> lowercase, columns)
+  return create_table(conn, model_table_name(model), columns)
 end
 
 function create_table(conn::PormGSQLite, model::PormGModel)
@@ -816,11 +833,12 @@ function create_table(conn::PormGSQLite, model::PormGModel)
       # Local FK column and referenced parent column both honor db_column (#50).
       local_col = field_db_column(field, string(field_name))
       target_pk = fk_target_column(field)
-      push!(columns, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(field.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
+      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table.
+      push!(columns, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(fk_target_table(field))\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
 
-  return create_table(conn, model.name |> lowercase, columns)
+  return create_table(conn, model_table_name(model), columns)
 end
 
 function create_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String})
@@ -887,9 +905,13 @@ function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, conn::
   return ""  # SQLite: no row-level locking — silent no-op (documented divergence, #26)
 end
 
+# `table_name` is QUOTED here (#59) — the caller pre-quotes every other identifier it passes but not
+# this one, which made it the last bare `ALTER TABLE` target in this file. Harmless while every table
+# name was lowercase; a mixed-case `db_table` would fold to lowercase on PostgreSQL and the statement
+# would target a table that does not exist.
 function add_foreign_key(conn::PormGPostgres, table_name::Union{Symbol,String}, constraint_name::String, field_name::String, ref_table_name::String, ref_field_name::String; on_delete::Union{String,Nothing}=nothing)
   on_delete_clause = on_delete !== nothing ? " ON DELETE $on_delete" : ""
-  return """ALTER TABLE $table_name ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause DEFERRABLE INITIALLY DEFERRED;"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD CONSTRAINT $constraint_name FOREIGN KEY ($field_name) REFERENCES $ref_table_name ($ref_field_name)$on_delete_clause DEFERRABLE INITIALLY DEFERRED;"""
 end
 # function add_foreign_key(conn::PormGPostgres, model::PormGModel, constraint_name::String, field_name::String, ref_model::PormGModel, ref_field_name::String)
 #   return add_foreign_key(model.name, model.name, constraint_name, field_name, ref_model.name, ref_field_name)
@@ -900,6 +922,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # column even when called with the field-name key (e.g. the temporary-default cleanup in
   # _add_new_field). Idempotent when callers already pass the physical column (#50).
   field_name = field_db_column(new_field, string(field_name))
+  # Escape ONCE here (#59) rather than at each of the ~20 `"$table_name"` interpolations below, so a
+  # statement added later cannot forget it. A no-op for every name without an embedded quote.
+  table_name = _quote_table_ddl(string(table_name))
   sql_statements = []
 
   # Non-negative CHECK constraint diffing on a type transition (Django-style).
@@ -1039,29 +1064,31 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
 end
 
 function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
-  return """ALTER TABLE "$table_name" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
 
 function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing)
-  return """ALTER TABLE "$table_name" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
 end
 
 function drop_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
-  return """ALTER TABLE "$table_name" DROP COLUMN "$field_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$field_name";"""
 end
 
 function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
   # Modern SQLite supports DROP COLUMN. If not, we'd need recreation.
-  return """ALTER TABLE "$table_name" DROP COLUMN "$field_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$field_name";"""
 end
 
 function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
-  return alter_field(conn, model.name |> lowercase, field_name, new_field, old_field, colect_not_equal)
+  return alter_field(conn, model_table_name(model), field_name, new_field, old_field, colect_not_equal)
 end
 
 function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
-  # SQLite implementation using table recreation
-  table_name = model.name |> lowercase
+  # SQLite implementation using table recreation.
+  # Escaped ONCE here (#59) — this function interpolates the name into five statements below, and
+  # `new_table_name` is derived from it. A no-op for every name without an embedded quote.
+  table_name = _quote_table_ddl(model_table_name(model))
   new_table_name = "$(table_name)_new"
 
   # 1. Define columns for the NEW table (using current model state)
@@ -1076,7 +1103,8 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
       on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
       local_col = field_db_column(f, string(f_name))
       target_pk = fk_target_column(f)
-      push!(columns_defs, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(f.to |> format_model_name)\"(\"$target_pk\") ON DELETE $on_delete_str")
+      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table.
+      push!(columns_defs, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(fk_target_table(f))\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
 
@@ -1129,11 +1157,11 @@ ALTER TABLE "$new_table_name" RENAME TO "$table_name";"""
 end
 
 function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol}, new_field_name::Union{String,Symbol})
-  return """ALTER TABLE "$table_name" RENAME COLUMN "$old_field_name" TO "$new_field_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME COLUMN "$old_field_name" TO "$new_field_name";"""
 end
 
 function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
-  return """ALTER TABLE "$table_name" DROP CONSTRAINT "$constraint_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT "$constraint_name";"""
 end
 
 # NOTE (#83): there is intentionally no `drop_foreign_key(::PormGSQLite, …)`. SQLite has no
@@ -1149,14 +1177,14 @@ function drop_index(conn::PormGSQLite, index_name::String)
 end
 
 function rename_table(conn::Union{PormGSQLite,PormGPostgres}, old_table_name::String, new_table_name::String)
-  return """ALTER TABLE "$old_table_name" RENAME TO "$new_table_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(old_table_name))" RENAME TO "$(_quote_table_ddl(new_table_name))";"""
 end
 
 function drop_table(conn::PormGPostgres, table_name::Union{String,Symbol})
-  return """DROP TABLE IF EXISTS "$table_name" CASCADE;"""
+  return """DROP TABLE IF EXISTS "$(_quote_table_ddl(table_name))" CASCADE;"""
 end
 function drop_table(conn::PormGSQLite, table_name::Union{String,Symbol})
-  return """DROP TABLE IF EXISTS "$table_name";"""
+  return """DROP TABLE IF EXISTS "$(_quote_table_ddl(table_name))";"""
 end
 
 function alter_sequence_name(conn::PormGPostgres, old_sequence_name::String, new_sequence_name::String)
@@ -1175,11 +1203,15 @@ end
 # Function to deal with deletion objects
 #
 
+# NOTE: this function currently has NO callers anywhere in `src/` or `test/` — the live delete path
+# is `querybuilder/deletion.jl`. The table identifier is resolved through `model_table_name` and
+# quoted anyway (#59) so it is not left as a landmine for whoever revives it; deciding whether to
+# delete it outright is out of scope for this issue.
 function get_objects_to_delete(connection::PormGPostgres, model::PormGModel, instruction::SQLInstruction)::Vector{NamedTuple}
   # Get the SQL that identifies objects to be deleted
   sql_to_delete = """
     SELECT "$(get_model_pk_field(model))"
-    FROM $(model.name |> lowercase) as $(instruction.alias)
+    FROM "$(_quote_table_ddl(model_table_name(model)))" as $(instruction.alias)
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
   """

@@ -5,6 +5,8 @@ using Base64
 using UUIDs
 import JSON
 import PormG: PormGField, PormGModel, reserved_words, Migration
+# Physical-table-name resolution (#59) — defined in Kernel so layer-2 Configuration can reach it too.
+import PormG: model_table_name, model_has_db_table
 import PormG: DATETIME_FORMAT
 import PormG: PormGBytes  # binary-payload wrapper the parameter collectors bind as one blob (#296)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
@@ -91,6 +93,7 @@ See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref).
 """
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
+  db_table::Union{String, Nothing} = nothing # explicit physical table name override (#59)
   fields::Dict{String, PormGField}
   field_names::Vector{String} = [] # needed to create sql queries with joins
   related_objects::Dict{String, Any} = Dict{String, Any}() # needed to create sql queries with joins
@@ -580,9 +583,9 @@ end
 # and it applies no other identifier-shape validation — a reserved word or a name with a space still
 # renders invalid bare DDL.
 #
-# Reject rather than fold, in both cases. PormG has no model-level `db_table` yet (#59), so quietly
-# lowercasing or stripping would discard a stated intent with no way to express it and no signal that
-# it happened.
+# Reject rather than fold, in both cases — even now that model-level `db_table` (#59) exists as the
+# escape valve. Folding here would still discard a stated intent silently; `db_table` is how that
+# intent gets expressed instead: `Model("driver_races", db_table = "Driver_Races", …)`.
 #
 # Two message-accuracy subtleties, both about the SUGGESTED spelling rather than the rejection itself
 # (found on independent review of this fix):
@@ -611,7 +614,7 @@ function _validate_positional_model_name(name::AbstractString)::Nothing
       "The model name '$(name)' must be lowercase; PormG lowercases table names when generating DDL " *
       "but quotes them as declared in queries, so this model would migrate the table " *
       "'$(lowercase(name))' and then query '$(name)'. Declare it as '$(hint)'. " *
-      "Mapping a model to a fixed mixed-case table is issue #59."))
+      "Mapping a model to a fixed mixed-case table: pass db_table = '$(name)' instead."))
   end
   if startswith(name, "_")
     throw(ModelDefinitionError(
@@ -640,6 +643,10 @@ function field_db_column(field::PormGField, name::AbstractString)::String
 end
 field_db_column(field::PormGField, name::Symbol)::String = field_db_column(field, String(name))
 
+# `model_table_name` / `model_has_db_table` (#59) — the table-level mirror of `field_db_column`
+# above — live in `Kernel` and are imported at the top of this module, because layer-2
+# `Configuration` needs them and is included before `Models`. See Kernel.jl for the definitions.
+
 # Referenced (parent) physical column for a ForeignKey (#50). `pk_field` names a
 # field on the target model; resolve it to that field's `db_column` when the target
 # model is in scope (the normal query/migration path, where `to` is a resolved
@@ -651,6 +658,15 @@ function fk_target_column(field::PormGField)::String
   tgt = field.to
   (tgt isa PormGModel && haskey(tgt.fields, pk)) && return field_db_column(tgt.fields[pk], pk)
   return pk
+end
+
+# Referenced (parent) physical TABLE for a ForeignKey (#59) — the table-level sibling of
+# fk_target_column above. A resolved PormGModel target goes through model_table_name (so it
+# honors the target's db_table); a still-unresolved String target falls back to
+# format_model_name, matching fk_target_column's own verbatim-fallback shape for that case.
+function fk_target_table(field::PormGField)::String
+  tgt = field.to
+  return tgt isa PormGModel ? model_table_name(tgt) : format_model_name(tgt)
 end
 
 # Resolve a string FK/O2O target to its model object within `mod` (#62). Returns the
@@ -862,6 +878,20 @@ function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
   return model
 end
 
+# Store an explicit physical table name override (#59). Mirrors db_column's precedent
+# (field_db_column, below): type-check + empty-string-as-unset only, no identifier-shape
+# validation, no forced case fold — the whole point is to carry an arbitrary legacy spelling
+# (including mixed case) through DDL/queries/migrations verbatim. `nothing` (the default) is a
+# no-op, so a model that never sets `db_table` behaves exactly as before this option existed.
+function _apply_db_table!(model::Model_Type, db_table)::Model_Type
+  db_table === nothing && return model
+  db_table isa AbstractString || throw(ModelDefinitionError(
+    "The 'db_table' option on model '$(model.name)' must be a String or nothing, got $(typeof(db_table))"))
+  isempty(db_table) && return model
+  model.db_table = String(db_table)
+  return model
+end
+
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
@@ -872,8 +902,8 @@ end
 Define a model — one database table, described by its fields. Returns a `Model_Type`: the object the
 query builder starts from, as in `M.Driver.objects`.
 
-Every keyword other than `constraints` declares a field: `field_name = FieldType(...)`, where the
-field types are the constructors in this module ([`IDField`](@ref), [`CharField`](@ref),
+Every keyword other than `constraints`/`db_table` declares a field: `field_name = FieldType(...)`,
+where the field types are the constructors in this module ([`IDField`](@ref), [`CharField`](@ref),
 [`ForeignKey`](@ref), …). Declaring a keyword whose value is not a field raises
 `ModelDefinitionError` — see the note below, which is the usual reason that happens.
 
@@ -881,7 +911,8 @@ The **table name** comes from the positional string when given, and otherwise fr
 the model is assigned to, filled in when [`set_models`](@ref) (or `@import_models`) registers the
 module. Both forms are idiomatic and `Race = Model(...)` and `Race = Model("race", ...)` name the
 same table, because a binding-derived name is lowercased as it is filled in. Reach for the
-positional form when the binding name is not the table name you want.
+positional form when the binding name is not the table name you want — and `db_table` (below) when
+even that isn't enough, because the physical table isn't a valid PormG model name at all.
 
 !!! warning "A positional name must be lowercase and may not start with '_'"
     `Model("Driver_Profile", …)` raises `ModelDefinitionError`. A positional name is stored
@@ -899,9 +930,8 @@ positional form when the binding name is not the table name you want.
     a failed constraint. Unlike a field name, a positional model name is a plain string, never a
     Julia kwarg key, so it never needed the leading-underscore escape hatch described below.
 
-    Mapping a model to a fixed mixed-case table is
-    [issue #59](https://github.com/PingoLee/PormG.jl/issues/59); until it lands, declare table names
-    in lowercase, without a leading underscore.
+    Mapping a model to a fixed, arbitrarily-cased table is `db_table` (below) — the positional name
+    stays the lowercase logical identifier either way.
 
 **Field names keep the case you declare** and are case-sensitive in queries, so a legacy `driverId`
 column is addressed as `driverId`. One leading underscore is stripped as the escape hatch for names
@@ -913,19 +943,39 @@ A `ManyToManyField` is stored on the model but owns no column of its own, so it 
 `field_names` and from the created table.
 
 `constraints` takes [`UniqueConstraint`](@ref) objects — one, or a collection — for uniqueness
-spanning more than one column. It is the **only** model-level option.
+spanning more than one column. `db_table` (#59) pins an explicit physical table name, **preserved
+verbatim** — no case fold, no validation beyond "is it a non-empty String" — overriding the name
+otherwise derived from the positional argument or the binding. It is authoritative everywhere a table
+identifier is rendered: DDL, `SELECT`/`INSERT`/`UPDATE`/`DELETE`, `JOIN`, foreign-key `REFERENCES`
+targets, and migration diffing. Unset (the default), a model behaves exactly as it did before this
+option existed. This is the table-level sibling of [`CharField`](@ref)'s `db_column` (#50):
+
+```julia
+# The logical name stays lowercase; db_table carries the exact legacy spelling.
+DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
+  id = Models.IDField(),
+)
+```
+
+`constraints` and `db_table` are the **only** model-level options.
+
+!!! warning "`constraints` and `db_table` are not field names"
+    Both are peeled off before the field keywords, so `db_table = CharField()` declares the *option*
+    (and raises, since a field is not a String) rather than a column called `db_table`. To declare a
+    column with one of those names, use the leading-underscore escape hatch: `_db_table =
+    CharField()` gives you the column `db_table` and leaves the option unset. A *table* named
+    `db_table` needs nothing special — `Model("db_table", …)` is fine.
 
 !!! note "PormG has no Django `Meta` block"
-    There is no model-level `db_table`, `ordering`, or `verbose_name`. Each of those is a keyword
-    like any other, so it is read as a field declaration and raises:
+    There is no model-level `ordering` or `verbose_name` — `db_table` (above) is the one model-level
+    physical-naming option. Any other keyword is read as a field declaration and raises:
 
     ```julia
     Models.Model("race", ordering = ["-year"], raceid = Models.IDField())
     # ModelDefinitionError: All fields must be of type PormGField, exemple: …
     ```
 
-    Instead: order at query time with `order_by()` — there is no per-model default sort; pin the
-    table name with the positional argument, which must be lowercase (see the warning above); and set
+    Instead: order at query time with `order_by()` — there is no per-model default sort; and set
     `verbose_name` per field, where it is accepted, rather than per model.
 
 # Examples
@@ -947,15 +997,23 @@ Race = Models.Model(
     Models.UniqueConstraint(fields = ("year", "round"), name = "race_year_round_uniq"),
   ],
 )
+
+# Porting a legacy schema PormG doesn't control: the live table is `Constructor_Standings`.
+ConstructorStandings = Models.Model("constructor_standings",
+  db_table = "Constructor_Standings",
+  id = Models.IDField(),
+)
 ```
 
 See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`ForeignKey`](@ref).
 """
-function Model(name::AbstractString; constraints = nothing, fields...)
-  # Peel `constraints` off BEFORE the `fields...` slurp — otherwise it would flow into the
-  # `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19). Generated
-  # model files (Model_to_str) reload through this kwargs form, so this is the round-trip seam.
+function Model(name::AbstractString; constraints = nothing, db_table = nothing, fields...)
+  # Peel `constraints`/`db_table` off BEFORE the `fields...` slurp — otherwise either would flow
+  # into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19).
+  # Generated model files (Model_to_str) reload through this kwargs form, so this is the
+  # round-trip seam.
   model = Model(name, Tuple(pairs(fields)))
+  model = _apply_db_table!(model, db_table)
   return _apply_unique_constraints!(model, constraints)
 end
 
@@ -1008,11 +1066,12 @@ function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
   throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
 end
-function Model(; constraints = nothing, fields...)
+function Model(; constraints = nothing, db_table = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
-  # via set_models). `constraints=` must work here too, so peel it before the `fields...` slurp
-  # exactly like the named form above.
+  # via set_models). `constraints=`/`db_table=` must work here too, so peel them before the
+  # `fields...` slurp exactly like the named form above.
   model = Model("", Tuple(pairs(fields)))
+  model = _apply_db_table!(model, db_table)
   return _apply_unique_constraints!(model, constraints)
 end
 
@@ -1058,10 +1117,17 @@ end
 Converts a model object to a string representation to create the model.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words)::String
+    Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false)::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
 - `settings::PormGSettings`: Connection settings; supplies `django_prefix` and the target output folder.
 - `contants_julia::Vector{String}=reserved_words`: A vector of reserved words in Julia.
+- `name_is_physical_table::Bool=false`: whether `model.name` is a **live table name** rather than a
+  logical identifier. `true` for database introspection (`inspectdb`), where a name that is not
+  already lowercase must be pinned as `db_table` so the generated declaration addresses the table it
+  was read from (#59) — the positional slot is lowercased and would otherwise name a different table.
+  `false` for the Django importer, whose `model.name` is a **Python class name**: there the physical
+  table genuinely is the lowercased form, and pinning the class spelling would invent a table that
+  does not exist. The two are indistinguishable from the name alone, so the caller states which it has.
 
 # Returns
 - `String`: The string representation of the model object. A field whose rendering fails is
@@ -1081,7 +1147,7 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words)::String
+function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false)::String
   fields::String = ""
   render_failures::Vector{String} = String[]
   django_prefix::Bool = settings.django_prefix === nothing ? false : true
@@ -1128,8 +1194,44 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
       fields *= ",\n  constraints = [$(join(rendered, ", "))]"
     end
   end
-  model_name_abs = django_prefix ? string(settings.django_prefix, "_", model.name |> lowercase) : model.name |> lowercase
   model_var_name = uppercasefirst(model.name)
+  # Round-trip the physical table name as `db_table=` (#59). Two sources, one kwarg:
+  #
+  #  1. An explicit `db_table` on the model — emitted verbatim so a reload reproduces it.
+  #  2. An INTROSPECTED name (`name_is_physical_table`) that the positional slot would not reproduce:
+  #     not already lowercase, or leading-underscore. On that path `model.name` IS the live table
+  #     name, so before `db_table` existed `inspectdb` on `Driver_Profile` generated
+  #     `Model("driver_profile", …)` — a declaration pointing at a *different* table (the #300 split,
+  #     arrived at from the other end), and on `_order` it generated a file that would not even load
+  #     (the #306 guard). Pinning the original spelling fixes both.
+  #
+  # The caller must SAY which it has: the Django importer's `model.name` is a Python CLASS name, not
+  # a table name — its physical table genuinely IS the lowercased form — so inferring "not lowercase
+  # ⇒ physical" from the string would make it pin a table that does not exist. Skipped under
+  # `django_prefix` too, where the prefixed lowercase name IS the physical one.
+  #
+  # `model_has_db_table`/`model_table_name` rather than `model.db_table`: the signature accepts any
+  # `PormGModel`, and only `Model_Type` is guaranteed to carry the field.
+  pin_introspected = name_is_physical_table && !django_prefix &&
+                     (model.name != lowercase(model.name) || startswith(model.name, "_"))
+  db_table_abs = if model_has_db_table(model)
+    model_table_name(model)
+  elseif pin_introspected
+    String(model.name)
+  else
+    nothing
+  end
+  db_table_part = db_table_abs === nothing ? "" : ", db_table = $(format_string(db_table_abs))"
+  # The positional slot drops leading underscores ONLY when the original is being pinned as
+  # `db_table` above — the two are one decision, not two. Stripping without pinning is precisely the
+  # "generated declaration silently addresses a different table" defect the `name_is_physical_table`
+  # gate exists to prevent: the Django importer's `_InternalThing` maps to table `_internalthing`,
+  # so emitting `internalthing` there would be wrong. Declines to strip an ALL-underscore name rather
+  # than emit an empty positional name (which silently means "derive from the binding").
+  _lowered = model.name |> lowercase
+  _stripped_name = pin_introspected ? lstrip(_lowered, '_') : _lowered
+  model_name_abs = django_prefix ? string(settings.django_prefix, "_", _lowered) :
+                                   (isempty(_stripped_name) ? _lowered : String(_stripped_name))
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
   if fields == ""
@@ -1139,9 +1241,9 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
     # marker — so the file still loads and the user sees exactly which model to fix by hand. Mirrors
     # Rails' SchemaDumper, which comments out a table it can't dump so schema.rb stays loadable.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
-    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model("$(model_name_abs)")"""
+    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model("$(model_name_abs)"$db_table_part)"""
   else
-    result = """$(marker)$(model_var_name) = Models.Model("$(model_name_abs)"$fields)"""
+    result = """$(marker)$(model_var_name) = Models.Model("$(model_name_abs)"$db_table_part$fields)"""
   end
   @info(result)
 
@@ -1887,6 +1989,17 @@ function strip_many_to_many_fields(model::PormGModel)::PormGModel
   physical_field_names = [field_name for field_name in model.field_names if haskey(physical_fields, field_name)]
   return Model_Type(
     name=model.name,
+    # MUST be carried (#59). This rebuilds a Model_Type field by field, so an omitted slot silently
+    # @kwdef-defaults — and every model reaching the migration planner passes through here
+    # (`synthesize_many_to_many_through_models`). Dropping `db_table` left the plan keyed by the
+    # physical name while the model it renders from had reverted to the logical one, so
+    # `CREATE TABLE` and the FK `REFERENCES` disagreed — the exact split this option closes — and a
+    # second `makemigrations` proposed dropping the live table.
+    #
+    # Gated on `model_has_db_table` rather than reading `model.db_table`: the signature accepts any
+    # `PormGModel`, and a bare `model_table_name` would wrongly PIN the logical name onto every model
+    # that declares no override.
+    db_table=(model_has_db_table(model) ? model_table_name(model) : nothing),
     fields=physical_fields,
     field_names=physical_field_names,
     related_objects=copy(model.related_objects),
@@ -1908,7 +2021,11 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
 
   for (model_name, model_info) in current_schema
     source_model = model_info[:model]
-    owner_binding = uppercasefirst(String(model_name))
+    # Derive from the model's LOGICAL name, symmetric with `related_binding` below — not from the
+    # dict key, which is the resolved PHYSICAL table name (#59) and so would carry a `db_table`
+    # spelling into a Julia-side binding label. Identical output for every model without `db_table`,
+    # since the key is that same logical name lowercased.
+    owner_binding = uppercasefirst(format_model_name(source_model.name))
     for (field_name, field) in source_model.fields
       is_many_to_many_field(field) || continue
       field.through === nothing || continue

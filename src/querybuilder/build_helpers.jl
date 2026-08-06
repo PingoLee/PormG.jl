@@ -857,7 +857,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     old_context !== nothing && set_context!(instruc.parameters, old_context)
   end
 
-  safe_table_name = safe_table_identifier(q.object.model.name, instruction.connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
 
   io = IOBuffer()

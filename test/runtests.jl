@@ -51,6 +51,7 @@ end
     @testset "Field-name Case Preservation (#57)" include("unit/test_field_name_case.jl")
     @testset "Model-name Case (#300)" include("unit/test_model_name_case.jl")
     @testset "db_column Authoritative (#50)" include("unit/test_db_column.jl")
+    @testset "db_table Authoritative (#59)" include("unit/test_db_table.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "CTE Ergonomics F() Reference (#44)" include("unit/test_cte_ergonomics.jl")
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")

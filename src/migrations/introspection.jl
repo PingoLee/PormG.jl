@@ -269,7 +269,7 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
     normalized_default = _normalize_sqlite_default(default_value, type_sym)
     # check if column_name is a primary key
     if haskey(pk_map, column_name)
-      field_instance = Models.IDField(null=!(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
+      field_instance = Models.IDField(null=(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
     elseif haskey(fk_map, column_name)
       # `default=` was computed above but never reached this branch before #292, so an FK declared
       # ON DELETE SET DEFAULT introspected to `SET_DEFAULT` with no default — which since #287
@@ -278,10 +278,10 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       # rather than throwing from inside introspection.
       field_instance = Models.ForeignKey(uppercasefirst(fk_map[column_name]["fk_table"] |> string); pk_field=fk_map[column_name]["fk_column"] |> string,
       on_delete=_normalize_introspected_on_delete(fk_map[column_name]["on_delete"]),
-      on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=!(nullable === nothing),
+      on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=(nullable === nothing),
       default=_fk_default_or_warn(normalized_default, table_name, column_name))
     else
-      field_instance = getfield(Models, type_sym)(null=!(nullable === nothing), default=normalized_default)
+      field_instance = getfield(Models, type_sym)(null=(nullable === nothing), default=normalized_default)
       # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
       if type_sym == :BinaryField && haskey(byte_bounds, column_name)
         field_instance.max_length = byte_bounds[column_name]

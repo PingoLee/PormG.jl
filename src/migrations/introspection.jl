@@ -538,13 +538,19 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- pg_get_constraintdef renders it as `CHECK ((octet_length(col) <= 4))`. Matching on
             -- digits after `<=` avoids backslash escapes surviving both Julia and SQL quoting.
             --
+            -- `substring(… from …)` rather than `regexp_match`: the latter is PostgreSQL 10+, and
+            -- this CTE sits in the schema query that EVERY introspection runs, so depending on it
+            -- would break `makemigrations`/`inspectdb` wholesale on 9.x — not just for binary
+            -- columns. `substring` with a capturing group returns the same first capture and has
+            -- been available since long before any version this package targets.
+            --
             -- min() collapses to ONE row per (table, column). This CTE is joined per-column, not
             -- per-table like non_negative_checks above, so without the GROUP BY two matching CHECKs
             -- on the same column (a hand-written extra bound, or a stale one) would fan the outer
             -- row out and emit that column twice into the string_agg — after which the recovered
             -- max_length would depend on row order, which is exactly the drift this CTE prevents.
             -- min() also picks the tightest bound, which is the one actually enforced.
-            min((regexp_match(pg_get_constraintdef(con.oid), '<= ([0-9]+)'))[1]::bigint) AS byte_limit
+            min(substring(pg_get_constraintdef(con.oid) from '<= ([0-9]+)')::bigint) AS byte_limit
         FROM pg_constraint con
         JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
         WHERE con.contype = 'c'
@@ -836,6 +842,18 @@ end
 # Deliberately a separate generic rather than a parameter on `get_constraints_check`: a table can
 # carry both kinds, and matching the wrong one would drop a live constraint.
 function get_constraints_byte_length_check(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
+  # Parameterized, unlike the `get_constraints_*` siblings above, which interpolate. Those predate
+  # the parameterized-queries-only rule and are left alone here; a new query has no excuse to
+  # inherit the pattern, and both values land inside single-quoted literals where an embedded `'`
+  # would break out.
+  #
+  # `table_schema` is restricted to the search path: an unqualified table name in the DDL this
+  # feeds resolves the same way, so without it a same-named table in another schema can hand back
+  # a constraint name that does not exist on the target table, and the ALTER then fails.
+  #
+  # Residual ambiguity, deliberately left: a *hand-written* CHECK using `octet_length` on the same
+  # column is indistinguishable from PormG's own by clause alone. Matching the auto-generated name
+  # instead would be worse — the name is not stable across the paths that create it.
   query = """
   SELECT tc.constraint_name
   FROM information_schema.table_constraints tc
@@ -843,12 +861,14 @@ function get_constraints_byte_length_check(conn::PormGPostgres, table_name::Stri
     ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
   JOIN information_schema.check_constraints cc
     ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
-  WHERE tc.table_name = '$table_name'
+  WHERE tc.table_name = \$1
     AND tc.constraint_type = 'CHECK'
-    AND ccu.column_name = '$field_name'
-    AND cc.check_clause ILIKE '%octet_length%';
+    AND ccu.column_name = \$2
+    AND tc.table_schema = ANY(current_schemas(false))
+    AND cc.check_clause ILIKE '%octet_length%'
+    AND cc.check_clause ~ '<= [0-9]+';
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end

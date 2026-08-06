@@ -496,8 +496,13 @@ end
             # This is the one place raw SQL is warranted: the assertion IS about the DDL.
             settings = PormG.config[PORMG_DB_FOLDER]
             pool = settings.connections
-            raw_failed = false
-            try
+            # Bind the exception rather than setting a flag in a bare `catch`. A bare catch is
+            # satisfied by a typo'd table name, a wrong placeholder style, or a MethodError on
+            # `fetch` — none of which involve the database rejecting anything — and the
+            # "row unchanged" assertion below holds in every one of those cases too, because the
+            # statement never ran. Asserting on the message is what makes this test fail when the
+            # CHECK stops reaching the DDL.
+            raw_err = try
                 if pool isa PormG.PormGPostgres
                     PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = \$1 WHERE slug = \$2",
                                 ["\\x010203040506070809", scratch_slug])
@@ -505,10 +510,14 @@ end
                     PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = ? WHERE slug = ?",
                                 [oversize, scratch_slug])
                 end
-            catch
-                raw_failed = true
+                nothing
+            catch e
+                e
             end
-            @test raw_failed          # the constraint exists in the live schema
+            @test raw_err !== nothing
+            # PostgreSQL: `violates check constraint "…"`. SQLite: `CHECK constraint failed: …`.
+            # Both contain "check constraint" once case is normalized.
+            @test occursin("check constraint", lowercase(sprint(showerror, raw_err)))
             # And the row is unchanged, so the failed statement wrote nothing.
             @test collect((scratch_query.values("bounded_blob").list() |> first)[:bounded_blob]) == at_bound
         finally

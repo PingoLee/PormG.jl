@@ -123,6 +123,61 @@ end
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# BinaryField payloads through bulk_insert and bulk_update, on BOTH backends (#296)
+#
+# These sit ABOVE the PostgreSQL-only guard on purpose. The bulk paths reach the driver
+# differently per backend — PostgreSQL casts each source column as
+# `source."col"::<pg type>` inside an UPDATE … FROM (VALUES …) CTE, SQLite binds `?`
+# placeholders into the same CTE shape with no cast at all — so a fix verified on one
+# backend proves nothing about the other. bulk_copy's own binary coverage stays below the
+# guard, because COPY genuinely is PostgreSQL-only.
+#
+# The payload carries high bytes and an embedded NUL: that is what separates a real
+# BLOB/bytea from a TEXT column that merely looks like it works.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_insert/bulk_update: BinaryField payloads round-trip byte-for-byte" begin
+    payload = UInt8[0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xC3, 0x28]
+    updated = UInt8[0x00, 0x01, 0xFE, 0xFF, 0x00]
+    slug = "bulk-binary-shared-990701"
+
+    scratch = () -> M.Field_validation_scratch.objects
+    _purge = () -> begin
+        q = scratch()
+        q.filter("slug" => slug)
+        q.exists() && q.delete()
+    end
+    _purge()
+
+    try
+        # ── bulk_insert ───────────────────────────────────────────────────────
+        df = DataFrames.DataFrame(
+            uuid_token    = ["dddddddd-0000-0000-0000-000000009701"],
+            canonical_url = ["https://example.com/f1/bulk-binary-shared"],
+            slug          = [slug],
+            blob_payload  = [payload],
+        )
+        bulk_insert(scratch(), df)
+
+        stored = scratch().filter("slug" => slug).values("blob_payload").list() |> first
+        @test stored[:blob_payload] isa AbstractVector{UInt8}
+        @test collect(stored[:blob_payload]) == payload
+
+        # ── bulk_update ───────────────────────────────────────────────────────
+        # A different payload, so a no-op update cannot masquerade as success.
+        update_df = DataFrames.DataFrame(slug = [slug], blob_payload = [updated])
+        bulk_update(M.Field_validation_scratch, update_df;
+                    columns = ["blob_payload", "slug"], match_on = ["slug"])
+
+        after = scratch().filter("slug" => slug).values("blob_payload").list() |> first
+        @test after[:blob_payload] isa AbstractVector{UInt8}
+        @test collect(after[:blob_payload]) == updated
+        @test collect(after[:blob_payload]) != payload
+    finally
+        _purge()
+    end
+end
+
 # bulk_copy is a PostgreSQL-only feature (COPY protocol)
 if adapter_name == "SQLite"
     @info "Skipping bulk_copy tests for SQLite (not supported)"
@@ -268,45 +323,6 @@ end
         @test stored[:blob_payload] isa AbstractVector{UInt8}
         # Byte identity, not just "a row arrived" — the whole point is that COPY did not
         # mangle the payload into the Julia literal or a text encoding of it.
-        @test collect(stored[:blob_payload]) == payload
-    finally
-        final_cleanup = M.Field_validation_scratch.objects
-        final_cleanup.filter("slug" => slug)
-        final_cleanup.exists() && final_cleanup.delete()
-    end
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-# bulk_update: BinaryField columns survive the UPDATE … FROM (VALUES …) CTE (#296)
-# bulk_update casts each source column as `source."col"::<field.type lowercased>`, and
-# BinaryField's `.type` is "BLOB" — the one field whose canonical type string is not a real
-# PostgreSQL type, so the statement failed with `type "blob" does not exist`. This is the
-# last write path; create/bulk_insert/bulk_copy are covered elsewhere.
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "bulk_update: BinaryField payloads round-trip byte-for-byte" begin
-    slug = "bulk-update-binary-990602"
-    payload = UInt8[0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0xC3, 0x28]
-
-    cleanup = M.Field_validation_scratch.objects
-    cleanup.filter("slug" => slug)
-    cleanup.exists() && cleanup.delete()
-
-    try
-        M.Field_validation_scratch.objects.create(
-            "uuid_token" => "cccccccc-0000-0000-0000-000000009602",
-            "canonical_url" => "https://example.com/f1/bulk-update-binary",
-            "slug" => slug,
-            "blob_payload" => UInt8[0x01]
-        )
-
-        df = DataFrames.DataFrame(slug = [slug], blob_payload = [payload])
-        bulk_update(M.Field_validation_scratch, df; columns = ["blob_payload", "slug"], match_on = ["slug"])
-
-        stored = M.Field_validation_scratch.objects.filter("slug" => slug).
-            values("blob_payload").list() |> first
-        @test stored[:blob_payload] isa AbstractVector{UInt8}
-        # Byte identity, and specifically NOT the single 0x01 seeded above — proving the
-        # update actually landed rather than silently doing nothing.
         @test collect(stored[:blob_payload]) == payload
     finally
         final_cleanup = M.Field_validation_scratch.objects

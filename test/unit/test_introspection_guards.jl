@@ -320,4 +320,40 @@ using PormG.Migrations: _pg_confdeltype_to_on_delete, _normalize_introspected_on
     @test model.fields["raceid"].on_delete === nothing
   end
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # The SQLite DDL-regex path reads nullability the right way round (#310)
+  # The column regex captures `(NOT NULL)?` into `nullable`, which holds the literal string
+  # "NOT NULL" when the column IS NOT NULL, and `nothing` when it IS nullable. Every field branch
+  # (IDField, ForeignKey, and the general/default branch) used to write `null=!(nullable ===
+  # nothing)`, inverting it: a NOT NULL column round-tripped as `null=true` and a nullable column
+  # as `null=false` — backwards against `src/Dialect.jl`, where `field.null == true` renders NULL.
+  # A fixture that only used one polarity would pass against either the correct or the inverted
+  # implementation, so this one mixes NOT NULL and nullable columns across all three branches.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "the SQLite DDL-regex path reads nullability the right way round" begin
+    sql = """
+    CREATE TABLE "results" (
+      "id" INTEGER NOT NULL,
+      "points" REAL NOT NULL,
+      "notes" TEXT,
+      "statusid" INTEGER NOT NULL,
+      "raceid" INTEGER,
+      PRIMARY KEY("id"),
+      FOREIGN KEY("statusid") REFERENCES "status"("statusid"),
+      FOREIGN KEY("raceid") REFERENCES "races"("raceid")
+    )"""
+    model = convertSQLToModel(sql)
+
+    # IDField branch: a NOT NULL primary key must not come back nullable.
+    @test model.fields["id"].null == false
+
+    # General/default branch: NOT NULL and nullable plain columns, both polarities.
+    @test model.fields["points"].null == false
+    @test model.fields["notes"].null == true
+
+    # ForeignKey branch: NOT NULL and nullable FK columns, both polarities.
+    @test model.fields["statusid"].null == false
+    @test model.fields["raceid"].null == true
+  end
+
 end

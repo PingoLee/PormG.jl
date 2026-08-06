@@ -234,7 +234,11 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
   event_date = Models.DateField(null = true),
   is_active = Models.BooleanField(default = false),
   event_time = Models.DateTimeField(null = true),
-  nullable_int = Models.IntegerField(null = true)
+  nullable_int = Models.IntegerField(null = true),
+  # ImageField/FileField regression (#309): `bulk_update` used to cast this column to the
+  # nonexistent `::blob` on PostgreSQL because its `.type` ("BLOB") was cast verbatim instead of
+  # via the field's actual rendered column type (`TEXT`).
+  photo = Models.ImageField(null = true)
 )
 
 # Fixture for the bulk_copy data-fidelity regression (#86): bulk_copy must store the SAME

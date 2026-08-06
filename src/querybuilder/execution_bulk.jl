@@ -962,20 +962,26 @@ _bulk_copy_cell(value::PormGBytes) = "\\x" * bytes2hex(value.bytes)
 _bulk_copy_cell(value) = value
 
 """
-    _pg_bulk_cast_type(field) -> String
+    _pg_bulk_cast_type(field, conn::PormGPostgres) -> String
 
 The PostgreSQL type name used to cast a `source.<col>` reference in `bulk_update`'s CTE.
 
-A field's `.type` is its canonical (SQLite-flavoured) spelling, and for every field except one it
-happens to lowercase into a real PostgreSQL type — `varchar`, `jsonb`, `timestamptz`, `decimal`,
-`interval`. `BinaryField` is the exception: its `.type` is `"BLOB"`, and `::blob` is not a
-PostgreSQL type at all, so the statement fails with *type "blob" does not exist* (#296).
+Delegates to `Dialect._get_column_type` — the same function that renders the column's actual DDL
+type — rather than re-deriving a cast from `field.type` (the SQLite-flavoured spelling). That
+independent re-derivation is what caused #296 (`BinaryField.type == "BLOB"` cast to the nonexistent
+`::blob`) and its untouched sibling #309 (`ImageField`/`FileField` share `.type == "BLOB"` but
+render as `TEXT`, and were still cast to `::blob`). Keying on the rendered type instead of `.type`
+means a field's type rendering can never drift out of sync with its `bulk_update` cast again — there
+is nothing left in this file to keep in step by hand.
 
-Deliberately keyed on `sBinaryField` rather than on the `"BLOB"` string: `ImageField` and
-`FileField` share that `.type` but render as `TEXT`, so mapping the string would cast a text column
-to `bytea`. Their own `::blob` cast is a separate pre-existing bug and is left alone here.
+A length/precision modifier (`VARCHAR(250)`, `DECIMAL(10,2)`) is stripped: the bare type is
+sufficient for a `source.<col>::<type>` cast and keeps prior behavior for `CharField`/`URLField`/
+`SlugField`/`DecimalField` unchanged.
 """
-_pg_bulk_cast_type(field)::String = field isa sBinaryField ? "bytea" : lowercase(field.type)
+function _pg_bulk_cast_type(field::PormGField, conn::PormGPostgres)::String
+  rendered = Dialect._get_column_type(field, conn)
+  return lowercase(replace(rendered, r"\(.*\)" => ""))
+end
 
 # bulk_copy NULL sentinel (#86) — PostgreSQL's conventional NULL marker. Safe because bulk_copy
 # force-quotes every string value (CSV.write quotestrings=true): a genuine string equal to this
@@ -1405,8 +1411,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       # VALUES/CTE source column list stay the field name (#50).
       quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)
       quoted_source_field = quote_identifier(field, connection)
-      field_type = _pg_bulk_cast_type(model.fields[field])
       if connection isa PormGPostgres
+        field_type = _pg_bulk_cast_type(model.fields[field], connection)
         push!(safe_set_parts, "$quoted_field = source.$quoted_source_field::$field_type")
       else
         push!(safe_set_parts, "$quoted_field = source.$quoted_source_field")
@@ -1515,8 +1521,8 @@ function _bulk_update(model::PormGModel,
     # and the source column list stay the field name (#50).
     quoted_tb_field = quote_identifier(Models.field_db_column(model.fields[filter], filter), connection)
     quoted_source_field = quote_identifier(filter, connection)
-    field_type = _pg_bulk_cast_type(model.fields[filter])
     if connection isa PormGPostgres
+      field_type = _pg_bulk_cast_type(model.fields[filter], connection)
       push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field::$field_type")
     else
       push!(safe_where_conditions, "\"Tb\".$quoted_tb_field = source.$quoted_source_field")

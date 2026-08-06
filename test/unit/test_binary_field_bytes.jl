@@ -309,28 +309,29 @@ PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, fi
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # bulk_update casts source columns by field type, and "BLOB" is not a PG type
-  # Its CTE renders `SET "col" = source."col"::<type>` from `field.type` lowercased. Every
-  # other field's `.type` happens to spell a real PostgreSQL type (varchar, jsonb,
-  # timestamptz, decimal, interval) — `BLOB` does not exist in PostgreSQL, so the
-  # statement failed outright with `type "blob" does not exist`.
+  # bulk_update casts source columns by the field's rendered column type
+  # Its CTE renders `SET "col" = source."col"::<type>` from `Dialect._get_column_type`, the same
+  # function that renders the column's real DDL type — not from `field.type` (the SQLite-flavoured
+  # spelling), so the cast can never drift out of sync with the actual column type again. `BLOB`
+  # (BinaryField's, and ImageField/FileField's, `.type`) is not a PostgreSQL type at all: casting to
+  # it verbatim used to fail with `type "blob" does not exist` (#296, #309).
   # ───────────────────────────────────────────────────────────────────────────
   @testset "bulk_update casts a BinaryField source column to bytea" begin
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.BinaryField()) == "bytea"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.BinaryField(), MockPGBin()) == "bytea"
     # Never the raw `.type`, which is the SQLite spelling and invalid on PostgreSQL.
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.BinaryField()) != "blob"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.BinaryField(), MockPGBin()) != "blob"
 
     # Every other field keeps the existing behaviour exactly.
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.JSONField()) == "jsonb"
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.DateTimeField()) == "timestamptz"
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.CharField()) == "varchar"
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.IntegerField()) == "integer"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.JSONField(), MockPGBin()) == "jsonb"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.DateTimeField(), MockPGBin()) == "timestamptz"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.CharField(), MockPGBin()) == "varchar"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.IntegerField(), MockPGBin()) == "integer"
 
-    # ImageField/FileField share `.type == "BLOB"` but render as TEXT, so they must NOT be
-    # remapped to bytea — keying this on the struct rather than the type string is what keeps
-    # them out. (Their own `::blob` cast is a separate pre-existing bug, untouched here.)
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.ImageField()) == "blob"
-    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.FileField()) == "blob"
+    # ImageField/FileField share `.type == "BLOB"` but render as TEXT (#309, fixed): delegating to
+    # `Dialect._get_column_type` — which has no ImageField/FileField branch and falls through to
+    # `TEXT` — casts them to `text`, not `bytea` and not the old, invalid `blob`.
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.ImageField(), MockPGBin()) == "text"
+    @test PormG.QueryBuilder._pg_bulk_cast_type(Models.FileField(), MockPGBin()) == "text"
   end
 
   # ───────────────────────────────────────────────────────────────────────────

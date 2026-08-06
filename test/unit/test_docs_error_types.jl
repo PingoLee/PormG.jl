@@ -171,6 +171,11 @@ const DOCERR_CASES = [
         ModelDefinitionError,
         () -> Model("Driver_Profile", driverid = IDField()),
     ),
+    (
+        "schema_conventions.md + src/Models.jl — Model docstring: a positional name may not start with '_' (#306)",
+        ModelDefinitionError,
+        () -> Model("_docerr_underscore_probe", driverid = IDField()),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

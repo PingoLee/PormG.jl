@@ -1,5 +1,5 @@
 """
-Unit coverage for model-name case handling (#300).
+Unit coverage for model-name case handling (#300) and leading-underscore handling (#306).
 
 A model's positional name used to be stored VERBATIM while the two groups of consumers disagreed
 about its case: `makemigrations` lowercased it into the DDL, and the query builder quoted it as
@@ -7,11 +7,18 @@ declared. So `Model("Driver_Profile", …)` migrated the table `driver_profile` 
 `"Driver_Profile"` in every SELECT/INSERT/UPDATE — a table that does not exist on PostgreSQL, where a
 quoted identifier is case-sensitive. SQLite's case-insensitive identifiers masked it entirely.
 
-Since #300 the split is unreachable from a user declaration: a non-lowercase positional name is
-rejected at construction. This file **pins the rejection** (the only assertions here that go red
-without the guard), **documents** the DDL/query agreement it buys, and **characterizes** the split as
-it still stands on the paths deliberately left exempt. It also records two limits of the guard: it
-checks case only, so it neither strips a leading underscore nor rejects an invalid bare identifier.
+A leading underscore split the schema the same way, one character away from #300: `format_model_name`
+(used to render an FK `REFERENCES` target and to resolve a model reference by name) strips ONE leading
+underscore, inherited from the FIELD-name reserved-word escape hatch — but `create_table` writes the
+stored name as-is. So `Model("_order", …)` created table `_order` while a `ForeignKey` pointing at it
+referenced `"order"` — a different table, or a failed constraint if `order` didn't exist.
+
+Since #300 (case) and #306 (leading underscore) the split is unreachable from a user declaration: a
+non-lowercase or underscore-prefixed positional name is rejected at construction. This file **pins
+the rejection** (the only assertions here that go red without the guards), **documents** the
+DDL/query agreement it buys, and **characterizes** the split as it still stands on the paths
+deliberately left exempt. It also records one remaining limit of the guard: it does not reject an
+invalid bare identifier (a reserved word or a name containing a space).
 
 All assertions render via mock PostgreSQL/SQLite connections; no live database.
 """
@@ -38,7 +45,7 @@ NameCaseDriver = Model("name_case_driver_scratch",
 )
 NameCaseDriver.connect_key = "model_name_case_mock"
 
-@testset "Model-name case (#300)" begin
+@testset "Model-name case and leading-underscore handling (#300, #306)" begin
 
   # ─────────────────────────────────────────────────────────────────────────────
   # The guard: a positional name needing a fold is a declaration-time error.
@@ -63,23 +70,63 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     @test Model("name_case_ok_scratch", id = IDField()).name == "name_case_ok_scratch"
     @test Model("f1_results_2024", id = IDField()).name == "f1_results_2024"
 
-    # The guard checks CASE and nothing else — it is NOT `format_model_name`, and it applies no
-    # identifier-shape validation. Two consequences, pinned here so they are deliberate:
-    #
-    # (a) A positional name keeps its leading underscore, where `format_model_name` strips it as the
-    #     reserved-word escape hatch. This is NOT harmless: FK targets are rendered through
-    #     `format_model_name` (`Dialect.jl` inline FK, `planner.jl` ADD CONSTRAINT), so a model named
-    #     "_order" is created as `_order` and referenced as `"order"` — a split of the same shape as
-    #     #300, one character away. Out of scope here (it is an underscore split, not a case split);
-    #     see the follow-up noted on the issue.
-    # (b) The guard accepts names that are lowercase but not valid bare identifiers — `"order"` is a
-    #     reserved word, `"driver profile"` contains a space — and the DDL writes the table bare, so
-    #     those render invalid SQL. Also pre-existing and out of scope; recorded so nobody reads the
-    #     guard as "the model name is now safe".
-    @test Model("_driver_scratch", id = IDField()).name == "_driver_scratch"
-    @test Models.format_model_name("_driver_scratch") == "driver_scratch"   # (a): the two disagree
-    @test Model("order", id = IDField()).name == "order"                    # (b): accepted as-is
+    # The guard checks CASE and a LEADING UNDERSCORE (#306) — and nothing else. It is NOT
+    # `format_model_name`, and it applies no other identifier-shape validation. One consequence
+    # remains, pinned here so it stays deliberate: the guard accepts names that are lowercase and
+    # underscore-free at the front but are not valid bare identifiers — `"order"` is a reserved word,
+    # `"driver profile"` contains a space — and the DDL writes the table bare, so those render invalid
+    # SQL. Pre-existing and out of scope; recorded so nobody reads the guard as "the model name is now
+    # safe". (A leading underscore used to be a second such gap here — see the rejection testset below.)
+    @test Model("order", id = IDField()).name == "order"                    # accepted as-is
     @test Model("driver profile", id = IDField()).name == "driver profile"
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The guard, extended (#306): a positional name starting with '_' is also a declaration-time error.
+  # This is the assertion that was RED before #306 — the declaration used to succeed and produce a
+  # model whose created table and FK `REFERENCES` target disagreed, one character away from #300.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "positional name with a leading underscore is rejected (#306)" begin
+    @test_throws PormG.ModelDefinitionError Model("_driver_scratch", id = IDField())
+    @test_throws PormG.ModelDefinitionError Model("_order", id = IDField())
+
+    # Same actionability requirement as the case guard: the message names the offending value AND the
+    # spelling to declare instead (the same spelling the FK `REFERENCES` target would have used).
+    err = try
+      Model("_order", id = IDField()); nothing
+    catch e; e end
+    @test err isa PormG.ModelDefinitionError
+    @test occursin("_order", err.msg)     # the name the user wrote
+    @test occursin("order", err.msg)      # the name they should write
+
+    # A name failing BOTH checks (case AND underscore) must still suggest a spelling that passes on
+    # RETRY — not just fix the one problem its own message names. Before this was pinned, the case
+    # message suggested `lowercase(name)` alone, which for "_Driver_Scratch" is "_driver_scratch" —
+    # still underscore-prefixed, so a user "fixing" it per the message would be rejected again.
+    err_both = try
+      Model("_Driver_Scratch", id = IDField()); nothing
+    catch e; e end
+    @test err_both isa PormG.ModelDefinitionError
+    # The "would migrate the table '_driver_scratch'" clause legitimately still names the lowercased-
+    # but-underscored spelling (that IS what makemigrations would emit) — the precise claim under test
+    # is the "Declare it as" suggestion specifically, which must be the ONE-SHOT correct spelling.
+    @test occursin("Declare it as 'driver_scratch'", err_both.msg)
+    @test !occursin("Declare it as '_driver_scratch'", err_both.msg)   # not the still-broken half-fix
+
+    # A double leading underscore (or a bare "_") is not one strip away from a valid FK reference the
+    # way a single underscore is: `format_model_name` strips only ONE, then itself rejects what's left
+    # if it still starts with '_' — so the "creates X, references Y" divergence this guard warns about
+    # can never actually happen for these names. The message says so instead of making that (wrong)
+    # claim, and never emits the unusable "Declare it as ''." that a naive full-strip would produce.
+    for bad in ("__order", "_", "___")
+      err_multi = try
+        Model(bad, id = IDField()); nothing
+      catch e; e end
+      @test err_multi isa PormG.ModelDefinitionError
+      @test occursin(bad, err_multi.msg)
+      @test !occursin("Declare it as ''", err_multi.msg)
+      @test !occursin("REFERENCES", err_multi.msg)   # not the single-underscore FK-divergence story
+    end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +200,31 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     del = del_raw isa Vector ? first(del_raw) : del_raw
     @test occursin("DELETE FROM driver_profile", del[:sql_text])   # bare + folded
     @test occursin("\"Driver_Profile\"", del[:sql_text])           # …and quoted verbatim, same string
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CHARACTERIZATION (#306): the create/REFERENCES split the underscore guard prevents is real, and
+  # still reachable through the exempt `Dict` path — the issue's own repro, DB-free via SQLite's inline
+  # FK. `create_table` writes the PARENT's name verbatim (`_fk306_driver_scratch`); the CHILD's
+  # `ForeignKey` renders through `format_model_name`, which strips the leading underscore
+  # (`fk306_driver_scratch`) — a table one character removed from the one actually created.
+  #
+  # This is a characterization test, not an endorsement. If this split is ever closed for the exempt
+  # path too, THIS TESTSET IS SUPPOSED TO FAIL.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "characterize: the create/REFERENCES split is real on the exempt path (#306)" begin
+    fk_parent = Model("_fk306_driver_scratch", Dict{String, PormG.PormGField}("id" => IDField()))
+    fk_child = Model("fk306_child_scratch",
+      id       = IDField(),
+      driverid = Models.ForeignKey(fk_parent, pk_field = "id", on_delete = "CASCADE"),
+    )
+
+    parent_ddl = PormG.Dialect.create_table(MockSQLiteNameCase(), fk_parent)
+    child_ddl  = PormG.Dialect.create_table(MockSQLiteNameCase(), fk_child)
+
+    @test occursin("_fk306_driver_scratch", parent_ddl)                    # the table actually created…
+    @test occursin("REFERENCES \"fk306_driver_scratch\"", child_ddl)       # …a DIFFERENT table referenced
+    @test !occursin("REFERENCES \"_fk306_driver_scratch\"", child_ddl)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

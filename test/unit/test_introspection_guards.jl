@@ -24,7 +24,8 @@ using PormG.Migrations: convertSQLToModel
 # `pg_constraint.confdeltype` codes, comma-joined in the same order as `foreign_keys` (#292).
 function _introspection_row(; table_name, columns, primary_keys,
                               foreign_keys = missing, foreign_tables = missing,
-                              referenced_primary_keys = missing, delete_rules = missing)
+                              referenced_primary_keys = missing, delete_rules = missing,
+                              index_columns = missing, index_names = missing)
   df = DataFrame(
     table_name              = [table_name],
     columns                 = [columns],
@@ -33,8 +34,8 @@ function _introspection_row(; table_name, columns, primary_keys,
     foreign_tables          = [foreign_tables],
     referenced_primary_keys = [referenced_primary_keys],
     delete_rules            = [delete_rules],
-    index_columns           = [missing],
-    index_names             = [missing],
+    index_columns           = [index_columns],
+    index_names             = [index_names],
   )
   return df[1, :]
 end
@@ -395,4 +396,66 @@ end
     primary_keys = "id"))
   @test !tricky.fields["UNIQUE_CODE"].unique
   @test !tricky.fields["label"].unique
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #325: a long VARCHAR must keep its length instead of being retyped to TEXT
+# The reader used to parse `character varying(500)`, then throw the result away — `CharField`
+# refused any `max_length > 255`, so the column was rebuilt as a `TextField` with no length at all.
+# The live column really was `varchar(500)`, so the declared model never matched its own table and
+# `makemigrations` proposed the same widening on every run. Both assertions go red on main.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL varchar(n > 255) keeps its length (#325)" begin
+  model = convertSQLToModel(_introspection_row(
+    table_name   = "long_varchar_guard",
+    columns      = "id bigint NOT NULL, canonical_url character varying(500) NOT NULL, " *
+                   "short character varying(120), body text",
+    primary_keys = "id"))
+
+  # THE mutation gate: on main this field is an `sTextField` and has no `max_length` at all.
+  @test model.fields["canonical_url"] isa PormG.Models.sCharField
+  @test model.fields["canonical_url"].max_length == 500
+
+  # The ≤ 255 case is the baseline — it passed before too. Kept so a fix that swings the other way
+  # (everything becomes a TextField) cannot go green here.
+  @test model.fields["short"] isa PormG.Models.sCharField
+  @test model.fields["short"].max_length == 120
+
+  # …and a genuine `text` column is still a TextField: `varchar` ⇒ CharField, `text` ⇒ TextField is
+  # now the whole rule, with no length-dependent crossover between them.
+  @test model.fields["body"] isa PormG.Models.sTextField
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #325: `db_index` is read back from the schema query's index columns
+# The reader computed `haskey(index_map, col_name |> Symbol)` against a `Dict{String,String}` — a
+# `Symbol` key never matches a `String` key, so `db_index` was a hard `false` for every plain
+# PostgreSQL column. Every `db_index=true` field therefore compared unequal to its own live table
+# forever, and `Dialect.alter_field` has no `db_index` branch, so the migration it triggered emitted
+# no DDL for it. The de-quoting half matters just as much: the CTE passes column names through
+# `quote_ident`, so a mixed-case column (#57) arrives wrapped in `"` and would miss even with the
+# key type fixed.
+#
+# The CTE's own filters (non-unique, non-partial, single-column) run against a live database in
+# test/integration/test_migration_bootstrap.jl — nothing here executes SQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL db_index is read back off the index map (#325)" begin
+  model = convertSQLToModel(_introspection_row(
+    table_name    = "db_index_guard",
+    columns       = "id bigint NOT NULL, slug character varying(120), plain text, \"mixedCase\" text",
+    primary_keys  = "id",
+    # What the `indexes` CTE hands back: one entry per indexed column, `quote_ident`-ed, with the
+    # index names aligned positionally.
+    index_columns = "slug, \"mixedCase\"",
+    index_names   = "db_index_guard_slug_idx, db_index_guard_mixedcase_idx"))
+
+  # THE mutation gate — all three are `false` on main.
+  @test model.fields["slug"].db_index
+  @test model.fields["mixedCase"].db_index      # the de-quoting half (#57)
+  @test !model.fields["plain"].db_index         # …and it did not over-mark
+
+  # The index NAME is carried too, de-quoted, because the planner needs it to DROP the index when a
+  # model stops declaring `db_index`. `_drop_index` re-quotes, so a quoted value would double up.
+  @test model.cache["index"]["slug"] == "db_index_guard_slug_idx"
+  @test model.cache["index"]["mixedCase"] == "db_index_guard_mixedcase_idx"
 end

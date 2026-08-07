@@ -263,14 +263,24 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   # allows `DEFAULT (expr)`, e.g. `(datetime('now'))`, which `_strip_sqlite_default_wrapper` exists
   # to unwrap — one nesting level is enough for every form SQLite emits); then a bare token. The
   # bare-token branch must exclude `(` so it cannot run into a trailing CHECK.
-  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+(?: UNSIGNED)?)\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[Xx]'[0-9A-Fa-f]*'|\([^()]*(?:\([^()]*\)[^()]*)*\)|[^,()\s]+))?", sql)
+  #
+  # The single-integer length suffix (`TEXT(120)`) is captured because it is what distinguishes a
+  # CharField from a TextField on SQLite (#325) — see the note by `type_sym` below. A two-argument
+  # suffix (`DECIMAL(10,2)`) deliberately does not match: `\s*(NOT NULL)?` then matches empty and
+  # the match ends before it, exactly as it did before the group existed.
+  column_matches = eachmatch(r"[^(]\"(\w+)\"\s+([A-Z]+(?: UNSIGNED)?)(?:\(\s*(\d+)\s*\))?\s*(NOT NULL)?\s*(?:DEFAULT\s+('[^']*'|[Xx]'[0-9A-Fa-f]*'|\([^()]*(?:\([^()]*\)[^()]*)*\)|[^,()\s]+))?", sql)
   # Initialize fields dictionary
   fields_dict = Dict{Symbol, Any}()
   str_fields_dict = Dict{String, Any}()
   for match in column_matches
     # println(match.captures)
-    column_name, column_type, nullable, default_value = match.captures
+    column_name, column_type, declared_length, nullable, default_value = match.captures
     type_sym = get(type_map, column_type, :TextField)
+    # #325: keep this reader's CharField/TextField split identical to the PRAGMA reader's. A bare
+    # textual column has no length, and `CharField()` would invent `max_length = 250`.
+    if type_sym == :CharField && declared_length === nothing
+      type_sym = :TextField
+    end
     normalized_default = _normalize_sqlite_default(default_value, type_sym)
     # check if column_name is a primary key
     if haskey(pk_map, column_name)
@@ -290,6 +300,9 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
       if type_sym == :BinaryField && haskey(byte_bounds, column_name)
         field_instance.max_length = byte_bounds[column_name]
+      elseif type_sym == :CharField && declared_length !== nothing
+        # #325: carry the declared length instead of letting CharField default it to 250.
+        field_instance.max_length = parse(Int, declared_length)
       end
     end
 
@@ -339,6 +352,9 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
   # #318: `PRAGMA table_info` above has no uniqueness column, so `unique` was never populated at all.
   # Read it once per table here; the per-column branches below test membership.
   unique_cols = _sqlite_single_column_unique_columns(db, table_name)
+  # #325: the same gap for `db_index` — PRAGMA table_info has no index column either. Column ⇒ index
+  # name, so the model can also carry `cache["index"]` for the planner's DROP INDEX path.
+  indexed_cols = _sqlite_single_column_indexed_columns(db, table_name)
 
   fields_dict = Dict{Symbol, Any}()
   fk_map = Dict{String, Any}()
@@ -382,6 +398,14 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
             default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
     else
         type_sym = get(type_map, base_type, :TextField)
+        # #325: a BARE textual column carries no length, but `CharField()` INVENTS `max_length = 250`
+        # (models/fields.jl) — which then renders `TEXT(250)` and can never match the live `TEXT`.
+        # SQLite collapses UUIDField, JSONField, ImageField and TextField all onto bare `TEXT`, so
+        # every one of them read back as `CharField(250)` and churned forever. Only a declared `(n)`
+        # is a CharField here; a lengthless textual column is a TextField.
+        if type_sym == :CharField && !occursin("(", col_type)
+            type_sym = :TextField
+        end
         # Handle decimal precision if present
       field = getfield(Models, type_sym)(null=nullable, default=_normalize_sqlite_default(default_val, type_sym))
         if type_sym == :CharField && occursin("(", col_type)
@@ -405,11 +429,46 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
     if !is_pk && col_name in unique_cols && hasfield(typeof(field), :unique) && !field.unique
       field.unique = true
     end
+    # #325: same treatment for `db_index`, and for the same three reasons `!is_pk` is required —
+    # sIDField is immutable, it already defaults `db_index=true`, and only ever setting TRUE keeps a
+    # ForeignKey's constructor-forced `db_index` intact.
+    if !is_pk && haskey(indexed_cols, col_name) && hasfield(typeof(field), :db_index) && !field.db_index
+      field.db_index = true
+    end
     fields_dict[Symbol(col_name)] = field
   end
-  
-  return Models.Model(table_name, fields_dict)
+
+  model_resp = Models.Model(table_name, fields_dict)
+  # The planner reads `cache["index"]` to name the index it must DROP when a model stops declaring
+  # `db_index`. PostgreSQL's reader has always populated it; SQLite's never did, which was harmless
+  # only while `db_index` could not be true on this side (#325).
+  if !isempty(indexed_cols)
+    model_resp.cache = Dict("index" => indexed_cols)
+  end
+  return model_resp
 end
+
+"""
+    _is_ignored_table(table_name, ignore_table) -> Bool
+
+Whether `table_name` is skipped by the introspection ignore list — matched as a **prefix**, on both
+backends (#325).
+
+Every entry in `postgres_ignore_table` / `sqlite_ignore_schema` is a framework prefix
+(`"django_"`, `"auth_"`, `"celery_"`, `"sqlite_autoindex"`) or a whole table name
+(`"pormg_migrations"`), and a prefix test covers both. The two backends used to disagree, and both
+were wrong in different directions:
+
+  * PostgreSQL used `occursin`, so a user table merely *containing* an entry was silently dropped
+    from the live schema — `company_admin_log` matched `"admin_"`, `oauth_tokens` matched `"auth_"`.
+    A dropped table does not read as "ignored" downstream, it reads as "does not exist", so
+    `makemigrations` proposed `CREATE TABLE` for it on every single run.
+  * SQLite used `==`, so `"sqlite_autoindex"` — a prefix of `sqlite_autoindex_<table>_<n>`, never a
+    table name in its own right — could never match. Harmless only because the table query already
+    filters `name NOT LIKE 'sqlite_%'`.
+"""
+_is_ignored_table(table_name, ignore_table)::Bool =
+  any(ignored -> startswith(String(table_name), ignored), ignore_table)
 
 function convert_schema_to_models(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema, include_table::Union{Vector{String}, Nothing} = nothing)
   # Always skip consumer-registered framework tables (e.g. Nitro's), on top of the caller's list.
@@ -425,9 +484,8 @@ function convert_schema_to_models(db::PormGSQLite; ignore_table::Vector{String} 
     if include_table !== nothing
       !any(included -> table_name == included, include_table) && continue
     end
-    # check if each ignore_table value is contained in the table_name
-    any(ignored -> table_name == ignored, ignore_table) && continue
-    
+    _is_ignored_table(table_name, ignore_table) && continue
+
     push!(models_array, convertSQLToModel(db, table_name))
   end  
   return models_array
@@ -469,8 +527,7 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
     if include_table !== nothing
       !any(included -> schema.table_name == included, include_table) && continue
     end
-    # check if each ignore_table value is contained in the schema.table_name
-    any(ignored -> occursin(ignored, schema.table_name), ignore_table) && continue
+    _is_ignored_table(schema.table_name, ignore_table) && continue
     # println(typeof(schema), " ", convertSQLToModel(schema) |> println)
     
     push!(models_array, convertSQLToModel(schema))
@@ -548,15 +605,32 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         WHERE con.contype = 'f'
         GROUP BY con.conrelid
     ),
+    -- Secondary indexes, filtered down to exactly what `field.db_index = true` emits: ONE
+    -- `CREATE INDEX` over ONE column (`planner._add_constrains` → `Dialect.create_index`). #325
+    -- made this feed `db_index` on read-back, which the three added predicates are what makes
+    -- safe — without them a model declaring only `unique=true` (or a composite `UniqueConstraint`,
+    -- #19) would read back as `db_index=true` and churn in the opposite direction:
+    --   * NOT indisunique — a UNIQUE constraint's backing index is `field.unique`, already read
+    --     from `pg_constraint` by the `unique_constraints` CTE above. Keeps the backends symmetric
+    --     with SQLite's `il."unique" = 0` filter.
+    --   * indpred IS NULL — a partial index constrains rows, not the column; PormG cannot declare
+    --     one, so reading it would be permanent churn.
+    --   * indnkeyatts = 1 — a composite index marks no single column, mirroring #318's
+    --     `HAVING COUNT(*) = 1` for composite UNIQUE.
+    -- An expression index joins no `pg_attribute` row (its `indkey` entry is 0) and so drops out
+    -- on its own.
     indexes AS (
         SELECT
             i.indrelid AS table_oid,
-            array_to_string(array_agg(quote_ident(a.attname)), ', ') AS index_columns,
+            array_to_string(array_agg(a.attname), ', ') AS index_columns,
             array_to_string(array_agg(quote_ident(c.relname)), ', ') AS index_names
         FROM pg_index i
         JOIN pg_class c ON c.oid = i.indexrelid
         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
         WHERE NOT i.indisprimary
+          AND NOT i.indisunique
+          AND i.indpred IS NULL
+          AND i.indnkeyatts = 1
         GROUP BY i.indrelid
     ),
     non_negative_checks AS (
@@ -798,6 +872,60 @@ function _sqlite_single_column_unique_columns(conn::PormGSQLite, table_name)::Se
 end
 
 """
+    _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name) -> Dict{String, String}
+
+Physical column ⇒ index name, for every SINGLE-column non-unique secondary index on `table_name` —
+exactly the set for which `field.db_index` must introspect back as `true` (#325).
+
+The `unique` sibling above and this one are the same shape for the same reason: `PRAGMA table_info`
+carries neither attribute, so `convertSQLToModel(::PormGSQLite)` never populated `db_index` at all.
+Every `db_index=true` field therefore compared unequal to its own live table, and — because
+`Dialect.alter_field` has no `db_index` branch — `makemigrations` proposed a rebuild that emitted no
+DDL for it, forever. `src/migrations/planner.jl` carried a workaround for one symptom of this
+(a duplicated `CREATE INDEX`); the cause is here.
+
+The three filters mirror the `unique` reader's, each excluding an index that is NOT `db_index`:
+
+  * `il."unique" = 0` — a UNIQUE index is `field.unique`, read by
+    [`_sqlite_single_column_unique_columns`](@ref). Marking it here would make a model declaring
+    only `unique=true` churn in the opposite direction. Symmetric with PostgreSQL's
+    `NOT i.indisunique`.
+  * `il.origin = 'c'` — only a `CREATE INDEX`, which is the one and only thing `db_index=true`
+    emits (`planner._add_constrains` → `Dialect.create_index`). Excludes `'u'` (a `UNIQUE` clause's
+    auto-index) and `'pk'`.
+  * `HAVING COUNT(*) = 1` — a composite index marks no single column, exactly as for composite
+    UNIQUE (#318). PormG only ever indexes one column per `db_index`.
+
+`il.partial = 0` IS load-bearing here, unlike in the `unique` reader: a partial index is created by
+`CREATE INDEX … WHERE` and so shares this reader's `origin = 'c'`. It constrains rows rather than
+the column, PormG cannot declare one, and reading it would be permanent churn.
+
+Returns the index NAME as well as the column because the planner needs it to drop an index the model
+no longer declares (`model.cache["index"]`); the PostgreSQL path builds the same mapping from its
+`indexes` CTE. ONE query per table; an unknown table yields an empty dict rather than throwing.
+"""
+function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::Dict{String, String}
+  rows = fetch(conn, """
+    SELECT MIN(ii.name) AS col, il.name AS idx
+    FROM pragma_index_list(?) AS il
+    JOIN pragma_index_info(il.name) AS ii
+    WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0
+    GROUP BY il.name
+    HAVING COUNT(*) = 1
+    """, [string(table_name)]) |> DataFrame
+  # An empty frame's columns are eltype Missing, so guard before touching them.
+  nrow(rows) == 0 && return Dict{String, String}()
+  out = Dict{String, String}()
+  for r in eachrow(rows)
+    (r.col === missing || r.idx === missing) && continue
+    # First index wins if two single-column indexes cover the same column — the duplicate is
+    # redundant, and `db_index` is a boolean either way.
+    get!(out, string(r.col), string(r.idx))
+  end
+  return out
+end
+
+"""
     get_secondary_index_ddls(conn::PormGSQLite, table_name) -> Vector{String}
 
 Return the `CREATE INDEX` DDL for every *user-created* secondary index on `table_name`, verbatim from
@@ -884,17 +1012,40 @@ end
 
 # Returns `nothing` when no UNIQUE constraint matches — the annotation must admit it, or Julia
 # converts the `return nothing` below and raises instead of letting callers test it (#284).
+#
+# #325: the SINGLE-column UNIQUE on `field_name`, and nothing else. The caller is
+# `Dialect.alter_field`, dropping a constraint because the model stopped declaring `unique=true` —
+# and `field.unique` is only ever read back from a single-column constraint (#318), so a composite
+# one must never be droppable through this path. It was: the query matched every constraint the
+# column merely *belongs to* and returned `result[1, …]` from an unordered result, so a column in
+# both `UNIQUE(a)` and `UNIQUE(a, b)` dropped whichever row PostgreSQL happened to return first.
+#
+# Three changes make that deterministic:
+#   * `key_column_usage`, not `constraint_column_usage` — the former lists a constraint's OWN
+#     columns, which is what lets `COUNT(*) = 1` mean "single-column constraint". (The latter is
+#     equivalent for UNIQUE, but only by accident of PostgreSQL's implementation; the sibling
+#     `get_constraints_pk` above already uses `kcu`.)
+#   * `GROUP BY` + `HAVING COUNT(*) = 1` — the arity filter, mirroring the CTE #318 added.
+#   * `ORDER BY` — with the arity filter two matches are already pathological (two single-column
+#     UNIQUEs on the same column), but "whichever came first" is not an answer.
+#
+# Parameterized and search-path-restricted, like `get_constraints_byte_length_check` below; the
+# unparameterized siblings predate the rule and are left alone, but an edited query does not
+# inherit the exemption.
 function get_constraints_unique(conn::PormGPostgres, table_name::String, field_name::String)::Union{String, Nothing}
-  # `AND tc.table_schema = ccu.table_schema` for the same reason as get_constraints_pk above:
-  # constraint names are unique per schema, so a name-only join can cross schemas (#283 review).
   query = """
   SELECT tc.constraint_name
   FROM information_schema.table_constraints tc
-  JOIN information_schema.constraint_column_usage ccu
-    ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-  WHERE tc.table_name = '$table_name' AND tc.constraint_type = 'UNIQUE' AND ccu.column_name = '$field_name';
+  JOIN information_schema.key_column_usage kcu
+    ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+  WHERE tc.table_name = \$1
+    AND tc.constraint_type = 'UNIQUE'
+    AND tc.table_schema = ANY(current_schemas(false))
+  GROUP BY tc.constraint_name, tc.table_schema
+  HAVING COUNT(*) = 1 AND bool_or(kcu.column_name = \$2)
+  ORDER BY tc.constraint_name, tc.table_schema;
   """
-  result = fetch(conn, query) |> DataFrame
+  result = fetch(conn, query, [table_name, field_name]) |> DataFrame
   if nrow(result) == 0
       return nothing
   end
@@ -1015,14 +1166,17 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
     end
   end
 
-  # Extract index information
+  # Extract index information — physical column ⇒ index name, for the single-column secondary
+  # indexes the `indexes` CTE keeps. Both halves are stored UNQUOTED (#325): the key has to match
+  # `fields_dict`, which is keyed by the de-quoted column name below, and the value is re-quoted by
+  # `_drop_index`. A mixed-case name (#57) arrived here wrapped in `"` and matched neither.
   index_map = Dict{String, String}()
   if !ismissing(row[:index_columns])
     indexes = split(row[:index_columns], ", ")
     index_names = split(row[:index_names], ", ")
     for (index, index_name) in zip(indexes, index_names)
-      index_map[index] = index_name
-    end      
+      index_map[replace(index, "\"" => "")] = replace(index_name, "\"" => "")
+    end
   end
    
   # Parse each column definition
@@ -1036,8 +1190,11 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       max_digits = nothing
       decimal_places = nothing
 
-      # Detect if the column is indexed
-      db_index = haskey(index_map, col_name |> Symbol)
+      # Detect if the column is indexed. #325: this probed a `Dict{String,String}` with a `Symbol`
+      # key, which `haskey` never matches — so `db_index` was a hard `false` for every plain
+      # PostgreSQL column, and every `db_index=true` field re-proposed its own CREATE INDEX on every
+      # `makemigrations`. `col_name` is de-quoted to match `index_map`'s keys.
+      db_index = haskey(index_map, replace(String(col_name), "\"" => ""))
 
       @pormg_debug false
 
@@ -1155,17 +1312,15 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # Only fields that actually carry these attributes get them. A primary-key column
       # is mapped to an IDField (above), which has no max_length/max_digits — guard the
       # assignments so such columns don't raise FieldError during introspection.
+      # #325: unconditional. This used to retype any `varchar(n > 255)` to TextField and DROP the
+      # length, because CharField refused a max_length above 255 — so a live `varchar(500)` read
+      # back as `text`, never matched the model that declared it, and `makemigrations` proposed the
+      # same widening on every run. CharField no longer carries that ceiling (models/fields.jl), so
+      # `varchar(n)` now always round-trips as `CharField(n)`, symmetric with `text` ⇒ `TextField`.
+      # (The sBinaryField branch that used to sidestep the ceiling for byte bounds, #296, is what
+      # this generalizes.)
       if max_length !== nothing && hasfield(typeof(field), :max_length)
-        if field isa Models.sBinaryField
-          # A BinaryField's bound is a BYTE count with no 255 ceiling — a 5 MB blob is ordinary, and
-          # the CharField fallback below would silently retype the column to TEXT (#296).
-          field.max_length = max_length
-        elseif max_length > 255
-          # CharField only supports max_length <= 255, use TextField for longer strings
-          field = Models.TextField(unique=unique, null=!not_null, default=default_value, db_index=db_index)
-        else
-          field.max_length = max_length
-        end
+        field.max_length = max_length
       end
 
       if max_digits !== nothing && hasfield(typeof(field), :max_digits)

@@ -101,7 +101,14 @@ const sqlite_type_map = Dict{String, Symbol}(
   "INTEGER UNSIGNED" => :PositiveIntegerField,
   "SMALLINT" => :PositiveSmallIntegerField,
   "INT" => :BigIntegerField,
+  # PormG renders every VARCHAR-family field as `TEXT(n)` on SQLite (see `sqlite_type_map_reverse`),
+  # so a length suffix is what distinguishes a CharField from a TextField here — a BARE `TEXT` is
+  # resolved to `:TextField` in `convertSQLToModel(::PormGSQLite)` rather than to a CharField whose
+  # constructor would invent `max_length = 250` (#325). VARCHAR/CHAR are accepted for schemas PormG
+  # did not create, so a hand-written `VARCHAR(50)` keeps its length.
   "TEXT" => :CharField,
+  "VARCHAR" => :CharField,
+  "CHAR" => :CharField,
   "NUMERIC" => :FloatField,
   "REAL" => :FloatField,
   "DECIMAL" => :DecimalField,

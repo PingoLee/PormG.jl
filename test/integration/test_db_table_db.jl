@@ -120,19 +120,27 @@ end
 # keyed on anything else, a db_table model would read as "a table to create" PLUS "a live table
 # nobody declared" — a CREATE and a DROP of a live table that did not change at all.
 #
-# The db_table fixtures were migrated by the same bootstrap as every other model here, so a re-diff
-# must propose NOTHING for them. Scoped to those tables on purpose: asserting global
-# `status().pending` would fold in unrelated drift from other fixtures in this shared database and
-# report a #59 regression that isn't one.
-@testset "db_table: a re-diff proposes nothing for the db_table-mapped tables" begin
+# GLOBAL since #325. This assertion used to be scoped to the db_table tables, because the whole
+# database carried standing drift from the type/`max_length`/`db_index` round-trip and a global
+# check would have reported a #59 regression that wasn't one. With that fixed, the plan must be
+# empty for EVERY fixture — which also catches the failure this test is really about (a db_table
+# model diffing as a CREATE plus a DROP) under any spelling, not only the five listed by hand.
+@testset "db_table: a re-diff proposes nothing (global, #325)" begin
     settings = PormG.config[PORMG_DB_FOLDER]
     conn = settings.connections
     live = PormG.Migrations.convert_schema_to_models(conn)
     declared = PormG.Migrations.get_all_models(M)
     plan = PormG.Migrations.get_migration_plan(live, declared, conn, settings; interactive = false)
 
-    # No plan entry under EITHER spelling: the physical name (a create/alter the planner thinks it
-    # needs) or the logical one (proof the two sides were keyed differently).
+    # Name the drifting models in the failure message — an `isempty` that just says `false` gives a
+    # reader nothing to act on.
+    @test isempty(plan) || error("Schema drift: " *
+        join([string(name, ": ", join(collect(keys(steps)), "; ")) for (name, steps) in plan], " | "))
+
+    # Kept explicitly on top of the global check: these are the two spellings #59 is about — the
+    # physical table name (a create/alter the planner thinks it needs) and the logical one (proof
+    # the two sides were keyed differently). A future change that legitimately relaxes the global
+    # assertion must still not relax these.
     for name in (:Db_Table_Scratch, :db_table_scratch, :Db_Table_Col_Scratch, :db_table_col_scratch,
                  :db_table_child_scratch)
         @test !haskey(plan, name)

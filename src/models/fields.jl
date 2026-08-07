@@ -889,7 +889,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 
 # Keyword Arguments
 - `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
-- `max_length::Int = 250`: Maximum number of characters allowed (1-255)
+- `max_length::Int = 250`: Maximum number of characters allowed (1 or greater)
 - `unique::Bool = false`: Whether values in this field must be unique across all records
 - `blank::Bool = false`: Whether the field can be left blank in forms
 - `null::Bool = false`: Whether the database column can store NULL values
@@ -901,7 +901,8 @@ The `CharField` is the most commonly used field for storing textual data with a 
 
 # Length Constraints
 - **Minimum**: 1 character
-- **Maximum**: 255 characters
+- **Maximum**: bounded by the backend, not by PormG — PostgreSQL's `varchar` accepts up to
+  10,485,760 characters and SQLite ignores the declared length entirely
 - **Validation**: Automatically enforced at the field level
 - **Storage**: Efficient variable-length storage in PostgreSQL
 
@@ -994,7 +995,7 @@ Task = Models.Model(
 # CharField vs TextField
 | Feature | CharField | TextField |
 |---------|-----------|-----------|
-| **Length** | Limited (1-255) | Unlimited |
+| **Length** | Bounded (`max_length`) | Unlimited |
 | **Database Type** | VARCHAR | TEXT |
 | **Use Case** | Short strings | Long content |
 | **Indexing** | Efficient | Less efficient |
@@ -1028,7 +1029,11 @@ function CharField(; kwargs...)
 
   max_length isa AbstractString && (max_length = parse(Int, max_length))
   max_length isa Int || throw(_fielderr("The max_length must be an integer"))
-  max_length > 255 && throw(_fielderr("The max_length must be less than or equal to 255"))
+  # No upper bound (#325). The old 255 ceiling was a MySQL-ism — PostgreSQL's `varchar` takes up to
+  # 10,485,760 characters and SQLite ignores the declared length. Worse, it was LOSSY on read-back:
+  # introspecting a live `varchar(500)` had to retype the column to TextField and drop the length,
+  # so the declared model never matched its own table and `makemigrations` churned forever. A future
+  # MySQL backend enforces its own limit at render time (#60), not here.
   max_length < 1 && throw(_fielderr("The max_length must be greater than 1"))
   default isa Int && (default = string(default))
   if !(default isa Nothing) && !(default isa AbstractString) 

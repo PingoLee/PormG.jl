@@ -225,7 +225,7 @@ Part = Models.Model(
 ```
 
 **Key Parameters**:
-- `max_length::Int = 250`: Maximum characters (1-255)
+- `max_length::Int = 250`: Maximum characters (1 or greater; the backend sets the real ceiling)
 - `choices`: Tuple of (value, display_name) pairs
 - `unique::Bool = false`: Enforce uniqueness
 - `db_index::Bool = false`: Create database index

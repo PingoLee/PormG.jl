@@ -48,3 +48,51 @@ import PormG.Migrations: convert_schema_to_models
     PormG._EXTRA_IGNORE_TABLES[] = saved   # never leak registry state into other suites
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #325: the ignore list matches a PREFIX, and matches the same way on both backends
+#
+# Every entry is either a framework prefix (`"django_"`, `"auth_"`, `"sqlite_autoindex"`) or a whole
+# table name (`"pormg_migrations"`) — a prefix test covers both. The backends used to disagree, and
+# each was wrong in its own direction:
+#
+#   * PostgreSQL used `occursin`, so a user table merely CONTAINING an entry vanished from the live
+#     schema. A dropped table does not read as "ignored" downstream, it reads as "does not exist" —
+#     so `makemigrations` proposed `CREATE TABLE` for it on every single run, which is the same
+#     never-converging churn #325 is about. `company_admin_log` and `oauth_tokens` are the shapes
+#     that actually bite; both are ordinary user tables.
+#   * SQLite used `==`, so `"sqlite_autoindex"` — only ever a prefix of `sqlite_autoindex_<t>_<n>`,
+#     never a table name — could not match anything.
+#
+# Pure predicate, no database.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ignore-list matching is prefix-based on both backends (#325)" begin
+  import PormG.Migrations: _is_ignored_table
+
+  pg = PormG.postgres_ignore_table
+
+  # Genuine framework tables are still skipped — the whole point of the list.
+  @test _is_ignored_table("django_migrations", pg)
+  @test _is_ignored_table("django_content_type", pg)
+  @test _is_ignored_table("auth_user", pg)
+  @test _is_ignored_table("celery_taskmeta", pg)
+  @test _is_ignored_table("pormg_migrations", pg)
+
+  # THE mutation gate: user tables that merely CONTAIN an entry are no longer swallowed.
+  @test !_is_ignored_table("company_admin_log", pg)      # contains "admin_"
+  @test !_is_ignored_table("oauth_tokens", pg)           # contains "auth_"
+  @test !_is_ignored_table("contract_django_scratch", pg)  # contains "django_" — the #325 fixture
+  @test !_is_ignored_table("my_social_graph", pg)        # contains "social_"
+
+  # A table that genuinely starts with a framework prefix is STILL skipped, so the fix did not
+  # simply turn the list off. This is why the integration fixture had to be renamed rather than the
+  # list edited — ignoring `django_*` is correct behavior.
+  @test _is_ignored_table("django_contract_scratch", pg)
+
+  # SQLite side: `sqlite_autoindex` is a prefix and never a table name, so `==` could not match it.
+  sl = PormG.sqlite_ignore_schema
+  @test _is_ignored_table("sqlite_sequence", sl)
+  @test _is_ignored_table("sqlite_autoindex_drivers_1", sl)   # ← impossible under `==`
+  @test _is_ignored_table("pormg_migrations", sl)
+  @test !_is_ignored_table("drivers", sl)
+end

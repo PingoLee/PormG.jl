@@ -1792,6 +1792,73 @@ end
     @test accepted
   end
 
+  # ── Phase 18: single-column UNIQUE round-trips + no churn (#318) ────
+  # Introspection never read a column's UNIQUE back, so a `unique=true` field never compared equal to
+  # its own live table: are_model_fields_equal said "changed" and makemigrations proposed the same
+  # alteration on EVERY run — on SQLite a real CREATE/INSERT-SELECT/DROP/RENAME table rebuild.
+  #
+  # Two root causes, one per backend, and `Uniq318` reproduces the harder one:
+  #   * SQLite — `PRAGMA table_info` has no uniqueness column at all, so `unique` was never populated.
+  #   * PostgreSQL — the `unique_constraints` CTE grouped by TABLE, merging every unique constraint's
+  #     columns into ONE array; a table with TWO separate single-column UNIQUEs produced length 2 and
+  #     the consumer's `array_length(...) = 1` guard then rejected BOTH.
+  # Hence two uniques on one table, not one.
+  @testset "Phase 18: UNIQUE Round-trip + No Churn (#318)" begin
+    write_edge_models("""
+    Uniq318 = Models.Model(
+        id = Models.IDField(),
+        slug = Models.CharField(unique=true),
+        token = Models.CharField(unique=true),
+        plain = Models.CharField(null=true)
+    )
+    Uniqcomp318 = Models.Model(
+        id = Models.IDField(),
+        season = Models.IntegerField(),
+        round = Models.IntegerField(),
+        constraints = [Models.UniqueConstraint(fields=("season", "round"), name="uniqcomp318_season_round_uniq")]
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # (a) The constraints are physically REAL, asserted behaviorally (the same oracle Phase 17 uses):
+    #     a metadata query here would just re-implement the production predicate and could not catch
+    #     it being wrong.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token","plain") VALUES ('s1','t1','p');""")
+    # Match the UNIQUE-violation message rather than catching everything: a bare `catch` would read a
+    # typo'd table name or a pool error as "constraint enforced" and pass for the wrong reason.
+    _is_unique_violation(e) = occursin("unique", lowercase(sprint(showerror, e)))
+    dup_slug = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s1','t2');"""); false
+    catch e; _is_unique_violation(e) end
+    dup_token = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s2','t1');"""); false
+    catch e; _is_unique_violation(e) end
+    ok_both = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO uniq318 ("slug","token") VALUES ('s3','t3');"""); true
+    catch; false end
+    @test dup_slug     # both single-column uniques are enforced…
+    @test dup_token
+    @test ok_both      # …and independently, not as a composite
+
+    # (b) INTROSPECTION reads them back — the unit of the fix, against a live database.
+    intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+    @test intro["uniq318"].fields["slug"].unique
+    @test intro["uniq318"].fields["token"].unique    # mutation gate for the PG per-table-array bug
+    @test !intro["uniq318"].fields["plain"].unique   # …and it did not over-mark
+
+    # Composite uniqueness is model-level (#19), never a per-field attribute. Marking a member column
+    # would churn in the OPPOSITE direction on every subsequent makemigrations.
+    @test !intro["uniqcomp318"].fields["season"].unique
+    @test !intro["uniqcomp318"].fields["round"].unique
+
+    # (c) NO CHURN — the reason #318 exists.
+    pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+  end
+
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

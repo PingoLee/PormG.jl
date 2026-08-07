@@ -32,7 +32,8 @@
   # Child before parent: since #276 SQLite enforces foreign keys, so dropping the parent while the
   # child still references it raises instead of silently succeeding.
   fixtures = ("pormg_it_fk_child", "pormg_it_fk_parent",
-              "pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored")
+              "pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored",
+              "pormg_it_uniq")
   drop_fixtures() = for t in fixtures
     try; ddl("DROP TABLE IF EXISTS \"$(t)\""); catch; end
   end
@@ -77,12 +78,27 @@
          fk_o2o        INTEGER UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
        )"""
 
+  # #318: TWO separate single-column UNIQUEs on one table plus a composite. This is the ONLY place
+  # PostgreSQL's `unique_constraints` CTE actually runs, and the two-uniques shape is precisely what
+  # it got wrong (it merged both constraints' columns into one per-table array, then rejected both
+  # for being length 2). The composite pins the must-NOT-mark half on both backends.
+  uniq_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_uniq" (
+         id BIGINT PRIMARY KEY, slug VARCHAR(60) UNIQUE, token VARCHAR(60) UNIQUE,
+         a INT, b INT, plain TEXT, UNIQUE (a, b)
+       )""" :
+    """CREATE TABLE "pormg_it_uniq" (
+         id INTEGER PRIMARY KEY, slug TEXT UNIQUE, token TEXT UNIQUE,
+         a INTEGER, b INTEGER, plain TEXT, UNIQUE (a, b)
+       )"""
+
   drop_fixtures()                      # clean slate if a prior run aborted mid-test
   ddl(natural_pk_ddl)
   ddl(numeric_pk_ddl)
   ddl(ignored_ddl)
   ddl(fk_parent_ddl)
   ddl(fk_child_ddl)
+  ddl(uniq_ddl)
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -140,13 +156,37 @@
     # self-consistent enough to register.
     @test child.fields["fk_setdefault"].default == 1
 
-    # OneToOneField had the identical omission and is fixed with ForeignKey. PostgreSQL-only: the
-    # SQLite PRAGMA path does not read UNIQUE, so `fk_o2o` stays a plain ForeignKey there — a
-    # pre-existing divergence this issue does not change.
+    # OneToOneField had the identical omission and is fixed with ForeignKey. PostgreSQL-only, and
+    # deliberately so as of #318: SQLite introspection now reads single-column UNIQUE, but it still
+    # returns a ForeignKey for a UNIQUE foreign key rather than a OneToOneField. PormG cannot
+    # materialize an O2O — `Dialect._get_column_type` has no branch for it and the FK clause is gated
+    # on `isa sForeignKey` — so returning one would regenerate `TEXT` with no foreign key where a
+    # plain ForeignKey regenerates `INTEGER` + the constraint. See the note in convertSQLToModel.
     if is_pg
       @test child.fields["fk_o2o"] isa PormG.Models.sOneToOneField
       @test child.fields["fk_o2o"].on_delete === PormG.Models.CASCADE
     end
+    # Both backends DO read the uniqueness itself, which is what #318 fixes.
+    @test child.fields["fk_o2o"].unique
+
+    # ── 3b. Single-column UNIQUE round-trips; composite does not (#318) ──────
+    # Introspection never read UNIQUE back, so every `unique=true` field diffed as changed on every
+    # makemigrations — forever. This is the ONLY coverage that executes PostgreSQL's
+    # `unique_constraints` CTE, which is where the PG half of the bug lived: it grouped by TABLE, so
+    # `pormg_it_uniq`'s two separate single-column UNIQUEs merged into one length-2 array and the
+    # consumer's `array_length(...) = 1` guard rejected BOTH.
+    uniq_models = PormG.Migrations.convert_schema_to_models(pool)
+    uniq = Dict(lowercase(string(m.name)) => m for m in uniq_models)["pormg_it_uniq"]
+
+    @test uniq.fields["slug"].unique
+    @test uniq.fields["token"].unique     # the mutation gate for the per-table-array bug
+    @test !uniq.fields["plain"].unique    # no over-marking
+
+    # Composite uniqueness is a model-level UniqueConstraint (#19), never a per-field attribute —
+    # marking a member would churn in the opposite direction. Excluded on both backends: PostgreSQL
+    # by `array_length(conkey,1) = 1`, SQLite by `HAVING COUNT(*) = 1`.
+    @test !uniq.fields["a"].unique
+    @test !uniq.fields["b"].unique
 
     # ── 4. The regenerated module registers via set_models (#287/#291) ───────
     # THE regression assertion. Before #292 this threw ModelDefinitionError ("declares on_delete

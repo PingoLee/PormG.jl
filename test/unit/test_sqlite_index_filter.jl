@@ -23,7 +23,8 @@ using Test
 using PormG
 using DataFrames
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
-import PormG.Migrations: get_secondary_index_ddls, _sqlite_column_is_unique
+import PormG.Migrations: get_secondary_index_ddls, _sqlite_column_is_unique,
+                         _sqlite_single_column_unique_columns, convertSQLToModel
 
 @testset "get_secondary_index_ddls column filter (#116)" begin
   mktempdir() do dir
@@ -122,10 +123,12 @@ end
 # needs a table rebuild.
 #
 # SQLite refuses `ALTER TABLE DROP COLUMN` for a UNIQUE column, and its backing `sqlite_autoindex_…` can't
-# be pre-dropped with `DROP INDEX` — so such a deletion must route through a rebuild. SQLite introspection
-# does NOT populate `field.unique`, so the deletion path can't trust the old field's attribute; it probes
-# the live schema instead. This probe must fire for a column-level `UNIQUE` (auto-index) but NOT for an
-# ordinary secondary index (whose column CAN take DROP COLUMN once the plain index is pre-dropped).
+# be pre-dropped with `DROP INDEX` — so such a deletion must route through a rebuild. The deletion path
+# probes the live schema rather than reading `old_field.unique`, and STILL must after #318 gave
+# introspection a `unique` flag: that flag is narrow by design (single-column UNIQUE *constraints*), while
+# this probe must answer the broader "is the column in ANY unique index?" — composite members and
+# `CREATE UNIQUE INDEX` columns included. This probe must fire for a column-level `UNIQUE` (auto-index) but
+# NOT for an ordinary secondary index (whose column CAN take DROP COLUMN once the plain index is pre-dropped).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "_sqlite_column_is_unique (#151)" begin
   mktempdir() do dir
@@ -144,6 +147,89 @@ end
       fetch(pool, "CREATE UNIQUE INDEX ux_plain ON t(plain);")
       @test _sqlite_column_is_unique(pool, :t, "plain") == true
       # Mutation gate: without the `row.unique == 1` filter, `ic` (plain index) would return true.
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #318: `_sqlite_single_column_unique_columns` — the NARROW sibling of the probe above, and the one
+# introspection uses to populate `field.unique`.
+#
+# `PRAGMA table_info` has no uniqueness column at all, so introspection never set `unique`: a model
+# declaring `unique=true` never compared equal to its own live table and `makemigrations` proposed the
+# same rebuild forever. This function answers a deliberately DIFFERENT question from the #151 probe —
+# "does this column carry a single-column UNIQUE *constraint*?", i.e. exactly what `field.unique`
+# emits — so the two must not be collapsed into one.
+#
+# Each filter has a distinct mutation gate, spelled out per assertion below.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "_sqlite_single_column_unique_columns (#318)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "uniquecols.sqlite"); pool_size = 1)
+    try
+      # One of every shape that PRAGMA index_list can report:
+      #   uc     → column-level UNIQUE      (origin 'u', 1 col)  ← the ONLY one that is field.unique
+      #   a, b   → table-level UNIQUE(a,b)  (origin 'u', 2 cols)
+      #   plain  → CREATE UNIQUE INDEX      (origin 'c')
+      #   ic     → plain CREATE INDEX       (not unique)
+      #   id     → INTEGER PRIMARY KEY      (origin 'pk', or no index at all for a rowid alias)
+      fetch(pool, "CREATE TABLE t (id INTEGER PRIMARY KEY, uc TEXT UNIQUE, ic INTEGER, plain TEXT, a TEXT, b TEXT, UNIQUE(a,b));")
+      fetch(pool, "CREATE INDEX ix_ic ON t(ic);")
+      fetch(pool, "CREATE UNIQUE INDEX ux_plain ON t(plain);")
+
+      cols = _sqlite_single_column_unique_columns(pool, :t)
+      @test cols == Set(["uc"])
+
+      # Spelled out individually so a failure names the filter that broke:
+      @test "uc" in cols        # drop `il."unique" = 1` and `ic` leaks in
+      @test !("a" in cols)      # drop `HAVING COUNT(*) = 1` and composite members leak in — they are
+      @test !("b" in cols)      #   model-level UniqueConstraint (#19), never a per-field attribute
+      @test !("plain" in cols)  # drop `origin = 'u'` and CREATE UNIQUE INDEX leaks in — that is how a
+                                #   single-field UniqueConstraint is materialized, and marking it would
+                                #   churn in the opposite direction (and diverge from PostgreSQL, whose
+                                #   pg_constraint read cannot see a bare index either)
+      @test !("ic" in cols)
+      @test !("id" in cols)     # a PK is already an IDField; introspection must never touch it (and
+                                #   sIDField is immutable, so setting `unique` on it would throw)
+
+      # An unknown table yields an empty set rather than throwing — convert_schema_to_models calls this
+      # per table and must not blow up on a race with a concurrent DROP.
+      @test _sqlite_single_column_unique_columns(pool, :nonexistent) == Set{String}()
+
+      # The #151 probe's BROAD semantics are untouched by all of the above — this is the assertion that
+      # proves the two functions were not accidentally merged.
+      @test _sqlite_column_is_unique(pool, :t, "uc") == true
+      @test _sqlite_column_is_unique(pool, :t, "plain") == true   # CREATE UNIQUE INDEX
+      @test _sqlite_column_is_unique(pool, :t, "a") == true       # composite member
+      @test _sqlite_column_is_unique(pool, :t, "ic") == false
+
+      # END TO END: the set above is only useful if convertSQLToModel actually applies it. Without
+      # this, the whole fix could be inert and every assertion above would still pass.
+      m = convertSQLToModel(pool, "t")
+      @test m.fields["uc"].unique
+      @test !m.fields["plain"].unique
+      @test !m.fields["a"].unique
+      @test !m.fields["ic"].unique
+      @test m.fields["id"] isa PormG.Models.sIDField   # PK branch untouched (and immutable)
+
+      # A UNIQUE foreign key gets the `unique` flag like any other column, but STAYS a ForeignKey —
+      # SQLite deliberately does not mirror PostgreSQL's OneToOneField here (#318). PormG cannot
+      # materialize an O2O (`Dialect._get_column_type` has no branch for it, and the FK clause is
+      # gated on `isa sForeignKey`), so returning one would make the inspectdb round trip strictly
+      # worse: `INTEGER` + a foreign key becomes `TEXT` + no foreign key. Pinned so a future
+      # "let's mirror PG" change has to confront that first.
+      fetch(pool, "CREATE TABLE parent318 (id INTEGER PRIMARY KEY, nome TEXT);")
+      fetch(pool, """CREATE TABLE child318 (
+        id INTEGER PRIMARY KEY,
+        o2o INTEGER UNIQUE REFERENCES parent318(id),
+        fk  INTEGER REFERENCES parent318(id));""")
+      c = convertSQLToModel(pool, "child318")
+      @test c.fields["o2o"] isa PormG.Models.sForeignKey
+      @test c.fields["o2o"].unique        # …the uniqueness IS read, which is what #318 fixes
+      @test c.fields["fk"]  isa PormG.Models.sForeignKey
+      @test !c.fields["fk"].unique
     finally
       close_pool!(pool)
     end

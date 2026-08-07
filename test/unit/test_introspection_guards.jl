@@ -357,3 +357,42 @@ using PormG.Migrations: _pg_confdeltype_to_on_delete, _normalize_introspected_on
   end
 
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #318: the PostgreSQL reader takes uniqueness from a ' UNIQUE' token the schema query appends to
+# each column string. This pins that CONTRACT hermetically — a future edit to the CTE that renames or
+# drops the token fails here, without a database.
+#
+# It does NOT test the CTE itself (no SQL runs here); that query is covered in
+# test/integration/test_importers_introspection.jl. What it DOES test is the half that silently
+# over-matched: the read used `occursin("UNIQUE", col)` against the WHOLE column string, so a column
+# *named* `UNIQUE_CODE` (mixed-case names are supported, #57) or a `DEFAULT 'UNIQUE'` literal
+# introspected as unique and then churned forever.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL UNIQUE marker is a token, not a substring (#318)" begin
+  row = _introspection_row(
+    table_name   = "uniq_guard",
+    columns      = "id bigint NOT NULL, slug character varying(120) NOT NULL UNIQUE, " *
+                   "token uuid NOT NULL UNIQUE, plain text",
+    primary_keys = "id")
+  model = convertSQLToModel(row)
+
+  # Baseline, NOT a mutation gate: these three pass on main too, because this file feeds
+  # `convertSQLToModel` a pre-rendered `columns` string and never runs the CTE. They pin the marker
+  # CONTRACT — if a future CTE edit renames or drops the ' UNIQUE' token, the reader stops seeing it
+  # and these fail. The CTE bug itself (a per-table array that rejected both columns of a two-unique
+  # table) is gated in test/integration/test_importers_introspection.jl, where the SQL actually runs.
+  @test model.fields["slug"].unique
+  @test model.fields["token"].unique
+  @test !model.fields["plain"].unique
+
+  # THE mutation gate for this testset: a column whose NAME contains the substring, and a DEFAULT
+  # literal that does. Both returned `true` under the old `occursin("UNIQUE", col)` and `false` under
+  # the token match — so these two assertions, unlike the three above, go red on main.
+  tricky = convertSQLToModel(_introspection_row(
+    table_name   = "uniq_guard_tricky",
+    columns      = "id bigint NOT NULL, UNIQUE_CODE text, label text DEFAULT 'UNIQUE'",
+    primary_keys = "id"))
+  @test !tricky.fields["UNIQUE_CODE"].unique
+  @test !tricky.fields["label"].unique
+end

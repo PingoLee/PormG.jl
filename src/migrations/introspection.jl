@@ -205,7 +205,12 @@ Converts a SQL CREATE TABLE statement into a model definition in PormGModel.
 - `PormGModel`: The model definition.
 
 # Example"""
-function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_type_map)   
+function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_type_map)
+  # NOTE (#318): this DDL-regex reader does NOT populate `field.unique`, unlike the PRAGMA reader
+  # (`convertSQLToModel(::PormGSQLite, …)`) that #318 fixed. Deliberate: `convert_schema_to_models`
+  # reaches the PRAGMA method, so this one is off the production introspection path. Reading it here
+  # would mean regex-parsing inline and table-level UNIQUE clauses out of the DDL text — strictly
+  # worse than the pragma. If this path is ever put back on the live route, close that gap first.
 
   # Extract table name
   table_name_match = match(r"CREATE TABLE \"(.+?)\"", sql)
@@ -331,6 +336,10 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
   _bounds_rows = fetch(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", [table_name]) |> DataFrame
   byte_bounds = _sqlite_byte_length_bounds(nrow(_bounds_rows) == 0 || ismissing(_bounds_rows[1, :sql]) ? nothing : _bounds_rows[1, :sql])
 
+  # #318: `PRAGMA table_info` above has no uniqueness column, so `unique` was never populated at all.
+  # Read it once per table here; the per-column branches below test membership.
+  unique_cols = _sqlite_single_column_unique_columns(db, table_name)
+
   fields_dict = Dict{Symbol, Any}()
   fk_map = Dict{String, Any}()
   if !isempty(fks)
@@ -359,6 +368,15 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         # `convert_schema_to_models(::PormGSQLite)` actually reaches. The FK column's declared type
         # drives normalization the same way a non-FK column's does.
         fk_type_sym = get(type_map, base_type, :TextField)
+        # A UNIQUE foreign key is conceptually a one-to-one, and PostgreSQL introspection returns
+        # `OneToOneField` for it — but SQLite deliberately does NOT follow suit here (#318). PormG
+        # cannot currently materialize a OneToOneField: `Dialect._get_column_type` has no branch for
+        # it, so it renders `TEXT` rather than the referenced key's type, and (on SQLite) the inline
+        # `FOREIGN KEY … REFERENCES` clause is gated on `isa sForeignKey`, so no constraint is emitted
+        # at all. Returning O2O here would therefore make the inspectdb round trip strictly WORSE:
+        # with the `unique` flag below, a live `INTEGER UNIQUE REFERENCES parent(id)` now regenerates
+        # LOSSLESSLY as `INTEGER UNIQUE` + the foreign key, where an O2O would regenerate as `TEXT`
+        # with no foreign key. The flag is what #318 is actually about; the field type is not.
         field = Models.ForeignKey(uppercasefirst(fk_info.table); pk_field=fk_info.to,
             on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
             default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
@@ -376,6 +394,16 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
             # cannot come from `col_type` the way CharField's does (#296).
             field.max_length = byte_bounds[col_name]
         end
+    end
+    # #318: set post-construction, matching the `field.max_length = …` mutations just above — that
+    # avoids threading a kwarg through three different constructors.
+    #
+    # `!is_pk` is required, not defensive, on two independent counts: `sIDField` is the ONE immutable
+    # field struct (models/fields.jl), so `setfield!` would throw; and it already defaults
+    # `unique=true`, which must survive an `INTEGER PRIMARY KEY` rowid alias that has no backing index
+    # at all. Hence the rule everywhere here: only ever set TRUE, never clear it.
+    if !is_pk && col_name in unique_cols && hasfield(typeof(field), :unique) && !field.unique
+      field.unique = true
     end
     fields_dict[Symbol(col_name)] = field
   end
@@ -481,6 +509,21 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         FROM pg_constraint con
         JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
         WHERE con.contype = 'u'
+          -- #318: the single-column test belongs HERE, per CONSTRAINT — not on the aggregate below.
+          -- This CTE groups by TABLE, so it merged every unique constraint's columns into ONE array:
+          -- a table with two SEPARATE single-column UNIQUEs produced {slug, uuid_token}, and the
+          -- consumer's `array_length(...) = 1` guard then rejected BOTH. Every such column
+          -- introspected as `unique=false`, never matched its own declaration, and makemigrations
+          -- proposed the same alteration forever.
+          --
+          -- Multi-column constraints stay excluded on purpose: PormG models composite uniqueness as
+          -- a model-level UniqueConstraint (#19), never as a per-field `unique`, so marking a member
+          -- column would churn in the opposite direction. `CREATE UNIQUE INDEX` — how #19 is
+          -- materialized — has no pg_constraint row at all and is excluded for free.
+          --
+          -- Grouping by `con.oid` instead would be wrong: the CTE must stay ONE ROW PER TABLE, or the
+          -- LEFT JOIN below fans out and every table yields N duplicate models.
+          AND array_length(con.conkey, 1) = 1
         GROUP BY con.conrelid
     ),
     foreign_keys AS (
@@ -568,11 +611,12 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
             || CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END
             $(identity_case)
-            || CASE
-                WHEN array_length(u.unique_cols, 1) = 1
-                     AND a.attname = ANY(u.unique_cols) THEN ' UNIQUE'
-                ELSE ''
-               END
+            -- #318: plain membership now. `unique_cols` already holds ONLY single-column constraints
+            -- (filtered per-constraint in the CTE above), so the old `array_length(...) = 1` guard
+            -- here was testing the wrong thing — the merged per-table array — and rejected every
+            -- column on any table with more than one unique constraint. `unique_cols` is NULL when a
+            -- table has none (LEFT JOIN) and `x = ANY(NULL)` is NULL, so this still falls through.
+            || CASE WHEN a.attname = ANY(u.unique_cols) THEN ' UNIQUE' ELSE '' END
             || CASE
                 WHEN nn.check_cols IS NOT NULL
                      AND a.attname = ANY(nn.check_cols) THEN ' NON_NEGATIVE_CHECK'
@@ -687,11 +731,14 @@ function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name
   return nothing
 end
 
-# #151: SQLite introspection does not populate `field.unique` (see convertSQLToModel(::PormGSQLite)), so the
-# deletion path can't trust the old field's attribute — probe the live schema for a UNIQUE index covering
-# `field_name`. That covers the column-level UNIQUE auto-index (`sqlite_autoindex_…`, which `DROP INDEX`
-# can't remove) as well as any `CREATE UNIQUE INDEX`. Such a column is refused by `ALTER TABLE DROP COLUMN`,
+# #151: probe the live schema for a UNIQUE index of ANY arity covering `field_name`. That covers the
+# column-level UNIQUE auto-index (`sqlite_autoindex_…`, which `DROP INDEX` can't remove), a table-level
+# `UNIQUE (a, b)`, and any `CREATE UNIQUE INDEX`. Such a column is refused by `ALTER TABLE DROP COLUMN`,
 # so its deletion must route through a table rebuild (same remedy #116 uses for FK columns).
+#
+# STILL REQUIRED after #318 gave introspection a `unique` flag, and deliberately BROADER than it: this
+# answers "would SQLite refuse to drop this column?", which is true for a composite-unique member and
+# for a `CREATE UNIQUE INDEX` column — neither of which sets `field.unique`. Do not collapse the two.
 function _sqlite_column_is_unique(conn::PormGSQLite, table_name, field_name::String)::Bool
   idx_list = fetch(conn, "PRAGMA index_list(\"$(string(table_name))\")") |> DataFrame
   isempty(idx_list) && return false
@@ -701,6 +748,53 @@ function _sqlite_column_is_unique(conn::PormGSQLite, table_name, field_name::Str
     (!isempty(idx_info) && field_name in idx_info.name) && return true
   end
   return false
+end
+
+"""
+    _sqlite_single_column_unique_columns(conn::PormGSQLite, table_name) -> Set{String}
+
+Physical columns of `table_name` carrying a SINGLE-column `UNIQUE` **constraint** — exactly the set for
+which `field.unique` must introspect back as `true` (#318).
+
+`PRAGMA table_info` has no uniqueness column at all, so `convertSQLToModel(::PormGSQLite)` never
+populated `unique`: every `unique=true` field compared unequal to its own live table and
+`makemigrations` proposed the same rebuild forever.
+
+Deliberately NARROWER than [`_sqlite_column_is_unique`](@ref) above, which answers the different
+question `ALTER TABLE DROP COLUMN` asks. Two filters make the difference, and both are load-bearing:
+
+  * `origin = 'u'` keeps only the auto-index SQLite creates for a `UNIQUE` clause inside
+    `CREATE TABLE` — the one and only thing `field.unique` emits (`Dialect.field_to_column`). It
+    excludes `origin = 'c'` (`CREATE UNIQUE INDEX`), which is how a model-level `UniqueConstraint`
+    (#19) is materialized, and `origin = 'pk'` (a primary key is already an IDField). Arity alone is
+    NOT enough here: a `UniqueConstraint` may name a single field, and marking that column would
+    churn in the opposite direction. This also keeps the backends symmetric — PostgreSQL reads
+    `pg_constraint` (`contype='u'`), which likewise cannot see a bare `CREATE UNIQUE INDEX`.
+  * `HAVING COUNT(*) = 1` drops a table-level `UNIQUE (a, b)`, whose origin is also `'u'`.
+
+`partial = 0` is belt-and-braces rather than load-bearing: SQLite only produces a partial index via
+`CREATE INDEX … WHERE`, which is always `origin = 'c'` and therefore already excluded. Kept so the
+predicate stays correct if that ever changes.
+
+Known, accepted gap: a hand-written `CREATE UNIQUE INDEX` in a foreign schema introspects as
+`unique=false`. Reading it would restore inspectdb fidelity at the cost of permanent churn for
+single-field `UniqueConstraint` — the exact bug class #318 fixes.
+
+ONE query per table (the table-valued-pragma idiom `get_secondary_index_ddls` also uses), not one probe
+per column: callers test membership. An unknown table yields an empty set rather than throwing.
+"""
+function _sqlite_single_column_unique_columns(conn::PormGSQLite, table_name)::Set{String}
+  rows = fetch(conn, """
+    SELECT ii.name AS col
+    FROM pragma_index_list(?) AS il
+    JOIN pragma_index_info(il.name) AS ii
+    WHERE il."unique" = 1 AND il.origin = 'u' AND il.partial = 0
+    GROUP BY il.name
+    HAVING COUNT(*) = 1
+    """, [string(table_name)]) |> DataFrame
+  # An empty frame's column is eltype Missing, so guard before touching `rows.col`.
+  nrow(rows) == 0 && return Set{String}()
+  return Set{String}(string(c) for c in rows.col if c !== missing)
 end
 
 """
@@ -990,7 +1084,11 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       
       # Determine field constraints
       primary_key::Bool = col_name in pk_set
-      unique::Bool = occursin("UNIQUE", col)
+      # #318: token match, not a substring test. `col` is the whole rendered column string, so
+      # `occursin` also fired on a column *named* `UNIQUE_CODE` (mixed-case names are supported, #57)
+      # or a `DEFAULT 'UNIQUE'` literal — inventing uniqueness that would then be diffed forever.
+      # The CTE appends ' UNIQUE' as its own space-separated token, so membership is exact.
+      unique::Bool = "UNIQUE" in col_parts
       not_null::Bool = occursin("NOT NULL", col)
       default_value = nothing
       if occursin("DEFAULT", col)

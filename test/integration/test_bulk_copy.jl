@@ -2,6 +2,11 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+# A PostgreSQL TIMESTAMPTZ comes back as a ZonedDateTime rendered in the *session* zone, so the
+# #114 testset below normalizes to a UTC instant before comparing. common_setup.jl does not load
+# TimeZones (test_django_contract.jl imports it the same way for the same reason).
+using TimeZones
+
 @testset "Bulk Validation and Type Normalization" begin
     # These tests exercise the shared validation path used by bulk_insert and bulk_update.
     # The goal is to pin down the new strict policy: bulk operations must reject type
@@ -478,6 +483,10 @@ end
 # paths) and it disambiguates an empty string from NULL (an unquoted \N sentinel is
 # NULL; a quoted "" is the empty string). Pre-fix, bulk_copy wrote the raw DataFrame
 # values (naive datetime) and let "" collapse to NULL — a silent divergence.
+#
+# Scope note (#114): only the empty-string ↔ NULL half below is mutation-guarded. Under a UTC
+# session the datetime assertions here cannot fail — see the "#114" testset further down, which
+# is the one that actually catches a regression of the formatter application.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "bulk_copy stores identical values to bulk_insert / create() (#86)" begin
     scratch = () -> M.Bulk_copy_fidelity_scratch.objects
@@ -545,6 +554,129 @@ end
 
     # Cleanup
     scratch().exists() && scratch().delete(allow_delete_all = true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bulk_copy datetime parity, made mutation-discriminating (#114)
+#
+# The #86 testset above asserts bulk_copy and bulk_insert store the same instant, but under a UTC
+# session that assertion cannot fail:
+#
+#   formatter applied  → CSV cell "2021-03-14T09:26:53.000+00:00" → explicit +00:00 → 09:26:53Z
+#   formatter reverted → CSV cell  2021-03-14T09:26:53            → session TimeZone → 09:26:53Z
+#
+# Identical, so reverting the formatter application in bulk_copy leaves #86 green. Under a NON-UTC
+# session the two land on different instants, which is what makes the assertion a guard rather than
+# a statement. `SET LOCAL` is transaction-scoped, so this needs every operation — the COPY, the
+# reference INSERT, create() and the read-back — pinned to the ONE connection the zone was set on:
+# an outer run_in_transaction does exactly that (bulk_copy/bulk_insert/create()/fetch all detect an
+# active transaction context and reuse its connection instead of leasing their own), and the zone
+# self-resets at COMMIT so nothing leaks back into the pool.
+#
+# PostgreSQL-only, like every COPY test in this file.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_copy datetime parity is guarded under a non-UTC session (#114)" begin
+    settings = PormG.config[PORMG_DB_FOLDER]
+    scratch  = () -> M.Bulk_copy_fidelity_scratch.objects
+
+    # America/Sao_Paulo has had no DST since 2019, so this date is a flat UTC-3: the raw-write path
+    # would store 12:26:53Z where the formatter path stores 09:26:53Z.
+    dt = DateTime(2021, 3, 14, 9, 26, 53)
+
+    # TIMESTAMPTZ reads back as a ZonedDateTime in the SESSION zone (-03:00 here), and TimeZones'
+    # isequal compares the zone as well as the instant — so normalize to a naive UTC DateTime
+    # before comparing, and never compare ZonedDateTimes directly.
+    to_utc = raw -> (raw === nothing || ismissing(raw)) ? missing : DateTime(astimezone(raw, TimeZone("UTC")))
+
+    read_back = () -> begin
+        q = scratch()
+        q.order_by("id")                                   # ids assigned in insert order == df order
+        q.values("event_time")
+        [to_utc(r[:event_time]) for r in q.list(:dict)]
+    end
+
+    # Inside the transaction this reads the PINNED connection (fetch reuses the tx context), so it
+    # reports the zone COPY itself will parse under; outside, it reports an arbitrary pooled one.
+    test_zone    = "America/Sao_Paulo"
+    session_zone = () -> (PormG.ConnectionPool.fetch(settings,
+        "SELECT current_setting('TimeZone') AS tz;") |> DataFrame)[1, :tz]
+
+    try
+        scratch().exists() && scratch().delete(allow_delete_all = true)
+        baseline_zone = session_zone()                     # whatever db_2's server default is
+
+        PormG.run_in_transaction(settings) do
+            PormG.ConnectionPool.fetch(settings, "SET LOCAL TIME ZONE '$(test_zone)';")
+
+            # Guard the guard, twice. If the zone ever stops taking effect (a pooling change, a
+            # different transaction helper, a server that rejects the zone) this testset would
+            # silently decay back into the non-discriminating shape #114 exists to fix.
+            #
+            # (i) The statement landed, on the connection COPY will use. Asserted against the zone
+            #     NAME rather than "differs from the ambient default": db_2/connection.yml already
+            #     carries time_zone: 'America/Sao_Paulo' — inert today (it only feeds Julia-side
+            #     now() for auto_now), but wire it into a connect-time SET and a `!= baseline_zone`
+            #     check would go red on correct code.
+            @test session_zone() == test_zone
+
+            # (ii) The semantic precondition: an UNLABELLED timestamp — exactly what a reverted
+            #      bulk_copy writes — resolves to a different instant than the same text labelled
+            #      UTC. This is what makes the parity assertions below able to fail at all.
+            probe = PormG.ConnectionPool.fetch(settings,
+                "SELECT (TIMESTAMP '2021-03-14 09:26:53')::timestamptz <> TIMESTAMPTZ '2021-03-14 09:26:53+00' AS non_utc_session;") |> DataFrame
+            @test probe[1, :non_utc_session]
+
+            df = DataFrames.DataFrame(
+                name       = ["tz-parity-a", "tz-parity-b"],
+                event_time = Union{Missing, DateTime}[dt, missing],
+            )
+
+            # ── reference path: bulk_insert applies the formatter (labels the naive value UTC) ──
+            bulk_insert(scratch(), df)
+            insert_utc = read_back()
+
+            # ── path under test ───────────────────────────────────────────────────────────────
+            scratch().delete(allow_delete_all = true)
+            bulk_copy(scratch(), df)
+            copy_utc = read_back()
+
+            @test length(insert_utc) == 2
+            @test length(copy_utc) == 2
+
+            # (a) Parity with bulk_insert. Reverting the formatter application in bulk_copy puts
+            #     this 3 hours out.
+            @test isequal(copy_utc, insert_utc)
+
+            # (b) Absolute instant. Independent of (a), so it still fires if BOTH write paths
+            #     regress together.
+            @test copy_utc[1] == dt
+            @test ismissing(copy_utc[2])                    # missing → NULL, unaffected by the zone
+
+            # (c) Three-way: create(), the canonical single-row path, on the same TZ-set session.
+            scratch().delete(allow_delete_all = true)
+            created = scratch().create("name" => "tz-parity-c", "event_time" => dt)
+            cq = scratch()
+            cq.filter("id" => created[:id])
+            cq.values("event_time")
+            @test to_utc((cq.list(:dict) |> first)[:event_time]) == dt
+        end
+
+        # The zone must NOT survive the transaction. `SET LOCAL` is transaction-scoped, but a
+        # future edit to a plain `SET` would keep every assertion above green while releasing a
+        # connection still carrying the test zone back into the 20-slot pool — surfacing as a
+        # by-pool-draw failure in some later test file, pointing nowhere near here. Compared against
+        # the default captured before the transaction, not against "UTC": the server's own default
+        # is whatever it is and this must not assume. release_connection returns the slot and
+        # acquire_connection takes the first available one, so in this single-task suite the check
+        # almost always lands back on the very connection it should — but "almost", and db_2 is a
+        # shared host, so read a failure as near-certain contamination rather than as proof.
+        @test session_zone() == baseline_zone
+    finally
+        # run_in_transaction COMMITs on success (a failed @test is recorded, not thrown), so the
+        # rows survive the block and are cleaned up here; on a thrown error the ROLLBACK already
+        # removed them and exists() short-circuits.
+        scratch().exists() && scratch().delete(allow_delete_all = true)
+    end
 end
 
 end # End of if adapter_name != "SQLite"

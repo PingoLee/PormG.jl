@@ -315,7 +315,10 @@ end
 # Reserves n ids from the PostgreSQL sequence associated with pk_field.
 # Uses nextval() inside generate_series so the allocation is a single atomic roundtrip.
 function _allocate_pg_ids(model::PormGModel, connection::PormGPostgres, pk_field::String, n::Int)
-  safe_table = string(model.name |> lowercase)
+  # `pg_get_serial_sequence` re-parses its first argument as an identifier, so an unquoted
+  # mixed-case table folds to lowercase and resolves to nothing. Bind the DOUBLE-QUOTED form; it is
+  # equally correct for an all-lowercase name (#59). Still a bound parameter, not interpolation.
+  safe_table = "\"$(replace(Models.model_table_name(model), "\"" => "\"\""))\""
   parameters = get_parameter(connection)
   set_context!(parameters, :select)
   table_placeholder = add_parameter!(parameters, safe_table)
@@ -344,7 +347,7 @@ end
 # when get_sqlite_reserved_primary_key_max returned non-nothing, which already implies an
 # open transaction (reservation overlay is a no-op at depth 0).
 function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::PormGSettings)
-  safe_table = string(model.name |> lowercase)
+  safe_table = Models.model_table_name(model)
   safe_table_name = safe_table_identifier(safe_table, connection)
   safe_table_literal = replace(safe_table, "'" => "''")
   safe_field = quote_identifier(Models.model_column(model, pk_field), connection)  # db_column (#50)
@@ -1042,7 +1045,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   # Security: Quote table name and physical column names (db_column when set, #50).
   # The CSV is positional (HEADER FALSE), so the data order still matches.
-  safe_table_name = safe_table_identifier(string(model.name), connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
 
   # Construct the COPY command (CSV format for safety). NULL marker disambiguates ""
@@ -1224,7 +1227,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
 
   # Security: Quote table name and physical column names (db_column when set, #50).
   # VALUES rows are positional and built in `fields` order, so they still align.
-  safe_table_name = safe_table_identifier(string(model.name), connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields]
 
   # Construct the bulk insert SQL. The ON CONFLICT clause (#123) is rendered once by the caller
@@ -1511,7 +1514,7 @@ function _bulk_update(model::PormGModel,
   end
 
   # Security: Quote table name and field names
-  safe_table_name = safe_table_identifier(model.name, connection)
+  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [quote_identifier(field, connection) for field in fields]
 
   # Security: Build safe WHERE conditions with quoted identifiers

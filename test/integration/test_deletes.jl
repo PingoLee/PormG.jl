@@ -370,7 +370,7 @@ end
     # Keyless fixture tables have a dedicated delete path:
     #   • A filtered delete on a keyless model must be rejected with
     #     ArgumentError (no PK to build a WHERE … IN subquery).
-    #   • allow_delete_all=true must emit a bare DELETE FROM … and remove all rows.
+    #   • allow_delete_all=true must emit an unfiltered DELETE FROM … (no WHERE) and remove all rows.
     #   • show_query=:dict on the unfiltered path must return meaningful SQL
     #     without touching data.
     # ─────────────────────────────────────────────────────────────────────────
@@ -390,7 +390,9 @@ end
         @test inspection[:operation] === :delete
         @test inspection[:parameter_count] == 0
         @test isempty(inspection[:parameters])
-        @test occursin("delete from lap_times", lowercase(inspection[:sql_text]))
+        # Table identifier is QUOTED since #59 (db_table) — it used to be written bare, which was
+        # indistinguishable from this while every table name was lowercase.
+        @test occursin("delete from \"lap_times\"", lowercase(inspection[:sql_text]))
 
         # Now exercise the actual delete-all path against the scratch table so
         # we do not touch the seeded F1 fixture data.
@@ -483,7 +485,7 @@ end
 
             @test inspection isa Dict
             @test inspection[:operation] == :delete
-            @test occursin("delete from do_nothing_parent_scratch", lowercase(inspection[:sql_text]))
+            @test occursin("delete from \"do_nothing_parent_scratch\"", lowercase(inspection[:sql_text]))
 
             # Live delete — the database refuses it on both backends since #276.
             delete_q = DoNothingM.Do_nothing_parent_scratch.objects
@@ -828,7 +830,7 @@ end
 
             @test inspection isa Dict
             @test inspection[:operation] == :delete
-            @test occursin("delete from delete_protect_parent_scratch", lowercase(inspection[:sql_text]))
+            @test occursin("delete from \"delete_protect_parent_scratch\"", lowercase(inspection[:sql_text]))
 
             # Live delete of the orphaned parent must succeed.
             delete_q = ProtectM.Delete_protect_parent_scratch.objects

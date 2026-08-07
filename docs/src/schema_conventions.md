@@ -42,10 +42,10 @@ Models.Model("Driver_Profile", driverid = Models.IDField())
 ```
 
 !!! note "Mapping a model to a mixed-case legacy table"
-    There is no way to do this today, which is why the name is rejected rather than quietly folded:
+    Use [`db_table`](#Pinning-an-explicit-table-name-with-db_table) (below). The positional name is
+    rejected rather than quietly folded precisely so that this intent has one unambiguous spelling:
     before the check existed, such a model migrated `driver_profile` and then queried
-    `"Driver_Profile"` — two different tables on PostgreSQL. An explicit `db_table` option is
-    [issue #59](https://github.com/PingoLee/PormG.jl/issues/59).
+    `"Driver_Profile"` — two different tables on PostgreSQL.
 
 A positional name given with a **leading underscore** is rejected the same way, and for a related
 reason (#306): a `ForeignKey` targeting the model renders its `REFERENCES` through
@@ -62,6 +62,47 @@ Unlike a field name, a positional model name is a plain string — never a Julia
 never needed the underscore escape hatch in the first place. That escape hatch is real for *field*
 names (`_end = ...` declares column `end`, documented on `Model`'s docstring) — it just does not
 extend to the model name itself.
+
+### Pinning an explicit table name with `db_table`
+
+The rules above constrain the **logical** model name. When the physical table is something those
+rules would reject — a mixed-case legacy table, a name PormG would never generate — pass `db_table`.
+It is the table-level sibling of [`db_column`](fields.md#Database-Column-Mapping) (#50): the model
+name stays a lowercase logical identifier, and `db_table` carries the physical one, **verbatim**.
+
+```julia
+DriverProfile = Models.Model("driver_profile",
+  db_table  = "Driver_Profile_Legacy",   # ← the table that actually exists
+  driverid  = Models.IDField(),
+  surname   = Models.CharField(max_length = 100),
+)
+```
+
+`db_table` is **authoritative** wherever a table identifier is rendered:
+
+| Path | Uses `db_table` |
+| :--- | :--- |
+| `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, `ADD CONSTRAINT` | ✔ |
+| `SELECT` / `INSERT` / `UPDATE` / `DELETE` | ✔ |
+| `JOIN` targets, including through a foreign key | ✔ |
+| A `ForeignKey`'s `REFERENCES` target, when it points at this model | ✔ |
+| Migration add/drop/rename detection | ✔ |
+
+The value is stored exactly as written — no case fold, no leading-underscore strip, no identifier
+validation. That is deliberate: the option exists to name a table PormG's own conventions could not
+produce. It is also **purely opt-in** — a model that does not set `db_table` derives its table name
+exactly as it always has, so no existing schema changes and nothing needs re-migrating.
+
+!!! note "Changing `db_table` on a migrated model is a table rename"
+    The migration planner matches the live schema against your models by **physical** table name, so
+    editing `db_table` on a model that is already migrated presents as "one table disappeared, another
+    appeared" — the same prompt you get for any table rename. Answer it as a rename to keep your data.
+
+!!! note "`ManyToManyField` takes its own `db_table`"
+    That option names the auto-generated **through** table, not the model's own table, and follows the
+    same case-preserving rule. An auto-derived through-table name (no `db_table` given) is still built
+    from the models' *logical* names, so pinning `db_table` on a model does not silently rename a join
+    table PormG generated for you.
 
 ### `django_prefix` interop
 

@@ -29,6 +29,10 @@ This comprehensive guide covers all field types available in PormG, inspired by 
   queries, and migrations (#50) — e.g. `chassis = CharField(db_column="chassis_code")` keeps the field
   `chassis` but targets the column `"chassis_code"`. Supported on all field types except `ManyToManyField`;
   see [Schema Conventions](schema_conventions.md).
+- **`db_table` is the same idea one level up** — a *model* option, not a field one, mapping a model to
+  a differently-named (and, unlike a model name, arbitrarily-cased) table: `Models.Model("driver_profile",
+  db_table = "Driver_Profile_Legacy", …)`. Also authoritative across DDL, queries, and migrations (#59);
+  see [Pinning an explicit table name](schema_conventions.md#Pinning-an-explicit-table-name-with-db_table).
 
 ### Examples of Good Naming
 

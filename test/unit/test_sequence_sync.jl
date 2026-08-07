@@ -48,7 +48,11 @@ end
   PormG.QueryBuilder._update_sequence(SequenceDriver, settings.connections, ["id"], settings)
 
   @test length(SEQUENCE_SYNC_SQL) == 2
-  @test SEQUENCE_SYNC_SQL[1] == "SELECT pg_get_serial_sequence('drivers', 'id');"
+  # The table argument is passed DOUBLE-QUOTED inside the literal since #59. `pg_get_serial_sequence`
+  # takes text that it re-parses as an identifier, so an unquoted argument is lowercased — which
+  # resolves to nothing for a mixed-case `db_table`. `'"drivers"'` is exactly the identifier
+  # `drivers`, so this is semantically identical for an all-lowercase table like this fixture.
+  @test SEQUENCE_SYNC_SQL[1] == "SELECT pg_get_serial_sequence('\"drivers\"', 'id');"
   @test occursin("setval('public.legacy_driver_id_seq'", SEQUENCE_SYNC_SQL[2])
   @test occursin("COALESCE((SELECT MAX(\"id\") FROM \"drivers\"), 0) + 1, false", SEQUENCE_SYNC_SQL[2])
 end

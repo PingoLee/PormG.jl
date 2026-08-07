@@ -48,6 +48,10 @@ using .Kernel
 # Underscore-private members are not exported by Kernel; import the two that are reached as
 # `PormG._emsg` / `PormG._EXTRA_IGNORE_TABLES` (both pinned by tests).
 import .Kernel: _emsg, _EXTRA_IGNORE_TABLES
+# Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
+# `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
+# layer-2 `Configuration` needs it and is included before `Models`.
+import .Kernel: model_table_name, model_has_db_table
 # Part of the documented downstream-extension surface (Nitro et al. call it from an ext `__init__`).
 export register_ignore_tables!
 

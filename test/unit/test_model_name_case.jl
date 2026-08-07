@@ -168,17 +168,16 @@ NameCaseDriver.connect_key = "model_name_case_mock"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # CHARACTERIZATION: the split the guard prevents is real, and still reachable through the exempt
-  # `Dict` path. Without this, every assertion above is compatible with the split never having
-  # existed — the guard would look like cargo cult. Here the same model renders `driver_profile` in
-  # the DDL and `"Driver_Profile"` in the SELECT: one declaration, two tables.
+  # CLOSED (#59). This testset used to CHARACTERIZE the DDL/query split on the exempt `Dict` path —
+  # `create_table` folded `Driver_Profile` to `driver_profile` while the query builder quoted it as
+  # declared, so one model addressed two tables. Its own comment said it was "SUPPOSED TO FAIL" once
+  # the split was closed properly, naming #59's `db_table` as one of the ways that could happen.
   #
-  # This is a characterization test, not an endorsement. If the split is ever closed properly
-  # (folding or preserving case across both paths — options A/B/D on #300, or #59's `db_table`),
-  # THIS TESTSET IS SUPPOSED TO FAIL, and updating it is the deliberate signal that the scope limit
-  # documented above no longer applies.
+  # That is what happened. `model_table_name` is now the single seam every renderer resolves through
+  # and it applies NO case fold, so the DDL and the query agree by construction — on this exempt path
+  # too, where `model.name` IS the live physical name read out of a database.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "characterize: the DDL/query split is real on the exempt path" begin
+  @testset "the DDL/query split is CLOSED, including on the exempt path (#59)" begin
     split_model = Model("Driver_Profile", Dict{String, PormG.PormGField}(
       "id" => IDField(), "surname" => CharField()))
     split_model.connect_key = "model_name_case_mock"
@@ -186,33 +185,32 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     ddl = PormG.Dialect.create_table(MockPostgresNameCase(), split_model)
     sel = inspect_query(split_model.objects)[:sql_text]
 
-    @test occursin("driver_profile", ddl)          # DDL folds…
-    @test !occursin("Driver_Profile", ddl)
-    @test occursin("\"Driver_Profile\"", sel)      # …the query quotes it as declared
+    @test occursin("\"Driver_Profile\"", ddl)      # DDL preserves the name it was given…
+    @test !occursin("driver_profile", ddl)         # …and no longer folds it into a second table
+    @test occursin("\"Driver_Profile\"", sel)      # …which is the SAME string the query addresses
     @test !occursin("\"driver_profile\"", sel)
 
-    # The sharpest illustration, and the reason DELETE is characterized here rather than asserted as
-    # "agreeing" anywhere: ONE statement carries BOTH spellings. `deletion.jl` writes the outer table
-    # bare and lowercased, while the `IN (...)` subquery is rendered by the normal builder and quoted
-    # verbatim — so the DELETE targets `driver_profile` by way of a subquery reading
-    # `"Driver_Profile"`, a table that does not exist on PostgreSQL.
+    # DELETE was the sharpest illustration of the defect — ONE statement carrying BOTH spellings,
+    # because `deletion.jl` wrote the outer table bare+folded while the `IN (...)` subquery went
+    # through the normal (quoting) builder. Both halves now resolve through `model_table_name`.
     del_raw = split_model.objects.filter("id" => 1).delete(show_query = :dict)
     del = del_raw isa Vector ? first(del_raw) : del_raw
-    @test occursin("DELETE FROM driver_profile", del[:sql_text])   # bare + folded
-    @test occursin("\"Driver_Profile\"", del[:sql_text])           # …and quoted verbatim, same string
+    @test occursin("DELETE FROM \"Driver_Profile\"", del[:sql_text])   # quoted + unfolded
+    @test !occursin("DELETE FROM driver_profile", del[:sql_text])      # the old bare+folded spelling
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # CHARACTERIZATION (#306): the create/REFERENCES split the underscore guard prevents is real, and
-  # still reachable through the exempt `Dict` path — the issue's own repro, DB-free via SQLite's inline
-  # FK. `create_table` writes the PARENT's name verbatim (`_fk306_driver_scratch`); the CHILD's
-  # `ForeignKey` renders through `format_model_name`, which strips the leading underscore
-  # (`fk306_driver_scratch`) — a table one character removed from the one actually created.
+  # CLOSED (#59), same story one character over. This used to characterize the create/REFERENCES
+  # split from #306: `create_table` wrote the parent's name verbatim while a child's `ForeignKey`
+  # rendered its target through `format_model_name`, which strips a leading underscore — so the FK
+  # pointed at a table one character removed from the one created. Its comment likewise said it was
+  # "SUPPOSED TO FAIL" once the split closed for the exempt path.
   #
-  # This is a characterization test, not an endorsement. If this split is ever closed for the exempt
-  # path too, THIS TESTSET IS SUPPOSED TO FAIL.
+  # `fk_target_table` now resolves a RESOLVED model target through `model_table_name` (no strip, no
+  # fold), so both sides agree. Declaring such a name positionally is still rejected (#306) — this is
+  # the introspection path, where the name is read from a live database and must survive verbatim.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "characterize: the create/REFERENCES split is real on the exempt path (#306)" begin
+  @testset "the create/REFERENCES split is CLOSED on the exempt path (#306 → #59)" begin
     fk_parent = Model("_fk306_driver_scratch", Dict{String, PormG.PormGField}("id" => IDField()))
     fk_child = Model("fk306_child_scratch",
       id       = IDField(),
@@ -222,9 +220,9 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     parent_ddl = PormG.Dialect.create_table(MockSQLiteNameCase(), fk_parent)
     child_ddl  = PormG.Dialect.create_table(MockSQLiteNameCase(), fk_child)
 
-    @test occursin("_fk306_driver_scratch", parent_ddl)                    # the table actually created…
-    @test occursin("REFERENCES \"fk306_driver_scratch\"", child_ddl)       # …a DIFFERENT table referenced
-    @test !occursin("REFERENCES \"_fk306_driver_scratch\"", child_ddl)
+    @test occursin("\"_fk306_driver_scratch\"", parent_ddl)                # the table actually created…
+    @test occursin("REFERENCES \"_fk306_driver_scratch\"", child_ddl)      # …is the one referenced
+    @test !occursin("REFERENCES \"fk306_driver_scratch\"", child_ddl)      # not the stripped spelling
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -243,11 +241,31 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     introspected = Model("Driver_Profile", Dict{String, PormG.PormGField}("id" => IDField()))
     @test introspected.name == "Driver_Profile"
 
-    # …and the generated model file lowercases it, so the round-trip produces a declaration that the
-    # guard above accepts rather than one that would throw on reload.
+    # …and the generated model file lowercases the POSITIONAL name, so the round-trip produces a
+    # declaration the guard above accepts rather than one that would throw on reload.
+    #
+    # The two exempt paths diverge HERE, and the difference is load-bearing (#59). `model.name` is a
+    # Python CLASS name for the Django importer and a LIVE TABLE name for `inspectdb` — identical as
+    # strings, opposite in meaning — so `Model_to_str` is TOLD which it has rather than guessing.
     settings = PormG.Configuration.Settings(connections = MockPostgresNameCase(), change_data = true)
+
+    # Django importer (name_is_physical_table = false, the default): the physical table genuinely IS
+    # the lowercased class name. Pinning `db_table = "CustomUser"` here would invent a table that
+    # does not exist and break every query against it.
     generated = Models.Model_to_str(django_like, settings)
     @test occursin("Models.Model(\"customuser\"", generated)
     @test !occursin("Models.Model(\"CustomUser\"", generated)
+    @test !occursin("db_table", generated)
+
+    # inspectdb (name_is_physical_table = true): the name came off a live database, so the original
+    # spelling MUST be pinned — otherwise the generated declaration addresses `driver_profile`, a
+    # different table from the `Driver_Profile` it was read from (the #300 split, from the other end).
+    introspected_gen = Models.Model_to_str(introspected, settings; name_is_physical_table = true)
+    @test occursin("Models.Model(\"driver_profile\"", introspected_gen)
+    @test occursin("db_table = \"Driver_Profile\"", introspected_gen)
+
+    # An already-lowercase live table needs no override, and must not grow a redundant one.
+    plain = Model("plain_scratch", Dict{String, PormG.PormGField}("id" => IDField()))
+    @test !occursin("db_table", Models.Model_to_str(plain, settings; name_is_physical_table = true))
   end
 end

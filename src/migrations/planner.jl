@@ -120,7 +120,10 @@ function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::Or
   # PostgreSQL: a UNIQUE constraint creates a backing index with the same name.
   # DROP INDEX fails when the index backs a constraint, so drop the constraint first.
   if conn isa PormGPostgres
-    table_name = format_model_name(model_name)
+    # `model_name` is already the RESOLVED physical table name (db_table when set, #59) — every
+    # producer of this Symbol keys on `model_table_name`. Do NOT re-normalize it through
+    # `format_model_name`, which would lowercase a mixed-case db_table back into a different table.
+    table_name = Dialect._quote_table_ddl(string(model_name))
     drop_sql = """ALTER TABLE \"$table_name\" DROP CONSTRAINT IF EXISTS \"$index_name\";\nDROP INDEX IF EXISTS \"$index_name\";"""
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", drop_sql)
   else
@@ -146,7 +149,7 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
     local_col = Models.field_db_column(new_field, string(field_name))
     on_delete_sql = hasfield(typeof(new_field), :on_delete) ? Dialect._foreign_key_on_delete_sql(new_field.on_delete) : nothing
     _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(new_field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(fk_target_table(new_field))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
   end
   return nothing
 end
@@ -164,7 +167,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
       local_col = Models.field_db_column(field, string(field_name))
       on_delete_sql = hasfield(typeof(field), :on_delete) ? Dialect._foreign_key_on_delete_sql(field.on_delete) : nothing
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
-      Dialect.add_foreign_key(conn, model.name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(field.to |> format_model_name)\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+      Dialect.add_foreign_key(conn, model_table_name(model), "\"$constraint_name\"", "\"$local_col\"",  "\"$(fk_target_table(field))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
     # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
     # we might need recreation if it's a FK.
     end
@@ -175,7 +178,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
     index_name = name * "_idx" |> lowercase
     index_col = Models.field_db_column(field, string(field_name))
     _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name",
-    Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$index_col\""]))
+    Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$index_col\""]))
   end
   nothing
 end
@@ -191,7 +194,7 @@ function _add_many_to_many_auto_constraints(conn::Union{PormGPostgres, PormGSQLi
     migration_plan,
     model_name,
     "Create many-to-many unique index",
-    Dialect.create_unique_index(conn, "\"$unique_index\"", "\"$(model.name |> lowercase)\"", ["\"$owner_column\"", "\"$related_column\""])
+    Dialect.create_unique_index(conn, "\"$unique_index\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$owner_column\"", "\"$related_column\""])
   )
   return nothing
 end
@@ -206,7 +209,7 @@ function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migrat
   haskey(model.cache, "unique_constraints") || return nothing
   constraints = get(model.cache["unique_constraints"], "constraints", nothing)
   constraints === nothing && return nothing
-  table = model.name |> lowercase
+  table = model_table_name(model)
   seen = Set{String}()
   for c in constraints
     # Resolve declared field names to physical columns (honors db_column #50; PormG adds no
@@ -260,7 +263,7 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     # #82: this add-NOT-NULL-with-default path also rebuilds the table on SQLite, so it must preserve the
     # existing secondary indexes too (no-op on PostgreSQL).
     _configure_order_dict_migration_plan(migration_plan, model_name, alter_key,
-      _sqlite_rebuild_preserving_indexes(conn, model.name |> lowercase,
+      _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
         Dialect.alter_field(conn, model, field_name, field, nothing, [:default]);
         surviving_columns = _model_physical_columns(model)))
   end
@@ -363,7 +366,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
         # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
         # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
-        alter_sql = _sqlite_rebuild_preserving_indexes(conn, model.name |> lowercase,
+        alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
           Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal);
           surviving_columns = _model_physical_columns(current_schema[model_name][:model]))
         _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
@@ -381,7 +384,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
           if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, field_name_stripped) !== nothing)
             index_name = "$(name)_idx"
             _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name_stripped",
-            Dialect.create_index(conn, "\"$index_name\"", "\"$(model.name |> lowercase)\"", ["\"$field_name_stripped\""]))
+            Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$field_name_stripped\""]))
           end
         end
 
@@ -460,7 +463,7 @@ function _resolve_table_fields(
           _configure_order_dict_migration_plan(migration_plan, model_name, "Rename field: $field_name",
           Dialect.rename_field(conn, model_name, old_field_name, field_name))
           _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
-          _sqlite_rebuild_preserving_indexes(conn, current_model.name |> lowercase,
+          _sqlite_rebuild_preserving_indexes(conn, model_table_name(current_model),
             Dialect.alter_field(conn, current_model, field_name, new_field, old_field, Symbol[]);
             surviving_columns = _model_physical_columns(current_model),
             column_renames = Dict(old_phys => field_name)))
@@ -540,7 +543,7 @@ function _resolve_table_fields(
       # idempotent recreation from the same desired model.
       rebuild_field = model.fields[model_fields_map[string(colect_deletion[rebuild_delete_idx])]]
       _configure_order_dict_migration_plan(migration_plan, model_name, "Alter table: $model_name",
-        _sqlite_rebuild_preserving_indexes(conn, current_model.name |> lowercase,
+        _sqlite_rebuild_preserving_indexes(conn, model_table_name(current_model),
           Dialect.alter_field(conn, current_model, string(colect_deletion[rebuild_delete_idx]), rebuild_field, rebuild_field, Symbol[]);
           surviving_columns = _model_physical_columns(current_model)))
     else
@@ -627,8 +630,10 @@ end
 @pormg_debug false
 
 for model in models # models is olds models
-  model_name = model.name |> Symbol
-  # model_name = lowercase(string(model.name)) |> Symbol
+  # Resolved physical name (#59), symmetric with how `get_all_models` keys `current_schema`. A no-op
+  # for genuinely-introspected models (they carry no db_table, so this is `model.name` — already the
+  # exact live table name), but it keeps the two sides of the diff keyed the same way.
+  model_name = Symbol(model_table_name(model))
   @pormg_debug false
   if haskey(current_schema, model_name)
     current_schema[model_name][:exist] = true
@@ -837,7 +842,14 @@ for name in names(mod, all = true)
       if obj.name == ""
         obj.name = name |> string |> format_model_name
       end
-      models[name |> string |> lowercase |> Symbol] = Dict{Symbol, Union{Bool, PormGModel}}(:model => obj, :exist => false) # TODO: change model.name to lowercase in all project
+      # Key by the RESOLVED PHYSICAL table name (#59): `db_table` when the model sets one, else the
+      # (now-filled) `obj.name`. The old key was the lowercased Julia BINDING name, which only ever
+      # agreed with the physical name by convention — a `db_table` model would key as `:driver_races`
+      # (binding) while its live table is `Driver_Races`, so the diff below would find no match and
+      # drop+recreate a live table that had not structurally changed. Keying both sides on
+      # `model_table_name` also retires the long-standing "lowercase model.name everywhere" TODO that
+      # sat on this line: the identity is now the resolved name, not an ad hoc fold of the binding.
+      models[Symbol(model_table_name(obj))] = Dict{Symbol, Union{Bool, PormGModel}}(:model => obj, :exist => false)
     end
   end
 end

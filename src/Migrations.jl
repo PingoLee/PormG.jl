@@ -34,7 +34,7 @@ import PormG: BackendCapabilityError
 import PormG.Configuration: MissingConfigurationError
 
 import PormG: Models, Migration, Dialect
-import PormG.Models: format_model_name
+import PormG.Models: format_model_name, model_table_name, fk_target_table
 import PormG: connection, config, get_constraints_pk, get_constraints_unique, get_constraints_check, get_constraints_byte_length_check
 import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite
 import PormG: sqlite_type_map, postgres_type_map, sqlite_ignore_schema, postgres_ignore_table, _EXTRA_IGNORE_TABLES

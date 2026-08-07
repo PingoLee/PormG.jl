@@ -2,6 +2,7 @@ module Configuration
 
 import YAML, Logging
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
+import PormG: model_table_name  # physical table name (db_table when set, #59) — defined in Kernel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
 import PormG: TransactionError  # cross-connection transaction misuse (#268); the config is valid, the call pattern is not
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
@@ -237,14 +238,16 @@ end
 function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String)
   ctx = _tx_context[]
   ctx.depth > 0 || return nothing
-  return get(ctx.sqlite_reserved_primary_keys, (string(model.name |> lowercase), pk_field), nothing)
+  # Keyed on the PHYSICAL table (#59): the reservation is about that table's PK sequence, and two
+  # models whose logical names fold together would otherwise share one overlay entry.
+  return get(ctx.sqlite_reserved_primary_keys, (model_table_name(model), pk_field), nothing)
 end
 
 function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer)
   ctx = _tx_context[]
   ctx.depth > 0 || return Int64(max_id)
 
-  key = (string(model.name |> lowercase), pk_field)
+  key = (model_table_name(model), pk_field)  # physical table (#59) — must match the reader above
   current_max = get(ctx.sqlite_reserved_primary_keys, key, typemin(Int64))
   new_max = max(current_max, Int64(max_id))
   ctx.sqlite_reserved_primary_keys[key] = new_max

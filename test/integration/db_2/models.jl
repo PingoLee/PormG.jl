@@ -410,4 +410,33 @@ M2m_rpk_driver_scratch = Models.Model("m2m_rpk_driver_scratch",
   sponsors = Models.ManyToManyField(M2m_rpk_sponsor_scratch, related_name="rpkdrivers"),
 )
 
+# #59 — model-level db_table. The LOGICAL name is lowercase (as every model name must be); the
+# PHYSICAL table is mixed-case, which is the spelling PormG could not express before this option.
+# On PostgreSQL a quoted identifier is case-sensitive, so this fixture only round-trips if every
+# renderer — DDL, SELECT/INSERT/UPDATE/DELETE, FK REFERENCES, migration diffing — agrees on
+# "Db_Table_Scratch". SQLite folds case and so cannot catch a disagreement here; that asymmetry is
+# the whole reason these live on both backends.
+Db_table_scratch = Models.Model("db_table_scratch",
+  db_table = "Db_Table_Scratch",
+  id = Models.IDField(),
+  name = Models.CharField(null=true),
+)
+
+# A child whose FK targets the db_table-mapped parent — the REFERENCES clause must name the
+# parent's PHYSICAL table, not its logical name. This is the half that failed silently before #300
+# (the constraint can bind to a different table that merely happens to exist).
+Db_table_child_scratch = Models.Model("db_table_child_scratch",
+  id = Models.IDField(),
+  parent = Models.ForeignKey(Db_table_scratch, on_delete="CASCADE", related_name="dbtchildren", null=true),
+  note = Models.CharField(null=true),
+)
+
+# db_table AND db_column together: the two overrides are independent axes (table vs column) and
+# must both apply to the same statements.
+Db_table_col_scratch = Models.Model("db_table_col_scratch",
+  db_table = "Db_Table_Col_Scratch",
+  id = Models.IDField(),
+  sku = Models.CharField(db_column="product_sku", null=true),
+)
+
 end

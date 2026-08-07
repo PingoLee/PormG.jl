@@ -162,6 +162,31 @@ abstract type PormGField <: PormGAbstractType end # define the type of the colum
 
 abstract type Migration <: PormGAbstractType end
 
+# Physical SQL table for `model` (#59) — `db_table` when the model declares a non-empty one, else
+# `model.name` unchanged. The table-level mirror of `Models.field_db_column`.
+#
+# Lives in Kernel, not Models, because layer-2 `Configuration` needs it (the SQLite reserved-PK
+# overlay keys on the physical table) and is included BEFORE Models — the shared-vocabulary rule.
+# It is pure property access with a fallback, so it carries no dependency on anything in Models.
+#
+# A model that never sets `db_table` resolves to `model.name` exactly as before this option existed,
+# so every call site is a no-op on the common path. `hasproperty` keeps it safe for any PormGModel
+# implementation that does not carry the field at all.
+function model_table_name(model::PormGModel)::String
+  hasproperty(model, :db_table) || return String(model.name)
+  dbt = getproperty(model, :db_table)
+  dbt isa AbstractString && !isempty(dbt) && return String(dbt)
+  return String(model.name)
+end
+
+# True when `model` declares a non-empty db_table (#59) — fast-path gate for call sites that want to
+# branch without building the resolved string. Mirrors `Models.model_has_db_column`'s shape.
+function model_has_db_table(model::PormGModel)::Bool
+  hasproperty(model, :db_table) || return false
+  dbt = getproperty(model, :db_table)
+  return dbt isa AbstractString && !isempty(dbt)
+end
+
 """
     PormGError <: Exception
 

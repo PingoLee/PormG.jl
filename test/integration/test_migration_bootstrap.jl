@@ -1859,6 +1859,157 @@ end
     @test !isfile(pending)
   end
 
+  # ── Phase 19: field type, max_length and db_index round-trip + no churn (#325) ────
+  # The rest of the same symptom #318 fixed for `unique`, with three more root causes:
+  #
+  #   * Several Julia field types render the SAME column, so introspection cannot reproduce the
+  #     declared type — the information is not in the schema to read. PostgreSQL renders
+  #     CharField/URLField/SlugField all as `varchar(n)` and ImageField as `text`; SQLite renders
+  #     UUIDField/JSONField/ImageField/TextField all as bare `TEXT`. The planner demanded Julia
+  #     struct identity, so it proposed an ALTER whose SQL re-rendered the column unchanged.
+  #   * `max_length` was lost on PostgreSQL (any `varchar(n > 255)` was retyped to `text`) and
+  #     INVENTED on SQLite (a bare `TEXT` read back as `CharField(250)`).
+  #   * `db_index` was never read on either backend — PostgreSQL probed a `Dict{String,String}`
+  #     with a `Symbol` key, SQLite never looked at indexes at all. Latent until the type fix
+  #     landed: SlugField defaults `db_index=true`, so the moment `slug` compared type-equal,
+  #     db_index became the NEW permanent churn.
+  #
+  # A fourth, found by the global drift assertion this issue restores: `auto_now`/`auto_now_add`
+  # emit NO DDL — PormG stamps the timestamp in Julia on write — so they can never be introspected
+  # and `alter_field` has nothing to emit for them. Every `DateTimeField(auto_now_add=true)` was
+  # producing an empty alteration on every run, which on SQLite is still a full table rebuild.
+  #
+  # `Rt325` declares one field per collapse so a regression in any single mapping shows up here.
+  # `Rtidx325` is the negative fixture: a declared-but-unindexed column and a composite
+  # UniqueConstraint whose members must NOT be marked `db_index`.
+  @testset "Phase 19: Type/Length/Index Round-trip + No Churn (#325)" begin
+    write_edge_models("""
+    Rt325 = Models.Model(
+        id = Models.IDField(),
+        canonical_url = Models.URLField(max_length=500),
+        slug = Models.SlugField(max_length=120, unique=true),
+        uuid_token = Models.UUIDField(),
+        payload = Models.JSONField(null=true),
+        photo = Models.ImageField(null=true),
+        body = Models.TextField(null=true),
+        created_at = Models.DateTimeField(auto_now_add=true),
+        updated_at = Models.DateTimeField(auto_now=true),
+        code = Models.CharField(max_length=40, db_index=true),
+        plain = Models.CharField(max_length=40)
+    )
+    Rtidx325 = Models.Model(
+        id = Models.IDField(),
+        season = Models.IntegerField(),
+        round = Models.IntegerField(),
+        constraints = [Models.UniqueConstraint(fields=("season", "round"), name="rtidx325_season_round_uniq")]
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # (a) The columns are physically REAL and hold what they claim to. A behavioral oracle, like
+    #     Phase 18's: a metadata query here would just re-implement the production reader.
+    #     `canonical_url` gets exactly 500 characters — the length PostgreSQL used to widen away, so
+    #     a regression that reverts to varchar(250) fails on the INSERT, not only on a diff.
+    long_url = "https://example.com/" * repeat("a", 480)
+    @test length(long_url) == 500
+    # `created_at`/`updated_at` are supplied explicitly: `auto_now`/`auto_now_add` are stamped by
+    # PormG in Julia on write and emit no column DEFAULT, so a raw INSERT must provide them.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO rt325 ("canonical_url","slug","uuid_token","code","plain","created_at","updated_at")
+      VALUES ('$(long_url)', 's1', '11111111-1111-4111-8111-111111111111', 'c1', 'p1',
+              '2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00');""")
+    stored = PormG.ConnectionPool.fetch(pool, """SELECT "canonical_url" FROM rt325;""") |> DataFrame
+    @test nrow(stored) == 1
+    @test length(stored[1, :canonical_url]) == 500
+
+    # The SlugField's UNIQUE is still enforced — the type fix must not have relaxed it away.
+    _is_unique_violation(e) = occursin("unique", lowercase(sprint(showerror, e)))
+    dup_slug = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO rt325 ("canonical_url","slug","uuid_token","code","plain","created_at","updated_at")
+        VALUES ('u2', 's1', '22222222-2222-4222-8222-222222222222', 'c2', 'p2',
+                '2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00');"""); false
+    catch e; _is_unique_violation(e) end
+    @test dup_slug
+
+    # (b) INTROSPECTION reads the schema-visible attributes back — the unit of the fix, live.
+    intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+    live = intro["rt325"]
+
+    # `max_length`: kept where the column carries one, absent where it does not. On PostgreSQL
+    # `canonical_url` used to come back as a TextField with no length at all; on SQLite `photo`,
+    # `payload` and `uuid_token` used to come back as CharField(250), a length nothing declared.
+    @test live.fields["canonical_url"].max_length == 500
+    @test live.fields["slug"].max_length == 120
+    @test !hasfield(typeof(live.fields["payload"]), :max_length)
+    @test !hasfield(typeof(live.fields["photo"]), :max_length)
+    @test !hasfield(typeof(live.fields["body"]), :max_length)
+
+    # `db_index`: read back on both backends now, and NOT over-marked. `slug` is the interesting
+    # one — SlugField defaults `db_index=true` AND declares `unique=true`, so PormG emits both a
+    # UNIQUE constraint and a separate CREATE INDEX; the reader must see the latter without
+    # mistaking the former for it.
+    @test live.fields["code"].db_index
+    @test live.fields["slug"].db_index
+    @test !live.fields["plain"].db_index          # …and it did not over-mark
+    @test !live.fields["canonical_url"].db_index
+    # A UNIQUE constraint's backing index is `field.unique`, never `db_index`; a composite
+    # UniqueConstraint (#19) marks neither of its members.
+    @test !intro["rtidx325"].fields["season"].db_index
+    @test !intro["rtidx325"].fields["round"].db_index
+    @test !intro["rtidx325"].fields["season"].unique
+    # `unique` itself still round-trips (#318) — this fix must not have regressed it.
+    @test live.fields["slug"].unique
+    @test !live.fields["plain"].unique
+
+    # (c) NO CHURN — the reason #325 exists. A re-diff against the SAME models proposes nothing,
+    #     even though every declared field type above reads back as a different Julia struct.
+    pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+
+    # (d) …and the diff is not merely inert: a REAL change to one of these fields is still planned.
+    #     Without this, a `describes_same_column` that returned `true` unconditionally would pass
+    #     every assertion above.
+    #
+    #     WIDENING (500 → 900), not shrinking: the row inserted in (a) holds 500 characters, and
+    #     PostgreSQL rejects `ALTER COLUMN TYPE varchar(300)` when a live value would not fit. 900
+    #     also keeps the column above the 255 mark this issue was about.
+    write_edge_models("""
+    Rt325 = Models.Model(
+        id = Models.IDField(),
+        canonical_url = Models.URLField(max_length=900),
+        slug = Models.SlugField(max_length=120, unique=true),
+        uuid_token = Models.UUIDField(),
+        payload = Models.JSONField(null=true),
+        photo = Models.ImageField(null=true),
+        body = Models.TextField(null=true),
+        created_at = Models.DateTimeField(auto_now_add=true),
+        updated_at = Models.DateTimeField(auto_now=true),
+        code = Models.CharField(max_length=40),
+        plain = Models.CharField(max_length=40)
+    )
+    Rtidx325 = Models.Model(
+        id = Models.IDField(),
+        season = Models.IntegerField(),
+        round = Models.IntegerField(),
+        constraints = [Models.UniqueConstraint(fields=("season", "round"), name="rtidx325_season_round_uniq")]
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test isfile(pending)   # 500 → 900 is a real column change; dropping db_index is a real DROP INDEX
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # …and applying it converges: the widened column and the dropped index both land, and the
+    # NEXT diff is empty again.
+    intro2 = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+    @test intro2["rt325"].fields["canonical_url"].max_length == 900
+    @test !intro2["rt325"].fields["code"].db_index
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+  end
+
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

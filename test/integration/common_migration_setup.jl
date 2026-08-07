@@ -224,6 +224,13 @@ end
 
 Smoke test: verifies the imported M module can reach the rebuilt schema.
 Call after reload_config_and_models!() and before fixture seeding.
+
+Also asserts the schema has **no drift**: every declared model compares equal to its own live
+table. That half was impossible until #325 — introspection lost each field's type, `max_length`
+and `db_index`, so `makemigrations` proposed the same no-op alteration forever and no point in the
+suite could be asserted schema-clean. Note that `st.pending` alone would NOT have caught it: it
+only tests whether a `pending_migrations.jl` file exists on disk, so it reports whatever some
+earlier call happened to leave behind and never re-diffs anything.
 """
 function assert_clean_state()
   settings = PormG.config[PORMG_DB_FOLDER]
@@ -231,6 +238,37 @@ function assert_clean_state()
   @assert st.has_history_table "Expected pormg_migrations table after bootstrap"
   @assert isempty(st.failed)   "Expected no failed migrations after bootstrap"
   @assert !st.pending          "Expected no pending migration file after bootstrap"
+  assert_no_schema_drift()
+  nothing
+end
+
+"""
+    assert_no_schema_drift()
+
+Re-diff the LIVE schema against the DECLARED models and assert the plan is empty (#325).
+
+In memory on purpose: `get_migration_plan` writes no `pending_migrations.jl`, so calling this
+never disturbs the `st.pending` check above or a later `makemigrations`. The failure message names
+every model that drifted and the plan steps proposed for it, because "the schema drifted" on its
+own is not enough to act on.
+
+This is the GLOBAL assertion #318 wanted and could not have: it was blocked on the type/length
+round-trip, which is why `test/integration/test_db_table_db.jl` carried a per-table workaround
+until #325 landed.
+"""
+function assert_no_schema_drift()
+  settings = PormG.config[PORMG_DB_FOLDER]
+  conn = settings.connections
+  live = PormG.Migrations.convert_schema_to_models(conn)
+  declared = PormG.Migrations.get_all_models(models)
+  plan = PormG.Migrations.get_migration_plan(live, declared, conn, settings; interactive = false)
+  if !isempty(plan)
+    lines = String[]
+    for (name, steps) in plan
+      push!(lines, string(name, ": ", join(collect(keys(steps)), "; ")))
+    end
+    error("Schema drift after bootstrap — makemigrations would propose:\n  " * join(lines, "\n  "))
+  end
   nothing
 end
 

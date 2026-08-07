@@ -8,6 +8,28 @@
 # Internal Helpers
 # ---
 
+# Field attributes a column ALTER can never express, so a difference in one must not enter
+# `colect_not_equal` — on SQLite that vector being non-empty means a full table rebuild.
+#
+#   * `blank`, `editable`, `verbose_name`, `related_name`, `how`, `formatter` are model-layer only.
+#   * `on_delete` and the FK identity are planned by `_add_fk_constraint_in_alteration` /
+#     `_drop_fk_constraint_in_alteration`.
+#   * `db_column` never alters the live schema by itself — the column identity is already proven
+#     equal by the matched (column-keyed) field, and the introspected side carries
+#     `db_column=nothing` (#50).
+#   * `db_index` is materialized by CREATE/DROP INDEX, planned separately in `_alter_table_fields`
+#     BEFORE the column diff. It was never in `Dialect.alter_field`'s implemented list either, so
+#     before #325 a `db_index` difference emitted the "attributes not implemented" warning plus a
+#     pointless ALTER (a full rebuild on SQLite).
+#   * `auto_now` / `auto_now_add` emit NO DDL anywhere — PormG stamps the timestamp in Julia on
+#     write, it is not a column DEFAULT and not a trigger. So introspection cannot read them back
+#     and `alter_field` has nothing to emit for them: every `DateTimeField(auto_now_add=true)`
+#     produced an empty alteration on every `makemigrations`, forever (#325). On SQLite that empty
+#     alteration was still a full table rebuild.
+const _NON_SCHEMA_FIELD_ATTRS = (:blank, :on_delete, :related_name, :verbose_name, :editable,
+                                 :how, :formatter, :db_column, :db_index,
+                                 :auto_now, :auto_now_add)
+
 function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
   _hash = randstring(8) 
   name = "$(model_name)_$field_name"
@@ -311,33 +333,63 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
     # Pass maps to resolve fields so original keys can be used for accessing model.fields
     _resolve_table_fields(conn, model_name, model, current_schema[model_name][:model], colect_deletion, colect_addition, migration_plan, settings, model_fields_map, current_fields_map, interactive=interactive)
       
+    # #325: index create/drop is DEFERRED to after the whole field loop, not emitted inline.
+    # `stripped_current_fields` is a `Set`, so field order is arbitrary — and on SQLite the table
+    # rebuild re-creates every live secondary index verbatim (#82). A `DROP INDEX` emitted before
+    # the rebuild is therefore undone by it, and whether that happened depended on which field the
+    # Set yielded first. Collecting the actions here and flushing them below puts them after any
+    # rebuild, deterministically. Each entry is `(:create | :drop, physical column, hashed name,
+    # live index name or nothing)`.
+    index_actions = Tuple{Symbol, String, String, Union{String, Nothing}}[]
+
     for field_name_stripped in stripped_current_fields
       original_code_key = current_fields_map[field_name_stripped]
       if haskey(model_fields_map, field_name_stripped)
         original_db_key = model_fields_map[field_name_stripped]
-        
+
         field = current_schema[model_name][:model].fields[original_code_key]
         old_field = model.fields[original_db_key]
 
+        # A ManyToManyField is not a physical column and `sManyToManyField` is the one field struct
+        # with no `db_index` at all, so the index blocks below would raise on it. It cannot normally
+        # be matched here (it is never a live column), but the guard is what makes that explicit —
+        # `_add_new_field` / `_add_constrains` both early-return on m2m for the same reason.
+        (Models.is_many_to_many_field(field) || Models.is_many_to_many_field(old_field)) && continue
+
+        name::String = _hash_field_name(model_name, field_name_stripped)
+
         # check if the field is diferent
         colect_not_equal::Vector{Symbol} = []
-        if old_field |> typeof == field |> typeof                          
-          # Check if all attributes are equal                
+        if old_field |> typeof == field |> typeof
+          # Check if all attributes are equal
           for attr in fieldnames(typeof(field))
             new_var = getfield(field, attr)
             old_var = getfield(old_field, attr)
-            if new_var != old_var                  
+            if new_var != old_var
               attr == :to && Models._compare_field_foreign_key(field, old_field) && continue
               # pk_field is compared by RESOLVED referenced column: a field-name pk_field on
               # the code side matches the introspected physical column when the parent pk is
               # renamed via db_column (#50). No-op when the referenced column isn't renamed.
               attr == :pk_field && Models.fk_target_column(field) == Models.fk_target_column(old_field) && continue
-              # :db_column never alters the live schema by itself — the column identity is
-              # already proven equal by the matched (column-keyed) field, and the introspected
-              # side carries db_column=nothing (#50).
-              attr in [:blank, :on_delete, :related_name, :verbose_name, :editable, :how, :formatter, :db_column] && continue
+              attr in _NON_SCHEMA_FIELD_ATTRS && continue
               push!(colect_not_equal, attr)
             end
+          end
+        elseif Dialect.describes_same_column(conn, field, old_field)
+          # #325: DIFFERENT Julia field types, SAME physical column. Introspection cannot reproduce
+          # the declared type — PostgreSQL renders CharField/URLField/SlugField all as `varchar(n)`,
+          # SQLite renders UUIDField/JSONField/ImageField/TextField all as bare `TEXT` — so demanding
+          # struct identity here proposed an ALTER whose SQL re-rendered the column unchanged, on
+          # every single `makemigrations`. Compare what the database can actually hold instead: the
+          # rendered column type (already proven equal) plus the attributes BOTH structs carry.
+          # `:type` is excluded because the signature supersedes it; the attributes only one side has
+          # (CharField's `choices`, UUIDField's `auto_add`) are Julia-side and never in the schema.
+          for attr in fieldnames(typeof(field))
+            hasfield(typeof(old_field), attr) || continue
+            attr == :type && continue
+            attr in _NON_SCHEMA_FIELD_ATTRS && continue
+            getfield(field, attr) == getfield(old_field, attr) && continue
+            push!(colect_not_equal, attr)
           end
         else
           # check is db_constraint is false in field
@@ -347,58 +399,77 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
             push!(colect_not_equal, :type)
           end
         end
-        
+
         # if field_name == "time"
         #   @pormg_debug
         # end
-        
-        isempty(colect_not_equal) && continue                       
 
-        # Check if is needed remove the foreign key
-        name::String = _hash_field_name(model_name, field_name_stripped)
-        
-        _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field)
-        
-        # For SQLite every field alteration requires a full table recreation. Use a
-        # single stable key ("Alter table: <model>") so repeated calls for the same
-        # table overwrite each other, producing exactly one recreation statement
-        # instead of one per changed field.
-        alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
-        # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
-        # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
-        alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
-          Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal);
-          surviving_columns = _model_physical_columns(current_schema[model_name][:model]))
-        _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
+        # #325: the column ALTER is CONDITIONAL, but the index blocks below are not. `db_index` is
+        # in `_NON_SCHEMA_FIELD_ATTRS`, so an index-only difference leaves `colect_not_equal` empty —
+        # which is the point (on SQLite a non-empty vector means a FULL TABLE REBUILD, for something
+        # a CREATE/DROP INDEX expresses on its own). Before #325 this was an early `continue`, so an
+        # index-only difference would now be planned as nothing at all.
+        if !isempty(colect_not_equal)
+          # Check if is needed remove the foreign key
+          _drop_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field)
 
-        # Check if the field is a foreign key
-        _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field, name)
-        
+          # For SQLite every field alteration requires a full table recreation. Use a
+          # single stable key ("Alter table: <model>") so repeated calls for the same
+          # table overwrite each other, producing exactly one recreation statement
+          # instead of one per changed field.
+          alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name_stripped"
+          # #82: on SQLite this preserves the table's secondary indexes across the rebuild and gates on
+          # foreign_key_check (no-op on PostgreSQL). See _sqlite_rebuild_preserving_indexes.
+          alter_sql = _sqlite_rebuild_preserving_indexes(conn, model_table_name(model),
+            Dialect.alter_field(conn, current_schema[model_name][:model], field_name_stripped, field, old_field, colect_not_equal);
+            surviving_columns = _model_physical_columns(current_schema[model_name][:model]))
+          _configure_order_dict_migration_plan(migration_plan, model_name, alter_key, alter_sql)
+
+          # Check if the field is a foreign key
+          _add_fk_constraint_in_alteration(conn, migration_plan, model_name, field_name_stripped, field, old_field, name)
+        end
+
+        # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
+
         # Check if the field is also indexed
-        if !field.primary_key && field.db_index && !model.fields[original_db_key].db_index
+        if !field.primary_key && field.db_index && !old_field.db_index
           @pormg_debug false
-          # #82: SQLite introspection can't see db_index, so this branch always fires for an indexed
-          # field; and the table rebuild (alter_field) already re-emits every existing index. Skip the
-          # redundant CREATE INDEX when one already exists in the live DB, or it would duplicate the
-          # rebuilt index (random suffix defeats IF NOT EXISTS). Genuinely-new indexes still get created.
-          if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, field_name_stripped) !== nothing)
-            index_name = "$(name)_idx"
-            _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name_stripped",
-            Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$field_name_stripped\""]))
-          end
+          push!(index_actions, (:create, field_name_stripped, name, nothing))
         end
 
         # Check if is need to remove the index
         if !field.primary_key && old_field.db_index && !field.db_index
           @pormg_debug
-          index_name = model.cache["index"][original_db_key]
-          _drop_index(conn, migration_plan, model_name, field_name_stripped, index_name=index_name)
-          # _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name_stripped", 
-          # Dialect.drop_index(conn, "\"$index_name\""))
+          # The live model's index cache maps physical column ⇒ index name. `db_index=true` on the
+          # live side means introspection saw exactly such an index, so the key is present; the
+          # `nothing` fallback routes `_drop_index` through `get_constraints_index` rather than
+          # raising a KeyError from inside makemigrations.
+          live_index_name = get(get(model.cache, "index", Dict{String,Any}()), original_db_key, nothing)
+          push!(index_actions, (:drop, field_name_stripped, name, live_index_name === nothing ? nothing : string(live_index_name)))
         end
       end
-    end    
-  end     
+    end
+
+    # Flush the deferred index actions — always after any "Alter table:"/"Alter field:" step the
+    # loop above registered, whichever field produced it.
+    for (kind, col, hashed, live_index_name) in index_actions
+      if kind === :create
+        # #82/#325: the SQLite rebuild already re-emits every existing index, so a CREATE INDEX
+        # alongside one would duplicate it (the random suffix defeats IF NOT EXISTS). Introspection
+        # now reads `db_index` back on both backends, so this branch no longer fires merely because
+        # SQLite could not see the index — but the probe stays: the rebuild is emitted from the
+        # DECLARED model, which can carry an index the live schema is only about to gain.
+        # Genuinely-new indexes still get created.
+        if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, col) !== nothing)
+          index_name = "$(hashed)_idx"
+          _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
+          Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$col\""]))
+        end
+      else
+        _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name)
+      end
+    end
+  end
 end
 
 function _resolve_table_fields(

@@ -95,6 +95,24 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
 
         @test validate_field_data(mock_str_model, "email", "test@example.com", "insert") === true
 
+        # #325: CharField no longer caps `max_length` at 255. That ceiling was a MySQL-ism —
+        # PostgreSQL's `varchar` takes up to 10,485,760 characters and SQLite ignores the declared
+        # length — and it was LOSSY on read-back: introspecting a live `varchar(500)` had to retype
+        # the column to TextField and drop the length, so the model never matched its own table and
+        # `makemigrations` proposed the same widening forever. The constructor call goes red on main.
+        @test Models.CharField(max_length = 500).max_length == 500
+        @test Models.CharField(max_length = 10_000).max_length == 10_000
+        # The lower bound is untouched — a zero/negative length is still a declaration error.
+        @test_throws PormG.FieldValidationError Models.CharField(max_length = 0)
+        # …and length validation still fires at the declared bound, wherever it is.
+        mock_long_model = Models.Model_Type(
+            name = "long_char_test",
+            fields = Dict("url" => Models.CharField(max_length = 500)),
+            field_names = ["url"]
+        )
+        @test validate_field_data(mock_long_model, "url", "a"^500, "insert") === true
+        @test_throws PormGError validate_field_data(mock_long_model, "url", "a"^501, "insert")
+
         # Regression: a field whose `max_length` is `nothing` (the St_cruz.b1_n case) must SKIP
         # the length check, not compare `length(value) > nothing` (which threw
         # MethodError: isless(::Int, ::Nothing)).

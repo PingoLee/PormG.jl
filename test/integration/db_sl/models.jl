@@ -199,7 +199,13 @@ Field_validation_scratch = Models.Model("field_validation_scratch",
 # Mirrors the column types Django generates for DateTimeField/DateField/DecimalField.
 # Used to validate PormG's wire-format compatibility with Django-managed schemas
 # without requiring Python or Django as a test dependency.
-Django_contract_scratch = Models.Model("django_contract_scratch",
+#
+# The table is `contract_django_scratch`, NOT `django_contract_scratch` (#325): `django_` is a
+# framework prefix in `postgres_ignore_table`, so a table named that way is deliberately invisible
+# to introspection on PostgreSQL — which made `makemigrations` propose `CREATE TABLE` for it on
+# every run and blocked the global schema-clean assertion. Kept identical to the db_2 fixture so the
+# two backends stay comparable, even though `sqlite_ignore_schema` carries no `django_` entry.
+Django_contract_scratch = Models.Model("contract_django_scratch",
   id          = Models.IDField(),
   label       = Models.CharField(max_length=100, unique=true),
   created_at  = Models.DateTimeField(auto_now_add=true),    # Django: DateTimeField(auto_now_add=True)

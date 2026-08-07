@@ -245,8 +245,11 @@ PormG.get_constraints_byte_length_check(::MockPGBinNamed, table_name::String, fi
 
     # The CHECK clause must not be mistaken for a column, and the neighbouring column's
     # own type must survive — the DEFAULT capture used to swallow the trailing CHECK.
+    # (#325: a lengthless `TEXT` now reads back as a TextField, not a CharField whose constructor
+    # would invent `max_length = 250`. What this assertion is here to prove — that `name` was
+    # parsed as a column at all — is unchanged.)
     @test !haskey(recovered.fields, "length")
-    @test recovered.fields["name"] isa Models.sCharField
+    @test recovered.fields["name"] isa Models.sTextField
   end
 
   @testset "an unbounded, defaultless BLOB column round-trips too" begin

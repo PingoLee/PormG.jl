@@ -665,6 +665,63 @@ _byte_length_check_clause(col_name, max_length::Int, ::PormGPostgres)::String =
 _byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
   "CHECK (length(\"$(col_name)\") <= $(max_length))"
 
+# ── Physical-column identity (#325) ──────────────────────────────────────────────────────────────
+#
+# Several Julia field types materialize the SAME column. On PostgreSQL `CharField`, `URLField` and
+# `SlugField` all render `varchar(n)`, and `EmailField`/`PasswordField`/`ImageField`/`AutoField`/
+# `OneToOneField` all fall through `_get_column_type`'s `else` to `text`; on SQLite the collapse is
+# wider still — `UUIDField`, `JSONField`, `TextField` and `ImageField` are all bare `TEXT`.
+#
+# Introspection therefore CANNOT reproduce the declared Julia type: the information is not in the
+# schema to read. Making it reproducible would mean encoding the type into the DDL (extra CHECK
+# markers on PostgreSQL, non-standard declared types on SQLite — which also changes SQLite's column
+# affinity) and rebuilding every existing table. So the migration diff compares the PHYSICAL COLUMN
+# instead: if two fields render the same column, an ALTER between them is by construction a no-op,
+# and proposing one is the perpetual churn #325 is about.
+#
+# `_get_column_type` alone is not the whole column: two bounds are expressible only as a CHECK, and
+# a signature built from the type string alone would call `IntegerField` and `PositiveIntegerField`
+# the same column on PostgreSQL (both render `integer`).
+#
+# Case-folded because SQL type names are case-insensitive and PormG's own rendering is not
+# self-consistent about it: the `else` fallthrough shared by ImageField/FileField/EmailField/
+# PasswordField/AutoField/OneToOneField returns the literal `"TEXT"`, while `TextField` goes through
+# the map and returns `"text"` on PostgreSQL. Both produce the same `text` column — comparing the
+# strings verbatim would call them different and churn forever, which is the very bug being fixed.
+_column_signature(field::PormGField, conn::Union{PormGPostgres,PormGSQLite}) = (
+  lowercase(_get_column_type(field, conn)),
+  _requires_non_negative_check(field),
+  _requires_byte_length_check(field) ? getfield(field, :max_length) : nothing,
+)
+
+# A relational field's column type is only half of it — the FK constraint is planned separately, by
+# `_add_fk_constraint_in_alteration` / `_drop_fk_constraint_in_alteration`, which run AFTER the
+# planner's `isempty(colect_not_equal)` early-out. `sForeignKey` and `sBigIntegerField` both render
+# `bigint`, so calling them the same column would silently stop planning FK add/drop on an existing
+# column. Excluded here rather than at the call site so the predicate is safe wherever it is used.
+_is_relational_field(field::PormGField)::Bool = hasfield(typeof(field), :to)
+_declares_primary_key(field::PormGField)::Bool =
+  hasfield(typeof(field), :primary_key) && getfield(field, :primary_key)::Bool
+
+"""
+    describes_same_column(conn, a::PormGField, b::PormGField) -> Bool
+
+Whether `a` and `b` materialize the same physical column on `conn` — the same rendered column type
+*and* the same CHECK-expressed bounds (#325).
+
+Used by the migration planner for the cross-type case only: when two fields have the same Julia
+struct type the planner compares them attribute by attribute as before, so this predicate can only
+ever turn a spurious "changed" into "unchanged", never the reverse.
+
+Relational fields (anything with a `to`) and primary keys are always `false`: their identity is not
+carried by the column type alone.
+"""
+function describes_same_column(conn::Union{PormGPostgres,PormGSQLite}, a::PormGField, b::PormGField)::Bool
+  (_is_relational_field(a) || _is_relational_field(b)) && return false
+  (_declares_primary_key(a) || _declares_primary_key(b)) && return false
+  return _column_signature(a, conn) == _column_signature(b, conn)
+end
+
 function field_to_column(col_name::String, field::PormGField, conn::PormGPostgres; temporary_default::Any=nothing)::String
   # Resolve the physical column name (db_column when set, else the field name) — #50.
   col_name = field_db_column(field, col_name)
@@ -1054,10 +1111,14 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
     end
   end
 
-  # alert if any colect_not_equal are not checked
-  XXX::Vector{Symbol} = [:type, :max_length, :max_digits, :decimal_places, :null, :unique, :default, :primary_key, :generated, :generated_always, :blank, :auto_now, :auto_now_add]
-  if any(attr -> !(attr in XXX), colect_not_equal)
-    not_in = [attr for attr in colect_not_equal if !(attr in XXX)]
+  # Warn for any requested attribute this function emits no SQL for. Every entry below has a
+  # statement branch above it; `:blank`, `:auto_now` and `:auto_now_add` used to be listed here with
+  # none, which silenced the warning for three attributes that genuinely could not be applied. They
+  # are now filtered upstream by `planner._NON_SCHEMA_FIELD_ATTRS` — they alter no schema at all —
+  # so if one reaches this point it IS an unhandled request and deserves the warning (#325).
+  IMPLEMENTED::Vector{Symbol} = [:type, :max_length, :max_digits, :decimal_places, :null, :unique, :default, :primary_key, :generated, :generated_always]
+  if any(attr -> !(attr in IMPLEMENTED), colect_not_equal)
+    not_in = [attr for attr in colect_not_equal if !(attr in IMPLEMENTED)]
     @warn "The attributes $(not_in) are not implemented in alter_field function ($(table_name).$(field_name))"
   end
   return join(sql_statements, "\n")

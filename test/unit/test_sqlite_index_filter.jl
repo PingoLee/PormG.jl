@@ -24,7 +24,8 @@ using PormG
 using DataFrames
 import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
 import PormG.Migrations: get_secondary_index_ddls, _sqlite_column_is_unique,
-                         _sqlite_single_column_unique_columns, convertSQLToModel
+                         _sqlite_single_column_unique_columns,
+                         _sqlite_single_column_indexed_columns, convertSQLToModel
 
 @testset "get_secondary_index_ddls column filter (#116)" begin
   mktempdir() do dir
@@ -230,6 +231,95 @@ end
       @test c.fields["o2o"].unique        # …the uniqueness IS read, which is what #318 fixes
       @test c.fields["fk"]  isa PormG.Models.sForeignKey
       @test !c.fields["fk"].unique
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #325: `_sqlite_single_column_indexed_columns` — the `db_index` twin of the #318 `unique` reader
+#
+# `PRAGMA table_info` carries neither attribute, so introspection never populated `db_index` on
+# SQLite at all. Every `db_index=true` field (SlugField defaults to it) therefore compared unequal
+# to its own live table forever — and since `Dialect.alter_field` has no `db_index` branch, the
+# rebuild it triggered emitted no DDL for it. `src/migrations/planner.jl` carried a workaround for
+# one symptom of that; this is the cause.
+#
+# The filters are the mirror image of the `unique` reader's, and each excludes an index that is NOT
+# `db_index`. Every assertion below names the filter it gates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "_sqlite_single_column_indexed_columns (#325)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "indexedcols.sqlite"); pool_size = 1)
+    try
+      # One of every shape PRAGMA index_list reports, mirrored from the #318 fixture above:
+      #   ix     → plain CREATE INDEX        (origin 'c', unique 0, 1 col)  ← the ONLY db_index
+      #   uc     → column-level UNIQUE       (origin 'u')
+      #   plain  → CREATE UNIQUE INDEX       (origin 'c', unique 1)
+      #   a, b   → composite CREATE INDEX    (origin 'c', unique 0, 2 cols)
+      #   part   → partial CREATE INDEX      (origin 'c', unique 0, 1 col, partial 1)
+      fetch(pool, """CREATE TABLE t325 (
+        id INTEGER PRIMARY KEY, ix TEXT, uc TEXT UNIQUE, plain TEXT,
+        a TEXT, b TEXT, part TEXT);""")
+      fetch(pool, "CREATE INDEX ix_t325_ix ON t325(ix);")
+      fetch(pool, "CREATE UNIQUE INDEX ux_t325_plain ON t325(plain);")
+      fetch(pool, "CREATE INDEX ix_t325_ab ON t325(a, b);")
+      fetch(pool, "CREATE INDEX ix_t325_part ON t325(part) WHERE part IS NOT NULL;")
+
+      idx = _sqlite_single_column_indexed_columns(pool, :t325)
+      @test collect(keys(idx)) == ["ix"]
+      # The index NAME is carried too — the planner needs it to DROP the index when a model stops
+      # declaring `db_index`, and SQLite's reader never populated `cache["index"]` before.
+      @test idx["ix"] == "ix_t325_ix"
+
+      # Spelled out individually so a failure names the filter that broke:
+      @test haskey(idx, "ix")         # drop `origin = 'c'` and the UNIQUE auto-index leaks in
+      @test !haskey(idx, "uc")        # a column-level UNIQUE is `field.unique` (#318), not db_index
+      @test !haskey(idx, "plain")     # drop `il."unique" = 0` and CREATE UNIQUE INDEX leaks in —
+                                      #   that is how a single-field UniqueConstraint (#19) is
+                                      #   materialized, and marking it would churn the other way
+      @test !haskey(idx, "a")         # drop `HAVING COUNT(*) = 1` and composite members leak in;
+      @test !haskey(idx, "b")         #   PormG only ever indexes one column per db_index
+      @test !haskey(idx, "part")      # drop `il.partial = 0` and a partial index leaks in — it
+                                      #   constrains rows, not the column, and PormG cannot declare
+                                      #   one, so reading it would be permanent churn
+      @test !haskey(idx, "id")        # a PK is already an IDField (and sIDField is immutable)
+
+      # An unknown table yields an empty dict rather than throwing — convert_schema_to_models calls
+      # this per table and must survive a race with a concurrent DROP.
+      @test _sqlite_single_column_indexed_columns(pool, :nonexistent) == Dict{String, String}()
+
+      # END TO END: the dict is only useful if convertSQLToModel applies it. Without this the whole
+      # fix could be inert and every assertion above would still pass.
+      m = convertSQLToModel(pool, "t325")
+      @test m.fields["ix"].db_index
+      @test !m.fields["uc"].db_index
+      @test !m.fields["plain"].db_index
+      @test !m.fields["a"].db_index
+      @test !m.fields["part"].db_index
+      @test m.cache["index"]["ix"] == "ix_t325_ix"
+
+      # ── The other half of #325 on SQLite: a bare TEXT column must not invent a max_length ──
+      # SQLite renders CharField as `TEXT(n)` and UUIDField/JSONField/ImageField/TextField all as
+      # bare `TEXT`. Reading a lengthless `TEXT` back as `CharField` meant the constructor's default
+      # `max_length = 250` was invented from nothing — the model rendered `TEXT`, the "live" model
+      # rendered `TEXT(250)`, and the two never matched.
+      fetch(pool, """CREATE TABLE len325 (
+        id INTEGER PRIMARY KEY, bare TEXT, sized TEXT(120), vc VARCHAR(64));""")
+      lm = convertSQLToModel(pool, "len325")
+
+      @test lm.fields["bare"] isa PormG.Models.sTextField      # ← the mutation gate
+      @test !hasfield(typeof(lm.fields["bare"]), :max_length)  # nothing left to invent
+
+      # A declared length still means CharField, carrying that exact length — the fix must not
+      # swing the other way and turn every textual column into a TextField.
+      @test lm.fields["sized"] isa PormG.Models.sCharField
+      @test lm.fields["sized"].max_length == 120
+      # VARCHAR/CHAR are accepted for schemas PormG did not create; before #325 a hand-written
+      # `VARCHAR(64)` fell through to TextField and lost its length outright.
+      @test lm.fields["vc"] isa PormG.Models.sCharField
+      @test lm.fields["vc"].max_length == 64
     finally
       close_pool!(pool)
     end

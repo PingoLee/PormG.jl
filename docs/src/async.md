@@ -106,6 +106,16 @@ Because the placeholder style is backend-native, a manual-params string is **not
 !!! warning "An un-awaited `FetchTask` holds a pool connection"
     `fetch_async` checks its connection out *synchronously*; only `await_result` (or the owning transaction's cleanup) returns it. Always await every task you start — including fire-and-forget writes. The opt-in [`leak_detection_threshold`](configuration/advanced.md) logs a warning when a connection is held suspiciously long, which almost always means an un-awaited `FetchTask`.
 
+## Cancelling a query with `Ctrl+C`
+
+Interrupting a running query in the REPL is safe: PormG asks the database to abandon the statement, waits for the driver to let go of the connection, and only then decides what to do with the pool slot. A connection that comes back clean is reused; one that does not is renewed or dropped, and a fresh connection takes its place. Either way the *next* query gets a healthy connection — the pool cannot be left in a state where every later query fails.
+
+!!! note "Recovery runs in the background"
+    Control returns to the REPL immediately; the cancel-and-clean happens on its own task, and the pool slot stays checked out while it does — so a query issued in the meantime may be served by a different connection. If the database never releases the connection, the slot is dropped from the pool anyway after a few seconds and the next query opens a fresh one. Under `julia -t 1` the driver's cancel and reconnect calls block the single worker thread while they run, so a heavily-loaded single-threaded session may pause briefly — start Julia with `-t auto` if that matters.
+
+!!! warning "An interrupt currently arrives as a `StatementError`"
+    Today the `InterruptException` reaches you wrapped in a `StatementError`, carried on its `cause` — so a `catch DatabaseError` around a query swallows your `Ctrl+C`. That wrapping is a known wart rather than a designed contract, and it is expected to change: a cancellation will propagate past `catch DatabaseError` altogether, which is what you want from `Ctrl+C`. So write the `catch` you would want *after* that change — let the interrupt escape — rather than reaching for `e.cause isa InterruptException` today, because that test will stop matching silently once the interrupt no longer arrives as a `DatabaseError` at all.
+
 ## Transactions and concurrency
 
 The transaction context is a `ScopedValue`, so tasks spawned **inside** `run_in_transaction` inherit it — every query they run targets the transaction's **single pinned connection** (see [Async Context Propagation](write/transaction.md#Async-Context-Propagation)). That is exactly what you want for *correctness*: child tasks participate in the same transaction.

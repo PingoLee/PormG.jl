@@ -113,7 +113,17 @@ end
 PormG.backend_num_affected_rows(pool::PormGPostgres, result) = LibPQ.num_affected_rows(result)
 PormG.backend_num_rows(pool::PormGPostgres, result) = LibPQ.num_rows(result)
 
-function _drain_postgres_connection!(conn::LibPQ.Connection)
+# Consume every PGresult still queued on `conn` until the wire is clean. Returns `true` when it
+# drained, `false` when `deadline` (an absolute `time()`) elapsed with a result still pending.
+#
+# Still THROWS `PQConnectionError` when `PQconsumeInput` fails: that means the socket is gone, which
+# `backend_copy_in!` has always propagated and must keep propagating. `deadline = Inf` — the default,
+# and what the COPY path passes — is exactly the pre-#315 behaviour.
+#
+# The bound matters only for the abandoned-await caller (#315). `PQisBusy` spins on `yield()` rather
+# than waiting on the socket, so it is a HOT loop, and a result stream the driver task abandoned
+# half-read can take as long as the query itself did.
+function _drain_postgres_connection!(conn::LibPQ.Connection; deadline::Float64 = Inf)::Bool
   LibPQ.lock(conn) do
     while true
       # COPY can leave a trailing PGresult pending on the connection even after
@@ -121,14 +131,62 @@ function _drain_postgres_connection!(conn::LibPQ.Connection)
       LibPQ.libpq_c.PQconsumeInput(conn.conn) == 1 || throw(LibPQ.Errors.PQConnectionError(conn))
 
       if LibPQ.libpq_c.PQisBusy(conn.conn) == 1
+        time() > deadline && return false
         yield()
         continue
       end
 
       result_ptr = LibPQ.libpq_c.PQgetResult(conn.conn)
-      result_ptr == C_NULL && return nothing
+      result_ptr == C_NULL && return true
       LibPQ.libpq_c.PQclear(result_ptr)
     end
+  end
+end
+
+# ── Abandoned-await recovery (#315) ──────────────────────────────────────────
+#
+# A Ctrl-C during a query leaves libpq with an unconsumed result queued on the socket. Nothing in
+# the pool can see that: `backend_is_alive` is `PQstatus(conn) == CONNECTION_OK`, which stays true
+# for a connection carrying a pending result — so the slot went back into circulation and every
+# later statement on it failed with "another command is already in progress", permanently.
+
+# How long the drain may spin on a still-busy socket before the caller gives up and renews the
+# connection instead. Generous: `PQcancel` normally aborts within milliseconds, so reaching this
+# means the server never acknowledged the cancel.
+const _PG_ABANDON_DRAIN_SECONDS = 5.0
+
+# Ask PostgreSQL to abandon the statement currently running on `conn` (#315).
+#
+# NOT `LibPQ.cancel(async_result)`: that only sets the AsyncResult's `should_cancel` flag, and the
+# flag is read by the `_consume` loop INSIDE the driver's own result task. In the case this exists
+# for, the SIGINT killed that task — the loop is gone, the flag is never read, and nothing is
+# cancelled. The out-of-band request below is the only one that reaches the server: libpq builds a
+# separate `PGcancel` and sends it on its OWN socket. That is also why this is the one libpq call
+# safe to issue while another task may still hold the `PGconn`.
+function PormG.backend_cancel_query!(pool::PormGPostgres, conn::LibPQ.Connection)
+  isopen(conn) || return nothing
+  cancel_ptr = LibPQ.libpq_c.PQgetCancel(conn.conn)
+  cancel_ptr == C_NULL && return nothing
+  try
+    errbuf = zeros(UInt8, 256)
+    if LibPQ.libpq_c.PQcancel(cancel_ptr, pointer(errbuf), Cint(length(errbuf))) != 1
+      @debug "PostgreSQL refused the cancel request" reason=unsafe_string(pointer(errbuf))
+    end
+  finally
+    LibPQ.libpq_c.PQfreeCancel(cancel_ptr)
+  end
+  return nothing
+end
+
+# Is `conn` clean enough to hand back to the pool? Never throws: the caller is a detached recovery
+# task, where an escaping failure would surface as an unhandled task error instead of a renewed
+# connection. A `false` here routes the connection to `_renew_or_discard_connection!`.
+function PormG.backend_drain_connection!(pool::PormGPostgres, conn::LibPQ.Connection)
+  try
+    return _drain_postgres_connection!(conn; deadline = time() + _PG_ABANDON_DRAIN_SECONDS)
+  catch drain_failure
+    @debug "PostgreSQL connection could not be drained; it will be renewed or discarded" exception=drain_failure
+    return false
   end
 end
 

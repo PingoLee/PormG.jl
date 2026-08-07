@@ -153,6 +153,31 @@ function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, e)
   return occursin("unable to open database file", msg)
 end
 
+# ── Abandoned-await recovery (#315) ──────────────────────────────────────────
+
+# Ask SQLite to abort whatever statement is running on `conn`.
+#
+# `sqlite3_interrupt` is the right primitive for all three states the recovery cannot distinguish
+# between: it is explicitly documented as safe to call from a thread other than the one running the
+# statement (which is always the case here — the global worker owns the handle, the caller does
+# not), it is a no-op when nothing is running, and since SQLite 3.8 it provably does not affect
+# statements started after it returns. The interrupted statement fails with SQLITE_INTERRUPT and
+# the worker's own `finally` finalizes it, so the handle is left consistent.
+function PormG.backend_cancel_query!(pool::PormGSQLite, conn::SQLite.DB)
+  isopen(conn) || return nothing
+  SQLite.C.sqlite3_interrupt(conn.handle)
+  return nothing
+end
+
+# SQLite has no wire protocol to leave half-consumed, so there is nothing to drain: every statement
+# is prepared, stepped and finalized inside ONE `_sqlite_execute_materialized` call above, and the
+# async worker only answers its caller AFTER that call returns. So by the time core has seen the
+# handle settle, the worker is already off this connection.
+#
+# The generic exists so the recovery path in core stays backend-agnostic; the PostgreSQL twin is
+# the half that does real work.
+PormG.backend_drain_connection!(pool::PormGSQLite, conn::SQLite.DB) = true
+
 # ── Error classification (#268) ──────────────────────────────────────────────
 #
 # SQLite is the imprecise half of the boundary, and the asymmetry with PostgreSQL is deliberate —

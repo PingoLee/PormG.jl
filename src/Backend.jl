@@ -34,13 +34,24 @@ const _SQLITE_DRIVER_HINT = "PormG: the SQLite backend requires SQLite. Run `usi
 #   backend_execute_async(pool, conn, sql, params)     -> async handle (PG: LibPQ.AsyncResult)
 #   backend_is_connection_error(pool, e)               -> Bool: is `e` a dropped-connection error
 #   backend_is_permanent_connect_error(pool, e)        -> Bool: is `e` a permanent connect failure (auth/cantopen) vs transient
+#   backend_cancel_query!(pool, conn)                  -> best-effort: stop the statement running on `conn` (#315)
+#   backend_drain_connection!(pool, conn)              -> Bool: is `conn` back to a clean, reusable state (#315)
 #   backend_num_affected_rows(pool, result)            -> Int matched-row count (PG)
 #   backend_num_rows(pool, result)                     -> Int row count (PG)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> PostgreSQL COPY FROM STDIN
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
+#
+# `backend_cancel_query!` and `backend_drain_connection!` are the abandoned-await pair (#315) —
+# named rather than positioned, because this list grows. A Ctrl-C leaves the driver mid-operation, and
+# neither state — libpq's unconsumed result, SQLite's worker still stepping — is visible to
+# `backend_is_alive`, so the pool cannot tell a poisoned connection from a healthy one. They are in
+# the loop below on purpose: the throwing "load the driver" fallback is a perfectly good answer for
+# `ConnectionPool._recover_abandoned_connection!`, which catches both and treats a throw as
+# "not clean" → renew or discard.
 for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
            :backend_execute, :backend_execute_async, :backend_is_connection_error,
            :backend_is_permanent_connect_error,
+           :backend_cancel_query!, :backend_drain_connection!,
            :backend_num_affected_rows, :backend_num_rows, :backend_copy_in!,
            :backend_sqlite_version)
   @eval begin

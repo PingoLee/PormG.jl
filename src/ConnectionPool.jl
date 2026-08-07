@@ -24,6 +24,7 @@ import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
+              backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
@@ -150,6 +151,38 @@ function _unwrap_async_exception(exception)
       return current
     end
   end
+end
+
+"""
+    _await_abandoned(e) -> Bool
+
+Was this await cut short by a *cancellation*, rather than by the database refusing the statement
+(#315)? Two shapes reach `await_result` and both must answer `true`:
+
+  * the SIGINT was force-thrown into the driver's own result task, so `Base.fetch` raises a
+    `TaskFailedException` wrapping the `InterruptException` — this is the shape in the issue report;
+  * the SIGINT hit the task doing the awaiting, so `e` IS the `InterruptException` and the driver
+    task is still running on the connection.
+
+The distinction is what decides the connection's fate: a refused statement leaves the connection
+clean, an abandoned one does not.
+
+Deliberately **not** built on [`_unwrap_async_exception`](@ref). That helper stops at a
+`CompositeException` carrying more than one exception — which is exactly what LibPQ's
+`handle_result` throws when several results errored, one of which can be the interrupt. The
+recursion below finds it anywhere in the tree. It sees through a [`DatabaseError`](@ref) too, so a
+caller that already crossed the taxonomy seam can ask the same question.
+"""
+function _await_abandoned(e, depth::Int = 0)::Bool
+  depth > 8 && return false                       # cheap guard against pathological nesting
+  e isa InterruptException && return true
+  if e isa TaskFailedException
+    nested = e.task.exception
+    return nested !== e && _await_abandoned(nested, depth + 1)
+  end
+  e isa CompositeException && return any(x -> x !== e && _await_abandoned(x, depth + 1), e.exceptions)
+  e isa DatabaseError && return _await_abandoned(_driver_cause(e), depth + 1)
+  return false
 end
 
 """
@@ -1179,8 +1212,14 @@ next `acquire_connection` opens a fresh physical connection through the empty-sl
 best-effort `close` it. Used when a connection is known-dirty — e.g. a failed ROLLBACK (#71)
 — and renewal via `reconnect_db` also failed. Returns whether the slot was found. Never
 throws (callers run it while an original error is propagating).
+
+`close_handle = false` empties the slot but leaves the handle open. It exists for one caller —
+[`_recover_abandoned_connection!`](@ref)'s timeout branch, which is reached *precisely because* the
+driver is still on the connection — and closing there would free a SQLite handle the global worker
+may be inside `sqlite3_step` on. That caller takes the slot out of circulation now and closes the
+doomed handle later, once the driver has let go.
 """
-function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn)::Bool
+function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; close_handle::Bool = true)::Bool
   found = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
@@ -1194,10 +1233,12 @@ function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn)::Bo
   end
   # Close OUTSIDE the pool lock: a driver close can block on I/O. On SQLite this also
   # releases the database file write-lock an aborted `BEGIN IMMEDIATE` may still hold.
-  try
-    close(conn)
-  catch close_error
-    @debug "Error closing discarded connection" exception=close_error
+  if close_handle
+    try
+      close(conn)
+    catch close_error
+      @debug "Error closing discarded connection" exception=close_error
+    end
   end
   found || @warn "Connection to discard not found in the pool - it may already have been replaced"
   return found
@@ -1399,6 +1440,9 @@ Use `await_result(task)` to get the result and properly release the connection.
 - `completed::Bool`: Whether the async result has been awaited
 - `result_cache::Union{Nothing, Any}`: Cached result for multiple `await_result` calls
 - `in_transaction::Bool`: Whether this task is part of a transaction (don't release connection)
+- `abandoned::Bool`: Whether the await was cut short by a cancellation rather than a database
+  failure (#315). Set by `await_result`; it routes the connection to
+  [`_recover_abandoned_connection!`](@ref) instead of a plain release.
 """
 mutable struct FetchTask
   async_result::Any  # LibPQ.AsyncResult (PG) or Task (SQLite)
@@ -1407,14 +1451,181 @@ mutable struct FetchTask
   completed::Bool
   result_cache::Union{Nothing, Any}
   in_transaction::Bool  # Whether this task is part of a transaction context
+  abandoned::Bool       # Await cut short by a cancellation — connection is NOT returnable as-is (#315)
 
   # Constructor for transaction-aware fetch
   FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn, in_transaction::Bool) =
-    new(async_result, pool, conn, false, nothing, in_transaction)
+    new(async_result, pool, conn, false, nothing, in_transaction, false)
 
   # Legacy constructor (defaults to not in transaction)
   FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn) =
-    new(async_result, pool, conn, false, nothing, false)
+    new(async_result, pool, conn, false, nothing, false, false)
+end
+
+# Abandoned-await recovery budgets (#315), in seconds. Exposed as `_recover_abandoned_connection!`
+# kwargs so a unit test can drive the timeout branch in milliseconds instead of waiting one out.
+#
+#   settle — how long the slot stays leased hoping the connection can be recovered in place. Both
+#            cancels normally abort within milliseconds, so reaching this means the engine never
+#            acknowledged one.
+#   close  — how long a detached, doomed handle is kept alive waiting for the driver to let go
+#            before `close` is attempted regardless. Long on purpose: the cost of waiting is one
+#            parked task, the cost of closing early is a use-after-free. Note that expiry does not
+#            make the close itself bounded — `close(::LibPQ.Connection)` takes the same per-connection
+#            semaphore the running result task holds (it does set libpq's cancel flag first), and
+#            SQLite's `sqlite3_close_v2` defers while a statement is live. Expiry only stops this
+#            task polling; the handle is still closed in driver order.
+const _ABANDON_SETTLE_SECONDS = 5.0
+const _ABANDON_CLOSE_SECONDS = 300.0
+
+"""
+    _settle_probe(handle) -> Function
+
+Park ONE detached waiter on the driver handle and return a zero-argument predicate answering
+"has the driver let go of this connection?" (#315).
+
+`Base.wait` is the only settle test that spans both backends without core naming a driver type:
+LibPQ defines it on its `AsyncResult` as `wait(result_task)`, and SQLite's handle *is* a `Task`.
+(`Base.isready` is not usable — LibPQ defines it on `AsyncResult`, `Task` does not have it.) It
+**throws** when that task failed, which is a *settled* outcome and all we asked, so the throw is
+swallowed. Waiting here also CONSUMES that failure, which is what stops Julia printing an
+"Unhandled Task Error" for a query nobody is listening to any more.
+
+One waiter, reused by every deadline: a query that never returns leaks exactly one parked task
+rather than one per wait, and it exits the moment the driver finally lets go.
+"""
+function _settle_probe(handle)
+  settled = Threads.Atomic{Bool}(false)
+  Threads.@spawn begin
+    try
+      Base.wait(handle)
+    catch
+      # Failed, cancelled, interrupted — every one of those means the driver is done with it.
+    finally
+      settled[] = true
+    end
+  end
+  return () -> settled[]
+end
+
+# Bounded, non-throwing settle wait. `timedwait` polls the predicate on its own Timer and never
+# touches the driver, so a handle that never settles costs a bounded wait rather than a wedged
+# recovery task.
+_wait_settled(probe, seconds::Real)::Bool =
+  timedwait(probe, max(0.0, Float64(seconds)); pollint = 0.05) === :ok
+
+"""
+    _recover_abandoned_connection!(ft::FetchTask; settle_seconds, close_seconds) -> Nothing
+
+Recover the pool slot of a [`FetchTask`](@ref) whose await was abandoned by a cancellation (#315).
+
+Replaces the plain [`release_connection`](@ref) that used to run unconditionally. A connection whose
+driver operation is still in flight, or which has an unconsumed result queued on it, must never go
+back into the pool: neither state is visible to `backend_is_alive` — PostgreSQL still reports
+`CONNECTION_OK` — so the next borrower inherits it and every later statement on that slot fails
+with *"another command is already in progress"*, for the life of the process.
+
+Runs on a DETACHED task, for three separate reasons:
+
+  * Ctrl-C has to give the REPL back immediately, and every step below can block for seconds
+    (`PQcancel` opens its own socket; `LibPQ.reset!` is a synchronous reconnect).
+  * On SQLite the connection cannot be touched AT ALL until the global worker is off it, so doing
+    this in the caller would make Ctrl-C wait for the very query it just cancelled.
+  * A second Ctrl-C would abort a synchronous cleanup half-way and re-poison the slot. A detached
+    task does not receive the REPL's interrupt.
+
+The slot stays LEASED for the whole routine. That is the point: it becomes available again only
+once the connection is proven clean, and otherwise it is renewed or emptied. Never throws — an
+escaping error here would surface as an unhandled task error instead of a recovered slot.
+
+This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection that is busy or
+not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
+a broken connection is discarded and replaced).
+"""
+function _recover_abandoned_connection!(ft::FetchTask;
+                                        settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
+                                        close_seconds::Real = _ABANDON_CLOSE_SECONDS)
+  pool, conn, handle = ft.pool, ft.conn, ft.async_result
+  Threads.@spawn begin
+    try
+      # 1. Best-effort stop signal, and the ONLY driver call allowed to run while the operation may
+      #    still be in flight: PQcancel uses a separate PGcancel on its own socket, and
+      #    sqlite3_interrupt is documented cross-thread-safe. Never allowed to escape — a missing
+      #    driver hits Backend.jl's throwing fallback, and a closed handle can raise too.
+      try
+        backend_cancel_query!(pool, conn)
+      catch cancel_failure
+        @debug "Cancel of an abandoned query failed" exception=cancel_failure
+      end
+
+      # 2. Bounded wait for the driver to let go. LOAD-BEARING, not an optimization: LibPQ's
+      #    `lock(::Connection)` is a plain `Semaphore(1)` held by the result task for the whole
+      #    query, so draining before it settles would block for the query's full remaining life.
+      probe = _settle_probe(handle)
+      if _wait_settled(probe, settle_seconds)
+        clean = try
+          backend_drain_connection!(pool, conn)
+        catch drain_failure
+          @debug "Drain of an abandoned connection failed" exception=drain_failure
+          false
+        end
+        # `=== true`, not a bare `clean ?`: `backend_drain_connection!` is a documented-Bool generic
+        # that nothing enforces, and a downstream override returning anything else would raise a
+        # TypeError here — landing in the outer catch and costing the slot. Anything that is not a
+        # definite "clean" takes the safe branch.
+        clean === true ? release_connection(pool, conn) : _renew_or_discard_connection!(pool, conn)
+      else
+        # 3. Still in flight past the budget. Take the slot out of the pool WITHOUT closing — the
+        #    next acquire materializes a fresh connection into it — then keep the doomed handle
+        #    alive until the driver is finally off it, and only then close.
+        _discard_connection!(pool, conn; close_handle = false)
+        _wait_settled(probe, close_seconds)
+        try
+          Base.invokelatest(close, conn)
+        catch close_failure
+          @debug "Error closing an abandoned connection" exception=close_failure
+        end
+      end
+    catch recovery_failure
+      # Nothing may escape: this task has no owner, so an escape prints an unhandled task error to
+      # stderr at finalization — which looks like a crash and pollutes unrelated `@test_logs`.
+      #
+      # But swallowing alone would re-create #315 in a new place: every branch above ends by
+      # releasing, renewing or detaching the slot, so a failure BETWEEN them leaves it leased with
+      # nothing scheduled to free it — silently, for the life of the process. The old code could not
+      # do that, because its `release_connection` was unconditional. So bail out to the one action
+      # that is always safe here: empty the slot so the next borrower opens a fresh connection, and
+      # do NOT close the handle — reaching this branch means we do not know whether the driver is
+      # still on it. The orphaned handle is left to the driver's own finalizer.
+      #
+      # Act only while the slot is still OURS. `_discard_connection!` matches by identity, so once an
+      # earlier branch has handed the slot back — released it, emptied it, or had `reconnect_db` swap
+      # a fresh handle into it — `conn` is no longer there, and blindly discarding would both warn
+      # untruthfully and (worse) risk nilling a slot a new borrower already holds.
+      #
+      # Known gap, deliberately not plumbed: if the failure came from inside
+      # `_renew_or_discard_connection!` AFTER its swap, the slot is leased around a handle we cannot
+      # name from here, and this bails out to the `@debug` below instead of freeing it. That needs
+      # `release_connection` to throw, whose every internal step is itself guarded — so the cost of
+      # threading the renewed handle out here is not worth paying for it.
+      still_ours = try
+        Base.lock(() -> any(c -> c === conn, pool.connections), pool.lock)
+      catch
+        false
+      end
+      if still_ours
+        @warn "Abandoned-connection recovery failed; emptying the pool slot" exception=recovery_failure
+        try
+          _discard_connection!(pool, conn; close_handle = false)
+        catch discard_failure
+          @debug "Emptying the slot after a failed recovery also failed" exception=discard_failure
+        end
+      else
+        @debug "Abandoned-connection recovery failed after the slot was already handed back" exception=recovery_failure
+      end
+    end
+  end
+  return nothing
 end
 
 """
@@ -1440,16 +1651,30 @@ function await_result(ft::FetchTask)
     return result
   catch e
     ft.completed = true
+    # Did the await END, or was it ABANDONED? Only the second leaves the driver mid-operation, and
+    # only it must keep the connection out of the pool (#315). Deliberately does not change what
+    # this throws — see below.
+    ft.abandoned = _await_abandoned(e)
     # `rethrow()` when nothing changed: PormG's own errors (DoesNotExist, QueryBuildError,
     # PoolTimeoutError…) pass through `_as_database_error` untouched, and re-`throw`ing the same
     # object would discard the backtrace saying where it came from.
+    #
+    # An abandoned await still goes through here, so a cancellation still surfaces as a
+    # `StatementError` wrapping the `InterruptException`, exactly as before this fix. That
+    # relabelling is its own defect — `_as_database_error`'s docstring above forbids it — but
+    # correcting it changes a caller-visible error contract, so it is tracked separately.
     err = _as_database_error(ft.pool, e)
     err === e ? rethrow() : throw(err)
   finally
     # Only release connection if we're not in a transaction context
     # Transaction context manages its own connection lifecycle
     if ft.completed && !ft.in_transaction
-      release_connection(ft.pool, ft.conn)
+      # An abandoned await must NOT hand the connection back: the driver may still be writing to it
+      # (SQLite's global worker) or have left an unconsumed result on the socket (libpq), and
+      # NEITHER state is visible to `backend_is_alive` — so the next borrower would inherit a
+      # connection on which every statement fails. Recovery runs detached and owns the
+      # release/renew/discard decision from here (#315).
+      ft.abandoned ? _recover_abandoned_connection!(ft) : release_connection(ft.pool, ft.conn)
     end
   end
 end

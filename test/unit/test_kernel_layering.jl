@@ -101,8 +101,10 @@ using PormG
         # so precompiling the package would not catch it. This assertion would.
         for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
                    :backend_execute, :backend_execute_async, :backend_is_connection_error,
-                   :backend_is_permanent_connect_error, :backend_num_affected_rows,
-                   :backend_num_rows, :backend_copy_in!, :backend_sqlite_version)
+                   :backend_is_permanent_connect_error,
+                   :backend_cancel_query!, :backend_drain_connection!,
+                   :backend_num_affected_rows, :backend_num_rows, :backend_copy_in!,
+                   :backend_sqlite_version)
             @test parentmodule(getfield(PormG, fn)) === PormG
         end
     end

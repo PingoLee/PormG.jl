@@ -7,6 +7,66 @@ end
 # TimeZones (test_django_contract.jl imports it the same way for the same reason).
 using TimeZones
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Foreign-key fixtures (#323)
+#
+# `Just_a_test_deletion.test_result` and `.test_result2` are foreign keys onto
+# `Result.resultid`. Every integer this file used to write into them silently asserted that
+# one particular F1-seeded result row existed right now — true only when
+# `test_database_setup.jl` had already run, since that is the only place `result` is
+# populated (it wipes the table and reloads it from `f1/results.csv`).
+#
+# That is what made the file order-dependent — though not in the way it first looks. Earlier
+# tests do not delete those particular rows: after a full green suite, every id this file used
+# to hard-code (1, 2, 3-9, 10, 20, 100-500, 999) is still present. The real coupling is that
+# `result` is populated by that one seeding step and nothing else, so any run which rebuilds
+# the schema without reaching it — an interrupted suite, or `test_migration_bootstrap.jl` on
+# its own, which drops and recreates every table — leaves the table empty and every literal
+# here dangling.
+#
+# Borrow the ids that actually exist rather than naming them. A `Result` row cannot be
+# conjured up here — `raceid`, `driverid` and `constructorid` are non-null foreign keys of
+# their own — but these ids are only ever read, never deleted, so borrowing needs no
+# teardown. Ascending order matters: the `order_by("test_result")` read-backs below rely on
+# the ids sorting the same way as the DataFrame rows that carry them.
+# ─────────────────────────────────────────────────────────────────────────────
+_bulk_copy_fk_query = M.Result.objects
+_bulk_copy_fk_query.order_by("resultid")
+_bulk_copy_fk_query.limit(9)
+_bulk_copy_fk_query.values("resultid")
+_bulk_copy_fk_rows = _bulk_copy_fk_query.list()
+
+# Fail loudly and actionably. Without this the symptom is a raw ForeignKeyViolation naming a
+# constraint, which reads like a regression in whatever you were working on — exactly the
+# false alarm #323 was filed for (it cost a comparison run against main during #320).
+length(_bulk_copy_fk_rows) == 9 || error(
+    "test_bulk_copy.jl needs at least 9 rows in `result` to use as foreign-key targets, " *
+    "but found $(length(_bulk_copy_fk_rows)) in \"$(PORMG_DB_FOLDER)\". The F1 fixtures are " *
+    "not seeded. Run `julia -t auto --project=. test/integration/runtests.jl` first.")
+
+_bulk_copy_fk_ids = [row[:resultid] for row in _bulk_copy_fk_rows]
+
+# One dependency this file cannot borrow its way out of: `test_result_set_default` is declared
+# `ForeignKey(Result, …, default = 1)`, and PormG writes a static default on every insert path —
+# `create()` fills it when the key is absent (execution.jl), and the bulk paths add a whole
+# column of it when the field is missing from the DataFrame (execution_bulk.jl). Supplying an
+# explicit `missing` does not help either: the bulk path rewrites missing/nothing back to the
+# default. So every row this file inserts into `just_a_test_deletion` carries
+# `test_result_set_default = 1` and needs `resultid = 1` to exist, whatever the other FK
+# columns say.
+#
+# Assert it here rather than let it surface as a ForeignKeyViolation naming a constraint no
+# test mentions. Dodging it instead would mean threading a real id through three DataFrames
+# that have nothing to do with defaults (and adding a third entry to the column-mapping test),
+# which distorts what those tests read as. The asymmetry — `create()` honours an explicit
+# `nothing`, the bulk path overwrites it with the default — is a PormG-level quirk, not a
+# test-fixture one, and is tracked in #331 rather than worked around here.
+M.Result.objects.filter("resultid" => 1).count() == 1 || error(
+    "test_bulk_copy.jl requires `result.resultid = 1` to exist in \"$(PORMG_DB_FOLDER)\": " *
+    "`Just_a_test_deletion.test_result_set_default` defaults to 1, and PormG writes that " *
+    "default on every insert, so every row inserted here references it. " *
+    "Run `julia -t auto --project=. test/integration/runtests.jl` to seed the F1 fixtures.")
+
 @testset "Bulk Validation and Type Normalization" begin
     # These tests exercise the shared validation path used by bulk_insert and bulk_update.
     # The goal is to pin down the new strict policy: bulk operations must reject type
@@ -18,7 +78,7 @@ using TimeZones
         query = M.Just_a_test_deletion.objects
         query.exists() && query.delete(allow_delete_all = true)
         try
-            query.create("name" => "empty-bulk-sentinel", "test_result" => 1)
+            query.create("name" => "empty-bulk-sentinel", "test_result" => _bulk_copy_fk_ids[1])
 
             initial_count = query.count()
 
@@ -101,7 +161,9 @@ using TimeZones
         # 2. Passing a Float64 into an integer-backed field should fail without partial writes.
         query = M.Just_a_test_deletion.objects
         query.exists() && query.delete(allow_delete_all = true)
-        query.create("name" => "update-target", "test_result" => 1, "test_result2" => 2)
+        query.create("name" => "update-target",
+                     "test_result"  => _bulk_copy_fk_ids[1],
+                     "test_result2" => _bulk_copy_fk_ids[2])
 
         current = M.Just_a_test_deletion.objects.filter("name" => "update-target") |> DataFrame
         nullable_update = DataFrames.DataFrame(id = current.id, test_result2 = [missing])
@@ -124,7 +186,7 @@ using TimeZones
         @test occursin("expected Int64 or an integer string", string(err))
 
         unchanged = M.Just_a_test_deletion.objects.filter("name" => "update-target").list() |> first
-        @test unchanged[:test_result] == 1
+        @test unchanged[:test_result] == _bulk_copy_fk_ids[1]
     end
 end
 
@@ -198,12 +260,14 @@ else
     @test query.count() == 0
 
     # 2. Create a DataFrame for bulk copy
+    # Ascending FK ids: the read-back below orders by this column, so the ids double as the
+    # sort key that pins each row to its expected name.
     data = [
-        (name = "Copy Test 1", test_result = 100),
-        (name = "Copy Test 2", test_result = 200),
-        (name = "Copy Test 3", test_result = 300),
-        (name = "Copy Test 4", test_result = 400),
-        (name = "Copy Test 5", test_result = 500)
+        (name = "Copy Test 1", test_result = _bulk_copy_fk_ids[1]),
+        (name = "Copy Test 2", test_result = _bulk_copy_fk_ids[2]),
+        (name = "Copy Test 3", test_result = _bulk_copy_fk_ids[3]),
+        (name = "Copy Test 4", test_result = _bulk_copy_fk_ids[4]),
+        (name = "Copy Test 5", test_result = _bulk_copy_fk_ids[5])
     ]
     df = DataFrames.DataFrame(data)
 
@@ -216,16 +280,16 @@ else
     # Check specific values
     results = query.order_by("test_result") |> DataFrame
     @test results[1, :name] == "Copy Test 1"
-    @test results[1, :test_result] == 100
+    @test results[1, :test_result] == _bulk_copy_fk_ids[1]
     @test results[5, :name] == "Copy Test 5"
-    @test results[5, :test_result] == 500
+    @test results[5, :test_result] == _bulk_copy_fk_ids[5]
 
     # 5. Test with column mapping
     query = M.Just_a_test_deletion.objects
     query.delete(allow_delete_all = true)
     df_mapped = DataFrames.DataFrame(
         raw_name = ["Mapped 1", "Mapped 2"],
-        raw_val = [10, 20]
+        raw_val = [_bulk_copy_fk_ids[1], _bulk_copy_fk_ids[2]]
     )
     bulk_copy(query, df_mapped, columns = ["raw_name" => "name", "raw_val" => "test_result"])
     @test M.Just_a_test_deletion.objects.count() == 2
@@ -236,7 +300,8 @@ else
     last_id = M.Just_a_test_deletion.objects.order_by("-id").values("id").list() |> first |> x -> x[:id]
     
     # Create a new row via standard create() to ensure sequence didn't break
-    new_row = M.Just_a_test_deletion.objects.create("name" => "Sequence check", "test_result" => 999)
+    new_row = M.Just_a_test_deletion.objects.create("name" => "Sequence check",
+                                                    "test_result" => _bulk_copy_fk_ids[1])
     @test new_row[:id] > last_id
 
 end
@@ -339,7 +404,7 @@ end
 @testset "bulk_copy: empty DataFrame is a no-op" begin
     query = M.Just_a_test_deletion.objects
     query.exists() && query.delete(allow_delete_all = true)
-    query.create("name" => "copy-empty-sentinel", "test_result" => 1)
+    query.create("name" => "copy-empty-sentinel", "test_result" => _bulk_copy_fk_ids[1])
 
     initial_count = query.count()
     empty_copy = DataFrames.DataFrame(
@@ -392,25 +457,27 @@ end
     # are stored as literal strings, not executed.
     query = M.Just_a_test_deletion.objects
     
-    # Clean up from any previous test runs
-    try
-        query.exists() && query.delete(allow_delete_all = true)
-    catch
-        # Ignore errors if table doesn't exist yet
-    end
+    # Clean up from any previous test runs. Deliberately unguarded, like every other testset
+    # in this file: a swallowed exception here does not make the run more robust, it makes the
+    # diagnosis worse. If the delete fails the rows survive, and then four separate assertions
+    # below (the count, the round-trip vector, and the final recount) report as plain failures
+    # with the real cause discarded — the "a failure tells you nothing" symptom of #323.
+    query.exists() && query.delete(allow_delete_all = true)
     @test (query.count()) == 0
 
     # Test vectors: strings that would exploit SQL injection if not properly escaped
+    # `test_result` carries ascending FK ids purely as an ordering key: the read-back below
+    # sorts on it so each escaped string can be pinned to its own slot.
     injection_vectors = [
-        (name = "'; DROP TABLE just_a_test_deletion; --", test_result = 1),
-        (name = "\" OR \"1\"=\"1", test_result = 2),
-        (name = "test\nwith\nnewlines", test_result = 3),
-        (name = "test,with,commas", test_result = 4),
-        (name = "test\"with\"quotes", test_result = 5),
-        (name = "test'with'single", test_result = 6),
-        (name = "UNION SELECT * FROM drivers", test_result = 7),
-        (name = "test`with`backticks", test_result = 8),
-        (name = "test\\with\\backslash", test_result = 9),
+        (name = "'; DROP TABLE just_a_test_deletion; --", test_result = _bulk_copy_fk_ids[1]),
+        (name = "\" OR \"1\"=\"1", test_result = _bulk_copy_fk_ids[2]),
+        (name = "test\nwith\nnewlines", test_result = _bulk_copy_fk_ids[3]),
+        (name = "test,with,commas", test_result = _bulk_copy_fk_ids[4]),
+        (name = "test\"with\"quotes", test_result = _bulk_copy_fk_ids[5]),
+        (name = "test'with'single", test_result = _bulk_copy_fk_ids[6]),
+        (name = "UNION SELECT * FROM drivers", test_result = _bulk_copy_fk_ids[7]),
+        (name = "test`with`backticks", test_result = _bulk_copy_fk_ids[8]),
+        (name = "test\\with\\backslash", test_result = _bulk_copy_fk_ids[9]),
     ]
     df_injection = DataFrames.DataFrame(injection_vectors)
 

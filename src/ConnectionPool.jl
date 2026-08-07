@@ -1305,6 +1305,43 @@ _is_benign_rollback_error(pool::Union{PormGPostgres, PormGSQLite}, e) =
   occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
 
 """
+    _finish_statement_connection!(pool, conn, handle; abandoned, rollback_failed) -> Nothing
+
+How ONE statement's connection goes back to the pool, for [`with_transaction`](@ref)'s two release
+points (the `catch`, when it acquired the connection itself, and the `finally`, when the caller asked
+for a release). A single helper because the two sites must not drift apart — they are the same
+decision reached down different paths.
+
+Ordered by severity, and the order is load-bearing:
+
+  * `abandoned` — a cancellation cut the await short (#322), so the driver may still be ON this
+    connection. It is the only case where nothing here may touch it, so it must be tested first:
+    the `rollback_failed` branch below renews SYNCHRONOUSLY, which would block on LibPQ's
+    per-connection semaphore and would close a SQLite handle its worker is still stepping.
+  * `rollback_failed` — a transaction-ending `ROLLBACK` that itself failed may leave an open or
+    aborted transaction the acquire liveness probe cannot detect (#71).
+  * otherwise the driver is done and the connection is clean: plain release.
+
+`handle` is the driver object the abandoned await was parked on; it is only read on the `abandoned`
+branch. Never throws — every branch is itself guarded, and callers run this while an original error
+is propagating.
+"""
+function _finish_statement_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn, handle;
+                                       abandoned::Bool = false, rollback_failed::Bool = false)
+  if abandoned
+    # Detached: cancel, wait for the driver to let go, then renew — never touching the connection
+    # while it may still be in use. `force_renew` because this connection is mid-lifecycle and a
+    # clean wire says nothing about the transaction state left on it.
+    _recover_abandoned_connection!(pool, conn, handle; force_renew = true)
+  elseif rollback_failed
+    _renew_or_discard_connection!(pool, conn)
+  else
+    release_connection(pool, conn)
+  end
+  return nothing
+end
+
+"""
     finalize_transaction_connection!(pool, conn; rollback_error=nothing) -> Nothing
 
 Terminal step of a manually-driven `BEGIN`/`COMMIT`/`ROLLBACK` lifecycle: return `conn` to the
@@ -1518,9 +1555,13 @@ _wait_settled(probe, seconds::Real)::Bool =
   timedwait(probe, max(0.0, Float64(seconds)); pollint = 0.05) === :ok
 
 """
-    _recover_abandoned_connection!(ft::FetchTask; settle_seconds, close_seconds) -> Nothing
+    _recover_abandoned_connection!(pool, conn, handle; settle_seconds, close_seconds, force_renew) -> Nothing
+    _recover_abandoned_connection!(ft::FetchTask; settle_seconds, close_seconds, force_renew) -> Nothing
 
-Recover the pool slot of a [`FetchTask`](@ref) whose await was abandoned by a cancellation (#315).
+Recover the pool slot of a connection whose driver await was abandoned by a cancellation (#315).
+`handle` is the driver-side object the abandoned await was parked on — a `LibPQ.AsyncResult` or the
+SQLite worker `Task` — which is what [`_settle_probe`](@ref) waits on. The [`FetchTask`](@ref) form
+is the same call with the three fields unpacked.
 
 Replaces the plain [`release_connection`](@ref) that used to run unconditionally. A connection whose
 driver operation is still in flight, or which has an unconsumed result queued on it, must never go
@@ -1541,14 +1582,26 @@ The slot stays LEASED for the whole routine. That is the point: it becomes avail
 once the connection is proven clean, and otherwise it is renewed or emptied. Never throws — an
 escaping error here would surface as an unhandled task error instead of a recovered slot.
 
+`force_renew = true` skips the drain and renews unconditionally. It is for the callers that abandoned
+an await **inside a transaction or session lifecycle** (#322) — `_run_in_transaction_impl`'s `BEGIN`,
+`with_transaction`, `AdvisoryLock` — where a clean drain is not evidence the connection is reusable.
+Two independent reasons, either one sufficient:
+
+  * `backend_drain_connection!` answers a question about the WIRE, not about session state. Its
+    PostgreSQL body consumes queued `PGresult`s and never reads `PQtransactionStatus`, so a `BEGIN`
+    that *did* land on the server before the interrupt drains perfectly clean — and releasing it
+    would put a connection with an open transaction back in the pool, which is #71 in a new place.
+  * A session-level `pg_advisory_lock` survives on a drained connection too, and dies only with the
+    session. Renewal is what actually releases it.
+
 This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection that is busy or
 not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
 a broken connection is discarded and replaced).
 """
-function _recover_abandoned_connection!(ft::FetchTask;
+function _recover_abandoned_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn, handle;
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
-                                        close_seconds::Real = _ABANDON_CLOSE_SECONDS)
-  pool, conn, handle = ft.pool, ft.conn, ft.async_result
+                                        close_seconds::Real = _ABANDON_CLOSE_SECONDS,
+                                        force_renew::Bool = false)
   Threads.@spawn begin
     try
       # 1. Best-effort stop signal, and the ONLY driver call allowed to run while the operation may
@@ -1566,17 +1619,25 @@ function _recover_abandoned_connection!(ft::FetchTask;
       #    query, so draining before it settles would block for the query's full remaining life.
       probe = _settle_probe(handle)
       if _wait_settled(probe, settle_seconds)
-        clean = try
-          backend_drain_connection!(pool, conn)
-        catch drain_failure
-          @debug "Drain of an abandoned connection failed" exception=drain_failure
-          false
+        if force_renew
+          # No drain: the caller abandoned a transaction/session lifecycle, and the wire being clean
+          # says nothing about an open transaction or a held session lock (#322 — see the docstring).
+          # Skipping it is also the cheaper path, since renewal discards whatever the drain would
+          # have consumed anyway.
+          _renew_or_discard_connection!(pool, conn)
+        else
+          clean = try
+            backend_drain_connection!(pool, conn)
+          catch drain_failure
+            @debug "Drain of an abandoned connection failed" exception=drain_failure
+            false
+          end
+          # `=== true`, not a bare `clean ?`: `backend_drain_connection!` is a documented-Bool generic
+          # that nothing enforces, and a downstream override returning anything else would raise a
+          # TypeError here — landing in the outer catch and costing the slot. Anything that is not a
+          # definite "clean" takes the safe branch.
+          clean === true ? release_connection(pool, conn) : _renew_or_discard_connection!(pool, conn)
         end
-        # `=== true`, not a bare `clean ?`: `backend_drain_connection!` is a documented-Bool generic
-        # that nothing enforces, and a downstream override returning anything else would raise a
-        # TypeError here — landing in the outer catch and costing the slot. Anything that is not a
-        # definite "clean" takes the safe branch.
-        clean === true ? release_connection(pool, conn) : _renew_or_discard_connection!(pool, conn)
       else
         # 3. Still in flight past the budget. Take the slot out of the pool WITHOUT closing — the
         #    next acquire materializes a fresh connection into it — then keep the doomed handle
@@ -1630,6 +1691,12 @@ function _recover_abandoned_connection!(ft::FetchTask;
   end
   return nothing
 end
+
+# The `fetch`/`await_result` caller already owns all three pieces on a FetchTask; the transaction and
+# advisory-lock callers (#322) hold a bare driver handle and no FetchTask, which is why the method
+# above is the primary one.
+_recover_abandoned_connection!(ft::FetchTask; kwargs...) =
+  _recover_abandoned_connection!(ft.pool, ft.conn, ft.async_result; kwargs...)
 
 """
     await_result(ft::FetchTask) -> result
@@ -1911,6 +1978,10 @@ transaction-ending `ROLLBACK` that itself failed causes a renew-or-discard inste
 connection with an open or aborted transaction cannot go back into the pool (#71). The
 underlying driver exception is rethrown as a `DatabaseError` subtype.
 
+An await cut short by a **cancellation** (`Ctrl+C`) takes neither of those paths: the driver may
+still be on the connection, so it is handed to the abandoned-await recovery — cancel, wait for the
+driver to let go, then renew — which runs detached and returns the slot only once it is safe (#322).
+
 !!! warning "`release_conn=true` on a COMMIT/ROLLBACK is a use-after-release race"
     It releases the connection **even when the statement fails**, which can hand it back to
     the pool before your cleanup `ROLLBACK` runs on it (#139). Do the cleanup on the still-
@@ -1927,6 +1998,12 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
 
   conn_acquired = false
   rollback_failed = false
+  # Was the await ABANDONED by a cancellation (#322)?
+  abandoned = false
+  # The driver handle, and the reason the flag above is gated on it: an interrupt can land BEFORE
+  # `backend_execute_async` returns, and with no handle there is nothing for the recovery to settle
+  # on — that case must fall through to the ordinary release.
+  local task = nothing
   if conn === nothing
     if pool isa PormGSQLite
       conn = acquire_connection(pool; mode=:write)
@@ -1950,17 +2027,21 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     # open/aborted transaction — it must never return to the pool as-is (#71); both
     # release points below renew or discard it instead.
     rollback_failed = _is_transaction_rollback(sql) && !_is_benign_rollback_error(pool, e)
+    # Same defect class one step earlier: a Ctrl-C leaves the driver mid-statement, and neither
+    # backend's state is visible to `backend_is_alive`, so releasing here poisons the slot (#322).
+    # `rollback_failed` cannot catch it — it is `false` for every sql that is not a plain ROLLBACK.
+    abandoned = task !== nothing && _await_abandoned(e)
     # If we acquired the connection here and the command failed (like BEGIN),
     # and we were not asked to release it (which means the caller expected it back),
     # we MUST release it now because the caller won't receive it in the return.
     if conn_acquired && !release_conn
-      rollback_failed ? _renew_or_discard_connection!(pool, conn) : release_connection(pool, conn)
+      _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
     @error "Failed to execute SQL transaction, rolling back: $e"
     throw(_as_database_error(pool, e))
   finally
     if release_conn
-      rollback_failed ? _renew_or_discard_connection!(pool, conn) : release_connection(pool, conn)
+      _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
   end
 end
@@ -2293,18 +2374,24 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
   end
   tx_started = false
   local rollback_error = nothing
+  # The BEGIN's driver handle, and whether its await was ABANDONED by a cancellation (#322). Hoisted
+  # out of the `try` because the terminal `finally` needs both, and initialized to `nothing` because
+  # an interrupt can land *before* `backend_execute_async` returns — with no handle there is nothing
+  # to settle on, so that case must fall through to the ordinary finalize rather than recover.
+  local begin_task = nothing
+  abandoned_begin = false
   try
     # Begin transaction. `_await_tx_statement`, not a bare `Base.fetch`: these statements bypass
     # `fetch`, so they are the only driver contact in this function that no seam covers. The
     # function-wide `catch` below must NOT wrap — it also sees `f()`, the caller's own code (#268).
     if pool isa PormGPostgres
-        task = backend_execute_async(pool, conn, "BEGIN;", nothing)
-        _await_tx_statement(pool, task)
+        begin_task = backend_execute_async(pool, conn, "BEGIN;", nothing)
+        _await_tx_statement(pool, begin_task)
     else
         # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks and ensure
         # write lock is acquired early for multi-threaded scenarios.
-      task = sqlite_execute_async(pool, conn, "BEGIN IMMEDIATE TRANSACTION;", nothing)
-      _await_tx_statement(pool, task)
+      begin_task = sqlite_execute_async(pool, conn, "BEGIN IMMEDIATE TRANSACTION;", nothing)
+      _await_tx_statement(pool, begin_task)
       # The transaction is open from here on, so mark it BEFORE anything else can throw — otherwise
       # a failure below skips the ROLLBACK in the catch and releases a connection with an open
       # transaction back to the pool, which the acquire liveness probe cannot detect (#71).
@@ -2338,6 +2425,40 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     return result
   catch e
     root = _unwrap_async_exception(e)
+    # Was the BEGIN await ABANDONED by a cancellation rather than refused by the database (#322)?
+    # That is the one window this function does not otherwise cover: `tx_started` is still `false`,
+    # so no ROLLBACK is issued below, and the terminal `finalize_transaction_connection!` would take
+    # its plain-release branch and hand back a connection the driver has not let go of — #315 exactly.
+    #
+    # `!tx_started` is what scopes this to the BEGIN, and it is exact: on BOTH backends it is `false`
+    # only while the BEGIN await is in flight (SQLite sets it immediately after `BEGIN IMMEDIATE`,
+    # before the PRAGMA). So an `InterruptException` raised by the caller's own `f()` — which
+    # `_await_abandoned` also answers `true` for — cannot reach this branch. It must not: an
+    # interrupt between statements leaves a CLEAN connection with an OPEN transaction, where skipping
+    # the ROLLBACK would be the bug rather than the fix.
+    #
+    # The third case — an interrupt landing while a query is IN FLIGHT inside `f()` — reaches neither
+    # branch, and deliberately so. `await_result`'s release is gated on `!ft.in_transaction`, so an
+    # abandoned in-transaction await does nothing to the connection; the ROLLBACK below is then
+    # issued on that same connection and SERIALIZES behind the abandoned query (LibPQ's
+    # per-connection semaphore; SQLite's single worker). Measured against a live PostgreSQL: the
+    # connection comes back IDLE and the slot is reusable — the ROLLBACK really does run once it gets
+    # the connection — but control returns only after the cancelled query's remaining runtime. So for
+    # ONE interrupt the cost is responsiveness, not a poisoned slot, which is why #322 leaves it
+    # alone: routing it here would trade a slow Ctrl-C for a reconnect on a connection that was going
+    # to be fine.
+    #
+    # A SECOND interrupt landing on that blocked ROLLBACK is a different matter, and a genuine
+    # pre-existing bug rather than a scope decision: it becomes `rollback_error`, which is not benign,
+    # so the terminal `finalize_transaction_connection!` renews — and `_renew_or_discard_connection!`
+    # closes the old handle SYNCHRONOUSLY. On SQLite `reconnect_db` always produces a fresh handle, so
+    # that close always fires, on a handle the worker is still inside, and the queued ROLLBACK then
+    # runs against it. Reproduced on a mock at two timings (#322 review). The remedy already exists in
+    # this file — `_settle_probe` + `_discard_connection!(…; close_handle = false)` — but it belongs
+    # to the #71 renewal path, not to this one. Tracked separately.
+    if !tx_started && begin_task !== nothing && _await_abandoned(e)
+      abandoned_begin = true
+    end
     # Rollback on error if transaction actually started
     if tx_started
       try
@@ -2366,9 +2487,18 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     end
     root === e ? rethrow() : throw(root)
   finally
-    # Single terminal release/renew, shared with the migration/delete lifecycles (#139).
-    # Never releases a dirty handle; never throws (the original error keeps propagating).
-    finalize_transaction_connection!(pool, conn; rollback_error = rollback_error)
+    if abandoned_begin
+      # The driver may still be inside BEGIN on this connection, so nothing here may touch it: the
+      # recovery cancels, waits for the driver to let go, and only then renews — all on a DETACHED
+      # task, so Ctrl-C returns to the REPL now (#322). `force_renew` because a BEGIN that DID land
+      # before the interrupt leaves an open transaction that draining cannot see, and releasing that
+      # is #71 in a new place.
+      _recover_abandoned_connection!(pool, conn, begin_task; force_renew = true)
+    else
+      # Single terminal release/renew, shared with the migration/delete lifecycles (#139).
+      # Never releases a dirty handle; never throws (the original error keeps propagating).
+      finalize_transaction_connection!(pool, conn; rollback_error = rollback_error)
+    end
   end
 end
 

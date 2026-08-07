@@ -237,6 +237,13 @@ end
   # call shape — so hoisting the argument into a temporary (`h = ...; wait(h)`)
   # is caught too. Same technique as test_docstring_coverage.jl. Line endings
   # normalized: .jl is not pinned to LF in .gitattributes (#216, #228).
+  #
+  # #322 changed HOW the restore is awaited — `_await_lock_handle`, which fetches
+  # the handle AND records a cancellation for the connection-recovery decision —
+  # so the positive anchors below name that instead of `Base.wait(`. The negative
+  # assertion, which is the actual invariant, is untouched: the method must never
+  # call the shadowed `wait`. It is now stronger by construction, since the method
+  # no longer calls `wait` in any form.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "the PostgreSQL method never calls the shadowed `wait`" begin
     src = replace(read(ADVLOCK_SRC, String), "\r\n" => "\n")
@@ -248,17 +255,32 @@ end
     @test stop_idx !== nothing
     body = rest[1:first(stop_idx)]
 
-    # Guard the guard: if the restore block were removed or renamed, the negative
-    # assertion below would pass vacuously.
-    @test occursin("SET statement_timeout TO DEFAULT", body)
-    @test occursin("Base.wait(", body)
-
     # Strip comments before scanning — the comment ABOVE the fix quotes `wait(...)`
     # while explaining the bug, and prose must not be able to fail a code guard.
     # (Line-based, which is sound here: no string literal in this method contains
     # a `#`.)
     code = replace(body, r"(?m)#.*$" => "")
-    @test occursin("Base.wait(", code)   # the fix itself is code, not commentary
+
+    # Guard the guard: if the restore block were removed, or went back to
+    # fire-and-forget, the negative assertion below would pass vacuously.
+    #
+    # SCOPED to the restore block, not the whole method. `Base.wait(` used to occur
+    # at exactly the two restore sites, which is what made a whole-body anchor
+    # honest; `_await_lock_handle(` occurs FOUR times in this method — twice in the
+    # `:block` acquisition path — so a whole-body anchor for it is satisfied by code
+    # that has nothing to do with the restore, and a fire-and-forget restore passes.
+    # That is not hypothetical: it was demonstrated on this file (#322 review).
+    restore_idx = findfirst("Restore statement_timeout", body)
+    @test restore_idx !== nothing
+    restore = replace(body[first(restore_idx):end], r"(?m)#.*$" => "")
+    @test occursin("SET statement_timeout TO DEFAULT", restore)
+    # EVERY statement issued from here on is awaited — the actual invariant, rather than "there are
+    # two of them". A fixed count is both too weak and too strong once `restore` runs to the end of
+    # the method: regressing one branch to fire-and-forget while any later statement is awaited keeps
+    # the count at 2 (a silent pass), and legitimately adding an awaited statement breaks it (a false
+    # positive). Both were demonstrated on this file (#322 delta review).
+    @test count("_await_lock_handle(", restore) == count("backend_execute_async(", restore)
+    @test count("backend_execute_async(", restore) >= 2   # …and the branches are still there
 
     # Any `wait(` not preceded by a dot or word character is the shadowed kwarg.
     @test !occursin(r"(?<![.\w])wait\s*\(", code)

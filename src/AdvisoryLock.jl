@@ -11,6 +11,10 @@ import PormG.ConnectionPool: acquire_connection, release_connection
 # database-error boundary (#268) or `with_advisory_lock` would be the last public entry point
 # still leaking raw `LibPQ.Errors.*`.
 import PormG.ConnectionPool: _as_database_error
+# Same reason, one defect class further on (#322): this module awaits driver handles directly, so a
+# Ctrl-C leaves it holding a connection the driver has not let go of — and unlike a plain query, a
+# session-level advisory lock is still held on it. Renewal is what releases that lock.
+import PormG.ConnectionPool: _await_abandoned, _recover_abandoned_connection!
 import PormG: PormGError, OperationalError, BackendCapabilityError, InvalidValueError
 
 import PormG: @pormg_debug
@@ -29,22 +33,48 @@ const UNLOCK_SQL = "SELECT pg_advisory_unlock($(ADVISORY_KEY_EXPR)) AS ok"
 const SQLITE_LOCK_WARN_CAP = 64
 
 """
+Records whether any await in one `with_advisory_lock` call was ABANDONED by a cancellation, and the
+driver handle it was parked on (#322).
+
+Mutable and threaded through the whole call rather than recomputed in the `finally`, because
+"was this an abandoned await?" and "did an `InterruptException` reach the `finally`?" are different
+questions with different right answers. A `Ctrl+C` inside the caller's `f()` interrupts a body that
+was NOT touching this connection — it is clean, still holds the lock, and must take the ordinary
+unlock-then-release path. Only an await recorded here means the driver is still on the connection.
+"""
+mutable struct _LockAwaitState
+  abandoned::Bool
+  handle::Any
+end
+_LockAwaitState() = _LockAwaitState(false, nothing)
+
+# Await one lock-lifecycle driver handle, recording it (and any abandonment) on `state` first.
+#
+# `Base.fetch` qualified deliberately: this module imports no `fetch`, so a bare call would resolve
+# to Base only by absence — qualifying keeps it immune to import shadowing.
+function _await_lock_handle(pool::PormGPostgres, state::_LockAwaitState, handle)
+  # Recorded BEFORE the await: the settle probe needs the handle precisely in the case where the
+  # await never returns normally.
+  state.handle = handle
+  try
+    return Base.fetch(handle)
+  catch e
+    _await_abandoned(e) && (state.abandoned = true)
+    throw(_as_database_error(pool, e))
+  end
+end
+
+"""
 Execute a lock/unlock query on a held connection and return boolean result.
 """
-function _exec_lock_query(pool::PormGPostgres, conn, sql::String, key::AbstractString)::Bool
+function _exec_lock_query(pool::PormGPostgres, conn, sql::String, key::AbstractString,
+                          state::_LockAwaitState)::Bool
   # backend_execute_async yields to the scheduler, allowing other Tasks to run.
   # It runs on the held connection without releasing it back to the pool, so the
   # session-level lock stays bound to this connection.
   async_res = backend_execute_async(pool, conn, sql, Any[key])
 
-  # Base.fetch awaits the LibPQ AsyncResult and returns the driver result.
-  # Qualified deliberately: this module imports no `fetch`, so a bare call would
-  # resolve to Base only by absence — qualifying keeps it immune to import shadowing.
-  res = try
-    Base.fetch(async_res)
-  catch e
-    throw(_as_database_error(pool, e))
-  end
+  res = _await_lock_handle(pool, state, async_res)
 
   rows = collect(res)
   return !isempty(rows) && rows[1][1] == true
@@ -95,6 +125,14 @@ The warning is emitted once per distinct key, tracked in-process, for up to
 `$(SQLITE_LOCK_WARN_CAP)` keys — the message says so when that cap is reached, rather than going
 quiet without saying.
 
+# Cancelling with `Ctrl+C`
+
+Interrupting a lock or unlock query does **not** leak the lock. The connection it ran on is renewed
+rather than returned to the pool, and a PostgreSQL advisory lock is bound to the session — so
+reconnecting releases it. That happens on a background task, so the interrupt reaches you
+immediately; the pool slot stays checked out until the connection is safe to replace. Interrupting
+the *body* `f` is unaffected: the connection is clean there, so the lock is released normally.
+
 # Examples
 ```julia
 # Lock around a critical update for a specific constructor
@@ -122,27 +160,38 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
   conn = acquire_connection(pool)
   got_lock = false
   old_timeout = nothing
-  
+  # Every driver await below funnels through `_await_lock_handle`, which records here whether one of
+  # them was cut short by a cancellation — the `finally` reads it to decide the connection's fate.
+  await_state = _LockAwaitState()
+
   try
     # Attempt to acquire lock
     if !wait
       # Non-blocking: single try
-      got_lock = _exec_lock_query(pool, conn, TRY_SQL, key)
+      got_lock = _exec_lock_query(pool, conn, TRY_SQL, key, await_state)
     elseif strategy == :block
       # Server-side blocking with timeout
       try
-        prev = Base.fetch(backend_execute_async(pool, conn, "SHOW statement_timeout", nothing))
+        prev = _await_lock_handle(pool, await_state,
+                                  backend_execute_async(pool, conn, "SHOW statement_timeout", nothing))
         rows = collect(prev)
         !isempty(rows) && (old_timeout = rows[1][1])
       catch
+        # Best-effort probe: a failure here only costs us the restore value. An ABANDONED await is
+        # NOT that — the connection is poisoned from here on and the `SET` below would be issued on
+        # it, so let the cancellation out to the finally instead of swallowing it (#322).
+        await_state.abandoned && rethrow()
         old_timeout = nothing
       end
 
-      # use Base.fetch() for commands without returned rows
-      Base.fetch(backend_execute_async(pool, conn, "SET statement_timeout = $(timeout_ms)", nothing))
-      
+      # Await commands without returned rows through the same seam, so a cancellation here is
+      # recorded too — this one runs BEFORE `got_lock`, i.e. on a connection the finally would
+      # otherwise release straight back into the pool with no unlock attempted at all.
+      _await_lock_handle(pool, await_state,
+                         backend_execute_async(pool, conn, "SET statement_timeout = $(timeout_ms)", nothing))
+
       try
-        got_lock = _exec_lock_query(pool, conn, BLOCK_SQL, key)
+        got_lock = _exec_lock_query(pool, conn, BLOCK_SQL, key, await_state)
       catch e
         # `sprint(showerror, e)`, not `string(e)` — and this was a latent bug, not just style.
         # `_exec_lock_query` awaits an async handle, so a server-side cancellation used to arrive
@@ -163,7 +212,7 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       # Client-side polling with retry
       deadline = time() * 1_000 + timeout_ms
       while true
-        got_lock = _exec_lock_query(pool, conn, TRY_SQL, key)
+        got_lock = _exec_lock_query(pool, conn, TRY_SQL, key, await_state)
         got_lock && break
         (time() * 1_000) >= deadline && break
         sleep(interval_ms / 1_000)
@@ -181,42 +230,71 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
     
     # Execute user function while holding lock
     return f()
-    
+
   finally
+    # An ABANDONED await takes the rest of this cleanup off the table (#322). The driver is still on
+    # `conn`, so every statement below would be issued on a poisoned connection — and the UNLOCK is
+    # the one that matters: it fails, the `@warn` says so, and the connection then goes back into the
+    # pool STILL HOLDING a session-level `pg_advisory_lock` that nothing will ever release.
+    #
+    # `await_state.abandoned` is re-read before each step rather than latched once, so a SECOND
+    # Ctrl-C — landing on the unlock or the restore — stops the remaining ones the same way.
+
     # Release lock if acquired (on same connection)
-    if got_lock
+    if got_lock && !await_state.abandoned
       try
-        _exec_lock_query(pool, conn, UNLOCK_SQL, key)
+        _exec_lock_query(pool, conn, UNLOCK_SQL, key, await_state)
       catch e
         @warn "Failed to release advisory lock; connection may have been dropped" key=key exception=(e, catch_backtrace())
       end
     end
-    
+
     # Restore statement_timeout if we changed it.
     #
-    # `Base.wait`, NOT a bare `wait` — the `wait::Bool` KEYWORD above shadows `Base.wait` inside
-    # this method, so `wait(...)` evaluated as `false(...)` and raised `MethodError: objects of
-    # type Bool are not callable`. The empty `catch` blocks below swallowed it, so this restore
-    # had never once completed: Julia evaluates the argument first, so the SET was dispatched
-    # asynchronously and then never awaited before `release_connection` returned the connection to
-    # the pool — which could hand back a connection still carrying the modified statement_timeout.
-    # The comment that used to sit here ("wait() is enough…") documented an intent that never ran.
-    # Found while working #277; the empty `catch`es stay, because restoring a timeout is genuinely
-    # best-effort, but a MethodError must no longer be one of the things they hide.
-    if old_timeout !== nothing
-      try
-        Base.wait(backend_execute_async(pool, conn, "SET statement_timeout = '$(old_timeout)'", nothing))
-      catch
-      end
-    elseif strategy == :block
-      try
-        Base.wait(backend_execute_async(pool, conn, "SET statement_timeout TO DEFAULT", nothing))
-      catch
+    # Awaited through `_await_lock_handle`, NOT a bare `wait` — two reasons, one historical and one
+    # current. The `wait::Bool` KEYWORD above shadows `Base.wait` inside this method, so `wait(...)`
+    # evaluated as `false(...)` and raised `MethodError: objects of type Bool are not callable`; the
+    # empty `catch` blocks below swallowed it, so this restore had never once completed (found while
+    # working #277). And now the seam is also what records a cancellation here, which the terminal
+    # branch below reads. The empty `catch`es stay — restoring a timeout is genuinely best-effort —
+    # but neither a MethodError nor a swallowed Ctrl-C is one of the things they hide any more.
+    if !await_state.abandoned
+      if old_timeout !== nothing
+        try
+          _await_lock_handle(pool, await_state,
+                             backend_execute_async(pool, conn, "SET statement_timeout = '$(old_timeout)'", nothing))
+        catch
+        end
+      elseif strategy == :block
+        try
+          _await_lock_handle(pool, await_state,
+                             backend_execute_async(pool, conn, "SET statement_timeout TO DEFAULT", nothing))
+        catch
+        end
       end
     end
-    
-    # Return connection to pool
-    release_connection(pool, conn)
+
+    # Terminal: the connection goes back exactly one way.
+    #
+    # An `if/else`, NOT an early `return` in the abandoned branch: a `return` inside a `finally`
+    # DISCARDS the exception that is propagating, so the Ctrl-C would be swallowed and this would
+    # hand the caller a silent `nothing`.
+    #
+    # Renewal is the remedy rather than a fallback: an advisory lock is bound to the SESSION, so
+    # reconnecting the slot is what drops it. `force_renew` makes that unconditional — a connection
+    # that drains clean still holds the lock, so wire-cleanliness is not the question here.
+    if await_state.abandoned
+      # Worded on `got_lock`: the cancellation may have landed on the very first lock query, or on
+      # the `SET statement_timeout` before it, in which case no lock was ever taken and claiming to
+      # release one would be a lie in the log.
+      @warn(got_lock ?
+              "Advisory-lock query was cancelled; renewing the connection so the session lock is released" :
+              "Advisory-lock query was cancelled before the lock was taken; renewing the connection",
+            key = key)
+      _recover_abandoned_connection!(pool, conn, await_state.handle; force_renew = true)
+    else
+      release_connection(pool, conn)
+    end
   end
 end
 

@@ -83,6 +83,7 @@ end
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")
     @testset "No Lost-Connection Retry Inside Transactions (#138)" include("unit/test_fetch_retry_transaction.jl")
     @testset "Abandoned Await Never Releases a Dirty Connection (#315)" include("unit/test_await_result_interrupt.jl")
+    @testset "Interrupted Transaction / Advisory Lock Recovers Its Connection (#322)" include("unit/test_transaction_interrupt.jl")
     @testset "Failed COMMIT Holds Conn Until Rollback (#139)" include("unit/test_commit_failure_release.jl")
     @testset "Direct-Handoff Pool Wait (#124)" include("unit/test_connection_pool_handoff.jl")
     @testset "Idle-Reaping + Max-Lifetime Pool (#125)" include("unit/test_connection_pool_reaping.jl")

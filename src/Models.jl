@@ -236,6 +236,106 @@ function get_model_name(model::PormGModel, settings::PormGSettings, symbol::Bool
   end
 end
 
+# ── Registration-time contradiction collector (#303) ────────────────────────────────────────
+# A field declaration can contradict itself in ways only registration can see, and a database
+# introspected into models can carry several at once — #292 taught PostgreSQL introspection to
+# emit `on_delete` for the first time, so a legacy schema now arrives with every one of its
+# SET_NULL/SET_DEFAULT mismatches intact. Both shapes are legal DDL on both backends (the
+# referential action is only enforced at delete time), so they really do coexist in the wild.
+# Throwing on the first turned N problems into N generate → set_models → fix one column →
+# regenerate cycles, for problems that were all visible on the first pass. So `set_models`
+# ACCUMULATES and raises once, with the whole list.
+#
+# The struct is deliberately rule-agnostic: WHERE (model, field), WHAT (`problem`), and the
+# REMEDY (`fix`). It knows nothing about `on_delete`. Adding a rule is one `push!` — the struct,
+# the sort key and the renderer are all untouched. It is a struct rather than a vector of
+# pre-rendered sentences because a frozen sentence has no sort key and no format seam: changing
+# the layout, or letting a future `check_models()`-style API consume the data, would become a
+# shotgun edit across every rule.
+#
+# The one shape not covered is a MODEL-level rule (e.g. the multiple-primary-key check in
+# `get_model_pk_field`): it would need a `field == ""` convention plus a one-line ternary in the
+# renderer. Not built now — that check is raised from a different function and would be a larger
+# change regardless.
+struct ModelContradiction
+  model::String    # model.name — where the offending field lives
+  field::String    # the offending field's declared name
+  problem::String  # "declares on_delete SET_NULL but has null=false"    (may carry ANSI)
+  fix::String      # "Declare the field with null=true, or use ..."      (may carry ANSI)
+end
+
+# Per-field contradiction rules. Runs for every FK/O2O field `set_models` walks; each rule that
+# fires appends one `ModelContradiction`. NOTHING throws here — that is the point: the walk always
+# reaches the next field and the next model. Today the two rules are mutually exclusive (`on_delete`
+# holds one sentinel), so a field yields at most one entry; the collector does not assume that, so a
+# future rule family can add a second entry for the same field without changing this signature.
+#
+# `field` is left untyped for the same reason `resolve_fk_target!`'s is: `sForeignKey` and
+# `sOneToOneField` are defined later in the load order (`models/fields.jl`). The only call site
+# already guards with `field isa sForeignKey || field isa sOneToOneField`.
+#
+# `src/querybuilder/deletion.jl` keeps its own copies of both rules, for models that never pass
+# through registration. Those stay per-field and IMMEDIATE on purpose — read the comment there
+# before considering a merge.
+function _collect_field_contradictions!(out::Vector{ModelContradiction},
+                                        model::PormGModel, field_name::AbstractString, field)
+  # SET_NULL needs a column that can hold NULL. Until #287 this was an `@error` log: it named the
+  # problem, let the broken model through, and the contradiction resurfaced later as a mangled
+  # UPDATE or a database-level constraint violation.
+  if field.on_delete == SET_NULL && field.null == false
+    push!(out, ModelContradiction(model.name, field_name,
+      "declares on_delete SET_NULL but has null=false",
+      "Declare the field with \e[1mnull=true\e[0m, or use a different on_delete."))
+  end
+  # The mirror image: SET_DEFAULT needs something to set. With no default, `field.default` flows
+  # into update_field as a bare NULL, so SET_DEFAULT silently behaved as SET_NULL and then died
+  # on the column's NOT NULL constraint.
+  if field.on_delete == SET_DEFAULT && field.default === nothing
+    push!(out, ModelContradiction(model.name, field_name,
+      "declares on_delete SET_DEFAULT but has no default",
+      "Give the field a \e[1mdefault=\e[0m, or use a different on_delete."))
+  end
+  return out
+end
+
+"""
+    _render_contradictions(cs::Vector{ModelContradiction}, mod::Module) -> String
+
+Compose every collected contradiction into ONE error message (#303). Returns the `String`; the
+call site wraps it in `ModelDefinitionError` so the thrown type is named where it is thrown (see
+`src/querybuilder/error_funnels.jl` — a helper that only maps a message to a type is an alias,
+not an abstraction).
+
+**Ordering is fixed here, not by the caller.** `set_models` walks `pairs(model.fields)`, which is
+`Dict` hash order and carries no meaning, so entries are sorted by `(model, field, problem)`
+before rendering. The third key is forward-looking rather than load-bearing today: `(model, field)`
+is already unique, because the two current rules are mutually exclusive on one field — but it keeps
+the order *total*, so a future rule family that can fire alongside them stays byte-stable without
+revisiting this. `model.field_names` is deliberately NOT the order — it defaults to empty on a
+hand-built `Model_Type` and is itself hash-ordered from the `Model(name, ::Dict)` constructors, so
+it is a meaningful order only sometimes. `sort` (not `sort!`) because this runs on the error path and must not reorder a vector
+the caller — or a debugger stopped at the throw — still holds.
+
+The line prefix stays ANSI-free on purpose: `showerror` prints `.msg` verbatim and `.msg` keeps
+its escapes in color mode, so an escape wedged into the prefix would break anything matching on
+line structure.
+
+Pure — no globals, no side effects — so the ordering guarantee is unit-testable by handing it
+contradictions in deliberately wrong order (`test/unit/test_alignment_sqlite.jl`). That test is
+the only thing that fails if the sort is dropped: `Dict` iteration is deterministic for a fixed
+insertion sequence, so going through `set_models` would not reliably notice.
+"""
+function _render_contradictions(cs::Vector{ModelContradiction}, mod::Module)::String
+  ordered = sort(cs; by = c -> (c.model, c.field, c.problem))
+  n = length(ordered)
+  header = n == 1 ?
+    "set_models($(nameof(mod))) rejected the models: 1 contradictory field declaration." :
+    "set_models($(nameof(mod))) rejected the models: $(n) contradictory field declarations — " *
+    "every one found is listed below, so they can be fixed in a single pass."
+  return header * join("\n  → \e[4m\e[31m$(c.model).$(c.field)\e[0m $(c.problem) — " *
+                       "the schema contradicts itself. $(c.fix)" for c in ordered)
+end
+
 # TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 #
 # NOTE: keep this comment ABOVE the docstring. A comment between a docstring and the definition it
@@ -270,8 +370,19 @@ Registration does four things:
    metadata built and cached.
 4. **Rejects contradictions.** `on_delete = SET_NULL` on a `null = false` field, or `SET_DEFAULT`
    with no `default`, raises `ModelDefinitionError` here — at declaration, rather than later as a
-   mangled `UPDATE`. An unresolvable foreign-key target and a duplicate `related_name` raise the
-   same type.
+   mangled `UPDATE`. **Every** such contradiction in the module is collected and reported in that
+   one error, naming each offending model, field and fix, so a legacy schema carrying several of
+   them is diagnosed in a single pass instead of one registration per field (#303). Only these two
+   are aggregated: every *other* registration error — an unresolvable foreign-key or many-to-many
+   target, a duplicate `related_name`, a model without exactly one primary key, an unusable
+   explicit `through` model — raises the same type but still on the first occurrence, and preempts
+   the aggregated report when present.
+
+   Because the aggregated throw comes after every model is wired, a **swallowed** failure leaves a
+   fully-wired, queryable graph. The `__init__` that `@import_models` and `@models_module` inject,
+   and the Revise reload callback, all `catch` — though the first load of either macro still
+   surfaces the error. `delete()` keeps its own copy of both checks, and that is what still raises
+   for a contradiction the caller never saw.
 
 Calling it again is safe and is the supported way to pick up edits: reverse relations and
 many-to-many caches are cleared before being rebuilt, so a reload cannot accumulate duplicates.
@@ -343,6 +454,10 @@ function set_models(_module::Module, path::String)::Nothing
     empty!(model.related_objects)
     haskey(model.cache, "many_to_many") && delete!(model.cache, "many_to_many")
   end
+  # #303: self-contradicting field declarations are ACCUMULATED across every model and every
+  # field, then raised once below. See `_render_contradictions` for the ordering contract.
+  contradictions = ModelContradiction[]
+
   # Validate like django related_name, if the model has more than one foreign key to the same model the related_name must be defined
   for model in models
     dict_tables_c = Dict{String, Int}()
@@ -355,6 +470,13 @@ function set_models(_module::Module, path::String)::Nothing
         # #65: single-sourced FK/O2O resolution + pk_field defaulting, shared with the migration
         # prelude via `resolve_fk_target!`. strict=true throws on an unresolvable target, so the
         # returned value is always a resolved model here; it drives the reverse-relation wiring below.
+        #
+        # This one stays IMMEDIATE and out of #303's collector, permanently. Structurally, the
+        # return drives every line of wiring below it, so collecting would mean strict=false plus a
+        # `continue` that silently skips it — and it would change how the runtime path uses a helper
+        # SHARED with the migration prelude (`planner.jl` calls it strict=false). Semantically, a
+        # missing referent is not a contradiction between two settings on one field: the model graph
+        # cannot be built at all, so walking on produces cascading noise, not more signal.
         field_to::PormGModel = resolve_fk_target!(field, field_name, model.name, _module; strict=true)
         if haskey(dict_tables_c, field_to.name)
           dict_tables_c[field_to.name] += 1
@@ -393,19 +515,38 @@ function set_models(_module::Module, path::String)::Nothing
         # through, so the contradiction resurfaced later as a mangled UPDATE or a database-level
         # constraint violation. The delete collector keeps its own copies of both guards for models
         # that never pass through `set_models`; this is the layer that catches them at declaration.
-        if field.on_delete == SET_NULL && field.null == false
-          throw(ModelDefinitionError("The field \e[4m\e[31m$(field_name)\e[0m in the model \e[4m\e[31m$(model.name)\e[0m declares on_delete SET_NULL but has null=false — the schema contradicts itself. Declare the field with null=true or use a different on_delete."))
-        end
-        if field.on_delete == SET_DEFAULT && field.default === nothing
-          throw(ModelDefinitionError("The field \e[4m\e[31m$(field_name)\e[0m in the model \e[4m\e[31m$(model.name)\e[0m declares on_delete SET_DEFAULT but has no default — the schema contradicts itself. Give the field a default= or use a different on_delete."))
-        end
-                 
+        #
+        # #303 COLLECTS instead of throwing, so ONE run reports every contradiction in the module.
+        # Nothing after this line depends on the result — the reverse-relation wiring above is
+        # already done — so a field that fails here still leaves the model graph in exactly the
+        # state a clean run would produce.
+        _collect_field_contradictions!(contradictions, model, field_name, field)
+
       elseif is_many_to_many_field(field)
         _register_many_to_many_relation!(_module, settings, model, field_name, field)
       end
     end
   end
- 
+
+  # Registration FAILS — informatively, not downgraded to a warning (#303). Deferring the throw to
+  # here means every model is wired before it fires, which is strictly more wiring than the
+  # pre-#303 mid-loop abort did. That is safe: the wiring performed is exactly what a SUCCESSFUL
+  # run performs (no half-state a success would not also produce), and every `set_models` call
+  # `empty!`s `related_objects` and drops the many-to-many cache before rebuilding (see the loop
+  # above), so a re-run cannot accumulate.
+  #
+  # One consequence worth knowing, because it is uniform now rather than order-dependent: every
+  # model comes out of a run that fails HERE with a valid `connect_key`, so
+  # `ensure_model_initialized`'s fast path reports it initialized. Pre-#303 that depended on whether
+  # the model happened to be walked before the throwing one — i.e. on Dict/`names` order. (A run
+  # that fails at one of the earlier in-loop throws still leaves the models after it unbound.)
+  # So a caller that swallows this throw — the `__init__` injected by `@import_models` /
+  # `@models_module`, or the Revise reload callback — is left with a fully-wired, queryable graph
+  # rather than a partly-wired one, and `deletion.jl`'s own copies of these two guards are what
+  # still catch the contradiction at delete time.
+  isempty(contradictions) ||
+    throw(ModelDefinitionError(_render_contradictions(contradictions, _module)))
+
   return nothing
 end
 

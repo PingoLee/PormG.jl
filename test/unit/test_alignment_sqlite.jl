@@ -1935,6 +1935,19 @@ end
     @test_throws PormG.ModelDefinitionError PormG.Models.set_models(bad_mod, "mock_sl_path")
 end
 
+# `set_models` has several other ModelDefinitionError sites (duplicate related_name, strict FK
+# target resolution), so a bare @test_throws would pass on a fixture typo for the wrong reason.
+# Assert the cause, not just the type. At file scope because both the #287 testset below and the
+# #303 aggregation testsets after it use it.
+function _set_models_error(mod)
+    try
+        PormG.Models.set_models(mod, "mock_sl_path")
+        nothing
+    catch e
+        e
+    end
+end
+
 @testset "set_models rejects contradictory on_delete declarations (#287)" begin
     # Both checks existed in set_models as `@error` logs: they named the contradiction and then
     # let the broken model through, so it resurfaced later as a mangled UPDATE (SET_DEFAULT with
@@ -1955,18 +1968,6 @@ end
         Core.eval(mod, :(const Parent = $parent))
         Core.eval(mod, :(const Child = $child))
         return mod
-    end
-
-    # `set_models` has several other ModelDefinitionError sites (duplicate related_name, strict FK
-    # target resolution), so a bare @test_throws would pass on a fixture typo for the wrong reason.
-    # Assert the cause, not just the type.
-    function _set_models_error(mod)
-        try
-            PormG.Models.set_models(mod, "mock_sl_path")
-            nothing
-        catch e
-            e
-        end
     end
 
     # SET_NULL on a field that cannot hold NULL.
@@ -1994,6 +1995,125 @@ end
     sd_ok = _on_delete_mod(:od_set_default_ok, p -> PormG.Models.ForeignKey(p,
         pk_field = "id", on_delete = "SET_DEFAULT", default = 1, null = true, related_name = "od_sd_ok"))
     @test PormG.Models.set_models(sd_ok, "mock_sl_path") === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# set_models: every on_delete contradiction is reported in ONE error (#303)
+# #287 made the two guards throw, but on the FIRST contradiction — so a legacy database
+# introspected into models (#292 gave PostgreSQL introspection `on_delete` for the first time)
+# took one generate → set_models → fix one column → regenerate cycle per contradiction, for
+# problems that were all visible on the first pass. The fixture below carries THREE contradictions
+# across TWO models, and the assertions demand all three by name plus the count: an assertion that
+# only checked the first name would pass against the pre-#303 first-throw behaviour and prove
+# nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "set_models reports every on_delete contradiction at once (#303)" begin
+    parent = PormG.Models.Model_Type(
+        name = "od303_parent",
+        fields = Dict("id" => PormG.Models.IDField()),
+        field_names = ["id"]
+    )
+    # Model A: TWO contradictions on ONE model — one of each rule. Proves the walk does not stop
+    # at the first offending FIELD. `ok_fk` is the discrimination control (assertion 5).
+    child_a = PormG.Models.Model_Type(
+        name = "od303_child_a",
+        fields = Dict(
+            "id"        => PormG.Models.IDField(),
+            "bad_null"  => PormG.Models.ForeignKey(parent, pk_field = "id",
+                             on_delete = "SET_NULL",    null = false, related_name = "od303_a_null"),
+            "bad_deflt" => PormG.Models.ForeignKey(parent, pk_field = "id",
+                             on_delete = "SET_DEFAULT", null = true,  related_name = "od303_a_deflt"),
+            "ok_fk"     => PormG.Models.ForeignKey(parent, pk_field = "id",
+                             on_delete = "CASCADE",     null = true,  related_name = "od303_a_ok"),
+        ),
+        field_names = ["id", "bad_null", "bad_deflt", "ok_fk"]
+    )
+    # Model B: a THIRD contradiction on a DIFFERENT model. Proves the walk does not stop at the
+    # first offending MODEL either — the two axes fail independently.
+    child_b = PormG.Models.Model_Type(
+        name = "od303_child_b",
+        fields = Dict(
+            "id"       => PormG.Models.IDField(),
+            "bad_null" => PormG.Models.ForeignKey(parent, pk_field = "id",
+                            on_delete = "SET_NULL", null = false, related_name = "od303_b_null"),
+        ),
+        field_names = ["id", "bad_null"]
+    )
+    mod = Module(:od303_many_contradictions)
+    Core.eval(mod, :(const Parent  = $parent))
+    Core.eval(mod, :(const Child_a = $child_a))
+    Core.eval(mod, :(const Child_b = $child_b))
+
+    err = _set_models_error(mod)
+    # Registration must still FAIL, and with the same type — #303 changed the message, not the
+    # taxonomy. A collector downgraded to `@warn` returns nothing here and fails on this line.
+    @test err isa PormG.ModelDefinitionError
+    # `showerror` prints `.msg` verbatim (exceptions.jl); ANSI is decided once in the constructor
+    # from `Base.have_color`, and `Pkg.test` forwards --color=yes. So every token matched below
+    # must be CONTIGUOUS in the message — never split by an escape sequence.
+    msg = sprint(showerror, err)
+
+    # 1. EVERY offending model.field pair is named. Asserting only one would pass against the
+    #    pre-#303 first-throw behaviour, which is exactly the trap #303 calls out.
+    @test occursin("od303_child_a.bad_null",  msg)
+    @test occursin("od303_child_a.bad_deflt", msg)
+    @test occursin("od303_child_b.bad_null",  msg)
+
+    # 2. The COUNT is right AND is stated. One `→` per entry (the same list shape
+    #    DestructiveMigrationError uses), so counting the bullets counts the contradictions.
+    #    Pre-#303 there are no bullets at all, so both of these fail hard.
+    @test count(==('→'), msg) == 3
+    @test occursin("3 contradictory field declarations", msg)
+
+    # 3. Both rules and both remedies survive aggregation — the #287 message content is not lost
+    #    when it becomes a list entry.
+    @test occursin("SET_NULL", msg)    && occursin("null=true", msg)
+    @test occursin("SET_DEFAULT", msg) && occursin("default", msg)
+
+    # 4. Discrimination: the CLEAN foreign key is not listed. A collector that reported every FK
+    #    would satisfy every assertion above and be worthless.
+    @test !occursin("ok_fk", msg)
+
+    # 5. The rendered (model, field) order. NOT a real pin on the sort: this fixture's natural
+    #    walk order already happens to match the sorted order, so it passes with the sort removed
+    #    (measured). It documents the expected shape end-to-end; the testset below is what
+    #    actually fails when the sort goes, by feeding the renderer an order a Dict walk cannot
+    #    produce on demand.
+    @test findfirst("od303_child_a.bad_deflt", msg).start <
+          findfirst("od303_child_a.bad_null",  msg).start <
+          findfirst("od303_child_b.bad_null",  msg).start
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# set_models: the aggregated message has a deterministic order (#303)
+# The order cannot be pinned through `set_models` alone: Julia's Dict iteration is deterministic
+# for a fixed insertion sequence, so dropping the sort might well reproduce the same order there
+# and leave the end-to-end ordering assertion inert. The sort therefore lives in
+# `_render_contradictions`, which is pure, and this testset feeds it a deliberately WRONG order —
+# the one input a Dict walk can never produce on demand. Removing the `sort` fails here every run.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "aggregated contradictions render in a deterministic order (#303)" begin
+    MC = PormG.Models.ModelContradiction
+    cs = [
+        MC("od_z_model", "a_field", "problem Z", "Fix Z."),   # wrong model first
+        MC("od_a_model", "z_field", "problem Y", "Fix Y."),   # wrong field order within a model
+        MC("od_a_model", "a_field", "problem X", "Fix X."),
+    ]
+    msg = PormG.Models._render_contradictions(cs, @__MODULE__)
+
+    @test findfirst("od_a_model.a_field", msg).start <
+          findfirst("od_a_model.z_field", msg).start <
+          findfirst("od_z_model.a_field", msg).start
+
+    # `sort`, not `sort!`: this runs on the error path and must not reorder a vector the caller
+    # (or a debugger stopped at the throw) still holds.
+    @test cs[1].model == "od_z_model"
+
+    # Single-violation rendering keeps the same list shape — one entry is still a list, so there
+    # is no second code path that only the rare case exercises and only the rare case can rot.
+    one = PormG.Models._render_contradictions([cs[1]], @__MODULE__)
+    @test count(==('→'), one) == 1
+    @test occursin("1 contradictory field declaration.", one)
 end
 
 # ── #64: db_column on M2M / CTE join keys (DB-free render asserts) ─────────────────────────

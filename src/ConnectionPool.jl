@@ -1441,8 +1441,11 @@ Use `await_result(task)` to get the result and properly release the connection.
 - `result_cache::Union{Nothing, Any}`: Cached result for multiple `await_result` calls
 - `in_transaction::Bool`: Whether this task is part of a transaction (don't release connection)
 - `abandoned::Bool`: Whether the await was cut short by a cancellation rather than a database
-  failure (#315). Set by `await_result`; it routes the connection to
-  [`_recover_abandoned_connection!`](@ref) instead of a plain release.
+  failure (#315). Set by `await_result`; it sends the connection through the abandoned-await
+  recovery — cancel, wait for the driver, drain, then release or renew — instead of a plain
+  release. (Plain backticks, not an `@ref`: this struct is exported, so `@autodocs` publishes this
+  docstring to `api.md`, and a cross-reference from there to an internal helper cannot resolve —
+  `Private = false` means the target is never rendered. That broke the docs build once.)
 """
 mutable struct FetchTask
   async_result::Any  # LibPQ.AsyncResult (PG) or Task (SQLite)

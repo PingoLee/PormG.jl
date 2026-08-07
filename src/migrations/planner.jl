@@ -522,8 +522,11 @@ function _resolve_table_fields(
     # deleted field forces a rebuild, route the WHOLE table's deletions through it and skip the per-column
     # DROP COLUMNs (emitting both would race: the rebuild removes the column, then a stray `DROP COLUMN` for a
     # sibling deletion fails "no such column"). Ordinary indexed columns still take the cheap DROP COLUMN path
-    # below (their plain index is pre-dropped). `unique` is probed live — SQLite introspection doesn't set
-    # `old_field.unique` (see _sqlite_column_is_unique) — while `primary_key` IS populated by introspection.
+    # below (their plain index is pre-dropped). `unique` is probed live, and STILL must be after #318 gave
+    # SQLite introspection a `unique` flag: that flag is deliberately narrow (single-column UNIQUE constraints
+    # only), whereas SQLite refuses DROP COLUMN for a column in ANY unique index — a composite-unique member
+    # or a `CREATE UNIQUE INDEX` column included. `_sqlite_column_is_unique` answers that broader question;
+    # `old_field.unique` does not. `primary_key` IS populated by introspection.
     rebuild_delete_idx = nothing
     if conn isa PormGSQLite
       rebuild_delete_idx = findfirst(colect_deletion) do fsym

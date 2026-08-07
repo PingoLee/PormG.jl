@@ -209,4 +209,11 @@ WHERE "Tb"."name" = $1
     schema fails as soon as the models load rather than at the first delete. `delete()` keeps its own
     copy of both checks as a backstop for models built without going through registration.
 
+    Every contradiction *of these two kinds* in the module is collected and reported in a single
+    `ModelDefinitionError` naming each offending model, field and fix, so a legacy schema carrying
+    several of them is diagnosed in one pass rather than one registration per field. Only these two
+    are aggregated: every *other* registration error — an unresolvable foreign-key or many-to-many
+    target, a duplicate `related_name`, a model without exactly one primary key, an unusable
+    explicit `through` model — still raises on the first occurrence and preempts that report.
+
 See [Models and Fields](../fields.md) for more details on configuring deletion behavior (CASCADE, PROTECT, SET_NULL, etc.).

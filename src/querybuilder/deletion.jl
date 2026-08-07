@@ -416,7 +416,17 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     throw(ProtectedError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
   elseif field.on_delete == SET_NULL
     @pormg_debug false
-    # check if the field allow null
+    # Backstop copy of `set_models`' SET_NULL guard, for models that never passed registration —
+    # see the fixtures in test/integration/common_delete_setup.jl, which register a VALID model and
+    # then flip the field, so this path is the only thing left to catch it.
+    #
+    # This one stays PER-FIELD and IMMEDIATE. Do NOT "unify" it with the aggregating collector
+    # `set_models` grew in #303. There, N models are being registered at once and reporting all N
+    # contradictions in one error saves N import cycles — the whole point. Here we are inside one
+    # delete, resolving one referencing field, with nothing to aggregate: deferring the throw would
+    # only let the collector keep building statements against a schema already known to be
+    # unsatisfiable, and then report them alongside an error we could have raised immediately.
+    # Fail on the field in hand.
     if !field.null
       throw(ModelDefinitionError("Error in delete: ON DELETE SET_NULL is declared on \e[4m\e[31m$(field_name)\e[0m, but the field has null=false — the schema contradicts itself. Declare the FK with null=true or use a different on_delete."))
     end
@@ -431,7 +441,8 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     collector.field_updates[(field_name |> string, nothing)][related_model] = prepare_related_query(keys, related_model, field_name)
 
   elseif field.on_delete == SET_DEFAULT
-    # check that there is a default to set — symmetric with the SET_NULL guard above (#287).
+    # check that there is a default to set — symmetric with the SET_NULL guard above (#287), and
+    # per-field/immediate for the same reason spelled out there (#303).
     # Without it `field.default === nothing` flows into update_field, which renders a bare NULL,
     # so SET_DEFAULT silently behaved as SET_NULL and then died on the column's NOT NULL constraint.
     if field.default === nothing

@@ -876,7 +876,9 @@ Omitting `on_delete` is also valid and is the default — PormG then emits no st
 relation and the column renders `ON DELETE NO ACTION`, so the dependent row is **not** cascaded.
 
 The two "requires" above are enforced, not advisory: registering a model with `SET_NULL` on a
-`null=false` field, or `SET_DEFAULT` with no `default`, raises `ModelDefinitionError`.
+`null=false` field, or `SET_DEFAULT` with no `default`, raises `ModelDefinitionError` — and every
+such contradiction in the module is reported in that one error, naming each offending model, field
+and fix, so a schema carrying several of them is fixed in a single pass.
 
 ### OneToOneField(to_model)
 

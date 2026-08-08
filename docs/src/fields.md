@@ -972,7 +972,7 @@ All field types support these common parameters:
 - `null::Bool = false`: Allow NULL values in database
 - `blank::Bool = false`: Allow empty values in forms  
 - `unique::Bool = false`: Enforce uniqueness constraint on this single column. For uniqueness spanning **two or more** columns, use a model-level `UniqueConstraint` — see [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)).
-- `default`: Set default value for new records
+- `default`: Set default value for new records. PormG applies it only where the write supplies no value for the field; a field passed explicitly — including as `nothing`/`missing` — is honored as written. See [Defaults and Auto Values](write/bulk.md#Defaults-and-Auto-Values) for the `DataFrame` form of the same rule.
 
 ### Database Options
 - `db_index::Bool = false`: Create database index for faster queries

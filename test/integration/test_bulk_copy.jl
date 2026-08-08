@@ -47,20 +47,22 @@ length(_bulk_copy_fk_rows) == 9 || error(
 _bulk_copy_fk_ids = [row[:resultid] for row in _bulk_copy_fk_rows]
 
 # One dependency this file cannot borrow its way out of: `test_result_set_default` is declared
-# `ForeignKey(Result, …, default = 1)`, and PormG writes a static default on every insert path —
-# `create()` fills it when the key is absent (execution.jl), and the bulk paths add a whole
-# column of it when the field is missing from the DataFrame (execution_bulk.jl). Supplying an
-# explicit `missing` does not help either: the bulk path rewrites missing/nothing back to the
-# default. So every row this file inserts into `just_a_test_deletion` carries
-# `test_result_set_default = 1` and needs `resultid = 1` to exist, whatever the other FK
-# columns say.
+# `ForeignKey(Result, …, default = 1)`, and PormG writes a static default whenever a write does
+# not mention the field — `create()` fills it when the key is absent (execution.jl), and the bulk
+# paths add a whole column of it when the DataFrame has no such column (execution_bulk.jl). Not one
+# of the writes below carries a `test_result_set_default` column, so every row this file inserts
+# into `just_a_test_deletion` gets `test_result_set_default = 1` and needs `resultid = 1` to exist,
+# whatever the other FK columns say.
 #
 # Assert it here rather than let it surface as a ForeignKeyViolation naming a constraint no
 # test mentions. Dodging it instead would mean threading a real id through three DataFrames
 # that have nothing to do with defaults (and adding a third entry to the column-mapping test),
-# which distorts what those tests read as. The asymmetry — `create()` honours an explicit
-# `nothing`, the bulk path overwrites it with the default — is a PormG-level quirk, not a
-# test-fixture one, and is tracked in #331 rather than worked around here.
+# which distorts what those tests read as.
+#
+# #331 does NOT lift this precondition, and that is not an oversight. It made an explicit blank
+# mean NULL — so a DataFrame *can* now opt out of the default — but opting out requires carrying
+# the column, which is exactly the distortion the paragraph above rejects. The fix is asserted
+# directly instead, in the "#331" testset below.
 M.Result.objects.filter("resultid" => 1).count() == 1 || error(
     "test_bulk_copy.jl requires `result.resultid = 1` to exist in \"$(PORMG_DB_FOLDER)\": " *
     "`Just_a_test_deletion.test_result_set_default` defaults to 1, and PormG writes that " *
@@ -187,6 +189,116 @@ M.Result.objects.filter("resultid" => 1).count() == 1 || error(
 
         unchanged = M.Just_a_test_deletion.objects.filter("name" => "update-target").list() |> first
         @test unchanged[:test_result] == _bulk_copy_fk_ids[1]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Defaults and auto values (#331): a present column is caller data, an absent one is filled
+# PormG supplies a value only for a column the DataFrame does not contain. Before #331 the bulk
+# paths also rewrote blank cells of a column the caller DID supply, so `create("f" => nothing)`
+# stored NULL while `bulk_insert` of the same row stored the model default — a real referential
+# difference on `test_result_set_default`, which is a SET_DEFAULT foreign key onto `result`.
+#
+# Asserted against stored rows rather than generated SQL: the unit file
+# (test/unit/test_bulk_default_fill_scope.jl) already pins the bound parameters, and what this
+# issue is actually about is what ends up in the table.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#331: defaults fill absent columns only, on every write path" begin
+    query = M.Just_a_test_deletion.objects
+    query.exists() && query.delete(allow_delete_all = true)
+
+    # Read one row's defaulted FK back by name. Returns `nothing` for SQL NULL so the two
+    # blank spellings (`missing` from the driver, `nothing`) compare equal across backends.
+    function stored_default_fk(name)
+        row = M.Just_a_test_deletion.objects.filter("name" => name).list() |> first
+        value = row[:test_result_set_default]
+        return (ismissing(value) || isnothing(value)) ? nothing : value
+    end
+
+    try
+        fk = _bulk_copy_fk_ids[1]
+
+        # Four writes covering both axes: create() vs bulk_insert × field absent vs explicitly blank.
+        query.create("name" => "i331-c-absent", "test_result" => fk)
+        query.create("name" => "i331-c-null", "test_result" => fk,
+                     "test_result_set_default" => nothing)
+        bulk_insert(query, DataFrames.DataFrame(
+            name = ["i331-b-absent"], test_result = [fk]))
+        bulk_insert(query, DataFrames.DataFrame(
+            name = ["i331-b-null"], test_result = [fk], test_result_set_default = [missing]))
+
+        # Absent → the default is written, on both paths. (Unchanged by #331, and the reason the
+        # `resultid = 1` precondition above still stands.)
+        @test stored_default_fk("i331-c-absent") == 1
+        @test stored_default_fk("i331-b-absent") == 1
+
+        # Explicitly blank → NULL, on both paths. The bulk arm stored 1 before #331.
+        @test stored_default_fk("i331-c-null") === nothing
+        @test stored_default_fk("i331-b-null") === nothing
+
+        # …and the two paths agree, which is the substitutability claim the issue is about.
+        # Stated separately from the absolutes above on purpose: an equality check alone would
+        # stay green if BOTH paths regressed to the default.
+        @test stored_default_fk("i331-c-null") == stored_default_fk("i331-b-null")
+        @test stored_default_fk("i331-c-absent") == stored_default_fk("i331-b-absent")
+
+        # bulk_update: clearing a defaulted column used to be a silent no-op — the default was
+        # written straight back, so the call reported success and changed nothing.
+        target_id = (M.Just_a_test_deletion.objects.filter("name" => "i331-b-absent") |> DataFrame).id
+        bulk_update(query, DataFrames.DataFrame(
+                        id = target_id, test_result_set_default = [missing]),
+                    columns = ["test_result_set_default"], match_on = ["id"])
+        @test stored_default_fk("i331-b-absent") === nothing
+    finally
+        query = M.Just_a_test_deletion.objects
+        query.exists() && query.delete(allow_delete_all = true)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #331 for auto_now_add / auto_now on a NOT NULL field
+# `test_result_set_default` covers the static-default fill kind but is nullable, so it cannot
+# show what a blank does when NULL is not a legal value. `Django_contract_scratch.created_at` is
+# `DateTimeField(auto_now_add = true)` — NOT NULL, no foreign key, no seeding — and covers both
+# gaps: the temporal fill kind, and the ORM-level error a blank must raise instead of being
+# quietly stamped with now().
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#331: a blank in a present NOT NULL auto column raises, and absent still stamps" begin
+    query = M.Django_contract_scratch.objects
+    # Scoped to the "i331-" prefix so this cannot disturb test_django_contract.jl's rows.
+    # `filter` accumulates onto the handler, so build it once — calling it twice would AND the
+    # same predicate into the DELETE a second time.
+    purge = () -> begin
+        q = M.Django_contract_scratch.objects
+        q.filter("label__@startswith" => "i331-")
+        q.exists() && q.delete()
+    end
+    purge()
+
+    try
+        # Present + blank on a NOT NULL auto_now_add column: PormG's own typed error rather than a
+        # backend constraint violation, and nothing persisted — asserted below by the row count, so
+        # the rollback is proven rather than assumed. Pre-#331 this silently succeeded with now().
+        err = try
+            bulk_insert(query, DataFrames.DataFrame(
+                label = ["i331-notnull"], created_at = [missing]))
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.InvalidValueError
+        @test occursin("created_at", string(err))
+        @test occursin("null values are not allowed", string(err))
+        @test M.Django_contract_scratch.objects.filter("label" => "i331-notnull").count() == 0
+
+        # Absent → still stamped. #331 narrows WHEN PormG supplies a value; it must not stop it
+        # supplying one, or a partial frame would no longer satisfy the NOT NULL columns.
+        bulk_insert(query, DataFrames.DataFrame(label = ["i331-stamped"]))
+        row = M.Django_contract_scratch.objects.filter("label" => "i331-stamped").list() |> first
+        @test !ismissing(row[:created_at]) && !isnothing(row[:created_at])
+        @test !ismissing(row[:updated_at]) && !isnothing(row[:updated_at])
+    finally
+        purge()
     end
 end
 
@@ -541,6 +653,69 @@ end
     @test err_type !== nothing
     @test occursin("test_result", string(err_type))
     @test occursin("expected Int64 or an integer string", string(err_type))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #331 on the COPY path — the third writer must agree with the other two
+# bulk_copy shares `_prepare_bulk_df!` with bulk_insert/bulk_update, so the rule is the same
+# code. What is NOT shared is where a blank becomes NULL: COPY writes an unquoted `\N` sentinel
+# into the CSV stream rather than binding a parameter, so agreement has to be observed rather
+# than assumed. This is also the ONLY layer at which bulk_copy's null validation is reachable —
+# under `show_query` it returns before its row loop, so the unit file cannot assert this half.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#331: bulk_copy agrees with bulk_insert and create() on an explicit null" begin
+    query = M.Just_a_test_deletion.objects
+    query.exists() && query.delete(allow_delete_all = true)
+
+    function stored_default_fk(name)
+        row = M.Just_a_test_deletion.objects.filter("name" => name).list() |> first
+        value = row[:test_result_set_default]
+        return (ismissing(value) || isnothing(value)) ? nothing : value
+    end
+
+    try
+        fk = _bulk_copy_fk_ids[1]
+
+        bulk_copy(query, DataFrames.DataFrame(
+            name = ["i331-copy-absent"], test_result = [fk]))
+        bulk_copy(query, DataFrames.DataFrame(
+            name = ["i331-copy-null"], test_result = [fk], test_result_set_default = [missing]))
+        # The other two writers on the same table, so the three-way agreement is asserted from
+        # rows written in this same testset rather than inferred across testsets.
+        bulk_insert(query, DataFrames.DataFrame(
+            name = ["i331-copy-peer-bulk"], test_result = [fk],
+            test_result_set_default = [missing]))
+        query.create("name" => "i331-copy-peer-create", "test_result" => fk,
+                     "test_result_set_default" => nothing)
+
+        @test stored_default_fk("i331-copy-absent") == 1        # absent → default, as always
+        @test stored_default_fk("i331-copy-null") === nothing   # pre-#331: 1
+
+        # All three writers, same input, same stored value.
+        @test stored_default_fk("i331-copy-null") == stored_default_fk("i331-copy-peer-bulk")
+        @test stored_default_fk("i331-copy-null") == stored_default_fk("i331-copy-peer-create")
+
+        # NOT NULL + auto_now_add + a blank cell: refused before the COPY stream is opened, with
+        # the same diagnosis bulk_insert gives. Only provable here (see the header note).
+        err = try
+            bulk_copy(M.Django_contract_scratch.objects,
+                      DataFrames.DataFrame(label = ["i331-copy-notnull"], created_at = [missing]))
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.InvalidValueError
+        @test occursin("bulk_copy", string(err))
+        @test occursin("created_at", string(err))
+        @test occursin("null values are not allowed", string(err))
+        @test M.Django_contract_scratch.objects.filter("label" => "i331-copy-notnull").count() == 0
+    finally
+        query = M.Just_a_test_deletion.objects
+        query.exists() && query.delete(allow_delete_all = true)
+        cleanup = M.Django_contract_scratch.objects
+        cleanup.filter("label" => "i331-copy-notnull")
+        cleanup.exists() && cleanup.delete()
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

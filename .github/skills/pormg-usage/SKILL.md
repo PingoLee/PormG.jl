@@ -106,7 +106,9 @@ end
 - **Models**: Capitalized, singular, snake_case for multi-word: `Driver`, `Race`, `Order_item`
 - **Field names**: Lowercase, snake_case: `first_name`, `created_at`
 - **Never use `__`** in field or table names — reserved for ORM join traversal
-- Prefix reserved Julia keywords: `_id`, `_type`, `_end`
+- **A field name may not start with `_`** (#317). For a column that is a Julia keyword — or that
+  genuinely begins with an underscore — declare a legal identifier and name the column with
+  `db_column`: `end_ = Models.CharField(db_column = "end")`. `id` needs nothing special.
 - **Query fields in the case they were declared** — lookups are case-sensitive (#57). The F1 models declare **lowercase** fields, so their paths are lowercase (`constructorid__name`); a camelCase path throws because the field doesn't exist under that case. (House style is lowercase snake_case; mixed-case columns are supported when you declare them that way.)
 
 > Migrations, create/update/delete, bulk operations, and transactions live in [`writing.md`](writing.md).

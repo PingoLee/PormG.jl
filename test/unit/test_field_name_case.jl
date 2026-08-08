@@ -39,13 +39,14 @@ LegacyEntryCase.connect_key = "default"
 @testset "Field-name case preservation (#57)" begin
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # format_fild_name: strips ONE leading underscore but PRESERVES case. This is the
-  # single function every field name flows through at registration.
+  # format_fild_name PRESERVES case. It is the single function every field name flows
+  # through, and since #317 it rewrites nothing at all — it only validates. (It used to
+  # also strip one leading underscore, the retired reserved-word escape hatch.)
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "format_fild_name preserves declared case" begin
     @test format_fild_name("driverId")  == "driverId"
     @test format_fild_name("foreName")  == "foreName"
-    @test format_fild_name("_DriverId") == "DriverId"   # strip one underscore, keep case
+    @test format_fild_name("_DriverId") == "_DriverId"  # verbatim: no strip (#317), case kept
     @test format_fild_name("driverid")  == "driverid"   # lowercase passes through unchanged
   end
 

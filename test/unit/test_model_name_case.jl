@@ -8,17 +8,24 @@ declared. So `Model("Driver_Profile", …)` migrated the table `driver_profile` 
 quoted identifier is case-sensitive. SQLite's case-insensitive identifiers masked it entirely.
 
 A leading underscore split the schema the same way, one character away from #300: `format_model_name`
-(used to render an FK `REFERENCES` target and to resolve a model reference by name) strips ONE leading
-underscore, inherited from the FIELD-name reserved-word escape hatch — but `create_table` writes the
-stored name as-is. So `Model("_order", …)` created table `_order` while a `ForeignKey` pointing at it
-referenced `"order"` — a different table, or a failed constraint if `order` didn't exist.
+(used to render an FK `REFERENCES` target and to resolve a model reference by name) stripped ONE
+leading underscore, inherited from the FIELD-name reserved-word escape hatch — but `create_table`
+wrote the stored name as-is. So `Model("_order", …)` created table `_order` while a `ForeignKey`
+pointing at it referenced `"order"` — a different table, or a failed constraint if `order` didn't
+exist.
 
-Since #300 (case) and #306 (leading underscore) the split is unreachable from a user declaration: a
-non-lowercase or underscore-prefixed positional name is rejected at construction. This file **pins
-the rejection** (the only assertions here that go red without the guards), **documents** the
-DDL/query agreement it buys, and **characterizes** the split as it still stands on the paths
-deliberately left exempt. It also records one remaining limit of the guard: it does not reject an
-invalid bare identifier (a reserved word or a name containing a space).
+**That second split no longer exists at all.** #317 retired the field-name hatch, so
+`format_model_name` is a pure `lowercase` fold with nothing to inherit: an unresolved FK target
+`"_Order"` now renders `REFERENCES "_order"`, exactly what `create_table` writes. The #306 rejection
+stands on its own footing instead — a PormG model name is a lowercase LOGICAL identifier, and
+`db_table` (#59) carries a physical name that is anything else. Same reasoning as the case rule, and
+the guard's message says so.
+
+So this file **pins** both rejections (the only assertions here that go red without the guards),
+**documents** the DDL/query agreement they buy, **pins the decoupling** that closed the underscore
+split at the root, and **characterizes** the case split as it still stands on the paths deliberately
+left exempt. It also records one remaining limit of the guard: it does not reject an invalid bare
+identifier (a reserved word or a name containing a space).
 
 All assertions render via mock PostgreSQL/SQLite connections; no live database.
 """
@@ -83,21 +90,24 @@ NameCaseDriver.connect_key = "model_name_case_mock"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # The guard, extended (#306): a positional name starting with '_' is also a declaration-time error.
-  # This is the assertion that was RED before #306 — the declaration used to succeed and produce a
-  # model whose created table and FK `REFERENCES` target disagreed, one character away from #300.
+  # It was originally the same defect as #300 one character away — the declaration succeeded and
+  # produced a model whose created table and FK `REFERENCES` target disagreed. #317 closed that at the
+  # root (see the decoupling testset below), so this is now a POLICY rejection: a model name is a
+  # lowercase logical identifier, and `db_table` carries a physical name that is anything else.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "positional name with a leading underscore is rejected (#306)" begin
     @test_throws PormG.ModelDefinitionError Model("_driver_scratch", id = IDField())
     @test_throws PormG.ModelDefinitionError Model("_order", id = IDField())
 
-    # Same actionability requirement as the case guard: the message names the offending value AND the
-    # spelling to declare instead (the same spelling the FK `REFERENCES` target would have used).
+    # Same actionability requirement as the case guard: the message names the offending value, the
+    # spelling to declare instead, AND the escape valve for a table genuinely named `_order`.
     err = try
       Model("_order", id = IDField()); nothing
     catch e; e end
     @test err isa PormG.ModelDefinitionError
     @test occursin("_order", err.msg)     # the name the user wrote
     @test occursin("order", err.msg)      # the name they should write
+    @test occursin("db_table", err.msg)   # …and how to keep the underscored physical table
 
     # A name failing BOTH checks (case AND underscore) must still suggest a spelling that passes on
     # RETRY — not just fix the one problem its own message names. Before this was pinned, the case
@@ -113,11 +123,11 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     @test occursin("Declare it as 'driver_scratch'", err_both.msg)
     @test !occursin("Declare it as '_driver_scratch'", err_both.msg)   # not the still-broken half-fix
 
-    # A double leading underscore (or a bare "_") is not one strip away from a valid FK reference the
-    # way a single underscore is: `format_model_name` strips only ONE, then itself rejects what's left
-    # if it still starts with '_' — so the "creates X, references Y" divergence this guard warns about
-    # can never actually happen for these names. The message says so instead of making that (wrong)
-    # claim, and never emits the unusable "Declare it as ''." that a naive full-strip would produce.
+    # An all-underscore name ("_", "___") strips to the empty string, and "Declare it as ''." is
+    # worse than no suggestion at all — the message omits that clause rather than emitting it.
+    # Any number of leading underscores is one rejection with one message (#317 removed the
+    # two-branch split, whose premise was that `format_model_name` stripped exactly one and then
+    # rejected the remainder — it strips none now).
     for bad in ("__order", "_", "___")
       err_multi = try
         Model(bad, id = IDField()); nothing
@@ -125,8 +135,36 @@ NameCaseDriver.connect_key = "model_name_case_mock"
       @test err_multi isa PormG.ModelDefinitionError
       @test occursin(bad, err_multi.msg)
       @test !occursin("Declare it as ''", err_multi.msg)
-      @test !occursin("REFERENCES", err_multi.msg)   # not the single-underscore FK-divergence story
+      @test occursin("db_table", err_multi.msg)      # still actionable: pin the physical name
     end
+    # `__order` DOES have a usable suggestion — all leading underscores are stripped for the hint,
+    # so it is one-shot correct rather than the still-rejected `_order` a single strip would give.
+    err_dbl = try; Model("__order", id = IDField()); nothing; catch e; e end
+    @test occursin("Declare it as 'order'", err_dbl.msg)
+
+    # No message may claim the FK-divergence story any more — it is not what happens for ANY of
+    # these names since #317 decoupled `format_model_name`.
+    for bad in ("_order", "__order", "_", "___", "_driver_scratch")
+      err_ref = try; Model(bad, id = IDField()); nothing; catch e; e end
+      @test !occursin("REFERENCES", err_ref.msg)
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The DECOUPLING that closed the underscore split at its root (#317). `format_model_name` no
+  # longer inherits the field-name hatch, so it rewrites nothing but case — and an unresolved
+  # String FK target renders the SAME identifier `create_table` writes. Before, these disagreed.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "format_model_name is a pure case fold (#317)" begin
+    @test Models.format_model_name("_Order")  == "_order"    # was: "order" — the split
+    @test Models.format_model_name("__order") == "__order"   # was: ModelDefinitionError
+    @test Models.format_model_name("a__b")    == "a__b"      # was: ModelDefinitionError
+    @test Models.format_model_name("Driver")  == "driver"    # the fold itself is unchanged
+
+    # The property that matters: an FK pointing at an unresolved `_`-prefixed target references the
+    # table that name denotes, not a stripped variant of it.
+    fk = Models.ForeignKey("_Fk317_Parent", pk_field = "id")
+    @test Models.fk_target_table(fk) == "_fk317_parent"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

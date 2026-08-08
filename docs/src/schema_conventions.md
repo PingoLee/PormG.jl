@@ -47,21 +47,33 @@ Models.Model("Driver_Profile", driverid = Models.IDField())
     before the check existed, such a model migrated `driver_profile` and then queried
     `"Driver_Profile"` — two different tables on PostgreSQL.
 
-A positional name given with a **leading underscore** is rejected the same way, and for a related
-reason (#306): a `ForeignKey` targeting the model renders its `REFERENCES` through
-`format_model_name`, which strips one leading underscore as the reserved-word escape hatch borrowed
-from field-name handling — but the table itself is created with the name as stored. `Model("_order",
-…)` would create table `_order` while a foreign key pointing at it referenced `order` instead:
+A positional name given with a **leading underscore** is rejected the same way, and for the same
+reason: a model name is a lowercase **logical** identifier, and an underscore-prefixed name is not a
+shape PormG generates.
 
 ```julia
 Models.Model("_order", id = Models.IDField())
 # ModelDefinitionError: The model name '_order' starts with '_'; …
 ```
 
-Unlike a field name, a positional model name is a plain string — never a Julia kwarg key — so it
-never needed the underscore escape hatch in the first place. That escape hatch is real for *field*
-names (`_end = ...` declares column `end`, documented on `Model`'s docstring) — it just does not
-extend to the model name itself.
+If the physical table really is called `_order`, pin it — the same escape valve as for case:
+
+```julia
+Order = Models.Model("order", db_table = "_order", id = Models.IDField())
+```
+
+!!! note "This rejection used to guard a bug; it is now a convention"
+    It arrived as #306, when a `ForeignKey` targeting the model rendered its `REFERENCES` through
+    `format_model_name`, which stripped one leading underscore — the escape hatch borrowed from
+    field-name handling — while the table itself was created with the name as stored. So
+    `Model("_order", …)` created table `_order` and referenced `order`: a different table, or a failed
+    constraint. #317 retired the field-name hatch, so `format_model_name` is now a pure case fold with
+    nothing to inherit and the two sides agree. The rejection was kept because "lowercase logical name,
+    explicit `db_table` for anything else" is the convention — not because the split is still reachable.
+
+Field names follow the same principle one level down, with `db_column` in place of `db_table`: a
+leading underscore is rejected there too (#317). See
+[Field Naming Rules](fields.md#Field-Naming-Rules).
 
 ### Pinning an explicit table name with `db_table`
 
@@ -252,6 +264,15 @@ and querying `"Driver_Profile"` — and why such a name is now rejected at decla
     identifier. That part is **not** checked: `Models.Model("order", …)` (a reserved word) and
     `Models.Model("driver profile", …)` (a space) are accepted and then emit invalid DDL. Stick to
     lowercase `snake_case`.
+
+**Column** identifiers, by contrast, are quoted everywhere, so a column may be named anything the
+database accepts — including a SQL reserved word or a Julia keyword. Declare the field under a legal
+Julia identifier and name the column with `db_column`; that is the sanctioned way to address a column
+whose name is not a legal PormG field name (#317):
+
+```julia
+end_ = Models.DateTimeField(db_column = "end")   # field `end_` → column "end"
+```
 
 Declaring lowercase snake_case (the house style) yields all-lowercase identifiers. The example below
 is the **SQLite** shape, which carries its foreign keys inline in `CREATE TABLE`. PostgreSQL renders

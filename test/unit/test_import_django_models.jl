@@ -68,7 +68,10 @@ end
         @test occursin("related_name=\"reportes_respondidos\"", generated)
         @test occursin("usuario_lido_em = Models.DateTimeField(blank=true, null=true)", generated)
         @test occursin("Cust_adminHOD = Models.Model(\"cust_adminhod\"", generated)
-        @test occursin("_id = Models.AutoField()", generated)
+        # `id` is emitted as `id`, not `_id` (#317): it was only ever prefixed because PormG's
+        # `reserved_words` list wrongly carried it — it is an ordinary Julia identifier.
+        @test occursin("id = Models.AutoField()", generated)
+        @test !occursin("_id = Models.AutoField()", generated)
         @test occursin("user_id = Models.OneToOneField(\"CustomUser\"", generated)
         @test occursin("criado_em = Models.DateTimeField(auto_now=true)", generated)
         @test !occursin("objects = Models.Manager", generated)

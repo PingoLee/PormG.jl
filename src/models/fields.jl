@@ -180,7 +180,7 @@ The `IDField` is typically used as the primary key for models and automatically 
 Basic usage (most common):
 ```julia
 User = Models.Model(
-    _id::PormGField = IDField()
+    id::PormGField = IDField()
     name::PormGField = CharField(max_length=100)
     email::PormGField = EmailField()
 )
@@ -189,7 +189,7 @@ User = Models.Model(
 Using GENERATED ALWAYS (stricter identity):
 ```julia
 Order = Models.Model(
-    _id::PormGField = IDField(generated_always=true)
+    id::PormGField = IDField(generated_always=true)
     customer_id::PormGField = ForeignKey("Customer")
     order_date::PormGField = DateTimeField()
 )
@@ -302,7 +302,7 @@ The two "requires" above are enforced, not advisory — `set_models` raises `Mod
 Basic foreign key relationship:
 ```julia
 Article = Models.Model(
-    _id = IDField()
+    id = IDField()
     title = CharField(max_length=200)
     author = ForeignKey("User")
     category = ForeignKey("Category", on_delete=CASCADE)
@@ -312,8 +312,7 @@ Article = Models.Model(
 Foreign key allowing NULL values:
 ```julia
 Product = Models.Model(
-    _id = IDField()
-    _id = IDField()
+    id = IDField()
     name = CharField(max_length=100)
     category = ForeignKey("Category", null=true, blank=true, on_delete=SET_NULL)
 )
@@ -322,7 +321,7 @@ Product = Models.Model(
 Multiple foreign keys to same model (requires related_name):
 ```julia
 Message = Models.Model(
-    _id = IDField()
+    id = IDField()
     sender = ForeignKey("User", related_name="sent_messages")
     recipient = ForeignKey("User", related_name="received_messages")
     content = TextField()
@@ -520,7 +519,7 @@ function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
     through,
     related_name === nothing ? nothing : String(related_name),
     # Case-PRESERVING (#59): this used to run through `format_model_name`, which silently lowercased
-    # (and stripped a leading underscore from) a user-supplied physical through-table name — the
+    # a user-supplied physical through-table name (and, until #317, stripped a leading underscore) — the
     # opposite policy from model-level `db_table`, which carries an arbitrary legacy spelling
     # verbatim. Both seams express the same intent ("this table is called X"), so they now behave the
     # same way. Empty-string-as-unset mirrors `_apply_db_table!`.
@@ -618,13 +617,13 @@ The two "requires" above are enforced, not advisory — `set_models` raises `Mod
 Basic one-to-one relationship (User Profile pattern):
 ```julia
 User = Models.Model(
-    _id = IDField()
+    id = IDField()
     username = CharField(max_length=150, unique=true)
     email = EmailField()
 )
 
 UserProfile = Models.Model(
-    _id = IDField()
+    id = IDField()
     user = OneToOneField("User", on_delete=CASCADE)
     bio = TextField(blank=true)
     avatar = ImageField(blank=true)
@@ -635,13 +634,13 @@ UserProfile = Models.Model(
 One-to-one with null values allowed:
 ```julia
 Employee = Models.Model(
-    _id = IDField()
+    id = IDField()
     name = CharField(max_length=100)
     department = CharField(max_length=50)
 )
 
 EmployeeSettings = Models.Model(
-    _id = IDField()
+    id = IDField()
     employee = OneToOneField("Employee", null=true, blank=true, on_delete=SET_NULL)
     email_notifications = BooleanField(default=true)
     theme_preference = CharField(max_length=20, default="light")
@@ -651,13 +650,13 @@ EmployeeSettings = Models.Model(
 Extending a model without modifying it:
 ```julia
 Product = Models.Model(
-    _id = IDField()
+    id = IDField()
     name = CharField(max_length=200)
     price = DecimalField(max_digits=10, decimal_places=2)
 )
 
 ProductDetails = Models.Model(
-    _id = IDField()
+    id = IDField()
     product = OneToOneField("Product", on_delete=CASCADE, related_name="details")
     detailed_description = TextField()
     technical_specs = TextField()
@@ -718,8 +717,9 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
 
   # Resolve db_index based on db_constraint
   db_index = db_index || !db_constraint
-  # Normalize pk_field (strip one leading underscore for reserved-word escaping), matching
-  # ForeignKey — so a referenced parent field resolves to its stored (stripped) key (#50).
+  # Validate pk_field, matching ForeignKey. It is a REFERENCE to a key on the parent model, so
+  # `format_fild_name` returns it verbatim since #317 — that is what lets it name a `_id`-style key
+  # on a model built by introspection (#50).
   pk_field = format_fild_name(pk_field)
 
   return sOneToOneField(
@@ -911,7 +911,7 @@ The `CharField` is the most commonly used field for storing textual data with a 
 Basic string field:
 ```julia
 User = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     username = CharField(max_length=150, unique=true),
     first_name = CharField(max_length=50),
     last_name = CharField(max_length=50)
@@ -921,7 +921,7 @@ User = Models.Model(
 String field with choices (enumeration):
 ```julia
 Order = Models.Model(
-    _id = IDField()
+    id = IDField()
     status = CharField(
         max_length=20,
         choices=(
@@ -940,7 +940,7 @@ Order = Models.Model(
 Field with a human-readable label (the column name follows the field name, "sku"):
 ```julia
 Product = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     name = CharField(max_length=200),
     sku = CharField(
         max_length=50,
@@ -954,7 +954,7 @@ Product = Models.Model(
 Indexed field for performance:
 ```julia
 Article = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     title = CharField(max_length=200, db_index=true),
     slug = CharField(max_length=200, unique=true, db_index=true),
     content = TextField()
@@ -974,7 +974,7 @@ priority_choices = (
 )
 
 Task = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     title = CharField(max_length=200),
     priority = CharField(max_length=10, choices=priority_choices, default="medium")
 )
@@ -1104,7 +1104,7 @@ The `IntegerField` stores whole numbers within the 32-bit signed integer range (
 Basic integer field:
 ```julia
 Product = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     name = CharField(max_length=200),
     quantity = IntegerField(default=0),
     price_cents = IntegerField()  # Store price in cents to avoid decimals
@@ -1114,7 +1114,7 @@ Product = Models.Model(
 Integer field with constraints:
 ```julia
 User = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     username = CharField(max_length=150, unique=true),
     age = IntegerField(null=true, blank=true),
     score = IntegerField(default=0, db_index=true)
@@ -1124,7 +1124,7 @@ User = Models.Model(
 Rating system:
 ```julia
 Review = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     product = ForeignKey("Product"),
     rating = IntegerField(default=5),  # 1-5 star rating
     helpful_votes = IntegerField(default=0)
@@ -1206,7 +1206,7 @@ re-derived whenever the table is recreated during an alter.
 # Examples
 ```julia
 Standing = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     position = PositiveSmallIntegerField(default=1),
     points = PositiveSmallIntegerField(default=0)
 )
@@ -1289,7 +1289,7 @@ engine adds or drops when a column's type transitions into or out of this field.
 # Examples
 ```julia
 Lap_times = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     lap = PositiveIntegerField(default=1),
     milliseconds = PositiveIntegerField()
 )
@@ -1363,7 +1363,7 @@ The `BigIntegerField` stores large whole numbers within the 64-bit signed intege
 Large identifier field:
 ```julia
 Analytics = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     user_id = BigIntegerField(db_index=true),
     session_id = BigIntegerField(),
     timestamp_ms = BigIntegerField()  # Unix timestamp in milliseconds
@@ -1373,7 +1373,7 @@ Analytics = Models.Model(
 Population and statistics:
 ```julia
 Country = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     name = CharField(max_length=100),
     population = BigIntegerField(null=true),
     gdp_usd = BigIntegerField(null=true),  # GDP in USD cents
@@ -1384,7 +1384,7 @@ Country = Models.Model(
 Large external identifiers:
 ```julia
 SocialMedia = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     user = ForeignKey("User"),
     twitter_id = BigIntegerField(unique=true, null=true),
     facebook_id = BigIntegerField(unique=true, null=true),
@@ -1467,7 +1467,7 @@ The `BooleanField` stores binary true/false values and is ideal for flags, switc
 Basic boolean flags:
 ```julia
 User = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     username = CharField(max_length=150),
     is_active = BooleanField(default=true),
     is_staff = BooleanField(default=false),
@@ -1545,7 +1545,7 @@ The `DateField` stores calendar dates in YYYY-MM-DD format and is ideal for birt
 Basic date fields:
 ```julia
 User = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     username = CharField(max_length=150),
     birth_date = DateField(null=true, blank=true),
     join_date = DateField(auto_now_add=true),
@@ -1556,7 +1556,7 @@ User = Models.Model(
 Event and scheduling:
 ```julia
 Event = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     title = CharField(max_length=200),
     event_date = DateField(db_index=true),
     registration_deadline = DateField(),
@@ -1567,7 +1567,7 @@ Event = Models.Model(
 Business dates:
 ```julia
 Invoice = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     customer = ForeignKey("Customer"),
     issue_date = DateField(auto_now_add=true),
     due_date = DateField(),
@@ -1972,7 +1972,7 @@ Basic password field:
 ```julia
 # Define a User model with password
 User = Models.Model(
-    _id = Models.IDField(),
+    id = Models.IDField(),
     username = Models.CharField(max_length=150, unique=true),
     email = Models.EmailField(unique=true),
     password = Models.PasswordField()
@@ -2559,7 +2559,7 @@ Values are validated against the standard UUID format (8-4-4-4-12 hex digits).
 using UUIDs
 
 Session = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     session_token = UUIDField(unique=true, db_index=true),
     user_id = ForeignKey("User")
 )
@@ -2648,7 +2648,7 @@ with `http://`, `https://`, or `ftp://`.
 # Examples
 ```julia
 Circuit = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     name = CharField(max_length=200),
     wiki_url = URLField(null=true, blank=true, verbose_name="Wikipedia Link")
 )
@@ -2728,7 +2728,7 @@ human-readable URL fragments derived from titles or names.
 # Examples
 ```julia
 Race = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     name = CharField(max_length=200),
     slug = SlugField(unique=true, verbose_name="URL Slug")
 )
@@ -2807,7 +2807,7 @@ being sent to the database.
 # Examples
 ```julia
 Race = Models.Model(
-    _id = IDField(),
+    id = IDField(),
     name = CharField(max_length=200),
     metadata = JSONField(null=true, blank=true, verbose_name="Extra Data")
 )

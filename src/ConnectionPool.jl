@@ -1153,54 +1153,168 @@ function release_connection(pool::PormGSQLite, conn)
   return false
 end
 
+"""
+    _slot_index_of(pool, conn) -> Union{Int, Nothing}
+
+Index of the slot currently holding `conn`, matched by identity, read under `pool.lock`.
+"""
+_slot_index_of(pool, conn) = Base.lock(pool.lock) do
+  findfirst(c -> c === conn, pool.connections)
+end
+
+"""
+    _swap_slot!(pool, i, conn, new_conn) -> Bool
+
+Put `new_conn` into slot `i`, but only while that slot still holds `conn`. Returns whether the swap
+happened.
+
+The re-check is what makes renewing OUTSIDE `pool.lock` safe (#327). Between releasing the lock to
+renew and re-taking it to install the result, a concurrent recovery — `_discard_connection!` from an
+abandoned await, or another renewal — may have emptied or replaced the slot. Installing blindly
+would clobber a slot that is no longer ours and strand whatever now occupies it.
+"""
+_swap_slot!(pool, i::Int, conn, new_conn)::Bool = Base.lock(pool.lock) do
+  pool.connections[i] === conn || return false
+  pool.connections[i] = new_conn
+  return true
+end
+
+# Renewal runs OUTSIDE `pool.lock` (#327). It used to hold the lock across
+# `backend_renew_connection`, which on PostgreSQL is `LibPQ.reset!` — a synchronous reconnect that
+# first cancels and then takes the connection's own semaphore. After an abandoned query that
+# semaphore is held for the query's entire remaining life, so a renewal stalled EVERY task on the
+# pool, not just this one.
+#
+# What that unlocked window costs is NOT the same answer for both callers:
+#
+#   * `_renew_or_discard_connection!` (#71) renews a connection the transaction still holds. It is
+#     leased throughout, so no borrower can acquire it, and `_swap_slot!`'s re-check covers the only
+#     things that can touch the slot meanwhile — `_discard_connection!` from an abandoned await, or
+#     another renewal. This is the caller that goes on to CLOSE the old handle, and it may.
+#   * `fetch`'s reconnect-and-retry (#268) renews a connection `await_result`'s `finally` has
+#     ALREADY released, so the slot is available and a concurrent borrower may acquire it inside the
+#     window. `_swap_slot!` does not see that: acquiring flips `available[i]`, it does not change
+#     `pool.connections[i]`, so the identity re-check still passes and the swap proceeds under the
+#     borrower. Tolerable only because of what that caller does NOT do — it never closes the old
+#     handle, so the borrower keeps a valid one, and `acquire_connection`'s liveness probe renews it
+#     again if it really is dead.
+#
+# So the re-check makes the SLOT safe for both; leasing is what makes the HANDLE safe for the one
+# caller that frees it. A future caller wanting to close a handle it has already released needs more
+# than this.
 function reconnect_db(pool::PormGPostgres, conn)
   _run_before_connect!(pool)
 
-  reconnect = Base.lock(pool.lock) do
-    for i in 1:length(pool.connections)
-      if pool.connections[i] === conn
-        new_conn = try
-          # Reset in place, or recreate if the reset fails (handled in the extension).
-          backend_renew_connection(pool, conn)
-        catch e
-          @error "Failed to renew PG connection $i: $e"
-          nothing
-        end
-        if new_conn !== nothing
-          pool.connections[i] = new_conn
-          return new_conn
-        end
-      end
-    end
+  i = _slot_index_of(pool, conn)
+  if i === nothing
+    @error "PG Connection not found in the pool for reconnection"
+    return nothing
   end
-  reconnect !== nothing && return reconnect
-  @error "PG Connection not found in the pool for reconnection"
-  return nothing
+
+  new_conn = try
+    # Reset in place, or recreate if the reset fails (handled in the extension).
+    backend_renew_connection(pool, conn)
+  catch e
+    @error "Failed to renew PG connection $i: $e"
+    nothing
+  end
+  new_conn === nothing && return nothing
+
+  # `reset!` returns the SAME handle on success, and swapping a slot to the value it already holds
+  # is a no-op — but it still has to go through the re-check, or a renewal racing a discard would
+  # resurrect a slot that was deliberately emptied.
+  if !_swap_slot!(pool, i, conn, new_conn)
+    @debug "PG slot changed during renewal; discarding the freshly renewed connection"
+    new_conn === conn || _close_driver_handle!(pool, new_conn)
+    return nothing
+  end
+  return new_conn
 end
 
+# Same restructuring as the PostgreSQL method above, for the same reason: opening a fresh SQLite
+# handle touches the filesystem and must not hold the pool-wide lock while it does. Note the
+# extension's renewal does NOT touch the old handle — it is `_create_sqlite_connection(...)` — so
+# renewal was never the unsafe step here; the close that follows it in
+# `_renew_or_discard_connection!` was, and that now goes through `_close_driver_handle!` (#327).
 function reconnect_db(pool::PormGSQLite, conn)
   _run_before_connect!(pool)
 
-  reconnect = Base.lock(pool.lock) do
-    for i in 1:length(pool.connections)
-      if pool.connections[i] === conn
-        is_reader_slot = pool.split_read_write && i != pool.writer_slot
-        new_conn = try
-          # SQLite has no in-place reset; the extension opens a fresh DB handle.
-          backend_renew_connection(pool, conn; read_only = is_reader_slot)
-        catch e
-          @error "Failed to recreate SQLite connection $i: $e"
-          nothing
-        end
-        if new_conn !== nothing
-          pool.connections[i] = new_conn
-          return new_conn
-        end
+  i = _slot_index_of(pool, conn)
+  if i === nothing
+    @error "SQLite Connection not found in the pool for reconnection"
+    return nothing
+  end
+  # Read under the lock with the index, since `writer_slot` is pool state.
+  is_reader_slot = Base.lock(() -> pool.split_read_write && i != pool.writer_slot, pool.lock)
+
+  new_conn = try
+    # SQLite has no in-place reset; the extension opens a fresh DB handle.
+    backend_renew_connection(pool, conn; read_only = is_reader_slot)
+  catch e
+    @error "Failed to recreate SQLite connection $i: $e"
+    nothing
+  end
+  new_conn === nothing && return nothing
+
+  if !_swap_slot!(pool, i, conn, new_conn)
+    @debug "SQLite slot changed during renewal; discarding the freshly opened connection"
+    new_conn === conn || _close_driver_handle!(pool, new_conn)
+    return nothing
+  end
+  return new_conn
+end
+
+"""
+    _close_driver_handle!(pool, conn; close_seconds) -> Nothing
+
+Close a driver handle the pool has finished with, **but never while the driver is still using it**
+(#327).
+
+On SQLite that is not a theoretical concern. `SQLite.jl`'s `close` runs `finalize_statements!`
+first — `sqlite3_finalize` over the DB's registered statements — so closing a handle the global
+worker is mid-`sqlite3_step` on finalizes a statement another thread is executing (undefined
+behaviour in SQLite's C API), races on the statement registry, and nulls the handle that any
+still-QUEUED statement will then run against. Reproduced: a second `Ctrl+C` during a transaction
+renewed the connection and closed the old handle with the cleanup `ROLLBACK` still in the queue, and
+the `ROLLBACK` then executed against the closed handle.
+
+So when the worker still has work for `conn`, the close is DETACHED and deferred until the ledger
+drains. The pool slot is not deferred with it — callers have already emptied or replaced the slot by
+the time they get here, so nothing can borrow this handle again either way; only its destruction
+waits.
+
+Everything else — PostgreSQL, and a SQLite connection the worker is done with — closes immediately,
+exactly as before. That matters: `_renew_or_discard_connection!` must stay synchronous for the
+ordinary failed-`ROLLBACK` case (#71), and it does.
+
+`close_seconds` bounds the wait. Expiry does not make the close safe, it makes it bounded: the
+budget is deliberately long (see `_ABANDON_CLOSE_SECONDS`), because the cost of waiting is one
+parked task and the cost of closing early is a use-after-free.
+"""
+function _close_driver_handle!(pool::Union{PormGPostgres, PormGSQLite}, conn;
+                               close_seconds::Real = _ABANDON_CLOSE_SECONDS)
+  if pool isa PormGSQLite && _sqlite_outstanding(conn) > 0
+    Threads.@spawn begin
+      # `_wait_settled` polls on its own Timer and never touches the driver, so a connection whose
+      # work never drains costs a bounded wait rather than a wedged task.
+      _wait_settled(() -> _sqlite_outstanding(conn) == 0, close_seconds)
+      # invokelatest, like `_recover_abandoned_connection!`'s deferred close: this task is created
+      # at one world age and may outlive the definition of the `close` method it needs (Revise, and
+      # the unit suite's mock handles).
+      try
+        Base.invokelatest(close, conn)
+      catch close_error
+        @debug "Error closing a deferred SQLite handle" exception=close_error
       end
     end
+    return nothing
   end
-  reconnect !== nothing && return reconnect
-  @error "SQLite Connection not found in the pool for reconnection"
+
+  try
+    close(conn)
+  catch close_error
+    @debug "Error closing connection" exception=close_error
+  end
   return nothing
 end
 
@@ -1232,14 +1346,9 @@ function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; clo
     return false
   end
   # Close OUTSIDE the pool lock: a driver close can block on I/O. On SQLite this also
-  # releases the database file write-lock an aborted `BEGIN IMMEDIATE` may still hold.
-  if close_handle
-    try
-      close(conn)
-    catch close_error
-      @debug "Error closing discarded connection" exception=close_error
-    end
-  end
+  # releases the database file write-lock an aborted `BEGIN IMMEDIATE` may still hold —
+  # and is deferred if the global worker still has statements for this handle (#327).
+  close_handle && _close_driver_handle!(pool, conn)
   found || @warn "Connection to discard not found in the pool - it may already have been replaced"
   return found
 end
@@ -1271,13 +1380,13 @@ function _renew_or_discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, 
   else
     if new_conn !== conn
       # A brand-new handle replaced the dirty one (always on SQLite; on PG only when
-      # reset! fell back to a fresh Connection). Close the old handle now rather than
-      # waiting for GC — on SQLite it may still hold the database file write-lock.
-      try
-        close(conn)
-      catch close_error
-        @debug "Error closing replaced connection" exception=close_error
-      end
+      # reset! fell back to a fresh Connection). Close the old handle rather than waiting for GC —
+      # on SQLite it may still hold the database file write-lock.
+      #
+      # Through the seam, not a bare `close`: this is the site where a second Ctrl-C freed a handle
+      # the SQLite worker was still stepping (#327). The slot has already been swapped by
+      # `reconnect_db`, so deferring the close costs nothing a borrower can observe.
+      _close_driver_handle!(pool, conn)
     end
     release_connection(pool, new_conn)
   end
@@ -1414,6 +1523,43 @@ const _sqlite_async_worker_lock = ReentrantLock()
 const _sqlite_async_worker_started = Ref(false)
 const _sqlite_async_work_queue = Channel{SQLiteAsyncWorkItem}(2048)
 
+# ── Outstanding-work ledger, per connection (#327) ───────────────────────────
+#
+# Answers ONE question, for any caller, without a driver handle: does the global worker still have
+# work for this connection? That is what makes `close` safe or unsafe, and nothing else in the pool
+# can see it — the worker is a separate task, and `backend_is_alive` says nothing about it.
+#
+# Counts QUEUED items, not just the executing one. That distinction is the whole bug: a second
+# Ctrl-C abandons the cleanup ROLLBACK's await while the ROLLBACK is still sitting in the queue
+# behind the interrupted query, and the renewal then closed the handle out from under both. The
+# reproduction showed the ROLLBACK executing AFTER the close, against a finalized handle.
+#
+# `IdDict`, keyed by identity: connections are stored untyped (`Any`) and a driver handle is not
+# required to be hashable by value. Entries are deleted at zero, so the ledger cannot grow with the
+# number of connections a long-lived process has ever opened.
+const _sqlite_pending = IdDict{Any, Int}()
+const _sqlite_pending_lock = ReentrantLock()
+
+_sqlite_pending_inc!(conn) = Base.@lock _sqlite_pending_lock begin
+  _sqlite_pending[conn] = get(_sqlite_pending, conn, 0) + 1
+end
+
+function _sqlite_pending_dec!(conn)
+  Base.@lock _sqlite_pending_lock begin
+    n = get(_sqlite_pending, conn, 0) - 1
+    n > 0 ? (_sqlite_pending[conn] = n) : delete!(_sqlite_pending, conn)
+  end
+  return nothing
+end
+
+"""
+    _sqlite_outstanding(conn) -> Int
+
+How many statements the global SQLite worker still has for `conn` — queued or executing (#327).
+Zero means the worker is provably off this connection and the handle can be closed.
+"""
+_sqlite_outstanding(conn)::Int = Base.@lock _sqlite_pending_lock get(_sqlite_pending, conn, 0)
+
 function _ensure_sqlite_async_worker!()
   _sqlite_async_worker_started[] && return
 
@@ -1423,16 +1569,31 @@ function _ensure_sqlite_async_worker!()
     Threads.@spawn begin
       while true
         item = take!(_sqlite_async_work_queue)
-        try
+        # Build the response and drop the ledger entry BEFORE waking the awaiter (#327). Ordering,
+        # not bookkeeping: it is what makes "my await returned" IMPLY "the ledger is drained", and
+        # callers rely on that implication. `_renew_or_discard_connection!` reads the ledger the
+        # moment a failed ROLLBACK's await comes back, and #71/#139 both assert the close it does
+        # there is SYNCHRONOUS. Decrementing after the `put!` leaves the awaiter free to resume
+        # first, see stale outstanding work, and defer that close instead — rarely, which is the
+        # worst frequency a guarantee can fail at. The decrement is safe the instant
+        # `backend_execute` returns: the worker is off the handle, and the `put!` below touches only
+        # the response channel.
+        response = try
           # Dispatches into the SQLite extension's backend_execute (materialized + retry).
           # invokelatest: this task lives forever and Julia tasks run in the world age
           # they were created in, so without it the worker cannot see backend_execute
           # methods defined after it spawned (Revise hot-reloads, test mocks).
-          result = Base.invokelatest(backend_execute, item.pool, item.conn, item.sql, item.params)
-          put!(item.response, SQLiteAsyncResponse(true, result))
+          SQLiteAsyncResponse(true, Base.invokelatest(backend_execute, item.pool, item.conn, item.sql, item.params))
         catch e
-          put!(item.response, SQLiteAsyncResponse(false, e))
+          SQLiteAsyncResponse(false, e)
+        finally
+          # The matching half of the increment in `sqlite_execute_async`. In the `finally` so it also
+          # covers a `backend_execute` that threw — and so a response channel nobody is listening to
+          # any more (the awaiting task may have been killed by the very Ctrl-C this exists for)
+          # cannot leak a count and defer that connection's close forever.
+          _sqlite_pending_dec!(item.conn)
         end
+        put!(item.response, response)
       end
     end
 
@@ -1453,8 +1614,24 @@ function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params)
   response = Channel{Any}(1)
   work_item = SQLiteAsyncWorkItem(pool, conn, sql, params, response)
 
+  # Count this statement as outstanding BEFORE it can reach the worker (#327), and synchronously —
+  # on the caller's task, not inside the `@async` below. Doing it in the task would leave a window
+  # in which the item is queued but uncounted, and that window is exactly when a concurrent renewal
+  # would decide the handle is idle and close it.
+  _sqlite_pending_inc!(conn)
+
   return @async begin
-    put!(_sqlite_async_work_queue, work_item)
+    try
+      put!(_sqlite_async_work_queue, work_item)
+    catch
+      # Balance the increment on the ONE path the worker never sees: `put!` threw, so no work item
+      # was ever dequeued and the worker's own `finally` will not run for it. Scoped to the `put!`
+      # itself rather than tracked with a flag across the whole body — the moment `put!` returns the
+      # worker owns the decrement unconditionally, so there is no in-between state to get wrong and
+      # no way for both halves to count the same statement down.
+      _sqlite_pending_dec!(conn)
+      rethrow()
+    end
     result = take!(response)
     if result isa SQLiteAsyncResponse
       result.success && return result.payload

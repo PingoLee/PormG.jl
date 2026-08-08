@@ -27,6 +27,8 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField, UniqueConstraint
+using PormG.QueryBuilder: bulk_insert
+import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
 # SQL and to fire the backend-capability guards. No DB, no pool.
@@ -63,6 +65,13 @@ end
 const DOCERR_STATUS_PG, DOCERR_DRIVER_PG, DOCERR_RESULT_PG = _docerr_models("docerr_pg")
 const DOCERR_STATUS_SL, DOCERR_DRIVER_SL, DOCERR_RESULT_SL = _docerr_models("docerr_sl")
 
+# #331 — a model of its own rather than a `default` bolted onto DOCERR_RESULT_*: a defaulted field
+# there would silently change what every other case's model injects on a write.
+const DOCERR_STINT_PG = let m = Model("docerr_stint_docerr_pg",
+        id = IDField(), driver = CharField(), laps = IntegerField(default = 0))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
 # (docs claim this test pins, expected type, the call that must raise it).
 # Keep the doc reference exact — it is how a maintainer finds the sentence to update when a type
 # legitimately changes.
@@ -94,6 +103,27 @@ const DOCERR_CASES = [
         UnsafeMutationError,
         () -> DOCERR_RESULT_PG.objects.filter("resultid" => 1).limit(5).
             update("points" => 0, show_query = :dict),
+    ),
+    # #331 — `write/bulk.md` → Defaults and Auto Values promises that a blank cell in a PRESENT,
+    # `null=false` column raises "null values are not allowed" as *PormG's own validation, not a
+    # database constraint error*, and that it is the same error `create()` raises. Build-time:
+    # bulk_insert runs its per-row validation sweep even under show_query, so the mock is enough —
+    # which is also what makes the "not a database error" half of the claim demonstrable here.
+    (
+        "write/bulk.md — a blank cell in a present NOT NULL defaulted column is a null, not the default",
+        InvalidValueError,
+        () -> bulk_insert(DOCERR_STINT_PG.objects,
+                          DataFrames.DataFrame(driver = ["Senna"], laps = [missing]),
+                          show_query = :dict),
+    ),
+    # A control, not a regression: create() already behaved this way, and #331 aligned the bulk
+    # paths onto it. It is here so the two halves of the documented equivalence are pinned
+    # together — if create() ever drifts, the claim in write/bulk.md becomes false too.
+    (
+        "write/create.md — an explicit `nothing` on a NOT NULL defaulted field is a null, not the default",
+        InvalidValueError,
+        () -> DOCERR_STINT_PG.objects.create("driver" => "Senna", "laps" => nothing,
+                                             show_query = :dict),
     ),
     (
         "read/filters_and_aggregates.md — a JSON path key with spaces is not addressable",

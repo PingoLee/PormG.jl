@@ -129,6 +129,12 @@ function _is_auto_generated_bulk_primary_key(field_meta)
     getfield(field_meta, :auto_increment)
 end
 
+# The single deliberate exception to the #331 rule ("a column the DataFrame carries is caller data;
+# PormG never rewrites its cells"): an auto-generated primary key column whose values are ALL blank
+# counts as ABSENT and is dropped from `mapping`/`fields_df` entirely, so the backend allocates the
+# ids. Note it REMOVES the column rather than rewriting cells, so the rule itself still holds — a
+# blank the caller wrote is never silently replaced by a different value. Mixed blank/explicit stays
+# a hard error. Documented for users in docs/src/write/bulk.md → Auto-Generated Primary Keys.
 function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
   model::PormGModel,
   fields_df::Vector{String},
@@ -411,7 +417,34 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   fields_df::Vector{String} = []
   mapping = Dict{String, String}() # model_field => df_column
 
-  function resolve_fill_value(f_meta, operation::Symbol, settings)
+  # What PormG fills into a column the DataFrame does NOT carry: a static `default`, an
+  # auto_now/auto_now_add timestamp, or a UUID `auto_add` value. Returns (should_fill, value).
+  #
+  # #331: this is consulted ONLY where the field has no mapped source column in the frame — both
+  # call sites below are guarded on exactly that (`!haskey(mapping, field)` in one arm, the
+  # not-in-`fields_df` arm in the other, where `mapping ⊆ fields_df` makes it equivalent). A column
+  # the field IS mapped to holds caller-authored data and is never rewritten, so there is nothing
+  # to ask about it — hence the name. The pre-#331 signature re-declared `operation`/`settings` as
+  # parameters that shadowed the enclosing ones with the same values, which read as if a caller
+  # could vary them; they come from the enclosing scope now.
+  #
+  # KNOWN HOLE (#335), pre-existing and NOT closed by #331: the injection sites write to
+  # `df[!, field]`, using the field's own name as the frame column. If an explicit `columns=` Pair
+  # maps some OTHER field to a source column that happens to be named `field`, that write lands on
+  # the column the other field reads from and destroys the caller's values. E.g.
+  # `columns = ["laps" => "pit_stops"]` on a model that also declares a defaulted `laps`:
+  # `pit_stops` binds `laps`'s default instead of the frame's numbers. Narrow (it needs the name
+  # collision) but silent. The guard belongs at the injection sites, not here.
+  #
+  # Second hole (#334): the UUID branch below calls `uuid4()` ONCE per field, and the injection
+  # sites broadcast that one value across the frame — so every row of an `auto_add` UUID column
+  # gets the same value, colliding immediately on a primary key. Correct for the temporal fills
+  # this idiom was written for (one `now()` per batch is intentional), wrong for UUIDs.
+  #
+  # The chain is deliberately EXCLUSIVE and default-first, mirroring `_prepare_row_insert!`
+  # (execution.jl:557-572): a field carrying BOTH a static `default` and `auto_now` takes the
+  # default, on the single-row and bulk paths alike.
+  function resolve_absent_column_fill(f_meta)
     if f_meta.default !== nothing
       return true, f_meta.default
     elseif f_meta.type == "TIMESTAMPTZ"
@@ -508,22 +541,49 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
     f_meta = model.fields[field]
     
     if in(field, fields_df)
-      if haskey(mapping, field)
-        # Field exists in mapping (and DF). Check if we should fill nulls with defaults.
-        col_name = mapping[field]
-        should_apply_default, fill_value = resolve_fill_value(f_meta, operation, settings)
-
-        if should_apply_default
-          # Mutate the column to replace missing/nothing with default
-          # We only do this if it's already there or if we really need it
-          df[!, col_name] = map(x -> x |> ismissing || x |> isnothing ? fill_value : x, df[!, col_name])
-        end
-      else
-        # Field is in fields_df (requested) but not in mapping (missing in DF)
-        # Check if we can auto-populate it
-        should_auto_populate, fill_value = resolve_fill_value(f_meta, operation, settings)
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # #331 — THE ONE RULE, for a field that TAKES PART in the write: PormG fills a value only
+      # when the DataFrame has no column for that field. A column that IS present is
+      # caller-authored data, and PormG never rewrites its cells — not for a static `default`,
+      # not for `auto_now`/`auto_now_add`, not for a UUID `auto_add`; on :insert, :copy and
+      # :update alike; nullable or not.
+      #
+      # "Takes part in the write" is what `in(field, fields_df)` above means: auto-detected from
+      # the frame, or named in an explicit `columns=`. A field `columns=` left out is out of
+      # scope by the caller's own instruction and is handled in the other arm — see the scope
+      # note there for why it is filled rather than read from the frame.
+      #
+      # So a blank cell (`missing`/`nothing`) in a present column means the caller asked for NULL,
+      # exactly as `create()` reads an explicit `"field" => nothing`: `_prepare_row_insert!`
+      # (execution.jl:557) fills only when `!haskey(real_obj.insert, field)`. On a NOT NULL field
+      # the blank then surfaces the ORM's own "null values are not allowed" from the per-row
+      # `validate_field_data` sweep every path already runs (:insert below, :copy and :update in
+      # their own loops) — the same error `create()` raises — instead of being silently papered
+      # over with the default.
+      #
+      # Pre-#331 a fourth fill site lived here, keyed on `haskey(mapping, field)`:
+      #     df[!, col_name] = map(x -> ismissing(x) || isnothing(x) ? fill_value : x, df[!, col_name])
+      # It carried no `is_explicit_update && is_static_default` guard (unlike the two absent-column
+      # sites below), so all three bulk ops disagreed with `create()` on the same input and turned
+      # an intentional NULL into the model default. Deleting it left this arm with a single
+      # branch, so the condition is inverted: what remains reads as "the DataFrame has no column
+      # for this field", which is the rule spelled by the control flow.
+      #
+      # Narrow known consequence: `bulk_update` exempts match keys and static-filter fields from
+      # the per-row null check, so a blank cell in a DEFAULTED match-key column is no longer
+      # back-filled — it now matches nothing rather than matching the default-valued row. That is
+      # the rule applied consistently, not an oversight.
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      if !haskey(mapping, field)
+        # ABSENT column: the field was requested via `columns=` but the DataFrame has no column
+        # for it. The fill rule applies — inject one whole column of the fill value.
+        should_auto_populate, fill_value = resolve_absent_column_fill(f_meta)
 
         if should_auto_populate
+          # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
+          # synthesized: that would overwrite live rows merely because the DataFrame lacks the
+          # column. Temporal auto_now/auto_now_add injections are always allowed — an intentional
+          # ORM side-effect. Same guard as the never-requested branch below. Unchanged by #331.
           is_static_default = f_meta.default !== nothing
           is_explicit_update = operation == :update && !isempty(normalized_columns)
           if !(is_explicit_update && is_static_default)
@@ -545,8 +605,24 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         push!(pk_field, field)
       end
     else
-      # Field not in fields_df. See if we should auto-populate it anyway (e.g. updated_at)
-      should_auto_populate, fill_value = resolve_fill_value(f_meta, operation, settings)
+      # Field not in fields_df — it takes no part in the write, either because the DataFrame has
+      # no column for it or because an explicit `columns=` left it out. See if we should
+      # auto-populate it anyway (e.g. updated_at).
+      #
+      # #331 scope note: this branch can fire for a field whose same-named column IS in the
+      # DataFrame, when `columns=` excluded it. That is NOT the rewrite #331 removed. `columns=`
+      # is the caller saying "do not write this field", so those cells were never going to be
+      # persisted; injecting the default here is what lets a partial `columns=` insert still
+      # satisfy the model's NOT NULL columns (pinned by test_bulk_update_column_scope.jl). The
+      # #331 rule governs the cells of a field that DOES take part in the write — see the comment
+      # in the other arm.
+      #
+      # Deferring to the frame here instead — reading the excluded column's values — was
+      # considered and rejected: it would make `columns=` stop deciding what gets written, which
+      # is a worse contract than the one above. (A *narrow* deferral, only when `field in
+      # names(df)`, would keep genuinely-absent columns injected and so would not break
+      # auto_now_add stamping — the objection is the contract, not a NOT NULL failure.)
+      should_auto_populate, fill_value = resolve_absent_column_fill(f_meta)
 
       if should_auto_populate
         # For an explicit-scope UPDATE (columns= was provided), a static `default`

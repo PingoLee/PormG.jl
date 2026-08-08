@@ -164,6 +164,12 @@ record = M.Status.objects.create("status" => "Finished")
 # created_at will be set automatically to the current timestamp
 ```
 
+A default is applied only to a field you **did not pass**. A key you pass is honored as written —
+including `"field" => nothing`, which stores SQL `NULL` on a nullable field and raises
+`InvalidValueError` on a `null=false` one. The bulk writers follow the identical rule, with
+*"a field you did not pass"* reading as *"a column your `DataFrame` does not contain"* — see
+[Defaults and Auto Values](bulk.md#Defaults-and-Auto-Values).
+
 **Generated SQL (PostgreSQL):**
 ```sql
 INSERT INTO "status" ("status") 

@@ -105,6 +105,7 @@ mutable struct MockPGPool322 <: PormG.PormGPostgres
   drains::Threads.Atomic{Int}
   renewals::Threads.Atomic{Int}
   renew_gate::Union{Nothing, Channel{Nothing}}
+  renewed::Base.RefValue{Any}             # the handle the last renewal produced (#327)
   next_id::Threads.Atomic{Int}
 end
 MockPGPool322(; interrupt_sql = nothing, fail_sql = nothing, renew_gate = nothing) =
@@ -112,7 +113,8 @@ MockPGPool322(; interrupt_sql = nothing, fail_sql = nothing, renew_gate = nothin
                 interrupt_sql, fail_sql,
                 Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
                 Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-                Threads.Atomic{Int}(0), renew_gate, Threads.Atomic{Int}(1))
+                Threads.Atomic{Int}(0), renew_gate, Base.RefValue{Any}(nothing),
+                Threads.Atomic{Int}(1))
 
 _matches_322(prefix, sql) = prefix !== nothing && startswith(sql, prefix)
 
@@ -122,7 +124,11 @@ PormG.backend_connect(pool::MockPGPool322; kwargs...) =
 function PormG.backend_renew_connection(pool::MockPGPool322, conn; kwargs...)
   Threads.atomic_add!(pool.renewals, 1)
   pool.renew_gate === nothing || take!(pool.renew_gate)   # park the recovery here on demand
-  return FakeConn322(Threads.atomic_add!(pool.next_id, 1) + 1)
+  # Recorded so a test can assert what happened to the handle when `reconnect_db` returns `nothing`
+  # and therefore hands it back to nobody (#327).
+  fresh = FakeConn322(Threads.atomic_add!(pool.next_id, 1) + 1)
+  pool.renewed[] = fresh
+  return fresh
 end
 PormG.backend_cancel_query!(pool::MockPGPool322, conn) =
   (Threads.atomic_add!(pool.cancels, 1); nothing)
@@ -160,13 +166,16 @@ mutable struct MockSQLitePool322 <: PormG.PormGSQLite
   drains::Threads.Atomic{Int}
   renewals::Threads.Atomic{Int}
   work_gate::Union{Nothing, Channel{Nothing}}   # blocks the worker INSIDE backend_execute
+  gate_prefix::String                           # which statement the gate holds (#327)
+  ran_on_closed::Threads.Atomic{Int}            # statements executed against a CLOSED handle (#327)
   next_id::Threads.Atomic{Int}
 end
-MockSQLitePool322(; work_gate = nothing) =
+MockSQLitePool322(; work_gate = nothing, gate_prefix::String = "BEGIN") =
   MockSQLitePool322(Any[FakeConn322(1)], [true], "mock://sqlite", 1, false, 1, 0,
                     ReentrantLock(), ReentrantLock(),
                     Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-                    Threads.Atomic{Int}(0), work_gate, Threads.Atomic{Int}(1))
+                    Threads.Atomic{Int}(0), work_gate, gate_prefix,
+                    Threads.Atomic{Int}(0), Threads.Atomic{Int}(1))
 
 PormG.backend_is_alive(::MockSQLitePool322, conn) = conn isa FakeConn322 && !conn.closed
 PormG.backend_connect(pool::MockSQLitePool322; read_only::Bool = false) =
@@ -181,13 +190,18 @@ PormG.backend_drain_connection!(pool::MockSQLitePool322, conn) =
   (Threads.atomic_add!(pool.drains, 1); true)
 # Runs on the global SQLite worker thread — keep it pure (no @test in here). `conn.busy` is set for
 # exactly as long as the worker is on the handle, which is the window a release or close must not
-# land in. Only BEGIN is gated: the point is to hold the worker inside the statement whose await the
-# test is about to interrupt.
+# land in. Exactly one statement kind is gated (`gate_prefix`): the point is to hold the worker
+# inside the statement whose await the test is about to interrupt. #322's testsets gate BEGIN;
+# #327's gate the transaction BODY, because that is where the second Ctrl-C lands.
+#
+# `ran_on_closed` is the #327 assertion in mock form: a statement the worker dequeues AFTER the
+# handle was closed is the queued ROLLBACK running against a finalized `sqlite3_stmt` registry.
 function PormG.backend_execute(pool::MockSQLitePool322, conn, sql::String, params)
   startswith(sql, "ROLLBACK") && Threads.atomic_add!(pool.rollbacks, 1)
+  conn.closed && Threads.atomic_add!(pool.ran_on_closed, 1)
   conn.busy[] = true
   try
-    if pool.work_gate !== nothing && startswith(sql, "BEGIN")
+    if pool.work_gate !== nothing && startswith(sql, pool.gate_prefix)
       take!(pool.work_gate)
     end
     return NamedTuple[]
@@ -618,4 +632,257 @@ end
   @test pool.available[1] === true
   @test pool.connections[1] === old
   @test pool.cancels[] == 0 && pool.renewals[] == 0 && pool.drains[] == 0
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #327 — no code path may free a SQLite handle the global worker still has work for
+#
+# #322 left one window open on purpose: an interrupt landing while a query is in flight INSIDE a
+# transaction body. One such interrupt is merely slow (the cleanup ROLLBACK serializes behind the
+# abandoned query and the connection comes back clean). A SECOND one is not:
+#
+#   interrupt #2 lands on the blocked ROLLBACK's await
+#     -> becomes `rollback_error`, which `_is_benign_rollback_error` calls non-benign
+#     -> `finalize_transaction_connection!` -> `_renew_or_discard_connection!`
+#     -> `reconnect_db` returns a FRESH handle on SQLite, so `new_conn !== conn`
+#     -> the old handle is closed, SYNCHRONOUSLY, while the worker is still inside it
+#
+# `SQLite.jl`'s `close` finalizes the DB's registered statements first, so that frees a
+# `sqlite3_stmt` another thread is stepping — and the still-QUEUED ROLLBACK then runs against the
+# closed handle. Both facts were observed before the fix.
+#
+# The fix answers "is the driver done with this handle?" from the worker's own ledger rather than
+# from a driver handle the caller may not have, so it protects `run_in_transaction`, the migration
+# and delete lifecycles, and the hand-rolled recipe in docs/src/write/transaction.md identically.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The headline (#327): the renewal path must not close a handle the worker is inside
+#
+# This drives `_renew_or_discard_connection!` DIRECTLY rather than by delivering two real
+# interrupts, and that is a deliberate choice rather than a shortcut. Reaching this function via a
+# genuine second Ctrl-C means landing `schedule(task, InterruptException(); error = true)` in the
+# window where the transaction is parked on its cleanup ROLLBACK — a window with no observable that
+# marks it (the ledger increments when the statement is ISSUED, not when the caller parks), and
+# retrying the schedule is not an option because interrupting an already-runnable task corrupts
+# Julia's workqueue fatally. A guard that fires "usually" is worse than one that fires always.
+#
+# What the second Ctrl-C actually *does* is arrive here with the worker still holding the
+# connection, which is exactly the state set up below. The end-to-end double-interrupt scenario was
+# reproduced separately against the real worker while diagnosing #327, and belongs to the live
+# proof rather than to a unit guard.
+#
+# Reverted-fix signature: `conn.closed` is already true on the line after the call,
+# `closed_while_busy` is true, and the queued statement then runs against the closed handle.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: renewal does not close a handle the worker is inside (#327)" begin
+  gate = Channel{Nothing}(1)
+  pool = MockSQLitePool322(work_gate = gate, gate_prefix = "SELECT")
+  conn = CP.acquire_connection(pool)
+
+  # The worker parks inside this statement, holding `conn` — the state a second Ctrl-C leaves.
+  running = CP.sqlite_execute_async(pool, conn, "SELECT surname FROM drivers;", nothing)
+  @test _wait_until_322(() -> conn.busy[])
+
+  # A second statement queued BEHIND it, standing in for the cleanup ROLLBACK that is still waiting
+  # its turn. This is the half that made the original bug concrete: it ran against a closed handle.
+  queued = CP.sqlite_execute_async(pool, conn, "ROLLBACK;", nothing)
+  # LOAD-BEARING, not setup. `== 2` asserts the ledger counts QUEUED work and not merely the
+  # statement currently executing — the distinction the whole bug turns on, since the ROLLBACK that
+  # ran against a finalized handle was still in the queue when the close fired. Counting at dequeue
+  # instead of at enqueue fails here and at the matching `== 2` in the ledger testset below —
+  # nowhere else in this file, since every other assertion involves at most one queued statement.
+  @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 2)
+
+  CP._renew_or_discard_connection!(pool, conn)      # the #71 path, on a connection still in use
+
+  @test pool.renewals[] == 1                        # renewal itself is still SYNCHRONOUS (#71/#139)
+  @test pool.connections[1] !== conn                # the slot already carries the fresh handle
+  @test conn.closed === false                       # ← the fix: the old handle is NOT freed yet
+
+  put!(gate, nothing)                               # let the worker finish both statements
+  try; Base.fetch(running); catch; end
+  try; Base.fetch(queued); catch; end
+
+  @test _wait_until_322(() -> conn.closed === true)  # the deferred close still happens…
+  @test conn.closed_while_busy === false             # …just never while the worker was inside it
+  @test pool.ran_on_closed[] == 0                    # ← and the queued ROLLBACK ran on an OPEN handle
+  @test pool.rollbacks[] == 1                        # it really did run
+  @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 0)
+  close(gate)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The seam itself (#327), without a transaction in the way
+# `_discard_connection!` must empty the slot IMMEDIATELY — nobody may borrow the handle — while
+# deferring only its destruction. Separating those two is the whole design.
+#
+# Reverted-fix signature: `conn.closed` is already true on the line after the call.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "_discard_connection! defers the close while work is outstanding (#327)" begin
+  gate = Channel{Nothing}(1)
+  pool = MockSQLitePool322(work_gate = gate, gate_prefix = "SELECT")
+  conn = CP.acquire_connection(pool)
+
+  t = CP.sqlite_execute_async(pool, conn, "SELECT 1;", nothing)
+  @test _wait_until_322(() -> conn.busy[])
+  @test CP._sqlite_outstanding(conn) == 1
+
+  CP._discard_connection!(pool, conn)                # default close_handle = true
+
+  @test pool.connections[1] === nothing              # slot out of circulation at once…
+  @test conn.closed === false                        # ← …but the handle is NOT freed under the worker
+
+  put!(gate, nothing)
+  try; Base.fetch(t); catch; end
+  @test _wait_until_322(() -> conn.closed === true)   # deferred close lands once the ledger drains
+  @test conn.closed_while_busy === false
+  close(gate)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The other half (#327): an idle handle is still closed SYNCHRONOUSLY
+# The guard against the fix over-firing. Deferring every close would make `_discard_connection!` and
+# `_renew_or_discard_connection!` asynchronous for the ordinary failed-ROLLBACK case, which #71 and
+# #139 both assert is immediate. No `_wait_until_322` here, deliberately — the point is the timing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an idle SQLite handle is closed synchronously, as before (#327)" begin
+  pool = MockSQLitePool322()
+  conn = CP.acquire_connection(pool)
+
+  Base.fetch(CP.sqlite_execute_async(pool, conn, "SELECT 1;", nothing))
+  @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 0)   # worker is done with it
+
+  CP._discard_connection!(pool, conn)
+
+  @test conn.closed === true                         # ← synchronous, no waiting involved
+  @test pool.connections[1] === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Renewal must not hold the pool-wide lock (#327)
+# `reconnect_db` used to call `backend_renew_connection` INSIDE `Base.lock(pool.lock)`. On
+# PostgreSQL that is `LibPQ.reset!`, which cancels and then takes the connection's own semaphore —
+# held for the abandoned query's entire remaining life. So one task's renewal stalled EVERY task on
+# the pool. The PG mock's `renew_gate` stands in for that block.
+#
+# Reverted-fix signature: `got_lock[]` stays false until the renewal is released.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "reconnect_db renews without holding pool.lock (#327)" begin
+  renew_gate = Channel{Nothing}(1)
+  pool = MockPGPool322(renew_gate = renew_gate)
+  conn = CP.acquire_connection(pool)
+
+  renewing = Threads.@spawn CP.reconnect_db(pool, conn)
+  @test _wait_until_322(() -> pool.renewals[] == 1)   # renewal is in flight and parked
+
+  got_lock = Threads.Atomic{Bool}(false)
+  Threads.@spawn Base.lock(() -> (got_lock[] = true), pool.lock)
+  @test _wait_until_322(() -> got_lock[])             # ← another task can still take the lock
+
+  put!(renew_gate, nothing)
+  new_conn = fetch(renewing)
+  @test new_conn !== nothing
+  @test pool.connections[1] === new_conn              # and the slot was still swapped correctly
+  close(renew_gate)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The price of that unlocked window (#327): `_swap_slot!`'s re-check
+# Renewing outside `pool.lock` opens a gap between "find the slot" and "install the result" that did
+# not exist when one critical section did both. `_swap_slot!` closes it by re-checking that the slot
+# STILL holds `conn` — and that re-check is the entire safety argument for the testset above, so it
+# needs a test of its own rather than being taken on faith.
+#
+# The race, made deterministic: a `_discard_connection!` (what an abandoned await does) empties the
+# slot while the renewal is parked. Installing blindly would then resurrect a slot somebody
+# deliberately took out of circulation, and hand out a connection whose owner believes it is gone.
+#
+# Reverted-fix signature (`_swap_slot!` assigning without the `=== conn` guard): the slot comes back
+# holding the fresh handle instead of `nothing`, and that handle is never closed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a slot emptied during renewal is not resurrected (#327)" begin
+  renew_gate = Channel{Nothing}(1)
+  pool = MockPGPool322(renew_gate = renew_gate)
+  conn = CP.acquire_connection(pool)
+
+  renewing = Threads.@spawn CP.reconnect_db(pool, conn)
+  @test _wait_until_322(() -> pool.renewals[] == 1)   # parked mid-renewal, slot index already read
+
+  CP._discard_connection!(pool, conn)                 # the slot changes underneath the renewal
+  @test pool.connections[1] === nothing
+
+  put!(renew_gate, nothing)
+  @test fetch(renewing) === nothing                   # renewal reports failure rather than success
+  @test pool.connections[1] === nothing               # ← the emptied slot STAYS empty
+
+  fresh = pool.renewed[]                              # the handle the renewal did open
+  @test fresh !== nothing && fresh !== conn
+  @test fresh.closed === true                         # ← and it is closed, not leaked to GC
+  @test fresh.closed_while_busy === false
+  close(renew_gate)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ledger symmetry (#327) — the leak guard
+# Every increment must be matched. A count that never returns to zero defers that connection's close
+# for the life of the process, which would be #327 again in a new place. The no-awaiter case is the
+# one that matters most: it is exactly what a Ctrl-C leaves behind.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the outstanding-work ledger always drains (#327)" begin
+  @testset "awaited statement" begin
+    pool = MockSQLitePool322()
+    conn = CP.acquire_connection(pool)
+    Base.fetch(CP.sqlite_execute_async(pool, conn, "SELECT 1;", nothing))
+    @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 0)
+  end
+
+  @testset "nobody ever awaits the result" begin
+    gate = Channel{Nothing}(1)
+    pool = MockSQLitePool322(work_gate = gate, gate_prefix = "SELECT")
+    conn = CP.acquire_connection(pool)
+
+    CP.sqlite_execute_async(pool, conn, "SELECT 1;", nothing)   # task dropped on the floor
+    @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 1)
+
+    put!(gate, nothing)
+    @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 0)
+    close(gate)
+  end
+
+  # The `enqueued[]` guard in `sqlite_execute_async`: once the item is queued, the WORKER owns the
+  # decrement, and the task's own `finally` must not also fire. Without the guard both halves count
+  # down, so finishing one statement zeroes the ledger for every other statement still outstanding
+  # on that connection — and a close fires while the driver still has work. Premature-close in a new
+  # place, which is the bug this file exists to stop.
+  #
+  # Reverted-guard signature: the `== 1` below reads 0.
+  @testset "finishing one statement does not zero the ledger for the others" begin
+    gate = Channel{Nothing}(2)
+    pool = MockSQLitePool322(work_gate = gate, gate_prefix = "SELECT")
+    conn = CP.acquire_connection(pool)
+
+    a = CP.sqlite_execute_async(pool, conn, "SELECT a;", nothing)
+    b = CP.sqlite_execute_async(pool, conn, "SELECT b;", nothing)   # queued behind `a`
+    @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 2)
+
+    put!(gate, nothing)          # release ONLY `a`; `b` then blocks on the empty gate
+    Base.fetch(a)                # `a` is fully done, its task's finally included
+    @test CP._sqlite_outstanding(conn) == 1   # ← `b` is still outstanding
+
+    put!(gate, nothing)
+    Base.fetch(b)
+    @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 0)
+    close(gate)
+  end
+
+  @testset "the ledger keeps no entry for a drained connection" begin
+    pool = MockSQLitePool322()
+    conn = CP.acquire_connection(pool)
+    Base.fetch(CP.sqlite_execute_async(pool, conn, "SELECT 1;", nothing))
+    @test _wait_until_322(() -> CP._sqlite_outstanding(conn) == 0)
+    # Zero must mean "absent", not "present and 0" — the ledger is keyed by connection identity and
+    # would otherwise grow by one entry per connection the process ever opens.
+    @test !haskey(CP._sqlite_pending, conn)
+  end
 end

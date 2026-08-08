@@ -11,11 +11,50 @@ All three operations accept `show_query=:sql`, `show_query=:dict`, `show_query=:
 ### The Mapping Adaptor Strategy ⭐
 
 All bulk operations in PormG use a **Mapping Adaptor** approach. This means:
-- **Never Mutates, Never Copies**: The pipeline works on a zero-copy wrapper of the input `DataFrame` (shared column vectors). Defaults, timestamps, and other ORM-side normalization happen on that internal frame only — your `DataFrame` is untouched, unconditionally, and no data is duplicated. There is no `copy=` knob because there is nothing to protect against.
+- **Never Mutates, Never Copies**: The pipeline works on a zero-copy wrapper of the input `DataFrame` (shared column vectors). Injected defaults and timestamps are added to that internal frame only — see [Defaults and Auto Values](#Defaults-and-Auto-Values) — so your `DataFrame` is untouched, unconditionally, and no data is duplicated. There is no `copy=` knob because there is nothing to protect against.
 - **Flexible Mapping**: Use `columns = ["df_col" => "model_field"]` to map any DataFrame column to any table field.
 - **Auto-Detection**: If you don't provide mappings, PormG automatically matches columns to fields by **exact, case-sensitive** name. A column differing only in case from a model field (e.g. `RaceId` vs `raceid`) raises an error instead of being silently folded — normalize first with `rename!(df, lowercase.(names(df)))` or map it explicitly.
 - **Centralized Validation**: Every row is automatically checked against the model's constraints (`max_length`, `nullability`, etc.) before reaching the database.
 - **Relation Value Semantics**: Foreign-key columns accept scalar key values (including `0` if present in the target table). Use `nothing` or `missing` when you want SQL `NULL` on nullable relation columns.
+
+### Defaults and Auto Values
+
+**For a field the write touches, PormG supplies a value only when your `DataFrame` has no column for it. A column that *is* present is your data, and PormG never rewrites its cells.**
+
+That is one rule covering every fill kind — a static `default`, `auto_now`, `auto_now_add`, and a UUID `auto_add` — across `bulk_insert()`, `bulk_copy()` and `bulk_update()` alike, whether or not the field is nullable.
+
+So a blank cell (`missing` or `nothing`) in a column you supplied means **`NULL`**, exactly as an explicit `"field" => nothing` does in [`create()`](create.md#Default-Values). On a `null=false` field that blank raises `InvalidValueError` — *"null values are not allowed"* — which is PormG's own validation reporting the field by name, not a database constraint error, and it is the same error `create()` raises for the same input. Nothing is persisted: the write is wrapped in a transaction, so a row that fails validation part-way through rolls back the chunks already sent.
+
+To have PormG supply the value, **leave the column out of the `DataFrame`**:
+
+```julia
+# Stint = Models.Model("stint",
+#     driver    = Models.CharField(),
+#     laps      = Models.IntegerField(default = 0, null = true),
+#     pit_stops = Models.IntegerField(default = 0))
+
+df = DataFrames.DataFrame(driver = ["Senna", "Prost"], laps = [missing, 71])
+
+bulk_insert(M.Stint.objects, df)
+# laps      → NULL, 71   (your column, your cells — the blank is honored)
+# pit_stops → 0, 0       (absent from the frame — PormG fills the default)
+
+bulk_insert(M.Stint.objects, DataFrames.select(df, DataFrames.Not(:laps)))
+# laps      → 0, 0       (now absent too, so the default applies)
+```
+
+Qualifications:
+
+- **A field you leave out of `columns=` is out of scope, not "your data".** If your frame carries a column for it, those cells are not written — you said not to write that field. On `bulk_insert()`/`bulk_copy()` PormG still supplies the field's default or timestamp, which is what lets a partial `columns=` insert satisfy the model's `null=false` columns.
+- `bulk_update(..., columns = [...])` does **not** synthesize a static `default` for an absent column — that would overwrite live rows merely because your frame lacks the column. `auto_now`/`auto_now_add` still inject, so timestamps stay current.
+- **`match_on` key columns are not null-checked.** They identify rows rather than being written, so a blank cell in one does not raise — it simply matches nothing, since `column = NULL` is never true. Before this rule changed, such a blank was quietly back-filled with the field's `default` and matched the default-valued row instead. (`filters=` fields are exempt from the check too, but they carry constants rather than `DataFrame` columns, so no cell can be blank there.)
+- An auto-increment primary key column whose values are **all** blank counts as absent, so the database allocates the ids. See [Auto-Generated Primary Keys](#Auto-Generated-Primary-Keys). This does **not** extend to a `UUIDField(auto_add = true)` primary key — carrying that column blank now raises. Fill it yourself, which works because a present column is honored verbatim:
+
+    ```julia
+    df[!, :token] = [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)]
+    ```
+
+    Dropping the column is *not* the fix: the absent path currently mints one UUID for the whole batch ([#334](https://github.com/PingoLee/PormG.jl/issues/334)), so a multi-row insert collides on the key.
 
 ---
 
@@ -443,7 +482,7 @@ WHERE "Tb"."id" = source."id"::bigint
 - **Handler filters are rebuilt**: `bulk_update()` clears any filters already attached to the query handler and rebuilds the `WHERE` clause from `match_on=` and `filters=`. Pass every predicate you need through those arguments rather than relying on prior `query.filter(...)` state.
 - **Dry-run support**: `show_query=:dict` and `show_query=:inspection` return metadata, `:sql` returns SQL text, `:params` returns the bound parameter list, and `:none` builds the statement and returns `nothing` without executing.
 - **Empty input is a no-op**: An empty `DataFrame` returns `nothing` after logging a warning.
-- **Nullable columns accept all-`missing` batches**: If a nullable update column is `missing` for every targeted row, PormG writes SQL `NULL` for every row in that column.
+- **Nullable columns accept all-`missing` batches**: If a nullable update column is `missing` for every targeted row, PormG writes SQL `NULL` for every row in that column — **including a column that carries a static `default`**, which is not written back over your blanks (see [Defaults and Auto Values](#Defaults-and-Auto-Values)).
 
 ### Migrating existing `bulk_update()` calls
 

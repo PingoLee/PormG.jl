@@ -76,13 +76,19 @@ Entry.connect_key = "default"
     @test fk_target_column(ForeignKey("UnresolvedTarget", pk_field="code")) == "code" # String .to → verbatim
     @test fk_target_column(ForeignKey(DriverRef)) == "id"                             # no pk_field → id
 
-    # Underscore-escaped reserved-word pk_field resolves to the parent's stored (stripped)
-    # key — ForeignKey AND OneToOneField both normalize pk_field via format_fild_name.
-    ParentEnd = Model("parent_end_scratch", id=IDField(), _end=CharField(db_column="end_col"))
-    @test ForeignKey(ParentEnd, pk_field="_end").pk_field == "end"
-    @test OneToOneField(ParentEnd, pk_field="_end").pk_field == "end"
-    @test fk_target_column(ForeignKey(ParentEnd, pk_field="_end")) == "end_col"
-    @test fk_target_column(OneToOneField(ParentEnd, pk_field="_end")) == "end_col"
+    # A reserved-word column declared the #317 way — legal Julia identity, real column pinned
+    # with db_column — resolves through pk_field on both ForeignKey and OneToOneField.
+    ParentEnd = Model("parent_end_scratch", id=IDField(), end_=CharField(db_column="end_col"))
+    @test ForeignKey(ParentEnd, pk_field="end_").pk_field == "end_"
+    @test OneToOneField(ParentEnd, pk_field="end_").pk_field == "end_"
+    @test fk_target_column(ForeignKey(ParentEnd, pk_field="end_")) == "end_col"
+    @test fk_target_column(OneToOneField(ParentEnd, pk_field="end_")) == "end_col"
+
+    # pk_field is a REFERENCE, not a declaration: `format_fild_name` passes it through
+    # verbatim (#317), so it can name a `_id`-style key on a Dict-built (introspected)
+    # model. The declaration guard deliberately does not reach here.
+    @test ForeignKey(ParentEnd, pk_field="_end").pk_field == "_end"
+    @test OneToOneField(ParentEnd, pk_field="_end").pk_field == "_end"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

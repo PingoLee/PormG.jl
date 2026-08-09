@@ -1017,8 +1017,10 @@ mutable struct PormGRow
 end
 PormGRow(data::Dict{Symbol,<:Any}, model::PormGModel) = PormGRow(Dict{Symbol,Any}(data), model, Set{Symbol}())
 
-"""Normalize row-facing symbols to the declared-case storage keys used internally
-(strips a leading underscore per `format_fild_name`; case is preserved, #57)."""
+"""Validate a row-facing symbol against the declared-case storage keys used internally. Each `__`
+segment goes through `format_fild_name`, which since #317 rewrites nothing — the name is returned
+verbatim, case preserved (#57). It used to strip a leading underscore, so `row._id` reached the key
+`:id`; now it reaches `:_id`, which resolves only on a model that genuinely has that field."""
 function _normalize_row_symbol(sym::Symbol)::Symbol
   parts = split(String(sym), "__")
   any(isempty, parts) && throw(UnknownFieldError("Invalid projected row field '$sym'. Empty '__' path segment."))
@@ -1037,6 +1039,9 @@ Base.pairs(row::PormGRow) = pairs(getfield(row, :_data))
 Base.iterate(row::PormGRow, args...) = iterate(getfield(row, :_data), args...)
 
 function Base.getproperty(row::PormGRow, sym::Symbol)
+  # These five shadow any real column of the same name. Since #317 retired the leading-underscore
+  # strip, an introspected schema can genuinely carry a `_data`/`_model`/`_dirty` column — reach it
+  # with `row[:_data]` (indexing skips this dispatch), not dot access.
   sym === :_data && return getfield(row, :_data)
   sym === :_model && return getfield(row, :_model)
   sym === :_dirty && return getfield(row, :_dirty)

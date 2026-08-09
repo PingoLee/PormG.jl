@@ -4,7 +4,7 @@ using Dates, TimeZones
 using Base64
 using UUIDs
 import JSON
-import PormG: PormGField, PormGModel, reserved_words, Migration
+import PormG: PormGField, PormGModel, reserved_words, MODEL_OPTION_KWARGS, Migration
 # Physical-table-name resolution (#59) — defined in Kernel so layer-2 Configuration can reach it too.
 import PormG: model_table_name, model_has_db_table
 import PormG: DATETIME_FORMAT
@@ -667,17 +667,31 @@ function ensure_model_initialized(model::PormGModel)
     return false
 end
 
-# Normalize a field name: strip ONE leading underscore (the escape hatch for SQL
-# reserved words / `id`, e.g. `_end` -> `end`) and validate. The declared case is
-# PRESERVED (#57): a field declared `driverId` keeps that case as its identity and
-# its column name, so PormG can faithfully target mixed-case/uppercase DB columns.
-# Table/model names still lowercase — see `format_model_name` below.
+# Validate a field-name REFERENCE and return it verbatim. The declared case is PRESERVED (#57): a
+# field declared `driverId` keeps that case as its identity and its column name, so PormG can
+# faithfully target mixed-case/uppercase DB columns. Table/model names still lowercase — see
+# `format_model_name` below.
+#
+# It used to strip ONE leading underscore, the escape hatch that let a column whose name is a Julia
+# keyword be declared as a kwarg (`_end = CharField()` -> column `end`). #317 retired that: `db_column`
+# (#50) states the same thing explicitly, and the strip had already cost two bugs (#306, and the
+# `Model_to_str` output that would not reload, patched in #316).
+#
+# This function is now a pure pass-through validator, and the rejection of a leading underscore
+# deliberately does NOT live here. Every caller other than the declaration paths is a REFERENCE to an
+# existing field key — `pk_field` (`src/models/fields.jl`), `UniqueConstraint` fields,
+# ManyToMany `source_field`/`target_field`, and `_normalize_row_symbol` on the row-read path
+# (`src/querybuilder/types.jl`). A model built from a `Dict` (the `inspectdb` / Django-importer paths)
+# may legitimately be keyed `_id`, and every one of those references must resolve to it. Throwing here
+# would also surface a `ModelDefinitionError` out of `row._id`, which is a read, not a definition.
+# The declaration guard is `_validate_declared_field_name` below.
+#
+# `__` and `@` are still rejected: `__` is the lookup separator (`driverid__surname`) and `@` the
+# operator marker, so a field spelled with either is unqueryable regardless of the hatch.
 function format_fild_name(name::String)::String
   isempty(name) && return name
-  name[1] == '_' && (name = name[2:end])
-  isempty(name) && return name
-  if occursin(r"__|@|^_", name)
-    throw(ModelDefinitionError("The field name $name contains __ or @ or starts with _; this is not allowed"))
+  if occursin(r"__|@", name)
+    throw(ModelDefinitionError("The field name $name contains __ or @; this is not allowed"))
   end
   return name
 end
@@ -686,11 +700,19 @@ function format_fild_name(name::Nothing)::Nothing
 end
 format_fild_name(name::Symbol)::String = name |> String |> format_fild_name
 
-# Table/model names are LOWERCASED (frozen schema convention, #33) — independent of
-# field-name case preservation (#57). Reuses `format_fild_name`'s leading-underscore
-# strip + validation, then lowercases the result.
+# Table/model names are LOWERCASED (frozen schema convention, #33) — independent of field-name case
+# preservation (#57). A pure fold, nothing more.
+#
+# It used to be `lowercase ∘ format_fild_name`, inheriting the leading-underscore strip — which is
+# exactly what split #306: `Model("_order", …)` created table `_order` while a `ForeignKey` targeting
+# it rendered `REFERENCES "order"`. With the strip gone (#317) both sides render `_order` and the
+# split is unreachable. It also carries NO validation: every caller runs at render/compare time on a
+# name that may have been read out of a live database (`fk_target_table` for an unresolved String
+# target, the model-reference comparisons, the ManyToMany table/accessor derivations, and the two
+# `get_all_models` implementations that fill a blank name from the Julia binding). Shape policy lives
+# at declaration time, in `_validate_positional_model_name` below.
 function format_model_name(name::String)::String
-  return lowercase(format_fild_name(name))
+  return lowercase(name)
 end
 function format_model_name(name::Symbol)::String
   return name |> String |> format_model_name  
@@ -703,70 +725,139 @@ end
 # the one identifier in a `Model(...)` call that nothing normalizes: the two callers that FILL
 # `Model_Type.name` run it through `format_model_name` but guard on `attr.name == ""`, so they only
 # ever reach a binding-derived name (`src/Models.jl` `get_all_models`, `src/migrations/planner.jl`
-# `get_all_models`). Field names, by contrast, are normalized by `format_fild_name` inside the
-# constructor itself.
+# `get_all_models`), which `format_model_name` lowercases as it fills it. Field names get their own
+# declaration-time gate, `_validate_declared_field_name` below.
 #
 # Left unchecked, a mixed-case name SPLITS the schema — `makemigrations` lowercases it into the DDL
 # while the query builder quotes it as declared — so the model migrates one table and then queries
 # another: silent on SQLite, fatal on PostgreSQL (#300).
 #
-# A leading underscore splits it differently: `format_model_name` (used to render an FK `REFERENCES`
-# target and to resolve a model reference by name) strips ONE leading underscore, inherited from
-# `format_fild_name`'s reserved-word escape hatch for FIELD names — but `create_table` writes the
-# stored name as-is. So `Model("_order", …)` creates table `_order` while a `ForeignKey` pointing at
-# it renders `REFERENCES "order"` — a different table, or a failed constraint if `order` doesn't
-# exist (#306). Unlike field names, a positional model name is a plain string literal, never a Julia
-# kwarg key, so it never had a syntactic reason to need that escape hatch in the first place — nothing
-# legitimate is lost by rejecting it.
+# A LEADING UNDERSCORE is rejected too (#306), now on its own footing. It was originally rejected
+# because it split the schema the same way: `format_model_name` stripped one underscore when rendering
+# an FK `REFERENCES` target while `create_table` wrote the stored name verbatim, so `Model("_order", …)`
+# created `_order` and referenced `order`. #317 retired that strip, so both sides now render `_order`
+# and THAT split is unreachable. The rejection stands as policy, not as a bug guard: a PormG model name
+# is a lowercase LOGICAL identifier, and a leading underscore is not a shape PormG generates — exactly
+# the same reasoning as the case rule above. A physical table that does have one is named with
+# `db_table` (#59), which carries it verbatim.
 #
-# Scope: this checks CASE and a LEADING UNDERSCORE only. It is NOT `format_model_name`, whose other
-# callers re-normalize the STORED name at render time (FK `REFERENCES`, model-reference comparison),
-# and it applies no other identifier-shape validation — a reserved word or a name with a space still
-# renders invalid bare DDL.
+# Scope: this checks CASE and a LEADING UNDERSCORE only. It is NOT `format_model_name`, which is now a
+# pure `lowercase` fold applied to STORED names at render time, and it applies no other
+# identifier-shape validation — a reserved word or a name with a space still renders invalid bare DDL.
 #
-# Reject rather than fold, in both cases — even now that model-level `db_table` (#59) exists as the
-# escape valve. Folding here would still discard a stated intent silently; `db_table` is how that
-# intent gets expressed instead: `Model("driver_races", db_table = "Driver_Races", …)`.
+# Reject rather than fold, in both cases — even now that `db_table` (#59) exists as the escape valve.
+# Folding here would still discard a stated intent silently; `db_table` is how that intent gets
+# expressed instead: `Model("driver_races", db_table = "Driver_Races", …)`.
 #
-# Two message-accuracy subtleties, both about the SUGGESTED spelling rather than the rejection itself
-# (found on independent review of this fix):
-#
-# 1. A name can fail BOTH checks (`"_Driver_Scratch"`). If the case message suggested only
-#    `lowercase(name)`, that suggestion would still start with '_' and fail again on retry. `hint`
-#    below is computed underscore-aware so whichever check fires first, "Declare it as" already names
-#    a spelling that passes both.
-# 2. `format_model_name`/`format_fild_name` strip exactly ONE leading underscore, then reject if a
-#    second one remains (`^_` in `format_fild_name`'s own regex) — so a name with 2+ leading
-#    underscores, or a bare `"_"`, would not actually reach the "creates X, references Y" split this
-#    guard warns about: `format_model_name` would itself raise a different, unrelated error first.
-#    Claiming the split for those names would be describing behavior that can't happen, so they get a
-#    narrower message with no specific "declare it as" spelling instead of an unusable
-#    `"Declare it as ''."` (an all-underscore name strips to the empty string).
+# `hint` is computed underscore-aware, and stripping is `lstrip(…, '_')` (ALL leading underscores, not
+# one), so whichever check fires first the suggested spelling already passes both. It can come out
+# EMPTY — `"_"`, `"___"` — and an unusable `"Declare it as ''."` is worse than no suggestion, so both
+# messages omit that clause when `hint` is empty (found on independent review of #306; the underlying
+# names changed but the message-accuracy requirement did not).
 function _validate_positional_model_name(name::AbstractString)::Nothing
-  if startswith(name, "_") && (length(name) < 2 || name[2] == '_')
-    throw(ModelDefinitionError(
-      "The model name '$(name)' starts with '_'; PormG does not support a leading underscore in a " *
-      "model name — unlike a field name, where exactly one is the reserved-word escape hatch " *
-      "(`_end` declares column `end`). Remove the leading underscore(s)."))
-  end
-  hint = startswith(name, "_") ? lowercase(name[2:end]) : lowercase(name)
+  hint = lstrip(lowercase(name), '_')
+  declare_as = isempty(hint) ? "" : " Declare it as '$(hint)'."
   if name != lowercase(name)
     throw(ModelDefinitionError(
       "The model name '$(name)' must be lowercase; PormG lowercases table names when generating DDL " *
       "but quotes them as declared in queries, so this model would migrate the table " *
-      "'$(lowercase(name))' and then query '$(name)'. Declare it as '$(hint)'. " *
+      "'$(lowercase(name))' and then query '$(name)'.$(declare_as) " *
       "Mapping a model to a fixed mixed-case table: pass db_table = '$(name)' instead."))
   end
   if startswith(name, "_")
     throw(ModelDefinitionError(
-      "The model name '$(name)' starts with '_'; a leading underscore is the escape hatch for FIELD " *
-      "names colliding with a reserved word, not model names. PormG's foreign-key REFERENCES target " *
-      "strips a leading underscore (format_model_name) but the table this creates keeps it verbatim, " *
-      "so this model would create table '$(name)' while a foreign key pointing at it references " *
-      "'$(hint)' instead — a different table if one exists, a failed constraint if it doesn't. " *
-      "Declare it as '$(hint)'."))
+      "The model name '$(name)' starts with '_'; a PormG model name is a lowercase logical " *
+      "identifier and never carries one.$(declare_as) If the physical table really is named " *
+      "'$(name)', pin it explicitly: Models.Model(\"$(isempty(hint) ? "table" : hint)\", " *
+      "db_table = \"$(name)\", …). A leading underscore used to be the escape hatch for FIELD names " *
+      "colliding with a Julia keyword; that was retired in #317 in favour of db_column, and it never " *
+      "applied to model names — a positional name is a plain string, never a Julia kwarg key."))
   end
   return nothing
+end
+
+# A DECLARED field name — one written as a Julia keyword argument in a `Model(...)` call, or passed to
+# `add_field!` — must not start with '_' (#317). Scope-disciplined exactly like
+# `_validate_positional_model_name` above: it checks a leading underscore and NOTHING else. Shape
+# validation is deliberately absent, mirroring `db_column`'s own precedent (`_apply_db_table!`), so
+# `var"end" = CharField()` — Julia's native non-standard identifier — keeps working.
+#
+# Deliberately NOT applied to the two `Dict`-taking `Model` methods, for the same reason
+# `_validate_positional_model_name` is not: those are how `inspectdb` introspection and the Django
+# importer build a model from names read out of a live database or a Python class, where `_id` is a
+# legitimate physical column and must pass through untouched.
+#
+# The message names BOTH readings, because `_end` was genuinely ambiguous under the old hatch — a
+# reader cannot tell whether the author meant the column `end` or the column `_end`, and picking one
+# silently is how the hatch cost its bugs.
+function _validate_declared_field_name(name::AbstractString, model_name::AbstractString)::Nothing
+  startswith(name, "_") || return nothing
+  bare  = lstrip(name, '_')
+  ident = isempty(bare) ? "col" : (bare in reserved_words || bare in MODEL_OPTION_KWARGS ? "$(bare)_" : bare)
+  on    = isempty(model_name) ? "" : " on model '$(model_name)'"
+  throw(ModelDefinitionError(
+    "The field name '$(name)'$(on) starts with '_'. One leading underscore used to be the escape " *
+    "hatch for a column whose name is a Julia keyword — `_end = CharField()` declared the column " *
+    "`end` — retired in #317 because db_column (#50) states the same thing explicitly and composes " *
+    "with db_table (#59). Declare the column you meant:\n" *
+    "  • for the column '$(bare)': $(ident) = Models.CharField(db_column = \"$(bare)\")\n" *
+    "  • for a column literally named '$(name)': $(ident) = Models.CharField(db_column = \"$(name)\")"))
+end
+
+# Pick a legal, collision-free Julia identifier for `column` when generating a model file
+# (`Model_to_str`, #317). The real column is pinned by the caller with `db_column`, so this only has to
+# produce something that (a) parses as a keyword-argument name, (b) is not peeled as a model option,
+# and (c) is unique within the model.
+#
+# `taken` accumulates names already emitted for this model; `raw_keys` is the model's FULL key set,
+# captured BEFORE the loop — without it a sanitized name could steal a column that appears later in
+# the sorted iteration (`_id` -> `id` when the model also has a real `id`).
+#
+# Step 4 appends a DIGIT, never another '_': `end_` + `_` is `end__`, which `format_fild_name` rejects
+# as the lookup separator.
+function _julia_field_identifier(column::AbstractString,
+                                 reserved::Vector{String},
+                                 taken::Set{String},
+                                 raw_keys::Set{String})::String
+  col = String(column)
+  # Fast path: a column that is ALREADY a legal declaration keeps its own name, so the common case
+  # emits no `db_column` at all. "Legal" here is exactly what the kwargs constructor accepts —
+  # `format_fild_name`'s `__`/`@` rejection and `_validate_declared_field_name`'s leading underscore,
+  # plus what Julia itself will parse as a keyword-argument name.
+  legal = Base.isidentifier(col) && !startswith(col, "_") && !occursin("__", col) &&
+          !(col in reserved) && !(col in MODEL_OPTION_KWARGS)
+  base = if legal
+    col
+  else
+    b = lstrip(col, '_')
+    # Collapse each RUN of non-identifier characters to a single '_' — a one-for-one substitution
+    # would turn `a@@b` into `a__b`. Unicode letters and digits are kept: Julia identifiers allow
+    # them, so `posição` needs no mangling.
+    b = replace(b, r"[^\p{L}\p{Nd}_]+" => "_")
+    # `__` is the lookup separator, so it is illegal in a DECLARED name even though it is a perfectly
+    # good Julia identifier — squeeze runs of '_' after the substitution above, which can itself
+    # create them.
+    b = replace(b, r"_{2,}" => "_")
+    b = strip(b, '_')
+    # A Julia identifier cannot START with a digit, and `2fast_` would still be illegal — prefix,
+    # don't suffix.
+    (isempty(b) || occursin(r"^\p{Nd}", b)) && (b = "col_$(b)")
+    b = rstrip(b, '_')
+    isempty(b) ? "col" : String(b)
+  end
+  # `Base.isidentifier` accepts keywords (`isidentifier("end")` is `true`), so the reserved-word and
+  # model-option checks are separate from it, not covered by it.
+  ident = (base in reserved || base in MODEL_OPTION_KWARGS) ? "$(base)_" : base
+  # Belt and braces for anything the filters above did not anticipate; `col` is always legal.
+  Base.isidentifier(ident) || (base = "col"; ident = "col")
+  # `ident != col` guards the no-op case: a name that needed no sanitizing keeps its own key, it just
+  # must not collide with something already emitted.
+  suffix = 2
+  while ident in taken || (ident != col && ident in raw_keys)
+    ident = "$(base)$(suffix)"
+    suffix += 1
+  end
+  return ident
 end
 
 # Physical SQL column for a field given its declared identity `name` (#50). Returns
@@ -1064,21 +1155,38 @@ even that isn't enough, because the physical table isn't a valid PormG model nam
     is case-sensitive, as it is on PostgreSQL. Rejecting the name at declaration (#300) turns that
     silent production failure into an error you get at load time.
 
-    `Model("_order", …)` raises the same error, for a related reason (#306): a foreign key that
-    targets the model renders its `REFERENCES` through `format_model_name`, which strips a leading
-    underscore — but `create_table` writes the stored name as-is. So the model would create table
-    `_order` while any `ForeignKey` pointing at it referenced `order` instead — a different table, or
-    a failed constraint. Unlike a field name, a positional model name is a plain string, never a
-    Julia kwarg key, so it never needed the leading-underscore escape hatch described below.
+    `Model("_order", …)` raises the same error, for the same reason: a model name is a lowercase
+    **logical** identifier, and an underscore-prefixed name is not a shape PormG generates. (It
+    arrived as #306, when `format_model_name` stripped a leading underscore for a foreign key's
+    `REFERENCES` target while `create_table` wrote the stored name as-is, so the model created
+    `_order` and referenced `order`. #317 retired that strip, so the split is gone and the rejection
+    is now convention rather than a bug guard.)
 
-    Mapping a model to a fixed, arbitrarily-cased table is `db_table` (below) — the positional name
-    stays the lowercase logical identifier either way.
+    Mapping a model to a fixed table whose name those rules reject — arbitrary case, a leading
+    underscore — is `db_table` (below). The positional name stays the lowercase logical identifier
+    either way.
 
 **Field names keep the case you declare** and are case-sensitive in queries, so a legacy `driverId`
-column is addressed as `driverId`. One leading underscore is stripped as the escape hatch for names
-that are Julia keywords or SQL reserved words (`_end = ...` declares the column `end`) — this applies
-to field names only, not the model name above; a name containing `__` is rejected, since that is the
-lookup separator.
+column is addressed as `driverId`. A name containing `__` is rejected, since that is the lookup
+separator, and so is a name starting with `_`:
+
+```julia
+Models.Model("lap", _end = Models.DateTimeField())
+# ModelDefinitionError: The field name '_end' … starts with '_'. …
+```
+
+That leading underscore used to be an escape hatch PormG silently stripped — `_end = CharField()`
+declared the column `end` — for a column whose name Julia will not accept as a keyword argument.
+Retired in #317: `db_column` (#50) says the same thing explicitly, and composes with `db_table`.
+
+```julia
+end_ = Models.DateTimeField(db_column = "end")   # field `end_` → column "end"
+id2  = Models.CharField(db_column = "_id")       # field `id2`  → column "_id"
+```
+
+Julia's own `var"…"` syntax also works for a plain field name — `var"end" = CharField()` declares
+the field `end` directly — but it does **not** escape a *model-option* collision (see the warning
+below), so `db_column` is the spelling that covers every case.
 
 A `ManyToManyField` is stored on the model but owns no column of its own, so it is absent from
 `field_names` and from the created table.
@@ -1103,9 +1211,16 @@ DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
 !!! warning "`constraints` and `db_table` are not field names"
     Both are peeled off before the field keywords, so `db_table = CharField()` declares the *option*
     (and raises, since a field is not a String) rather than a column called `db_table`. To declare a
-    column with one of those names, use the leading-underscore escape hatch: `_db_table =
-    CharField()` gives you the column `db_table` and leaves the option unset. A *table* named
-    `db_table` needs nothing special — `Model("db_table", …)` is fine.
+    column with one of those names, pin it with `db_column`:
+
+    ```julia
+    table_kind = Models.CharField(db_column = "db_table")
+    ```
+
+    `var"db_table" = CharField()` does **not** help: it parses to the keyword-argument name
+    `:db_table`, and the peel keys on that name however it was spelled. `db_column` is the only
+    spelling that genuinely declares the column. A *table* named `db_table` needs nothing special —
+    `Model("db_table", …)` is fine.
 
 !!! note "PormG has no Django `Meta` block"
     There is no model-level `ordering` or `verbose_name` — `db_table` (above) is the one model-level
@@ -1167,12 +1282,19 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   #
   # Deliberately NOT on the two `Dict`-taking `Model` methods below: those are how `inspectdb`
   # introspection and the Django importer build a model from a name they read out of a live database
-  # or a Python class, where mixed case is legitimate and must pass through untouched.
+  # or a Python class, where mixed case is legitimate and must pass through untouched. The same
+  # split applies to the FIELD-name guard on the loop below (#317).
   isempty(name) || _validate_positional_model_name(name)
   fields_dict::Dict{String, PormGField} = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
-    field_name = field[1] |> String |> format_fild_name
+    # This is the KWARGS declaration path — the only place a field name is a Julia identifier the
+    # user typed, and therefore the only place the retired leading-underscore hatch could have been
+    # meant (#317). Checked before the `isa PormGField` test so a bad NAME reports before a bad
+    # value, matching the positional-name gate above.
+    field_name = field[1] |> String
+    _validate_declared_field_name(field_name, name)
+    field_name = format_fild_name(field_name)
     if !(field[2] isa PormGField)
       throw(ModelDefinitionError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
@@ -1182,19 +1304,27 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   # println(fields_dict)
   return Model_Type(name=name, fields=fields_dict, field_names=field_names)
 end
+# `inspectdb` path. No name normalization or validation at all (#317): the keys ARE live column names,
+# and `field_names` must agree with them key-for-key. It previously ran `format_fild_name` here while
+# storing `dict` verbatim, so a `_end` column registered `fields["_end"]` alongside
+# `field_names == ["end"]` — a split — and an `a__b` column aborted the whole import from inside this
+# loop, before `Model_to_str` ever got a chance to render it.
 function Model(name::AbstractString, dict::Dict{String, PormGField})
   field_names::Vector{String} = []
-  for (field_name, field) in pairs(dict)    
-    !is_many_to_many_field(field) && push!(field_names, field_name |> format_fild_name)
+  for (field_name, field) in pairs(dict)
+    !is_many_to_many_field(field) && push!(field_names, field_name)
   end
   return Model_Type(name=name, fields=dict, field_names=field_names)
 end
+# Django-importer path. Same exemption as the `Dict{String,…}` method above (#317) — the keys are
+# Python class attributes read from a live model; a Django `_foo = models.CharField()` used to import
+# as the column `foo`, which was simply wrong.
 function Model(name::AbstractString, fields::Dict{Symbol, Any})
   fields_dict = Dict{String, PormGField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
     @pormg_debug false
-    field_name = field_name |> String |> format_fild_name
+    field_name = field_name |> String
     if !(field isa PormGField)
       throw(ModelDefinitionError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
@@ -1222,9 +1352,19 @@ end
 Dynamically adds a field to an existing model. If the field is a ManyToManyField,
 it also registers reverse accessors and caches join metadata (requires the model to
 be initialized via `set_models()` / `@import_models` with a configured connection).
+
+`field_name` follows the same rules as a field declared in a `Model(...)` call: `__` and `@` are
+rejected, and a **leading underscore** raises [`ModelDefinitionError`](@ref) (#317) — pass
+`db_column` on the field to target a column whose name is a Julia keyword or literally begins with
+an underscore.
 """
 function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field::PormGField)
-  field_name = format_fild_name(field_name isa Symbol ? String(field_name) : field_name)
+  # A DECLARATION path, not a reference: this is public API that takes a name the user wrote, so it
+  # gets the same leading-underscore guard as the kwargs constructor (#317). Without it,
+  # `add_field!(m, :_end, f)` would silently flip from the column `end` to the column `_end`.
+  field_name = field_name isa Symbol ? String(field_name) : String(field_name)
+  _validate_declared_field_name(field_name, model.name)
+  field_name = format_fild_name(field_name)
 
   if is_many_to_many_field(field)
     ensure_model_initialized(model)
@@ -1261,7 +1401,10 @@ Converts a model object to a string representation to create the model.
     Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false)::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
 - `settings::PormGSettings`: Connection settings; supplies `django_prefix` and the target output folder.
-- `contants_julia::Vector{String}=reserved_words`: A vector of reserved words in Julia.
+- `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
+  the words that cannot be a Julia keyword-argument name. A column named after one of them (or after a
+  model option, or otherwise not a legal identifier) is emitted under a sanitized name with the real
+  column pinned as `db_column` (#317).
 - `name_is_physical_table::Bool=false`: whether `model.name` is a **live table name** rather than a
   logical identifier. `true` for database introspection (`inspectdb`), where a name that is not
   already lowercase must be pinned as `db_table` so the generated declaration addresses the table it
@@ -1296,12 +1439,48 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   # `sort(::Dict)` (via `pairs(...) |> sort`), which is deprecated and emits a Warn-level
   # depwarn — that surfaces under CI's depwarn-enabled `Pkg.test` run and trips the #70
   # render-failure test's "healthy model → no warn" assertion.
+  # Captured BEFORE the loop: a sanitized identifier must not steal a column that appears LATER in
+  # the sorted iteration (`_id` -> `id` on a model that also has a real `id`). `taken` accumulates
+  # what has already been emitted.
+  raw_keys::Set{String} = Set(String(k) for k in keys(model.fields))
+  taken::Set{String} = Set{String}()
+  # column -> emitted identifier, for every field this loop RENAMES. `UniqueConstraint(fields = …)`
+  # below names fields by their key, so it has to be translated through this or the generated file
+  # declares a constraint over a field it no longer contains.
+  renamed::Dict{String, String} = Dict{String, String}()
+  # Columns that actually REACHED the output. A field can be dropped two ways — the #70 render-failure
+  # `catch` below, and the ManyToManyField `continue` — and a constraint naming a dropped field is the
+  # same unloadable-file failure as a constraint naming a renamed one.
+  rendered::Set{String} = Set{String}()
   for (field_name, field) in sort(collect(model.fields); by = first)
-    occursin(r"__|@|^_", field_name) && throw(ModelDefinitionError("The field name $field_name in the model $model contains __ or @ or starts with _"))
-    db_field_name::String = field_name  # real column name, before reserved-word prefixing — diagnostics must show this one
-    field_name in contants_julia && (field_name = "_$field_name")
+    db_field_name::String = field_name  # real column name, before sanitizing — diagnostics must show this one
     struct_name::Symbol = nameof(typeof(field)) |> string |> x -> x[2:end] |> Symbol
     sets::Vector{String} = []
+    # Pick a legal Julia identity for the field and pin the real column with `db_column` (#317).
+    # This replaces the old `field_name = "_$field_name"` reserved-word prefix — the leading-underscore
+    # hatch that `Model(...)` no longer accepts, so re-adding it here generated files that would not
+    # reload — and the outright `throw` on a `__`/`@`/`^_` key, which aborted the ENTIRE import on one
+    # such column instead of rendering it.
+    field_name = _julia_field_identifier(db_field_name, contants_julia, taken, raw_keys)
+    push!(taken, field_name)
+    if field_name != db_field_name
+      renamed[db_field_name] = field_name
+      if struct_name == :ManyToManyField
+        # `sManyToManyField` carries no `db_column`, AND its field name feeds the derived join-table
+        # name (`_many_to_many_table_name`), so a rename here is lossy and unrecorded. Route it
+        # through the #70 render-failure path instead of silently renaming a relation. Practically
+        # unreachable: an M2M field only exists on a code-declared model, where the declaration guard
+        # already rejects an illegal key.
+        @warn "Model_to_str: ManyToManyField name is not a legal Julia identifier — emitting marker comment" model=model.name field=db_field_name
+        push!(render_failures, "# PormG: field '$(db_field_name)' (ManyToManyField) could not be rendered: a ManyToManyField has no db_column, so its name cannot be remapped to a legal Julia identifier — rename the relation by hand. — field omitted.")
+        continue
+      elseif field_db_column(field, db_field_name) == db_field_name
+        # Anti-clobber: only when the KEY is what states the column. A field that already carries an
+        # explicit `db_column` has it emitted from the struct diff by `_model_to_str_general` below,
+        # and this rename must touch the Julia-side identity only.
+        push!(sets, "db_column=$(format_string(db_field_name))")
+      end
+    end
     try
       fields = if struct_name in [:ForeignKey, :OneToOneField]
         _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
@@ -1310,6 +1489,7 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
       else
         _model_to_str_general(field_name, field, struct_name, sets, fields)
       end
+      push!(rendered, db_field_name)
     catch e
       # Never drop a field silently (#70). Program-state errors surface loudly (#69 guard);
       # anything else logs and emits a visible marker comment in the generated output —
@@ -1325,17 +1505,55 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   if fields != "" && haskey(model.cache, "unique_constraints")
     ucs = get(model.cache["unique_constraints"], "constraints", UniqueConstraint[])
     if !isempty(ucs)
-      rendered = String[]
+      rendered_constraints = String[]
       for c in ucs
-        cols = join(("\"$(f)\"" for f in c.fields), ", ")
-        namepart = c.name === nothing ? "" : ", name = \"$(c.name)\""
+        cfields = String[String(f) for f in c.fields]
+        # A constraint over a field that never reached the output cannot be declared: on reload
+        # `_apply_unique_constraints!` raises "UniqueConstraint references unknown field 'boom'" and
+        # the whole generated file fails. Drop it with a visible marker rather than emit a file that
+        # does not load — the #70 convention, applied one level up (#317).
+        missing_fields = filter(f -> !(f in rendered), cfields)
+        if !isempty(missing_fields)
+          @warn "Model_to_str: UniqueConstraint references a field that did not render — emitting marker comment" model=model.name fields=cfields missing=missing_fields
+          push!(render_failures, "# PormG: UniqueConstraint over ($(join(cfields, ", "))) could not be rendered: field(s) $(join(missing_fields, ", ")) did not render — constraint omitted.")
+          continue
+        end
+        # A constraint names its fields by KEY, and the loop above may have renamed some of those
+        # keys to legal Julia identifiers (#317). Translate through `renamed` — a constraint over the
+        # old key would be rejected the same way. Identity fallback for anything not renamed, which
+        # is the common case.
+        cols = join((format_string(get(renamed, f, f)) for f in cfields), ", ")
+        namepart = c.name === nothing ? "" : ", name = $(format_string(String(c.name)))"
         # Trailing comma keeps a single-field tuple valid Julia: ("a",)
-        push!(rendered, "Models.UniqueConstraint(fields = ($(cols),)$(namepart))")
+        push!(rendered_constraints, "Models.UniqueConstraint(fields = ($(cols),)$(namepart))")
       end
-      fields *= ",\n  constraints = [$(join(rendered, ", "))]"
+      isempty(rendered_constraints) ||
+        (fields *= ",\n  constraints = [$(join(rendered_constraints, ", "))]")
     end
   end
-  model_var_name = uppercasefirst(model.name)
+  # The generated BINDING must be a legal Julia identifier. `uppercasefirst` alone is not enough once
+  # the name can come from a live table: `inspectdb` on `2fast` or `driver profile` produced source
+  # that does not parse. Fall back to the field sanitizer only when it is not already legal.
+  #
+  # The `isidentifier` guard is load-bearing, not an optimization. A child's `ForeignKey` `.to` is
+  # `uppercasefirst(<live parent table>)` (`src/migrations/introspection.jl`), and
+  # `_resolve_target_model` resolves it by BINDING LOOKUP alone — no name or table fallback. So the
+  # binding and `.to` must stay the same expression. Sanitizing unconditionally silently broke that
+  # for every name `uppercasefirst` already made legal: `end` -> `End_` vs `.to = "End"`,
+  # `db_table` -> `Db_table_` vs `Db_table`, `_order` -> `Order` vs `_order`.
+  #
+  # A binding is a variable name, so neither the keyword list nor the model options apply to it —
+  # `uppercasefirst` alone escapes every Julia keyword, since they are all lowercase.
+  #
+  # `isidentifier` is necessary but NOT sufficient: `Base.isidentifier("_")` is `true`, yet an
+  # ALL-underscore identifier is write-only in Julia — `_ = Model(…)` assigns and then
+  # `getfield(mod, :_)` raises `UndefVarError`. A table named `_` would generate a file that loads
+  # and leaves the model permanently invisible to every binding-based lookup, with no error anywhere.
+  # `_order` is fine; only a name with nothing left after `lstrip` is not.
+  _plain_var = uppercasefirst(String(model.name))
+  model_var_name = (Base.isidentifier(_plain_var) && !isempty(lstrip(_plain_var, '_'))) ? _plain_var :
+    uppercasefirst(_julia_field_identifier(String(model.name), contants_julia,
+                                           Set{String}(), Set{String}()))
   # Round-trip the physical table name as `db_table=` (#59). Two sources, one kwarg:
   #
   #  1. An explicit `db_table` on the model — emitted verbatim so a reload reproduces it.
@@ -1367,12 +1585,26 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   # `db_table` above — the two are one decision, not two. Stripping without pinning is precisely the
   # "generated declaration silently addresses a different table" defect the `name_is_physical_table`
   # gate exists to prevent: the Django importer's `_InternalThing` maps to table `_internalthing`,
-  # so emitting `internalthing` there would be wrong. Declines to strip an ALL-underscore name rather
-  # than emit an empty positional name (which silently means "derive from the binding").
+  # so emitting `internalthing` there would be wrong.
+  #
+  # An ALL-underscore table (`_`, `___`) strips to the empty string, which as a positional name
+  # silently means "derive from the binding". Emitting the unstripped `_` instead is no better — the
+  # #306 guard rejects it, so the generated file did not load. Since this branch is only reached when
+  # `db_table` is pinning the real name anyway, the positional slot is free to take a placeholder that
+  # the guard accepts (#317).
   _lowered = model.name |> lowercase
   _stripped_name = pin_introspected ? lstrip(_lowered, '_') : _lowered
-  model_name_abs = django_prefix ? string(settings.django_prefix, "_", _lowered) :
-                                   (isempty(_stripped_name) ? _lowered : String(_stripped_name))
+  model_name_abs = if django_prefix
+    string(settings.django_prefix, "_", _lowered)
+  elseif !isempty(_stripped_name)
+    String(_stripped_name)
+  elseif pin_introspected
+    # `db_table` carries the truth; this is only the logical handle, so any name the guard accepts
+    # will do. The sanitizer yields `col` for an all-underscore name.
+    lowercase(_julia_field_identifier(_lowered, contants_julia, Set{String}(), Set{String}()))
+  else
+    _lowered
+  end
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
   if fields == ""
@@ -1382,17 +1614,27 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
     # marker — so the file still loads and the user sees exactly which model to fix by hand. Mirrors
     # Rails' SchemaDumper, which comments out a table it can't dump so schema.rb stays loadable.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
-    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model("$(model_name_abs)"$db_table_part)"""
+    result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part)"""
   else
-    result = """$(marker)$(model_var_name) = Models.Model("$(model_name_abs)"$db_table_part$fields)"""
+    result = """$(marker)$(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$fields)"""
   end
   @info(result)
 
   return result
 end
+# True when `Model_to_str` already pinned `db_column` for this field because it had to rename the
+# field's Julia identity (#317). The struct diff below must then NOT emit its own — Julia rejects a
+# repeated keyword argument at PARSE time, so a duplicate produces a file that will not even load.
+# Only reachable for a field carrying `db_column = ""` (empty is "unset" to `field_db_column`, but
+# differs from the `nothing` default the diff compares against), and the pinned value is the truthful
+# one in that case.
+_db_column_already_pinned(sets)::Bool = any(s -> startswith(s, "db_column="), sets)
+
 function _model_to_str_general(field_name, field, struct_name, sets, fields)
   stadard_field = getfield(@__MODULE__, struct_name)()
+  pinned = _db_column_already_pinned(sets)
   for sfield in fieldnames(typeof(field))
+    pinned && sfield === :db_column && continue
     if getfield(field, sfield) != getfield(stadard_field, sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
     end
@@ -1406,18 +1648,24 @@ function _model_to_str_general(field_name, field, struct_name, sets, fields)
 end
 function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   to::String = ""
+  pinned = _db_column_already_pinned(sets)
   for sfield in fieldnames(typeof(field))
+    pinned && sfield === :db_column && continue
     # #62: `.to` may now be a resolved PormGModel (set_models / migration prelude write
-    # back the model). Emit its generated variable name — `uppercasefirst(model.name)`,
-    # matching `Model_to_str` above — so a model-`.to` serializes identically to the
-    # string a user would have declared. (The only live caller, the import flow, always
-    # has a string `.to`; this branch is defensive, locked by a round-trip test.)
+    # back the model). Emit its generated variable name — `uppercasefirst(model.name)`, which is
+    # exactly what `Model_to_str` emits as the binding whenever that is already a legal identifier,
+    # and the two MUST agree: `_resolve_target_model` resolves a String `.to` by binding lookup
+    # alone. So a model-`.to` serializes identically to the string a user would have declared. (The
+    # only live caller, the import flow, always has a string `.to`; this branch is defensive,
+    # locked by a round-trip test.)
     sfield == :to && (v = getfield(field, sfield); to = v isa PormGModel ? uppercasefirst(v.name) : v; continue)
     if getfield(field, sfield) != getfield(ForeignKey(""), sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
     end
   end
-  fields *= ",\n  $field_name = Models.$struct_name(\"$to\", $(join(sets, ", ")))"
+  # `format_string`, not raw interpolation: `to` is a live parent TABLE name on the inspectdb path,
+  # so a `"` or `$` in it would emit source that does not parse (#317).
+  fields *= ",\n  $field_name = Models.$struct_name($(format_string(String(to))), $(join(sets, ", ")))"
   return fields
   
 end
@@ -1430,7 +1678,8 @@ function _model_to_str_many_to_many(field_name, field, sets, fields)
   field.source_field !== nothing && push!(sets, "source_field=$(format_string(field.source_field))")
   field.target_field !== nothing && push!(sets, "target_field=$(format_string(field.target_field))")
   field.verbose_name !== nothing && push!(sets, "verbose_name=$(format_string(field.verbose_name))")
-  fields *= ",\n  $field_name = Models.ManyToManyField(\"$to\"$(isempty(sets) ? "" : ", " * join(sets, ", ")))"
+  # `format_string` for the same reason as the ForeignKey site above (#317).
+  fields *= ",\n  $field_name = Models.ManyToManyField($(format_string(String(to)))$(isempty(sets) ? "" : ", " * join(sets, ", ")))"
   return fields
 end
 
@@ -2212,11 +2461,21 @@ end
 """
     format_string(x)
 
-Format the input `x` as a string if it is of type `String`, otherwise return `x` as is.
+Format the input `x` as a Julia source literal if it is a `String`, otherwise return `x` as is.
+
+Used to render generated model files (`Model_to_str`). The value is `escape_string`d because the
+strings reaching it are no longer all pre-validated identifiers: since #317 an arbitrary live column
+name can arrive here as a `db_column = "…"` value, and `db_table = "…"` (#59) has always been able to.
+A column named `say "hi"` would otherwise emit source that does not parse.
+
+The `esc` argument REPLACES `escape_string`'s default rather than adding to it, so it must list `"`
+as well as `\$`. Both are needed: an unescaped `"` closes the literal early, and an unescaped `\$`
+emits source that parses but silently *interpolates* — `cost\$usd` would become the value of `usd`
+rather than the column name. (A backslash is escaped unconditionally, `esc` or not.)
 """
-function format_string(x)  
+function format_string(x)
   if x isa String
-    return "\"$x\""
+    return "\"$(escape_string(x, "\$\""))\""
   else
     return x
   end

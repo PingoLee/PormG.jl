@@ -125,15 +125,25 @@ DbtPlain.connect_key = "db_table_mock"
     # NAME COLLISION. Because `db_table` is peeled off before the `fields...` slurp, a FIELD named
     # `db_table` can no longer be declared that way — it is read as the option and fails the type
     # check. Loud, not silent, which is the point (the older `constraints` peel dies with a raw
-    # MethodError instead). The underscore escape hatch is the supported spelling.
+    # MethodError instead).
     field_err = try
       Model("dbt_collide_scratch", id = IDField(), db_table = CharField()); nothing
     catch e; e end
     @test field_err isa PormG.ModelDefinitionError
     @test occursin("db_table", field_err.msg)
 
-    escaped = Model("dbt_escape_scratch", id = IDField(), _db_table = CharField())
-    @test haskey(escaped.fields, "db_table")          # the COLUMN is named db_table…
+    # `db_column` is the supported spelling for that column (#317). It is the ONLY one that works:
+    # the peel keys on the kwarg NAME however it was spelled, so `var"db_table"` is peeled too, and
+    # the old `_db_table` leading-underscore hatch is retired.
+    @test_throws PormG.ModelDefinitionError Model("dbt_hatch_scratch", id = IDField(), _db_table = CharField())
+    var_err = try
+      Model("dbt_var_scratch", id = IDField(), var"db_table" = CharField()); nothing
+    catch e; e end
+    @test var_err isa PormG.ModelDefinitionError
+    @test occursin("'db_table' option", var_err.msg)   # peeled as the OPTION, not read as a field
+
+    escaped = Model("dbt_escape_scratch", id = IDField(), table_kind = CharField(db_column = "db_table"))
+    @test PormG.Models.field_db_column(escaped.fields["table_kind"], "table_kind") == "db_table"  # the COLUMN…
     @test escaped.db_table === nothing                # …and the OPTION is untouched
     @test occursin("\"db_table\"", PormG.Dialect.create_table(MockPostgresDbTable(), escaped))
 
@@ -391,8 +401,9 @@ DbtPlain.connect_key = "db_table_mock"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # ManyToManyField(db_table = …) predates this option and applied the OPPOSITE policy: it ran the
-  # value through `format_model_name`, silently lowercasing it (and stripping a leading
-  # underscore). Same user intent — "this table is called X" — so it now behaves the same way.
+  # value through `format_model_name`, silently lowercasing it (and, until #317 retired that strip,
+  # removing a leading underscore too). Same user intent — "this table is called X" — so it now
+  # behaves the same way.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "ManyToManyField db_table preserves case too" begin
     m2m = ManyToManyField("dbt_driver_scratch", db_table = "Dbt_Driver_Races")

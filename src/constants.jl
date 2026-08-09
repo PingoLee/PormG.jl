@@ -27,13 +27,34 @@ const LAST_INSERT_ID_LABEL = "LAST_INSERT_ID"
 const DATETIME_FORMAT = "yyyy-mm-ddTHH:MM:SS.ssszzzz"
 const UTC_TIMEZONE = "UTC"
 
+# Words that CANNOT be a Julia keyword-argument name — i.e. `Model("t", <word> = CharField())` is a
+# syntax/lowering error, so a column with one of these names cannot be declared as a plain kwarg.
+# `Model_to_str` consults this list to pick a legal identifier for a generated field and pins the real
+# column with `db_column` (#317). It is NOT a list of SQL reserved words, and NOT "words Julia treats
+# specially" — `type`, `where`, `in`, `isa`, `mutable`, `abstract`, `primitive`, `outer` and `var` all
+# parse fine as kwarg names and are deliberately absent.
+#
+# Re-derive it with EVAL, not `Meta.parse`: `true`/`false` parse and then fail at lowering, and
+# `Base.isidentifier("end")` is `true`, so neither is a usable predicate on its own.
+#
+#   f(; kw...) = keys(kw)
+#   filter(w -> (try eval(Meta.parse("f($w = 1)")); false catch; true end), candidates)
+#
+# The list previously carried twelve legal words plus `id` — which is why every doc example and every
+# generated model file said `_id = IDField()`. `id` is an ordinary Julia identifier (#317).
 const reserved_words = [
-  "if", "else", "elseif", "while", "for", "begin", "end", "function", "return",
-  "break", "continue", "global", "local", "const", "let", "do", "try", "catch",
-  "finally", "struct", "mutable", "abstract", "primitive", "type", "quote",
-  "macro", "module", "baremodule", "using", "import", "export", "importall",
-  "where", "in", "isa", "throw", "true", "false", "nothing", "missing", "id"
+  "baremodule", "begin", "break", "catch", "const", "continue", "do", "else", "elseif", "end",
+  "export", "false", "finally", "for", "function", "global", "if", "import", "let", "local",
+  "macro", "module", "quote", "return", "struct", "true", "try", "using", "while"
 ]
+
+# Keyword arguments `Model(...)` peels off BEFORE the `fields...` slurp (`src/Models.jl`). A column
+# with one of these names cannot be declared as a kwarg at all — not even as `var"db_table"`, since
+# the peel keys on the kwarg NAME however it was spelled — so it needs `db_column` (#317).
+# `Model_to_str` treats them exactly like `reserved_words` when picking a generated identifier;
+# without that, an introspected `db_table` column emitted `db_table = Models.CharField()`, which the
+# peel then read as the option and rejected on reload.
+const MODEL_OPTION_KWARGS = ["constraints", "db_table"]
 
 const PormGsuffix = Dict{String,Union{Int64, String}}(
   "gte" => ">=",

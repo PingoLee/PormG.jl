@@ -40,6 +40,113 @@ consuming app, `/pormg-cut-release` stamps every entry below with `0.4.0`, dates
 
 ---
 
+## The leading-underscore field-name escape hatch is retired (#317)
+
+- **Version**: Unreleased
+- **PormG ref**: #317; `src/Models.jl`, `src/constants.jl`, `src/Kernel.jl`,
+  `src/models/fields.jl`, `src/querybuilder/types.jl`, `docs/src/fields.md`,
+  `docs/src/schema_conventions.md`
+- **Recorded**: 2026-08-08
+- **Severity**: **breaking (definition time, wide)** — every model declaring a field with a leading
+  underscore needs a source edit. **No database migration.** Part of the `0.4.x` pre-publish wave.
+
+### What changed
+
+A single leading underscore used to be an escape hatch: `format_fild_name` stripped it, so
+`_end = CharField()` declared the column `end`. It existed because `end = CharField()` is a Julia
+**syntax** error — a real problem, but one PormG now solves explicitly.
+
+The hatch is gone. A declared field name starting with `_` raises at load time:
+
+```
+ModelDefinitionError: The field name '_id' on model 'b1_proc' starts with '_'. One leading underscore
+used to be the escape hatch for a column whose name is a Julia keyword — `_end = CharField()` declared
+the column `end` — retired in #317 because db_column (#50) states the same thing explicitly and
+composes with db_table (#59). Declare the column you meant:
+  • for the column 'id': id = Models.CharField(db_column = "id")
+  • for a column literally named '_id': id = Models.CharField(db_column = "_id")
+```
+
+It **rejects** rather than silently meaning the literal column `_id`, for the same reason #300/#306
+reject a bad model name: quietly changing which column a declaration addresses is the failure mode
+worth preventing. A rejection is a load-time error; the silent version would be a wrong `SELECT`.
+
+Why it had to go: it encoded the Julia identity and the SQL identity in **one** string with a decoding
+rule, where `db_column` (#50) states them separately and composes with `db_table` (#59). It cost
+[#306](#a-positional-model-name-may-not-start-with-an-underscore-306) — `format_model_name` inherited
+the strip, so a model named `_order` created that table and referenced `order` — and it made
+`Model_to_str` generate files that would not reload. It also forced a grammar restriction on everyone:
+a name with two leading underscores was rejected outright, and `inspectdb` **aborted the entire
+import** on a single column named `_foo`.
+
+Three things fall out of it, all improvements:
+
+- **`id` is an ordinary identifier again.** PormG's `reserved_words` list wrongly carried `id` (plus
+  eleven other legal words: `type`, `where`, `in`, `isa`, `throw`, `nothing`, `missing`, `mutable`,
+  `abstract`, `primitive`, `importall`). That is why every doc example and every generated model file
+  said `_id = IDField()`. The list is now exactly the words Julia will not accept as a
+  keyword-argument name.
+- **`format_model_name` is a pure case fold.** It no longer inherits the strip, so the FK
+  `REFERENCES` target and `CREATE TABLE` render the same identifier for any name.
+- **Introspection can read any column.** A column named `end`, `_id`, `a__b`, `2fast` or
+  `db_table` is generated under a legal Julia identity with `db_column` pinning the truth, and the
+  generated file reloads to the same physical schema.
+
+### Before → after
+
+```julia
+# before                                    # after
+_id       = Models.IDField()                id         = Models.IDField()
+_end      = Models.CharField()              end_       = Models.CharField(db_column = "end")
+_function = Models.CharField()              function_  = Models.CharField(db_column = "function")
+_db_table = Models.CharField()              table_kind = Models.CharField(db_column = "db_table")
+```
+
+**The physical column is unchanged in every row above, so `makemigrations` proposes nothing.**
+`db_column` is in the planner's non-schema attribute set and the code side of the diff is keyed by
+physical column, so renaming the Julia identity while pinning the same column is invisible to the
+migration engine. `_id` → `id` needs no `db_column` at all: the hatch was already stripping it, so the
+column was always `id`.
+
+Field **references** follow the field's new name — `pk_field`, `UniqueConstraint(fields = …)`,
+ManyToMany `source_field`/`target_field`, `values()`, `filter()`, `order_by()`. Anything that already
+referred to the *stripped* name (`.filter("id" => …)`, `.filter("function" => …)`) keeps working
+unchanged if you keep that name as the field identity, and needs the new identity if you rename it —
+`function_` in the table above, since `function` is not a legal kwarg.
+
+Two more spellings that also work, for completeness. `var"end" = CharField()` — Julia's own
+non-standard identifier syntax — declares the field `end` directly, and the `Dict` form
+(`Model("t", Dict("end" => CharField()))`) takes any string. Neither escapes a **model-option**
+collision: `var"db_table"` still parses to the kwarg `:db_table` and is peeled as the option, so
+`db_column` is the one spelling that covers every case.
+
+### How to find the calls to migrate
+
+```bash
+rg -n --pcre2 '(?<![\w.])_\w+\s*(::\w+\s*)?=\s*(Models\.)?[A-Z]\w*(Field|Key)\(' -g '*.jl'
+rg -n 'add_field!\([^,]+,\s*[:"]_' -g '*.jl'
+```
+
+The first finds declarations; the second finds the `add_field!` arity, which is guarded the same way.
+Row **reads** need a look too — `row._id` used to resolve to the key `id` and now resolves to `_id`:
+
+```bash
+rg -n --pcre2 '(?<![\w])row\._\w+|\[\s*:_\w+\s*\]' -g '*.jl'
+```
+
+### Two more things you may hit
+
+- **Regenerate `inspectdb` / Django-importer output, or hand-edit it.** The spelling changed: `id` is
+  no longer emitted as `_id`, and a keyword or otherwise-illegal column now emits
+  `end_ = Models.CharField(db_column = "end")`. The columns are identical either way — this is a
+  cosmetic change to generated files, not a schema change.
+- **A model binding starting with `_` changes its table.** `_Order = Models.Model(id = IDField())`
+  derived the table `order`; it now derives `_order`, because `format_model_name` no longer strips.
+  Rename the binding (`Order = …`) to keep the old table, or pin `db_table = "order"`. The positional
+  form was already rejected (#306), so this only affects the binding-derived form.
+
+---
+
 ## Bulk writes — a `default` / `auto_now` no longer overwrites a blank cell in a column the DataFrame carries (#331)
 
 - **Version**: Unreleased
@@ -335,7 +442,7 @@ Models.ManyToManyField(Driver, db_table = "Driver_Races")
 Driver_profile = Models.Model("driver_profile", db_table = "Driver_Profile", …)
 ```
 
-**A field named `db_table` must now use the underscore escape hatch.** `db_table` is peeled off
+**A field named `db_table` must now be declared with `db_column`.** `db_table` is peeled off
 before the `fields...` slurp (exactly like `constraints`), so it is read as the option:
 
 ```julia
@@ -344,9 +451,16 @@ Models.Model("thing", id = Models.IDField(), db_table = Models.CharField())
 # after  → ModelDefinitionError: The 'db_table' option on model 'thing' must be a String or nothing,
 #          got PormG.Models.sCharField
 
-# migrate to the leading-underscore escape hatch — still the column `db_table`:
-Models.Model("thing", id = Models.IDField(), _db_table = Models.CharField())
+# migrate to db_column — still the column `db_table`:
+Models.Model("thing", id = Models.IDField(), table_kind = Models.CharField(db_column = "db_table"))
 ```
+
+`var"db_table" = Models.CharField()` does **not** work either: it parses to the keyword-argument
+name `:db_table`, and the peel keys on that name however it was spelled. (This entry originally
+prescribed the leading-underscore escape hatch, `_db_table = Models.CharField()`; that hatch was
+retired later in the same pre-publish wave — see
+[the #317 entry](#the-leading-underscore-field-name-escape-hatch-is-retired-317) — so `db_column`
+is the spelling to migrate to.)
 
 It fails loudly at load time, never silently. A *table* named `db_table` is unaffected —
 `Models.Model("db_table", …)` needs no change.
@@ -544,12 +658,13 @@ have, and the corrected declaration now points at it instead of at a table that 
 ### What changed
 
 The same split as #300, one character away. `Models.Model("_order", …)` stored the name **verbatim**,
-but a `ForeignKey` targeting it renders its `REFERENCES` through `format_model_name`, which strips
-one leading underscore — inherited from the FIELD-name reserved-word escape hatch (`_end = ...`
-declares column `end`), which a positional model name never actually needed, since it is a plain
-string literal and never a Julia kwarg key. So the model created table `_order` while any foreign key
-pointing at it referenced `order` instead — **a different table**, or a failed constraint if `order`
-did not exist.
+but a `ForeignKey` targeting it rendered its `REFERENCES` through `format_model_name`, which stripped
+one leading underscore — inherited from the FIELD-name reserved-word escape hatch (`_end = ...` then
+declared the column `end`; that hatch was itself retired later in this wave, see
+[#317](#the-leading-underscore-field-name-escape-hatch-is-retired-317)), which a positional model name
+never actually needed, since it is a plain string literal and never a Julia kwarg key. So the model
+created table `_order` while any foreign key pointing at it referenced `order` instead — **a different
+table**, or a failed constraint if `order` did not exist.
 
 On PostgreSQL this either fails the migration outright (`order` does not exist) or, worse, silently
 binds the foreign key to an unrelated table that happens to share that name. SQLite carries the same
@@ -558,16 +673,18 @@ inline-FK split (see `create_table(::PormGSQLite, …)`), so it is not backend-s
 A positional name starting with `_` is now rejected at declaration:
 
 ```
-ModelDefinitionError: The model name '_order' starts with '_'; a leading underscore is the escape
-hatch for FIELD names colliding with a reserved word, not model names. PormG's foreign-key REFERENCES
-target strips a leading underscore (format_model_name) but the table this creates keeps it verbatim,
-so this model would create table '_order' while a foreign key pointing at it references 'order'
-instead — a different table if one exists, a failed constraint if it doesn't. Declare it as 'order'.
+ModelDefinitionError: The model name '_order' starts with '_'; a PormG model name is a lowercase
+logical identifier and never carries one. Declare it as 'order'. If the physical table really is
+named '_order', pin it explicitly: Models.Model("order", db_table = "_order", …). A leading
+underscore used to be the escape hatch for FIELD names colliding with a Julia keyword; that was
+retired in #317 in favour of db_column, and it never applied to model names — a positional name is
+a plain string, never a Julia kwarg key.
 ```
 
 It rejects rather than silently stripping, for the same reason as #300: folding the name would
-discard a stated intent with no signal it happened. Model-level `db_table` (#59) has since landed as
-the way to express a physical name PormG's own naming rules would not produce.
+discard a stated intent with no signal it happened. Model-level `db_table` (#59) landed alongside it
+as the way to express a physical name PormG's own naming rules would not produce, and the message
+above points at it.
 
 **Only the positional form is affected.** `inspectdb` introspection and the Django importer still
 accept a leading-underscore name — they read it from a live database or a Python class, where it is
@@ -588,11 +705,15 @@ Order = Models.Model("order",
 )
 ```
 
-**If the physical table really is named with a leading underscore**, there is no mapping for it yet —
-that is [#59](https://github.com/PingoLee/PormG.jl/issues/59). Check what `makemigrations` actually
-created: it wrote the name **verbatim** (unlike the case split, nothing here folds it), so `_order` is
-the table you already have, and the rejected declaration was never able to reference it correctly in
-the first place.
+**If the physical table really is named with a leading underscore**, pin it with `db_table` (#59):
+
+```julia
+Order = Models.Model("order", db_table = "_order", id = Models.IDField())
+```
+
+Check what `makemigrations` actually created first: it wrote the name **verbatim** (unlike the case
+split, nothing here folds it), so `_order` is the table you already have — and the rejected
+declaration was never able to reference it correctly in the first place.
 
 ### How to find the calls to migrate
 

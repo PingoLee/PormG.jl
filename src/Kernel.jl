@@ -333,7 +333,7 @@ export DBDF_FOLDER_NAME, CONFIG_PATH, ENV_PATH, LOG_PATH, APP_PATH, RESOURCES_PA
 
 # Behavior constants
 export DEFAULT_POOL_TIMEOUT, LAST_INSERT_ID_LABEL, DATETIME_FORMAT, UTC_TIMEZONE,
-       reserved_words
+       reserved_words, MODEL_OPTION_KWARGS
 
 # Query-builder vocabulary
 export PormGsuffix, PormGtransform, PormGTypeField, JSON_CONTAINMENT_OPERATORS

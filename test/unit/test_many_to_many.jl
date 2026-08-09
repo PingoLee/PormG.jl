@@ -300,8 +300,10 @@ end
 # The `sym in fieldnames(typeof(m))` branch must stay BEFORE the M2M check because
 # has_many_to_many_accessor() itself accesses m.cache and m.related_objects, which
 # would recurse infinitely if those went through getproperty again.
-# The guard cannot shadow M2M accessors because format_fild_name() rejects names that
-# collide with Model_Type struct field names.
+# The `fieldnames` branch is itself why an M2M accessor cannot shadow a struct field —
+# a struct field always wins there, whatever the accessor is called. (This used to be
+# attributed to format_fild_name rejecting such names; that was never the mechanism, and
+# since #317 that function rewrites nothing.)
 # This testset confirms both struct fields AND M2M accessors remain reachable.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PormGModel.getproperty: struct fields and M2M accessors coexist (BUG-1)" begin

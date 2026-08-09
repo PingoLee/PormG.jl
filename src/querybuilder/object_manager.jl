@@ -529,8 +529,10 @@ function Base.getproperty(m::Models.Model_Type, sym::Symbol)
     # IMPORTANT: struct fields MUST be intercepted here via getfield before the M2M
     # accessor check below.  has_many_to_many_accessor() itself accesses m.cache and
     # m.related_objects; if those go through getproperty again we get infinite recursion.
-    # M2M accessor names are validated through format_fild_name which rejects reserved
-    # names, so a user-defined M2M field cannot shadow a Model_Type struct field.
+    # This `fieldnames` intercept is itself what stops a user-defined M2M accessor from shadowing a
+    # `Model_Type` struct field — a struct field always wins here, whatever the accessor is called.
+    # (It used to be attributed to `format_fild_name` rejecting such names; that was never the
+    # mechanism, and since #317 that function rewrites nothing at all.)
     return getfield(m, sym)
   elseif Models.has_many_to_many_accessor(m, String(sym))
     Models.ensure_model_initialized(m)

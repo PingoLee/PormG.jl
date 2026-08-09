@@ -26,7 +26,8 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField, UniqueConstraint
+using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField, UniqueConstraint,
+                    add_field!
 using PormG.QueryBuilder: bulk_insert
 import DataFrames
 
@@ -205,6 +206,16 @@ const DOCERR_CASES = [
         "schema_conventions.md + src/Models.jl — Model docstring: a positional name may not start with '_' (#306)",
         ModelDefinitionError,
         () -> Model("_docerr_underscore_probe", driverid = IDField()),
+    ),
+    (
+        "fields.md + src/Models.jl — Model docstring: a declared FIELD name may not start with '_'; use db_column (#317)",
+        ModelDefinitionError,
+        () -> Model("docerr_field_underscore_probe", _id = IDField()),
+    ),
+    (
+        "src/Models.jl — add_field! docstring: a leading-underscore field name raises (#317)",
+        ModelDefinitionError,
+        () -> add_field!(Model("docerr_addfield_probe", id = IDField()), :_end, CharField()),
     ),
 ]
 

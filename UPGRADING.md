@@ -32,17 +32,19 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
 
 ---
 
-## Unreleased — next `0.4.0`
+## Unreleased — next `0.5.0`
 
 _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD is running these,
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
-consuming app, `/pormg-cut-release` stamps every entry below with `0.4.0`, dates them, and tags it._
+consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates them, and tags it._
 
 ---
 
+## 0.4.0 — 2026-08-10
+
 ## The leading-underscore field-name escape hatch is retired (#317)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #317; `src/Models.jl`, `src/constants.jl`, `src/Kernel.jl`,
   `src/models/fields.jl`, `src/querybuilder/types.jl`, `docs/src/fields.md`,
   `docs/src/schema_conventions.md`
@@ -149,7 +151,7 @@ rg -n --pcre2 '(?<![\w])row\._\w+|\[\s*:_\w+\s*\]' -g '*.jl'
 
 ## Bulk writes — a `default` / `auto_now` no longer overwrites a blank cell in a column the DataFrame carries (#331)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #331; `src/querybuilder/execution_bulk.jl`
 - **Recorded**: 2026-08-08
 - **Severity**: **behavior change** — persisted values can differ, and a `null=false` column can now
@@ -253,7 +255,7 @@ bulk_insert(M.Stint.objects, DataFrames.select(df, DataFrames.Not([:laps, :note]
 
 ## The migration diff compares the physical column, not the Julia field type (#325)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #325; `src/Dialect.jl`, `src/migrations/introspection.jl`,
   `src/migrations/planner.jl`, `src/models/fields.jl`, `src/constants.jl`
 - **Recorded**: 2026-08-07
@@ -334,7 +336,7 @@ visible.
 
 ## Introspection now reads single-column `UNIQUE` back (#318)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #318; `src/migrations/introspection.jl`, `src/migrations/planner.jl`
 - **Recorded**: 2026-08-07
 - **Severity**: **behavior-visible (one-time migration plan against existing databases)** — no source
@@ -388,7 +390,7 @@ Then run `makemigrations` and **read the plan** before `migrate`.
 
 ## Model-level `db_table`, and DDL now quotes the table identifier (#59)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #59; `src/Kernel.jl`, `src/Models.jl`, `src/Dialect.jl`, `src/migrations/planner.jl`,
   `src/querybuilder/{execution,build_joins,deletion,execution_bulk}.jl`, `src/Configuration.jl`,
   `src/models/fields.jl`, `docs/src/schema_conventions.md`, `docs/src/fields.md`
@@ -488,7 +490,7 @@ lowercase the value to keep the current table, or migrate the table to the new s
 
 ## The join/CTE free-function form is withdrawn — fluent only (#305)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #305; `src/QueryBuilder.jl`, `src/querybuilder/ctes.jl`,
   `src/querybuilder/object_manager.jl`, `docs/src/api.md`,
   `docs/src/read/subqueries_and_ctes.md`
@@ -556,7 +558,7 @@ arguments plus `q.object` (the underlying `SQLObject`); the fluent method takes 
 on the handler. Same for `cjoin(query, "result" => "Result")` → `query.cjoin("result" => "Result")`.
 ## A positional model name must be lowercase (#300)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #300; `src/Models.jl`, `docs/src/schema_conventions.md`, `docs/src/models.md`
 - **Recorded**: 2026-08-04
 - **Severity**: **breaking (definition time, SQLite-only apps in practice)** — a declaration that
@@ -649,7 +651,7 @@ have, and the corrected declaration now points at it instead of at a table that 
 
 ## A positional model name may not start with an underscore (#306)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #306; `src/Models.jl`, `docs/src/schema_conventions.md`
 - **Recorded**: 2026-08-06
 - **Severity**: **breaking (definition time, narrow)** — only declarations using a leading-underscore
@@ -727,7 +729,7 @@ An app that follows the documented lowercase, no-leading-underscore house style 
 
 ## Introspected foreign keys now carry `on_delete` (PostgreSQL) and the column default (SQLite) (#292)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #292; `src/migrations/introspection.jl`, `UPGRADING.md`
 - **Recorded**: 2026-08-04
 - **Severity**: **breaking (generated model files change; a contradictory PostgreSQL schema now
@@ -826,7 +828,7 @@ ALTER TABLE results ALTER COLUMN statusid SET DEFAULT 1;
 
 ## `BinaryField` stores real bytes — reads return `Vector{UInt8}`, not `String` (#296)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #296; `src/Kernel.jl`, `src/Models.jl`, `src/constants.jl`, `src/Dialect.jl`,
   `src/models/fields.jl`, `src/querybuilder/parameters.jl`, `src/querybuilder/sanitization.jl`,
   `src/migrations/introspection.jl`, `docs/src/fields.md`
@@ -903,7 +905,7 @@ M.Technical_document.objects.create("file_data" => read("aero.pdf"))
 
 ## SQLite now enforces foreign keys (#276)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #276; `ext/PormGSQLiteExt.jl`, `src/ConnectionPool.jl`, `src/migrations/runner.jl`,
   `src/querybuilder/deletion.jl`, `docs/src/write/create.md`, `docs/src/write/delete.md`
 - **Recorded**: 2026-08-02
@@ -996,7 +998,7 @@ directly.
 
 ## Contradictory `on_delete` declarations now raise, and the `SET` sentinel is gone (#287)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #287; `src/constants.jl`, `src/Kernel.jl`, `src/Models.jl`, `src/QueryBuilder.jl`,
   `src/models/fields.jl`, `src/querybuilder/deletion.jl`
 - **Recorded**: 2026-08-01
@@ -1077,7 +1079,7 @@ If a model trips check 2 or 3 at `set_models`, the message names the model and f
 
 ## `PormG.Migrations` no longer exports its schema-introspection helpers (#274)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #274; `src/Migrations.jl`
 - **Recorded**: 2026-08-01
 - **Severity**: **breaking (export surface)** — narrow: it affects only code that does
@@ -1146,7 +1148,7 @@ the ambiguity as a side effect.
 
 ## Database failures now raise `DatabaseError`, not the driver's exception type (#268)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: #268; `src/exceptions.jl`, `src/Backend.jl`, `src/ConnectionPool.jl`,
   `src/AdvisoryLock.jl`, `src/Configuration.jl`, `ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl`,
   `docs/src/api.md`
@@ -1231,7 +1233,7 @@ Read any of these with `error_message(e)`, **not** `e.msg` — like `PoolConnect
 
 ## Error contract, final pass: renames, capability split, and closed escape hatches (audit / #268)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: the 2026-07-30 taxonomy audit; `src/exceptions.jl`, `src/Backend.jl`,
   `src/Configuration.jl`, `src/ConnectionPool.jl`, `src/Dialect.jl`, `src/migrations/*`,
   `src/querybuilder/*`, `docs/src/api.md`; boundary decision deferred to #268
@@ -1317,7 +1319,7 @@ A `catch UnsupportedConnectionError` around a query that might hit a backend lim
 
 ## Read a caught `PormGError` with `error_message`, not `e.msg` (#261)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: issue #261 ; `src/exceptions.jl` (`error_message`, `PoolError`), `src/Kernel.jl`
   and `src/PormG.jl` (exports), `src/ConnectionPool.jl` (reparenting), `docs/src/api.md`
 - **Recorded**: 2026-07-29
@@ -1393,7 +1395,7 @@ catch e
 
 ## The `PormGError` taxonomy now covers all of PormG — not just the query builder (#239)
 
-- **Version**: Unreleased
+- **Version**: 0.4.0
 - **PormG ref**: issue #239 ; `src/exceptions.jl` (the taxonomy), `src/models/fields.jl`,
   `src/Models.jl`, `src/Dialect.jl`, `src/Configuration.jl`, `src/ConnectionPool.jl`,
   `src/migrations/*`, `src/PormG.jl`, `src/querybuilder/execution.jl`, `docs/src/api.md`

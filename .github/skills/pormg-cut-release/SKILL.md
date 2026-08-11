@@ -25,6 +25,33 @@ outside this skill.
 2. `UPGRADING.md` has at least one entry under `## Unreleased` (grep `- \*\*Version\*\*: Unreleased`).
    **If `## Unreleased` is empty, stop** — there is nothing to cut.
 3. The full unit suite is green on this commit (or run it as step 5).
+4. **The full integration suite is green on both engines** — see below. This is the cut's blocking
+   gate, and the only place it runs in full.
+
+### Precondition 4 — the integration gate
+
+Per-issue work runs an *integration slice*, not the suite
+([`pormg-issue-workflow`](../pormg-issue-workflow/SKILL.md) → rung 4). The cut is where the full
+suite runs, on both backends, because that is where a train's worth of changes meets the shared
+prologue — real DDL from empty, a full fixture reseed, the ordering effects no slice can surface.
+
+```bash
+julia --project=test/integration test/integration/runtests.jl                  # db_2 (PostgreSQL)
+PORMG_DB=db_sl julia --project=test/integration test/integration/runtests.jl   # SQLite
+```
+
+- **Ask the maintainer before running** — `db_2` is one shared PostgreSQL server and other sessions
+  may be mid-issue on it. Ask which database is free. This is the standing rule; a cut does not
+  waive it.
+- **Both engines, not one.** *"Keep PostgreSQL and SQLite aligned"* is a non-negotiable, and the
+  slice-per-issue model means engine divergence can accumulate for a whole train without anyone
+  noticing. The cut is the only thing that catches it.
+- **Do not pipe through `tail`** — it masks Julia's exit code.
+- **Red means stop.** Do not stamp `UPGRADING.md` or bump `Project.toml` over a failing suite. Fix
+  it as its own issue and PR first, then cut. A version tag asserts the train works; making that
+  assertion false to save a re-run is the one thing this gate exists to prevent.
+- If the maintainer waives the run (a docs-only train, a `z` bump touching nothing executable), say
+  so explicitly in the cut report. A skipped gate is a fine outcome; a silently skipped one is not.
 
 ## Steps
 
@@ -87,6 +114,9 @@ outside this skill.
 - **One bump per cut.** If you find yourself editing `Project.toml`'s version outside this skill, stop
   — that's the per-PR churn this model removes.
 - **Never cut an empty `## Unreleased`.**
+- **Never cut over a red or unrun integration suite.** Per-issue work only runs slices, so the cut is
+  the *first and only* time a train is validated end-to-end on both engines. Skipping it does not
+  defer the cost — it ships it.
 - **`Unreleased` is a literal token**, not a version — `_parse_upgrading` maps it to a high sentinel
   (`_UNRELEASED_VERSION`) so uncut entries sort newest and `upgrade_guide` surfaces them by default.
   Stamping replaces that token with the real `VersionNumber`.

@@ -120,7 +120,8 @@ fails tells you far less than the narrow slice that fails.
 | 1 | The new test file alone |
 | 2 | The **guard tests your change could trip** — see below |
 | 3 | `julia --project=. test/runtests.jl` (full unit) |
-| 4 | Integration — **ask the user first** |
+| 4 | **Integration slice** — only the files your diff reaches — **ask the user first** |
+| 5 | Full `test/integration/runtests.jl` — **only if the diff is in the table below** |
 
 **Rung 2 is the one people skip.** This repo has meta-tests that fail on changes far from the code
 you touched. Before running the full suite, ask which of these your diff could reach:
@@ -136,9 +137,65 @@ you touched. Before running the full suite, ask which of these your diff could r
 
 **Integration runs need explicit permission every time** — the user works several issues in parallel
 and `db_2` hits one shared PostgreSQL server. Ask which database is free. `db_sl` in a worktree uses
-its own copied fixture and cannot corrupt another session, but ask anyway. Run
-`test/integration/runtests.jl` directly (it skips the ~2-minute unit phase). Do **not** pipe it
+its own copied fixture and cannot corrupt another session, but ask anyway. Do **not** pipe any run
 through `tail` — that masks Julia's exit code.
+
+### Rung 4: run the slice, not the suite
+
+`test/integration/runtests.jl` is **not** the default integration target. It re-runs the whole
+prologue before a single behavioral test executes — `test_migration_bootstrap.jl` (2400 lines, ~170
+DDL statements, schema built from empty), then `test_inserts.jl`, then a full truncate-and-reseed of
+the F1 fixture in `test_database_setup.jl`. That is the expensive part of the suite, and a change to
+`src/querybuilder/` has no business paying it.
+
+Almost every file carries a standalone guard —
+
+```julia
+if !isdefined(Main, :PormG)
+    include("common_setup.jl")
+end
+```
+
+— so it can be invoked on its own:
+
+```bash
+julia --project=test/integration test/integration/test_json_fields.jl          # db_2 (default)
+PORMG_DB=db_sl julia --project=test/integration test/integration/test_cte.jl   # SQLite
+```
+
+**Precondition: the target database must already be bootstrapped and seeded** by a prior full run.
+A slice run does no DDL and no reseed — that is the point. Against a fresh or wiped database, run
+the full suite once to establish the state, then slice from there.
+
+**Four files are not slice-safe.** Run them through `runtests.jl`:
+
+| File | Why |
+|---|---|
+| `test_inserts.jl`, `test_updates.jl` | call `_seed_bulk_update_scratch_parents!` / `_clear_bulk_update_scratch_rows!` but never include `common_bulk_scratch_setup.jl` — `runtests.jl` does it for them at top level |
+| `test_migration_bootstrap.jl` | guards on `:reset_database!`, not `:PormG`, so `common_setup.jl` never loads |
+| `test_importers_introspection.jl` | no guard at all |
+
+(`test_sqlite_datetime_normalize.jl` is not in `runtests.jl` at all — an orphan with its own run
+instruction on line 2. Do not assume the suite covers it.)
+
+### Rung 5: when the slice is not enough
+
+Escalate to the full suite when the diff touches something the slice cannot see — the shared
+prologue *is* the test for these:
+
+| Diff touches | Why a slice can't vouch |
+|---|---|
+| `src/migrations/`, `src/Migrations.jl`, field-type definitions | the DDL path only executes in `test_migration_bootstrap.jl`; unit coverage is hermetic temp SQLite |
+| driver round-trip — `BinaryField` bytes, DateTime/UTC, NUMERIC/decimal | the driver is the thing under test; unit runs against SQLite `:memory:` |
+| PG-only surface — JSONB containment, `unaccent`, `COPY`/bulk, advisory locks, sequence sync | no SQLite equivalent exists, so `db_sl` proves nothing |
+| `src/ConnectionPool.jl`, `src/Configuration.jl` transactions | unit pool tests use mocks; rollback-on-a-real-connection is a different failure mode |
+| the include chain in `src/PormG.jl`, or anything cross-cutting | ordering effects surface only in a full run |
+
+Everything else — query rendering, joins, operators, validation, the error taxonomy — is genuinely
+covered by the 26k-line unit suite plus the one or two integration files that name the feature.
+
+The **full suite on both engines is a release gate**, run once per train by
+[`pormg-cut-release`](../pormg-cut-release/SKILL.md), not a per-issue tax.
 
 **Doc examples get executed, not just read.** Any query example added to `docs/`, `README.md` or a
 docstring is confirmed two ways — generated SQL shape *and* real rows against `db_sl/f1.sqlite` —
@@ -200,6 +257,8 @@ guards, declined findings, scope you widened and on whose say-so.
 - Do not review your own diff and call it an independent review
 - Do not stop after fixing review findings without re-reviewing the delta
 - Do not run an integration suite without asking, even when a plan lists it
+- Do not reach for the full integration suite when a slice covers the diff — nor slice one of the four files that cannot be sliced
+- Do not slice against a database that was never bootstrapped — the slice does no DDL and no reseed
 - Do not claim a doc example works because it looks right — run it against `f1.sqlite`
 - Do not commit, push, or open a PR on plan approval alone
 - Do not `git add -A` in a worktree

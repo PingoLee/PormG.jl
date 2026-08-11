@@ -1,4 +1,5 @@
 using Test
+using Logging
 using PormG
 using PormG.Migrations
 
@@ -553,6 +554,234 @@ end
         )
 
         @test read(generated_path, String) == sentinel
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: line endings and stray whitespace do not truncate a class (#340)
+# `import_models_from_django` accepts source as CONTENT, not only as a path, and
+# only the path branch runs the reader that normalizes line endings. A statement
+# indented no further than its class header closes that class — so a line holding
+# just a `\r` (or a form feed, PEP 8's page separator) read as an empty statement
+# at indent 0 and silently discarded every field after it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer is not truncated by CRLF or stray whitespace lines" begin
+    lf = """
+    from django.db import models
+
+
+    class Batch(models.Model):
+        filename = models.CharField(max_length=255)
+
+        sha256 = models.CharField(max_length=64)
+
+        created_at = models.DateTimeField(auto_now_add=True)
+    """
+
+    # Same source three ways: LF, CRLF, and with a form feed on an otherwise blank line.
+    variants = Dict(
+        "lf" => lf,
+        "crlf" => replace(lf, "\n" => "\r\n"),
+        "formfeed" => replace(lf, "\n\n" => "\n\f\n"),
+    )
+
+    for (label, src) in variants
+        config_key, db_dir_existed = temp_import_config!()
+        output_file = "django_lineendings_$(label).jl"
+        try
+            import_models_from_django(src; db = config_key, file = output_file, force_replace = true)
+            generated = read(joinpath(config_key, output_file), String)
+
+            # All three fields survive in every variant. Before the fix the CRLF and form-feed
+            # variants kept only `filename` — the class was closed by the blank line.
+            @test occursin("filename = Models.CharField(max_length=255)", generated)
+            @test occursin("sha256 = Models.CharField(max_length=64)", generated)
+            @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        finally
+            cleanup_import_test!(config_key, db_dir_existed)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a field is a LOGICAL statement, not a physical line (#340)
+# The importer matched fields with a per-line regex requiring `= models.X(...)`
+# to open AND close on one line, with no else branch — so a wrapped definition
+# (ordinary Django formatting, and what `black` emits) was dropped in SILENCE.
+# This is the highest-severity failure the importer had: the generated file
+# looks complete and loads fine while the schema is missing columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads fields wrapped across physical lines" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_statement_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_statement_forms_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The three-line ForeignKey arrives whole, target and all keyword arguments intact.
+        @test occursin("created_by_id = Models.ForeignKey(\"CustomUser\"", generated)
+        @test occursin("on_delete=SET_NULL", generated)
+        @test occursin("blank=true", generated)
+        @test occursin("null=true", generated)
+
+        # Control (passes before and after): a single-line FK was never affected. Present so a
+        # failure of the four assertions above is unambiguously about *wrapping*, not about FKs.
+        @test occursin("batch_id = Models.ForeignKey(\"ImportBatch\"", generated)
+
+        # A wrapped `models.Q(...)` inside a method body must not be read as a field. Doing so
+        # resolved `getfield(Models, :Q)` and threw, aborting the import and losing every later
+        # model — so the strongest assertion is simply that the LAST class exists at all.
+        @test occursin("ImportRow = Models.Model(", generated)
+        # Anchored on the assignment, not the bare substring: a later fixture field named
+        # `condition` or `second` would otherwise flip this into a false failure.
+        @test !occursin("cond = ", generated)
+
+        # django-stubs annotation on the left-hand side does not hide the field.
+        @test occursin("annotated = Models.CharField(max_length=11)", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: string- and comment-aware scanning (#340)
+# Comments used to be stripped from the first `#` on a line regardless of
+# strings, truncating `default="#fff"`; and the reader globally rewrote every
+# apostrophe to a double quote, corrupting any value containing one. Both are
+# now handled by the shared scanner rather than by regex and blunt replace.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer does not corrupt values containing # or apostrophes" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_statement_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_statement_scanner_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # `#` inside a string literal is data, not the start of a comment.
+        @test occursin("color = Models.CharField(max_length=7, default=\"#fff\")", generated)
+
+        # The apostrophe is asserted in a RETAINED parameter. Before the fix the reader rewrote
+        # every `'` to `"`, so this emitted `default="Don"t stop"`. Putting it in help_text would
+        # not discriminate — help_text is dropped by parameters_ignore either way.
+        @test occursin("default=\"Don't stop\"", generated)
+
+        # Choices given as a LIST. The old option splitter counted only parentheses, so `[` was
+        # invisible: it split at the comma BETWEEN the two bracketed tuples, and the second choice
+        # was silently discarded. Asserting on the labels rather than the exact rendering — the
+        # keys keep their Python quote characters as literal text, which is pre-existing
+        # `parse_choices` behaviour this change does not touch (see #342).
+        @test occursin("Upload", generated)
+        @test occursin("Sheets", generated)
+        @test occursin("choices=", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: nested classes and module-level tail code do not leak (#340)
+# `parse_class` set `inside_class = true` and never reset it, so a nested
+# `class Source(models.TextChoices)` and every module-level statement following
+# the last model were appended to the preceding class's field list. Class
+# structure now comes from indentation, so a block ends where the source says.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer isolates nested classes and trailing module code" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_statement_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_statement_blocks_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # Module-level code after the last class belongs to no model. These two are the
+        # assertions that genuinely fail with the old flag-based parser, which appended
+        # every trailing statement to whichever class it saw last. The two local names are
+        # deliberately non-overlapping so neither assertion is implied by the other.
+        @test !occursin("LEAKED", generated)
+        @test !occursin("module_tail_local", generated)
+
+        # A method's locals are not fields either.
+        @test !occursin("helper_local", generated)
+
+        # `Meta.unique_together` is read from the isolated Meta block. The fixture's ImportBatch
+        # docstring contains `unique_together = ("filename", "sha256")` naming two REAL fields, so
+        # a parser scanning the whole class body resolves them and attaches a constraint that
+        # ImportBatch never declared. Both halves are asserted.
+        @test occursin(
+            "constraints = [Models.UniqueConstraint(fields = (\"batch_id\", \"row_number\",))]",
+            generated,
+        )
+        @test !occursin("UniqueConstraint(fields = (\"filename\", \"sha256\",))", generated)
+
+        # Nested class isolation asserted STRUCTURALLY. It has no signature in the generated text
+        # — enum members were never `models.X(...)`, so `!occursin("UPLOAD")` passes with or
+        # without the fix — but the parse tree shows it directly.
+        parsed = PormG.Migrations.parse_class(read(fixture, String))
+        batch = only(filter(c -> c.name == "ImportBatch", parsed))
+        @test "Source" in [n.name for n in batch.nested]
+        @test isempty(filter(s -> occursin("UPLOAD", s.text), batch.body))
+        @test count("Models.Model(", generated) == 3
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: an unreadable field-shaped statement is reported (#340)
+# The point of #340 is not merely "parse wrapped calls" — it is "never drop a
+# field-shaped statement in silence". An assignment whose right-hand side is a
+# call the importer cannot read (a field imported directly rather than through
+# `models.`) is warned with its source line so the author can port it by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer warns on a field-shaped statement it cannot read" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_statement_forms.txt")
+    config_key, db_dir_existed = temp_import_config!()
+    output_file = "django_statement_warn_unit.jl"
+
+    try
+        # The warning carries the field name as STRUCTURED metadata, not inside the message, so
+        # assert on `kwargs` — a message-only matcher would silently stop discriminating.
+        logs, _ = Test.collect_test_logs() do
+            import_models_from_django(
+                fixture; db = config_key, file = output_file, force_replace = true,
+            )
+        end
+        unreadable = [r for r in logs
+                      if r.level == Logging.Warn && occursin("field-shaped call", string(r.message))]
+        named = [get(Dict(r.kwargs), :field, nothing) for r in unreadable]
+
+        # The fixture's `tags = ArrayField(...)` is a field-shaped call that cannot be read.
+        @test "tags" in named
+
+        # ...and so is `direct_fk = ForeignKey(...)`. It is asserted separately because
+        # `ForeignKey` does NOT end in "Field": a predicate keyed on that suffix alone stays
+        # silent here, which drops the single most important field type without a word. The
+        # relation family straddles both suffixes — OneToOneField/ManyToManyField end in
+        # "Field", ForeignKey and django-mptt's TreeForeignKey do not.
+        @test "direct_fk" in named
+
+        # ...and it must stay QUIET about everything that is not a field. Warning on every
+        # unreadable assignment buried the one real finding under manager wiring and method
+        # locals — which is the silent drop this issue exists to remove, wearing a hat.
+        @test !("objects" in named)      # ImportBatchQuerySet.as_manager() is a manager
+        @test !("helper_local" in named) # lives in a method body
+        @test !("cond" in named)         # ditto, and it used to abort the whole import
+        @test length(unreadable) == 2
+
+        # The import completed despite the warning.
+        generated = read(joinpath(config_key, output_file), String)
+        @test !occursin("tags", generated)
+        @test occursin("ImportBatch = Models.Model(", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

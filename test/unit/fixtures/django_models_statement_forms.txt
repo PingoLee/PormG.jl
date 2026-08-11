@@ -1,0 +1,83 @@
+from django.conf import settings
+from django.db import models
+
+
+class ImportBatch(models.Model):
+    '''One upload, from parse to applied (or rejected).
+
+    This docstring deliberately mentions unique_together = ("filename", "sha256").
+    Both ARE real fields below, so a parser that scans the whole class body instead
+    of the isolated Meta block attaches a constraint ImportBatch never declared.
+    '''
+
+    class Source(models.TextChoices):
+        UPLOAD = "UPLOAD", "Upload manual"
+        GSHEETS = "GSHEETS", "Google Sheets API"
+
+    filename = models.CharField(max_length=255)
+    sha256 = models.CharField(max_length=64, db_index=True)
+
+    # A '#' inside a value: the old line-based comment strip truncated here.
+    color = models.CharField(max_length=7, default="#fff")
+
+    # An apostrophe inside a RETAINED value. It must be in `default`, not `help_text`:
+    # help_text is in parameters_ignore, so a corrupted one never reaches the output
+    # and the assertion would pass with or without the fix.
+    apostrophe = models.CharField(max_length=20, default="Don't stop")
+
+    # Choices as a LIST, not a tuple. The old option splitter tracked only ( and ),
+    # so it split at the comma BETWEEN the two bracketed tuples and kept one choice.
+    origem = models.CharField(max_length=2, choices=[("UP", "Upload"), ("GS", "Sheets")], default="UP")
+
+    # Wrapped across three physical lines - what `black` produces, and what the
+    # per-line regex dropped in silence.
+    created_by = models.ForeignKey(
+        "CustomUser", on_delete=models.SET_NULL, null=True, blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # django-stubs style annotation: the field must still be imported.
+    annotated: str = models.CharField(max_length=11)
+
+    # Assignments whose RHS is a field-shaped call the importer cannot read: must be
+    # WARNED, not dropped. `ForeignKey` is here on purpose - it does NOT end in "Field",
+    # and `from django.db.models import ForeignKey` is a normal idiom, so a warning
+    # predicate keyed on the "Field" suffix alone drops the most important field type
+    # of all in silence.
+    tags = ArrayField(models.CharField(max_length=10))
+    direct_fk = ForeignKey("CustomUser", on_delete=CASCADE)
+
+    # A manager, not a field. Must NOT warn - it has no PormG equivalent, and noise
+    # here is what buries the one real finding above.
+    objects = ImportBatchQuerySet.as_manager()
+
+    def touched_by(self, user):
+        # A wrapped `models.Q(...)` in a method body. Read as a field it resolves to
+        # `getfield(Models, :Q)` and aborts the WHOLE import, losing every later model.
+        cond = models.Q(
+            created_by=user,
+        )
+        helper_local = format_label(self.filename)
+        return cond
+
+
+class CustomUser(models.Model):
+    username = models.CharField(max_length=50)
+
+
+class ImportRow(models.Model):
+    batch = models.ForeignKey(ImportBatch, on_delete=models.CASCADE, related_name="rows")
+    row_number = models.PositiveIntegerField()
+
+    class Meta:
+        unique_together = ("batch", "row_number")
+
+
+# Module-level code after the last class. The `inside_class` flag was never reset,
+# so all of this used to be appended to ImportRow's field list.
+LEAKED = models.CharField(max_length=99)
+
+
+def some_helper(x):
+    module_tail_local = models.CharField(max_length=1)
+    return module_tail_local

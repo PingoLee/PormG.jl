@@ -201,8 +201,13 @@ end
 
 Read a Django `models.py` and return its text, ready for [`import_models_from_django`](@ref).
 
-Single quotes are normalized to double quotes so the Django parser sees one string delimiter.
 A missing file logs a warning and returns `nothing` rather than throwing.
+
+Until #340 this also rewrote every apostrophe to a double quote so the line-based parser saw one
+string delimiter. That was a blunt global `replace`: it broke any apostrophe inside a value (a
+`help_text` reading `Don't` became `Don` + stray quote + `t`) and rewrote single-quoted Python
+docstring delimiters as well. The scanner below tracks both delimiters, and both triple-quoted
+forms, natively — so the text is now handed over verbatim.
 
 ```julia
 django_to_string("/home/user/models.py") |> import_models_from_django
@@ -215,10 +220,324 @@ function django_to_string(path::String)
     return
   end
 
-  # Read the file  
-  return replace(read(path, String), "'" => "\"")
+  # Read the file. Line-ending normalization is owned by `_py_logical_lines`, which has to do it
+  # anyway for source handed over as content rather than as a path; this is only so the string
+  # this function *returns* is already in the canonical form callers see elsewhere.
+  return replace(read(path, String), "\r\n" => "\n")
 end
-  
+
+# ── Python source scanner (#340) ────────────────────────────────────────────────────────────────
+# Fields used to be matched with a per-LINE regex that required `= models.X(...)` to open AND close
+# on one physical line. A definition wrapped across lines — ordinary Django formatting, and what
+# `black` produces — matched nothing, and there was no `else` branch, so it was dropped in silence:
+#
+#     created_by = models.ForeignKey(
+#         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+#     )
+#
+# Everything below exists so that a field is a *logical statement* instead — text accumulated until
+# bracket depth returns to zero outside any string.
+#
+# ONE scanner backs all of it. `split_field_options` and `_balanced_group` used to carry their own
+# partial copies that tracked `(`/`)` only, with no `[`/`{` and no backslash escapes — which is why
+# `choices=[("A","a"), ("B","b")], max_length=1` split at the comma BETWEEN the two tuples.
+
+"""
+    _PyScan
+
+Character-level state for reading Python source: bracket `depth` outside strings, the active
+string delimiter `delim` (`'\\0'` when not in a string), whether that string is `triple`-quoted,
+and whether the previous character was an escaping backslash.
+
+`delim` rather than the obvious `quote`: `quote` is a Julia keyword, so `quote::Char` in a struct
+body opens a `quote ... end` block and silently swallows the rest of the file.
+"""
+mutable struct _PyScan
+  depth::Int
+  delim::Char
+  triple::Bool
+  escaped::Bool
+end
+_PyScan() = _PyScan(0, '\0', false, false)
+
+_in_string(st::_PyScan)::Bool = st.delim != '\0'
+
+# True when `s` holds `n` consecutive `c` starting at index `i` — how `"` is told from `"""`.
+function _run_of(s::AbstractString, i::Int, c::Char, n::Int)::Bool
+  idx = i
+  for _ in 1:n
+    (idx > lastindex(s) || s[idx] != c) && return false
+    idx = nextind(s, idx)
+  end
+  return true
+end
+
+function _skip(s::AbstractString, i::Int, n::Int)::Int
+  for _ in 1:n
+    i = nextind(s, i)
+  end
+  return i
+end
+
+"""
+    _py_step!(st, s, i) -> Int
+
+Advance `st` past the token starting at index `i` of `s` and return the index of the next one.
+A triple quote needs three characters of lookahead, so this consumes a *token* rather than a
+character — callers must use the returned index instead of `nextind`.
+"""
+function _py_step!(st::_PyScan, s::AbstractString, i::Int)::Int
+  c = s[i]
+
+  if _in_string(st)
+    if st.escaped
+      st.escaped = false
+    elseif c == '\\'
+      st.escaped = true
+    elseif c == st.delim
+      if st.triple
+        if _run_of(s, i, c, 3)
+          st.delim = '\0'
+          st.triple = false
+          return _skip(s, i, 3)
+        end
+      else
+        st.delim = '\0'
+      end
+    end
+    return nextind(s, i)
+  end
+
+  if c == '"' || c == '\''
+    st.triple = _run_of(s, i, c, 3)
+    st.delim = c
+    return st.triple ? _skip(s, i, 3) : nextind(s, i)
+  elseif c == '(' || c == '[' || c == '{'
+    st.depth += 1
+  elseif c == ')' || c == ']' || c == '}'
+    # Clamped: a malformed source must not drive depth negative and make every later `depth == 0`
+    # test read as "still nested", which would swallow the rest of the file into one statement.
+    st.depth = max(0, st.depth - 1)
+  end
+  return nextind(s, i)
+end
+
+"""
+    PyStmt
+
+One logical Python statement: its `text` (comments stripped, continuation lines folded to a single
+space), the `indent` of its first physical line in spaces (a tab counts as four), and the 1-based
+`lineno` it started on. `lineno` is what lets a diagnostic point at a line the author can open.
+"""
+struct PyStmt
+  indent::Int
+  text::String
+  lineno::Int
+end
+
+"""
+    _py_logical_lines(src) -> Vector{PyStmt}
+
+Split Python source into logical statements.
+
+A physical newline ends a statement only at bracket depth zero, outside any string, and with no
+trailing line-continuation backslash — so a wrapped `models.ForeignKey(\\n … \\n)` arrives whole.
+
+`#` starts a comment only *outside* a string. The regex this replaces stripped from the first `#`
+unconditionally, so `default="#fff"` lost its value.
+"""
+function _py_logical_lines(src::AbstractString)::Vector{PyStmt}
+  out = PyStmt[]
+  # Normalized HERE rather than in `django_to_string`, because only the *path* branch of
+  # `import_models_from_django` goes through that function — source handed over as content keeps its
+  # `\r`, and a lone `\r` on an otherwise blank line used to read as a statement at indent 0, which
+  # closed the enclosing class and discarded every field after it. Silently.
+  src = replace(src, "\r\n" => "\n", "\r" => "\n")
+  st = _PyScan()
+  buf = IOBuffer()
+  started = false        # the current statement has at least one significant character
+  indent = 0             # indent of the started statement
+  pending_indent = 0     # leading whitespace measured on the current physical line
+  start_lineno = 1
+  lineno = 1
+  in_comment = false
+  continued = false      # previous physical line ended with a backslash
+  measuring = true       # still consuming this physical line's leading whitespace
+
+  i = firstindex(src)
+  stop = lastindex(src)
+  while i <= stop
+    c = src[i]
+
+    if c == '\n'
+      lineno += 1
+      # A newline inside a triple-quoted string is content, not a terminator: fall through so the
+      # scanner consumes it and the docstring stays one statement.
+      if !(_in_string(st) && st.triple)
+        in_comment = false
+        if st.depth > 0 || continued
+          started && print(buf, ' ')   # fold the break into a single separator
+        elseif started
+          _push_stmt!(out, indent, String(take!(buf)), start_lineno)
+          started = false
+        else
+          take!(buf)
+        end
+        continued = false
+        measuring = true
+        pending_indent = 0
+        i = nextind(src, i)
+        continue
+      end
+    end
+
+    if in_comment
+      i = nextind(src, i)
+      continue
+    end
+
+    if measuring && !_in_string(st)
+      # Any whitespace counts as indentation, not as content. Matching only ' ' and '\t' let a
+      # form feed (PEP 8's page separator) or a non-breaking space start an EMPTY statement at
+      # indent 0 — which then closed the enclosing class, as `\r` did.
+      if isspace(c)
+        pending_indent += (c == '\t' ? 4 : 1)
+        i = nextind(src, i)
+        continue
+      end
+      measuring = false
+    end
+
+    if c == '#' && !_in_string(st)
+      in_comment = true
+      i = nextind(src, i)
+      continue
+    end
+
+    if c == '\\' && !_in_string(st)
+      continued = true
+      i = nextind(src, i)
+      continue
+    end
+
+    if !started
+      started = true
+      indent = pending_indent
+      start_lineno = lineno
+    end
+
+    j = _py_step!(st, src, i)
+    print(buf, src[i:prevind(src, j)])
+    i = j
+  end
+
+  started && _push_stmt!(out, indent, String(take!(buf)), start_lineno)
+
+  # An unterminated string or unbalanced bracket makes every following line fold into the current
+  # statement, so the rest of the file disappears into one unusable blob. The line-based parser used
+  # to lose exactly one line; say so rather than let a truncated file look fully imported.
+  if _in_string(st) || st.depth > 0
+    @warn "import: Python source ends inside an unterminated string or unclosed bracket; statements after the opening point may have been merged and lost" open_brackets=st.depth in_string=_in_string(st)
+  end
+  return out
+end
+
+# Never record an empty statement: `_py_classes` closes a class on any statement indented no further
+# than its header, so a blank entry at indent 0 would silently truncate the class it sits in.
+function _push_stmt!(out::Vector{PyStmt}, indent::Int, text::AbstractString, lineno::Int)
+  t = String(strip(text))
+  isempty(t) || push!(out, PyStmt(indent, t, lineno))
+  return out
+end
+
+"""
+    PyClass
+
+A `class` block recovered from Django source: its `name`, the raw text of its base list (`bases`),
+its own direct statements (`body`), the statements of a nested `class Meta:` block, and any other
+nested classes.
+
+Nested bodies are held separately rather than inlined into `body`, which is what retires the
+`inside_class` flag: that flag was set once and never reset, so a nested `class Status(TextChoices)`
+and any module-level code following the last model both leaked into the previous model's content.
+"""
+struct PyClass
+  name::String
+  bases::String
+  lineno::Int
+  body::Vector{PyStmt}
+  meta::Vector{PyStmt}
+  nested::Vector{PyClass}
+end
+
+const _CLASS_HEADER_RE = r"^class\s+(\w+)\s*(?:\((.*)\))?\s*:"
+const _DEF_HEADER_RE = r"^(?:async\s+)?def\s+\w+"
+
+"""
+    _py_classes(stmts) -> Vector{PyClass}
+
+Group logical statements into a class tree using indentation. A statement indented no further than
+a class header closes that class, so nesting is derived from the source's own structure rather than
+from a flag the caller has to remember to clear.
+"""
+function _py_classes(stmts::Vector{PyStmt})::Vector{PyClass}
+  roots = PyClass[]
+  # `nothing` marks a `def` body. A method's locals are not fields, and feeding them to the field
+  # matcher is not merely noisy — a routine wrapped `cond = models.Q(\n … \n)` inside a queryset
+  # helper resolved to `getfield(Models, :Q)` and aborted the ENTIRE import, taking every later
+  # model with it. (The old line-based regex never matched the wrapped form, so this was a
+  # regression introduced by making the parser see across lines.)
+  stack = Tuple{Union{PyClass, Nothing}, Int}[]
+
+  for s in stmts
+    while !isempty(stack) && s.indent <= stack[end][2]
+      pop!(stack)
+    end
+    inside_def = !isempty(stack) && stack[end][1] === nothing
+
+    if match(_DEF_HEADER_RE, s.text) !== nothing
+      push!(stack, (nothing, s.indent))
+      continue
+    end
+
+    m = match(_CLASS_HEADER_RE, s.text)
+    if m !== nothing
+      if inside_def
+        # A class declared inside a method is not importable; skip its whole body too.
+        push!(stack, (nothing, s.indent))
+        continue
+      end
+      cls = PyClass(String(m.captures[1]),
+                    m.captures[2] === nothing ? "" : String(strip(m.captures[2])),
+                    s.lineno, PyStmt[], PyStmt[], PyClass[])
+      parent = isempty(stack) ? nothing : stack[end][1]
+      parent === nothing ? push!(roots, cls) : push!(parent.nested, cls)
+      push!(stack, (cls, s.indent))
+    elseif !isempty(stack) && !inside_def
+      push!(stack[end][1].body, s)
+    end
+    # A statement at module level that is not a class header is ignored outright — this is where
+    # the trailing `def`s, signal wiring and constants of a real models.py now go.
+  end
+
+  # Lift `class Meta:` out of `nested` so callers read Meta options from a block that is provably
+  # the Meta block. `parse_meta_unique_together` used to `occursin` over the whole class body, which
+  # also matched the word inside a docstring or a sibling nested class.
+  for cls in roots
+    _lift_meta!(cls)
+  end
+  return roots
+end
+
+function _lift_meta!(cls::PyClass)
+  idx = findfirst(n -> n.name == "Meta", cls.nested)
+  if idx !== nothing
+    append!(cls.meta, cls.nested[idx].body)
+    deleteat!(cls.nested, idx)
+  end
+  return cls
+end
+
 
 """
   import_models_from_django(model_py_string::String; db::String = DB_PATH, force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, django_prefix::Union{Nothing, String, Missing} = missing, autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
@@ -301,23 +620,22 @@ function import_models_from_django(
     model_py_string = django_to_string(model_py_string)
   end
 
+  # Recover the importable classes as structured blocks (#340). The parser itself is the validity
+  # test: the regex that used to guard this required the class header to sit on ONE physical line,
+  # so once the parser learned to read a wrapped header it was rejecting files it could handle.
+  class_colector = parse_class(model_py_string)
+
   # check if model_py_string is a model.py file content and not a path
-  if !occursin(r"class\s+\w+\(models\.(Model|AbstractUser)\)", model_py_string)
+  if isempty(class_colector)
     @warn("The string does not contain a valid model.py content")
     return
   end
 
-  # create a vector{String} with the a string for each 20 classes 
-  class_colector = parse_class(model_py_string) 
-
   Instructions = Vector{Any}()
   for class in class_colector
-    class_name = class["class_name"]  # Extract the class name
-    base_class = class["class_type"]  # Extract the base class (models.Model or AbstractUser)
-    class_content = class["class_content"]  # Extract the class content
-
-    # println("Processing class: ", class_name)
-    # println(class["original_class"])
+    class_name = class.name
+    base_class = class.bases          # "models.Model" or "AbstractUser"
+    class_content = class.body        # this class's OWN statements; nested bodies excluded
 
     # Initialize fields_dict
     fields_dict = Dict{Symbol, Any}()
@@ -339,7 +657,9 @@ function import_models_from_django(
         # BOTH parsing and validation are wrapped — a malformed `unique_together` (e.g. duplicate
         # fields) is warned and skipped, never aborting the whole multi-class import.
         try
-          constraints = parse_meta_unique_together(class_content, fields_dict, class_name)
+          # `class.meta`, not the whole body (#340): the Meta block is now isolated, so the word
+          # `unique_together` appearing in a docstring or a sibling nested class no longer matches.
+          constraints = parse_meta_unique_together(class.meta, fields_dict, class_name)
           isempty(constraints) || Models._apply_unique_constraints!(model, constraints)
         catch e
           @warn "import: could not parse/apply unique_together; skipping" class=class_name exception=e
@@ -352,44 +672,101 @@ function import_models_from_django(
   generate_models_from_db(file, Instructions, render_settings, path=model_path)
 end
 
-function parse_class(model_py_string::String)
-  # Initialize state variables
-  inside_class = false
-  original_class = ""
-  class_colector::Vector{Dict{String,Any}} = []
+# Base lists the importer recognises as "this class becomes a table". Deliberately unchanged from the
+# regex it replaces (`\((models\.Model|AbstractUser)\)`) — widening it to arbitrary/abstract bases is
+# #341, and doing it here would silently change which classes get imported.
+const _MODEL_BASES = ("models.Model", "AbstractUser")
 
-  # Iterate over lines
-  for line in split(model_py_string, '\n')
-      # Trim leading and trailing whitespace
-      stripped_line = strip(line)
+"""
+    parse_class(model_py_string) -> Vector{PyClass}
 
-      # check if the line is a class
-      # Detect the start of a class definition
-      if startswith(stripped_line, "class ")
-        match_class = match(r"class\s+(\w+)\((models\.Model|AbstractUser)\).?", stripped_line)
-        if match_class !== nothing
-          class_name = match_class.captures[1]
-          class_type = match_class.captures[2]           
-          push!(class_colector, Dict("class_name" => class_name, "class_type" => class_type, "original_class" => "", "class_content" => []))
-          inside_class = true
-        end
-      end
+Recover the importable model classes from Django source.
 
-      # Append the line to the class content if inside a class
-      # revome comments from the line      
-      if inside_class
-        class_colector[end]["original_class"] = class_colector[end]["original_class"] * "\n" * line
-        comment_match = match(r"^(.*?)(#.*)?$", line)
-        if comment_match !== nothing
-          line = comment_match.captures[1]
-        end
-        push!(class_colector[end]["class_content"], line)
-      end
-  end 
-  return class_colector
+Statement- and indentation-driven (#340): a field spanning several physical lines arrives intact,
+a nested `class Status(models.TextChoices)` stays in `nested` instead of leaking into the parent's
+fields, `class Meta:` is isolated in `meta`, and module-level code after the last class is ignored
+rather than appended to it.
+"""
+function parse_class(model_py_string::String)::Vector{PyClass}
+  classes = _py_classes(_py_logical_lines(model_py_string))
+  return filter(c -> strip(c.bases) in _MODEL_BASES, classes)
 end
 
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{Any}, class_name::AbstractString, base_class::AbstractString, has_primary_key::Base.RefValue{Bool}, autofields_ignore::Vector{String}, parameters_ignore::Vector{String})
+# Split `text` on its first TOP-LEVEL `=` — not inside a string or bracket, and not part of a
+# comparison operator. Returns `(lhs, rhs)` or `nothing`.
+function _split_top_level_assign(text::AbstractString)
+  st = _PyScan()
+  i = firstindex(text)
+  stop = lastindex(text)
+  while i <= stop
+    c = text[i]
+    j = _py_step!(st, text, i)
+    if c == '=' && st.depth == 0 && !_in_string(st)
+      nxt = j <= stop ? text[j] : '\0'
+      prv = i > firstindex(text) ? text[prevind(text, i)] : '\0'
+      if nxt != '=' && !(prv in ('=', '<', '>', '!'))
+        return (String(strip(text[firstindex(text):prevind(text, i)])), String(strip(text[j:end])))
+      end
+    end
+    i = j
+  end
+  return nothing
+end
+
+const _FIELD_CALL_RE = r"^models\.(\w+)\s*\("
+# Captures the final identifier of a dotted call target (`a.b.ArrayField(` → `ArrayField`). Used only
+# to decide whether an unrecognised assignment is FIELD-shaped and therefore worth reporting.
+const _CALL_TARGET_RE = r"^(?:[A-Za-z_]\w*\s*\.\s*)*([A-Za-z_]\w*)\s*\("
+
+# Suffixes that make a call target a column declaration by name. `Key` is not optional: Django's
+# relation family splits across both — `OneToOneField`/`ManyToManyField` end in `Field`, but
+# `ForeignKey` does not, and `from django.db.models import ForeignKey` is a normal idiom (as is
+# django-mptt's `TreeForeignKey`). Matching only `Field` left the single most important field type
+# dropping in silence — exactly the hole this issue exists to close.
+const _FIELD_NAME_SUFFIXES = ("Field", "Key")
+
+"""
+    _looks_like_a_field_call(rhs) -> Bool
+
+True when `rhs` is a call whose target names a column type — `ArrayField(...)`, `ForeignKey(...)`,
+`TreeForeignKey(...)`: a field imported directly instead of through `models.`.
+
+Deliberately narrow. Warning on *every* unreadable call buried the one real finding under
+`objects = SomeQuerySet.as_manager()`, `history = HistoricalRecords()` and other class-body
+assignments that have no PormG equivalent — and a warning nobody reads is the silent drop this
+issue exists to remove, wearing a hat.
+"""
+function _looks_like_a_field_call(rhs::AbstractString)::Bool
+  m = match(_CALL_TARGET_RE, rhs)
+  m === nothing && return false
+  return any(sfx -> endswith(m.captures[1], sfx), _FIELD_NAME_SUFFIXES)
+end
+
+"""
+    _match_field_statement(text) -> nothing | (name, type, args)
+
+Recognise `name = models.Type(args)` in a logical statement. `type === nothing` means the statement
+*is* an assignment but not a `models.X(...)` call — the caller decides whether that is worth
+reporting. Replaces the old `field_regex`, which could not see past one physical line.
+
+A django-stubs annotation (`name: str = models.CharField(...)`) is accepted: the annotation is
+dropped and the field imported, rather than failing the identifier check and vanishing.
+"""
+function _match_field_statement(text::AbstractString)
+  parts = _split_top_level_assign(text)
+  parts === nothing && return nothing
+  lhs, rhs = parts
+  ann = findfirst(':', lhs)
+  ann === nothing || (lhs = String(strip(lhs[firstindex(lhs):prevind(lhs, ann)])))
+  Base.isidentifier(lhs) || return nothing
+  m = match(_FIELD_CALL_RE, rhs)
+  m === nothing && return (name = lhs, type = nothing, args = rhs)
+  args = _balanced_group(rhs)
+  args === nothing && return (name = lhs, type = nothing, args = rhs)
+  return (name = lhs, type = String(m.captures[1]), args = args)
+end
+
+function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, base_class::AbstractString, has_primary_key::Base.RefValue{Bool}, autofields_ignore::Vector{String}, parameters_ignore::Vector{String})
   # Initialize fields for AbstractUser
   if base_class == "AbstractUser"
       has_primary_key[] = true
@@ -406,50 +783,58 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
       fields_dict[:date_joined] = Models.DateTimeField()
   end
 
-  # Regex to capture field definitions
-  # field_regex = r"^\s*(\w+)\s*=\s*models\.(\w+)\((.*)\)"
-  field_regex = r"^\s*(\w+)\s*=\s*models\.(\w+)\(([^#]*)\)"
+  # Iterate over the fields in the class content. Each entry is a LOGICAL statement (#340), so a
+  # field wrapped across physical lines is matched like any other.
+  for stmt in class_content
+    parsed = _match_field_statement(stmt.text)
+    parsed === nothing && continue
 
-
-  # Iterate over the fields in the class content
-  for field_line in class_content
-    field_match = match(field_regex, field_line)
-    if field_match !== nothing
-      field_name = field_match.captures[1]
-      field_type = django_field_type(field_match.captures[2])
-      field_args_str = field_match.captures[3]
-
-      # Parse field arguments
-      options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore)
-      
-      # Check for primary key
-      if haskey(options, :primary_key) && options[:primary_key] == true
-          has_primary_key[] = true
-      end         
-
-      # Instantiate the field
-      try
-        # println(field_type)
-        if field_type in autofields_ignore
-          continue
-        elseif field_type in ["ForeignKey", "OneToOneField"]
-          # Add "_id" suffix for foreign keys
-          field_key = Symbol("$(field_name)_id")
-          # println(related_model, " ", related_model |> typeof)
-          _normalize_django_set_default!(options, field_name)
-          fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
-        elseif field_type == "ManyToManyField"
-          fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; options...)
-        else
-          fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
-        end
-      catch e
-        @pormg_debug
-        # A FieldValidationError/InvalidValueError from field construction is already the right
-        # type — stringifying it into an ErrorException would eject it from the taxonomy (audit).
-        e isa PormGError && rethrow()
-        throw(InvalidMigrationError("Error processing field '$field_name' in class '$class_name': $(e)"))
+    if parsed.type === nothing
+      # #340's actual requirement: never drop a FIELD in silence. An assignment whose right-hand
+      # side is a field-shaped call the importer cannot read (`tags = ArrayField(...)` — a field
+      # imported directly rather than through `models.`) is reported with its source line so the
+      # author can declare it by hand. Managers, constants and enum members are not fields and
+      # stay quiet: see `_looks_like_a_field_call` for why the test is deliberately narrow.
+      if _looks_like_a_field_call(parsed.args)
+        @warn "import: field-shaped call the importer cannot read; not imported — declare it in PormG by hand" field=parsed.name class=class_name line=stmt.lineno
       end
+      continue
+    end
+
+    field_name = parsed.name
+    field_type = django_field_type(parsed.type)
+    field_args_str = parsed.args
+
+    # Parse field arguments
+    options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore)
+
+    # Check for primary key
+    if haskey(options, :primary_key) && options[:primary_key] == true
+        has_primary_key[] = true
+    end
+
+    # Instantiate the field
+    try
+      # println(field_type)
+      if field_type in autofields_ignore
+        continue
+      elseif field_type in ["ForeignKey", "OneToOneField"]
+        # Add "_id" suffix for foreign keys
+        field_key = Symbol("$(field_name)_id")
+        # println(related_model, " ", related_model |> typeof)
+        _normalize_django_set_default!(options, field_name)
+        fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
+      elseif field_type == "ManyToManyField"
+        fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; options...)
+      else
+        fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
+      end
+    catch e
+      @pormg_debug
+      # A FieldValidationError/InvalidValueError from field construction is already the right
+      # type — stringifying it into an ErrorException would eject it from the taxonomy (audit).
+      e isa PormGError && rethrow()
+      throw(InvalidMigrationError("Error processing field '$field_name' in class '$class_name': $(e)"))
     end
   end
 
@@ -591,42 +976,35 @@ function parse_choices(choices_str::AbstractString)
   return choices
 end
 
+"""
+    split_field_options(field_options) -> Vector{String}
+
+Split a call's argument text on its top-level commas, preserving quotes for `parse_value`.
+
+Rebased on the shared scanner (#340). The hand-rolled version it replaces tracked `(`/`)` only —
+not `[` or `{` — and had no backslash-escape handling, so `choices=[("A","a"), ("B","b")]` split at
+the comma *between* the two tuples and produced two unparseable fragments.
+"""
 function split_field_options(field_options::AbstractString)
   tokens = String[]
   buffer = IOBuffer()
-  parens = 0
-  in_quotes = false
-  quote_char::Union{Char, Nothing} = nothing  # Proper initialization
-  
-  for c in field_options
-      if c == '"' || c == '\''
-          if in_quotes
-              if c == quote_char
-                  in_quotes = false
-                  quote_char = nothing  # Reset quote_char when exiting quotes
-              end
-          else
-              in_quotes = true
-              quote_char = c  # Set quote_char to the current quote
-          end
-          print(buffer, c)
-      elseif in_quotes
-          print(buffer, c)
-      else
-          if c == '('
-              parens += 1
-              print(buffer, c)
-          elseif c == ')'
-              parens -= 1
-              print(buffer, c)
-          elseif c == ',' && parens == 0
-              push!(tokens, String(take!(buffer)) |> strip)
-          else
-              print(buffer, c)
-          end
-      end
+  st = _PyScan()
+
+  i = firstindex(field_options)
+  stop = lastindex(field_options)
+  while i <= stop
+    c = field_options[i]
+    j = _py_step!(st, field_options, i)
+    if c == ',' && st.depth == 0 && !_in_string(st)
+      push!(tokens, String(strip(String(take!(buffer)))))
+    else
+      # Copy the consumed span verbatim: a token may be several characters wide (`\"\"\"`), and the
+      # quote characters themselves must survive for `parse_value` to strip them.
+      print(buffer, field_options[i:prevind(field_options, j)])
+    end
+    i = j
   end
-  
+
   if position(buffer) > 0
       push!(tokens, String(take!(buffer)) |> strip)
   end
@@ -635,46 +1013,43 @@ function split_field_options(field_options::AbstractString)
 end
 
 # ── Django `Meta.unique_together` → PormG `UniqueConstraint` (#19) ────────────────────────
-# The field regex above silently drops any non-`models.X(...)` line, so `class Meta:` options
-# never reached the model. These helpers recover `unique_together` and map it to PormG's
+# `class Meta:` options are not field declarations, so they never reach `fields_dict`. These helpers
+# recover `unique_together` from the isolated Meta block (`PyClass.meta`) and map it to PormG's
 # composite-uniqueness declaration. Django `Meta.constraints=[UniqueConstraint(...)]` (the newer
 # named form) is not parsed here yet — `unique_together` is the concrete #19 need.
 
 # Return the text inside the FIRST balanced (...) or [...] group in `s` (Django allows tuples
 # or lists), or nothing. Quote-aware so a paren inside a string literal is ignored.
 function _balanced_group(s::AbstractString)::Union{String, Nothing}
-  chars = collect(s)
-  start = findfirst(c -> c == '(' || c == '[', chars)
-  start === nothing && return nothing
-  depth = 0
+  st = _PyScan()
   buf = IOBuffer()
-  in_quotes = false
-  quote_char = ' '
-  for idx in start:length(chars)
-    c = chars[idx]
-    if in_quotes
-      c == quote_char && (in_quotes = false)
-      print(buf, c)
-    elseif c == '"' || c == '\''
-      in_quotes = true
-      quote_char = c
-      print(buf, c)
-    elseif c == '(' || c == '['
-      depth += 1
-      depth > 1 && print(buf, c)
-    elseif c == ')' || c == ']'
-      depth -= 1
-      depth == 0 && return String(take!(buf))
-      print(buf, c)
+  opened = false
+
+  i = firstindex(s)
+  stop = lastindex(s)
+  while i <= stop
+    c = s[i]
+    was_in_string = _in_string(st)
+    j = _py_step!(st, s, i)
+
+    if !opened
+      # The opening bracket is the first `(` or `[` seen outside a string.
+      if !was_in_string && (c == '(' || c == '[')
+        opened = true
+      end
+    elseif !was_in_string && st.depth == 0 && (c == ')' || c == ']' || c == '}')
+      return String(take!(buf))
     else
-      print(buf, c)
+      print(buf, s[i:prevind(s, j)])
     end
+    i = j
   end
   return nothing
 end
 
 # Strip surrounding quotes/whitespace off each token, dropping empties (e.g. trailing-comma
-# artifacts). `django_to_string` already normalizes `'`→`"` for file input; handle both anyway.
+# artifacts). Both delimiters are handled: since #340 the reader no longer rewrites `'` to `"`,
+# so a single-quoted Django source arrives with its own quotes intact.
 function _clean_constraint_field_names(tokens)::Vector{String}
   out = String[]
   for t in tokens
@@ -717,8 +1092,8 @@ end
 # Build PormG UniqueConstraints from a class's `Meta.unique_together`, resolving each declared
 # Django field to its imported PormG field name. Unresolvable groups are warned and skipped
 # (lenient, matching the importer's philosophy) rather than aborting the whole import.
-function parse_meta_unique_together(class_content, fields_dict::Dict{Symbol, Any}, class_name::AbstractString)
-  content = join(string.(class_content), "\n")
+function parse_meta_unique_together(meta_content, fields_dict::Dict{Symbol, Any}, class_name::AbstractString)
+  content = join((s isa PyStmt ? s.text : string(s) for s in meta_content), "\n")
   occursin("unique_together", content) || return Models.UniqueConstraint[]
   # `\b` anchors to a word boundary so a longer identifier ending in `unique_together`
   # (e.g. `not_unique_together = ...`) is not mis-parsed as the Meta option.

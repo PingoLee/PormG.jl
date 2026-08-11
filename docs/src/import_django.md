@@ -209,10 +209,18 @@ user_type = models.CharField(
 
 **Key Requirements:**
 - **Inline definition**: Define choices directly in the field, not as external variables
-- **Tuple format**: Use parentheses `()` for choices, not square brackets `[]`
-- **Tuple structure**: Each choice must be a tuple `(value, display_name)`
-- **Nested tuples**: The entire choices parameter must be a tuple of tuples
+- **Either outer bracket**: The choices *container* may be a list `[...]` or a tuple `(...)`. Before
+  the importer read Python source with a bracket-aware scanner, a list silently kept only its
+  *first* choice — the argument splitter counted parentheses only, so it split at the comma between
+  two bracketed pairs.
+- **Parenthesized pairs**: Each choice must be a `(value, display_name)` tuple. The *inner* bracket
+  is **not** free: `choices=[["A", "Alpha"]]` is valid Django but imports as an empty `choices=()`,
+  with no warning. Write `choices=[("A", "Alpha")]`.
 - **Parameter order**: Place `default` before `choices` for better parsing reliability
+
+The field itself may be wrapped across several lines — that is what `black` produces, and it is read
+correctly. Note that a field whose declaration the importer cannot read is reported with a warning
+naming the field and its source line; it is never dropped silently.
 
 ### Automatic Additions
 

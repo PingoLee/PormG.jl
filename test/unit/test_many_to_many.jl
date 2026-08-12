@@ -305,15 +305,16 @@ end
 # The shape: a model declared in one module and pulled into the REGISTERING module with `using`.
 # `names(mod; all=true, imported=true)` does not list `using`-brought bindings (only explicitly
 # `import`ed ones), so the identity scan misses — but `isdefined`/`getfield` do reach them, and
-# `_resolve_m2m_side_model` tests `isdefined`. So the guessed spelling resolves and the layout works.
+# `_resolve_m2m_side_model` tests `isdefined`. So the binding resolves and the layout works.
 #
 # Deleting the fallback breaks it QUIETLY: the injected `__init__` in `Utils.jl` and the Revise
 # callback both swallow a `set_models` throw, so the symptom is "no models registered at all", not an
 # error anyone can read. That is why this is pinned by a test and not only by a comment.
 # ─────────────────────────────────────────────────────────────────────────────
-# The binding here is deliberately `Uschampionship` — i.e. exactly `uppercasefirst(name)`. That is
-# the ONLY spelling the fallback can produce, so it is the only one this layout can use; see the
-# negative assertion at the end of the testset for the case it cannot rescue.
+# #354: the `usings=true` miss-path in `_find_model_binding_name` and `_collect_models_and_bindings`
+# now finds `using`-scoped bindings directly. For `Xxxxx`-style bindings like `Uschampionship`, the
+# scan result is identical to the old `uppercasefirst` guess. The mixed-case fixture below
+# (`Dim_CNES`) is the case that discriminates — only the scan can spell it correctly.
 module UsingScopedSharedModels
   import PormG
   import PormG.Models
@@ -338,30 +339,80 @@ module UsingScopedAppModels
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
-@testset "using-scoped M2M target keeps the binding fallback (#343)" begin
-  # Preconditions — the asymmetry the fallback exists for. If either of these flips, the rest of
-  # this testset is no longer testing what it claims, so assert them rather than assume them.
+module UsingScopedMixedCaseSharedModels
+  import PormG
+  import PormG.Models
+  export Dim_CNES
+  Dim_CNES = Models.Model("dim_cnes",
+    id = Models.IDField(),
+    code = Models.CharField(),
+  )
+end
+
+module UsingScopedMixedCaseAppModels
+  import PormG
+  import PormG.Models
+  # `using`, NOT `import` — testing mixed-case using-scoped model visibility (#354).
+  using ..UsingScopedMixedCaseSharedModels
+
+  UsUser = Models.Model("ususer",
+    id = Models.IDField(),
+    name = Models.CharField(),
+    cnes_units = Models.ManyToManyField(Dim_CNES, related_name = "users"),
+  )
+  PormG.Models.set_models(@__MODULE__, "m2m_mock")
+end
+
+@testset "using-scoped M2M target resolved via usings=true scan (#343/#354)" begin
+  # Preconditions: `using`-scoped names are invisible to `imported=true` but reachable via
+  # the `usings=true` miss-path added in #354.
   @test !(:Uschampionship in names(UsingScopedAppModels; all=true, imported=true))
   @test isdefined(UsingScopedAppModels, :Uschampionship)
 
-  # The contract: registration COMPLETED (it threw while the fallback was removed), and the recorded
-  # binding is the guessed `uppercasefirst` spelling rather than one the scan found.
+  # The binding is found by the `usings=true` scan (not the `uppercasefirst` fallback).
+  # Before #354 this was a guess; now it is an exact match. The string is identical either way
+  # for `Xxxxx`-style bindings, but the code path is different.
   rel = Models.get_many_to_many_relation(UsingScopedAppModels.Usdriver, "championships")
   @test rel.related_binding == "Uschampionship"
 
-  # And the guess is not merely stored — it RESOLVES, through the `isdefined` branch the identity
-  # scan cannot see. This is what makes the fallback load-bearing rather than cosmetic.
+  # The binding resolves via `isdefined`, which sees `using`-scoped names.
   @test isdefined(UsingScopedAppModels, Symbol(rel.related_binding))
   @test PormG.QueryBuilder._resolve_m2m_side_model(
       UsingScopedAppModels, rel.related_binding, "uschampionship", "championships"
     ) === UsingScopedSharedModels.Uschampionship
+end
 
-  # The limit of the rescue, asserted so nobody reads more into the fallback than is there: it works
-  # only where the binding happens to equal `uppercasefirst(name)`. A `using`-scoped model whose
-  # binding carries an internal capital is still unreachable — the scan misses it AND the guess is
-  # the wrong spelling. That intersection is what #343 fixes for reverse foreign keys (which store
-  # the binding) and cannot fix for many-to-many, which still re-resolves by binding (#68/#41).
-  @test uppercasefirst("dim_cnes") != "Dim_CNES"
+@testset "using-scoped model with mixed-case binding is fully registered (#354)" begin
+  # Preconditions: Dim_CNES is brought in via using, so it is invisible to `imported=true`
+  @test !(:Dim_CNES in names(UsingScopedMixedCaseAppModels; all=true, imported=true))
+  @test isdefined(UsingScopedMixedCaseAppModels, :Dim_CNES)
+
+  # get_all_models includes the using-scoped model
+  all_models = Models.get_all_models(UsingScopedMixedCaseAppModels)
+  @test UsingScopedMixedCaseSharedModels.Dim_CNES in all_models
+
+  # Registration set _module and connect_key on the using-scoped model
+  @test UsingScopedMixedCaseSharedModels.Dim_CNES._module === UsingScopedMixedCaseAppModels
+  @test UsingScopedMixedCaseSharedModels.Dim_CNES.connect_key == "m2m_mock"
+
+  # M2M relation correctly recorded the exact binding, NOT the lossy "Dim_cnes" guess
+  rel = Models.get_many_to_many_relation(UsingScopedMixedCaseAppModels.UsUser, "cnes_units")
+  @test rel.related_binding == "Dim_CNES"
+
+  # The exact binding resolves cleanly in _resolve_m2m_side_model
+  @test PormG.QueryBuilder._resolve_m2m_side_model(
+      UsingScopedMixedCaseAppModels, rel.related_binding, "dim_cnes", "cnes_units"
+    ) === UsingScopedMixedCaseSharedModels.Dim_CNES
+end
+
+@testset "_find_model_binding_name uppercasefirst fallback when both scans miss" begin
+  # The fallback is the last resort when a model object is not bound by name in the module.
+  # Construct a model that is not assigned to any binding in any module.
+  unbound_model = Models.Model("orphan_test",
+    id = Models.IDField(),
+  )
+  # Neither scan can find it — the fallback produces uppercasefirst("orphan_test") = "Orphan_test".
+  @test PormG.Models._find_model_binding_name(UsingScopedAppModels, unbound_model) == "Orphan_test"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

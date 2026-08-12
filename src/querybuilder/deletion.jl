@@ -350,16 +350,20 @@ end
 function find_related_objects!(collector::DeletionCollector, model::PormGModel, dict::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}})
   # For each foreign key in the model (model has FK -> related_model)
   @pormg_debug false
-  _django = collector.settings.django_prefix === nothing ? false : true
-    
+
   # For models with foreign keys pointing to this model (related_model has FK -> model)
   for (related_name, related_value) in model.related_objects
     # Skip many-to-many reverse accessors — these are handled by the through
     # table's own CASCADE FK on the owner side, not by this loop.
     related_value isa Models.ManyToManyRelation && continue
-    field_name, pk_field, related_model_name, pk_model = related_value
-    _django && (related_model_name = replace(string(related_model_name), collector.settings.django_prefix * "_" => "") |> Symbol)
-    related_model = getfield(model._module, related_model_name |> capitalize_symbol);
+    # #343: read the resolved child. This used to respell the binding with `capitalize_symbol`,
+    # which cannot produce an internal capital, so a cascade through `Dim_CNES` threw UndefVarError.
+    # Its django-prefix strip went with it: `get_model_name` strips the prefix at REGISTRATION, so
+    # the stored name never carried one and the strip was a guaranteed no-op. The tuple's `pk_field`
+    # and `pk_model` slots were destructured here and never read — both are gone with the tuple.
+    rel = related_value::Models.ReverseRelation
+    field_name = rel.fk_field
+    related_model = rel.model_resolved
 
     _query = related_model |> object;
     if size(dict, 1) == 1

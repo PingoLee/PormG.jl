@@ -296,6 +296,75 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# `_find_model_binding_name`'s `uppercasefirst` fallback is load-bearing (#343).
+#
+# The fallback looks like dead defensive code — an identity scan that already walked the module,
+# followed by a guess. #343 deleted it for a throw on exactly that reading, and the whole 6118-test
+# suite stayed green, because nothing exercised the shape that needs it. This is that test.
+#
+# The shape: a model declared in one module and pulled into the REGISTERING module with `using`.
+# `names(mod; all=true, imported=true)` does not list `using`-brought bindings (only explicitly
+# `import`ed ones), so the identity scan misses — but `isdefined`/`getfield` do reach them, and
+# `_resolve_m2m_side_model` tests `isdefined`. So the guessed spelling resolves and the layout works.
+#
+# Deleting the fallback breaks it QUIETLY: the injected `__init__` in `Utils.jl` and the Revise
+# callback both swallow a `set_models` throw, so the symptom is "no models registered at all", not an
+# error anyone can read. That is why this is pinned by a test and not only by a comment.
+# ─────────────────────────────────────────────────────────────────────────────
+# The binding here is deliberately `Uschampionship` — i.e. exactly `uppercasefirst(name)`. That is
+# the ONLY spelling the fallback can produce, so it is the only one this layout can use; see the
+# negative assertion at the end of the testset for the case it cannot rescue.
+module UsingScopedSharedModels
+  import PormG
+  import PormG.Models
+  export Uschampionship
+  Uschampionship = Models.Model("uschampionship",
+    id = Models.IDField(),
+    nome = Models.CharField(),
+  )
+end
+
+module UsingScopedAppModels
+  import PormG
+  import PormG.Models
+  # `using`, NOT `import` — this is the entire point of the fixture.
+  using ..UsingScopedSharedModels
+
+  Usdriver = Models.Model("usdriver",
+    id = Models.IDField(),
+    surname = Models.CharField(),
+    championships = Models.ManyToManyField(Uschampionship, related_name = "drivers"),
+  )
+  PormG.Models.set_models(@__MODULE__, "m2m_mock")
+end
+
+@testset "using-scoped M2M target keeps the binding fallback (#343)" begin
+  # Preconditions — the asymmetry the fallback exists for. If either of these flips, the rest of
+  # this testset is no longer testing what it claims, so assert them rather than assume them.
+  @test !(:Uschampionship in names(UsingScopedAppModels; all=true, imported=true))
+  @test isdefined(UsingScopedAppModels, :Uschampionship)
+
+  # The contract: registration COMPLETED (it threw while the fallback was removed), and the recorded
+  # binding is the guessed `uppercasefirst` spelling rather than one the scan found.
+  rel = Models.get_many_to_many_relation(UsingScopedAppModels.Usdriver, "championships")
+  @test rel.related_binding == "Uschampionship"
+
+  # And the guess is not merely stored — it RESOLVES, through the `isdefined` branch the identity
+  # scan cannot see. This is what makes the fallback load-bearing rather than cosmetic.
+  @test isdefined(UsingScopedAppModels, Symbol(rel.related_binding))
+  @test PormG.QueryBuilder._resolve_m2m_side_model(
+      UsingScopedAppModels, rel.related_binding, "uschampionship", "championships"
+    ) === UsingScopedSharedModels.Uschampionship
+
+  # The limit of the rescue, asserted so nobody reads more into the fallback than is there: it works
+  # only where the binding happens to equal `uppercasefirst(name)`. A `using`-scoped model whose
+  # binding carries an internal capital is still unreachable — the scan misses it AND the guess is
+  # the wrong spelling. That intersection is what #343 fixes for reverse foreign keys (which store
+  # the binding) and cannot fix for many-to-many, which still re-resolves by binding (#68/#41).
+  @test uppercasefirst("dim_cnes") != "Dim_CNES"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BUG-1 documentation: PormGModel.getproperty struct-field guard is intentional.
 # The `sym in fieldnames(typeof(m))` branch must stay BEFORE the M2M check because
 # has_many_to_many_accessor() itself accesses m.cache and m.related_objects, which
@@ -391,11 +460,16 @@ end
   @test rev.owner_model_resolved === M2M.Driver
   @test rev.related_model_resolved === M2M.Driver_championship
 
-  # deepcopy SHARES the resolved slots (the deepcopy_internal override) instead of cloning the
-  # related-model graph. This is also REQUIRED for correctness: a resolved model carries a
-  # `_module::Module`, and Julia cannot deepcopy a Module — so without the override, deep-copying
-  # a relation (e.g. via deepcopy(model.related_objects)) would throw "deepcopy of Modules not
-  # supported". The override copies the value fields and shares the two model references.
+  # deepcopy SHARES the resolved slots instead of cloning the related-model graph, and this is
+  # REQUIRED for correctness: a resolved model carries a `_module::Module`, and Julia cannot deepcopy
+  # a Module — so without sharing, deep-copying a relation (e.g. via deepcopy(model.related_objects))
+  # would throw "deepcopy of Modules not supported".
+  #
+  # The sharing comes from the `Model_Type` deepcopy hook (#157), NOT from a hook on this struct.
+  # #65 shipped a hand-written `deepcopy_internal(::ManyToManyRelation, …)`; #157 later made it
+  # redundant (a relation is immutable, so Base rebuilds one whose every field is `===` the
+  # original's once the model slots share), and #343 removed it. These assertions are unchanged and
+  # still hold — they now pin the DEFAULT behavior, which is the point.
   fwd_copy = deepcopy(fwd)
   @test fwd_copy.owner_model_resolved === M2M.Driver_championship  # same object (===), not a clone
   @test fwd_copy.related_model_resolved === M2M.Driver

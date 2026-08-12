@@ -2155,11 +2155,21 @@ end
     # model name of Just_a_nested_roll_back.
     @test haskey(M.Just_a_test_deletion.related_objects, "just_a_nested_roll_back")
 
-    # Verify the tuple structure: (field_name, pk_field, related_model_name, pk_model)
+    # Verify the relation structure. This was a bare 4-tuple until #343; the 4th slot (the child's
+    # own PK) is gone with it, unread by anything, and two slots were ADDED that no string function
+    # could have reconstructed from the other three.
     entry = M.Just_a_test_deletion.related_objects["just_a_nested_roll_back"]
-    @test entry isa Tuple{Symbol, Symbol, Any, Symbol}
-    @test entry[1] == :test  # FK field name in Just_a_nested_roll_back
-    @test entry[2] == :id    # pk_field referenced in the FK definition
+    @test entry isa PormG.Models.ReverseRelation
+    @test entry.fk_field == :test                     # FK field name in Just_a_nested_roll_back
+    @test entry.target_pk == :id                      # pk_field referenced in the FK definition
+    @test entry.model_name == :just_a_nested_roll_back # child's LOGICAL name — lowercase by #300
+
+    # #343: the binding and the resolved model. Here the binding happens to equal
+    # `uppercasefirst(model_name)`, which is exactly why the old reconstruction survived this long —
+    # every model in this fixture is spelled that way. See test_reverse_join_mixed_case_binding.jl
+    # for the shape that is NOT recoverable by respelling.
+    @test entry.binding === :Just_a_nested_roll_back
+    @test entry.model_resolved === M.Just_a_nested_roll_back
 end
 
 @testset "Related Objects - Duplicate related_name rejection" begin

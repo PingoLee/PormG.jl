@@ -391,28 +391,35 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       m2m_inserted = true
     else
     # @pormg_debug false
-    s_model = Symbol(uppercasefirst(string(instruct.object.model.related_objects[vector[1]][3])))
-    reverse_model = getfield(foreing_table_module, s_model)
+    # #343: the child model is READ off the relation, never rebuilt from its name. The old
+    # `Symbol(uppercasefirst(lowercased_name))` could only ever spell `Xxxxx`, so a binding with an
+    # internal capital (Dim_CNES, CustomUser) raised UndefVarError instead of joining.
+    rel = related_object::Models.ReverseRelation
+    reverse_model = rel.model_resolved
     length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
     # !(vector[2] in reverse_model.field_names) && throw("Error in _build_row_join, the column $(vector[2]) not found in $(reverse_model.name)")
     row_join["a"] = Models.model_table_name(instruct.object.model)
     row_join["alias_a"] = instruct.alias
-    join_field = reverse_model.fields[instruct.object.model.related_objects[vector[1]][1] |> String]
+    join_field = reverse_model.fields[String(rel.fk_field)]
     row_join["how"] = _determine_join_type(join_field, second_fild_name= vector[2])
     size(vector, 1) == 2 && (last_field = reverse_model.fields[vector[2]])
-    # After `|> String`, foreign_table_name is always a String — the old `=== nothing` and
-    # `isa PormGModel` arms were type-impossible dead code (removed in the #197 review pass).
-    foreign_table_name = instruct.object.model.related_objects[vector[1]][3] |> String
-    row_join["b"] = _reverse_join_table(reverse_model, foreign_table_name, instruct.django)
+    # The LOGICAL name goes straight into the table fallback, which is the only thing that ever
+    # wanted it — before #343 it was assigned to `foreign_table_name` and then overwritten below.
+    row_join["b"] = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django)
 
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     # Reverse join: key_a is the parent's referenced column, key_b the child's FK
     # column; both honor db_column (resolved in their own model, no-op without it) (#50).
-    row_join["key_a"] = Models.model_column(instruct.object.model, instruct.object.model.related_objects[vector[1]][2] |> String)
-    row_join["key_b"] = Models.model_column(reverse_model, instruct.object.model.related_objects[vector[1]][1] |> String)
+    row_join["key_a"] = Models.model_column(instruct.object.model, String(rel.target_pk))
+    row_join["key_b"] = Models.model_column(reverse_model, String(rel.fk_field))
     # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
     row_join["to_many"] = "1"
-    foreign_table_name = s_model |> string
+    # Carry the RESOLVED model forward, matching the CTE and M2M branches. `foreign_table_name` is
+    # already declared `Union{String, PormGModel, Nothing}`, and both cross-branch readers accept a
+    # model: the next-hop lookup branches on `isa PormGModel`, and the terminal column resolver
+    # dispatches to `_solve_field(::String, ::Module, ::PormGModel, …)`. That terminal site was a
+    # FIFTH broken reconstruction, reached only if the join above had not already thrown.
+    foreign_table_name = reverse_model
     @pormg_debug false
     end
   else
@@ -498,28 +505,27 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         foreign_table_name = foreign_model
         _m2m_inserted = true
       else
-      s_model = Symbol(uppercasefirst(string(new_object.related_objects[vector[1]][3])))
-      reverse_model = getfield(foreing_table_module, s_model)
+      # #343: read the resolved child — see the first-hop branch above for why respelling the
+      # binding from the logical name cannot work.
+      rel = related_object::Models.ReverseRelation
+      reverse_model = rel.model_resolved
       length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
       !(vector[2] in reverse_model.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(reverse_model.name)"))
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias
-      join_field = reverse_model.fields[new_object.related_objects[vector[1]][1] |> String]
+      join_field = reverse_model.fields[String(rel.fk_field)]
       row_join["how"] = _determine_join_type(join_field, previus_how=prev_how, second_fild_name= vector[2])
       size(vector, 1) == 2 && (last_field = reverse_model.fields[vector[2]])
-      # After `|> String`, foreign_table_name is always a String — the old `=== nothing` and
-      # `isa PormGModel` arms were type-impossible dead code (removed in the #197 review pass).
-      foreign_table_name = new_object.related_objects[vector[1]][3] |> String
-      row_join["b"] = _reverse_join_table(reverse_model, foreign_table_name, instruct.django)
+      row_join["b"] = _reverse_join_table(reverse_model, String(rel.model_name), instruct.django)
 
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
       # Reverse join: key_a is the parent's referenced column, key_b the child's FK
       # column; both honor db_column (resolved in their own model, no-op without it) (#50).
-      row_join["key_a"] = Models.model_column(new_object, new_object.related_objects[vector[1]][2] |> String)
-      row_join["key_b"] = Models.model_column(reverse_model, new_object.related_objects[vector[1]][1] |> String)
+      row_join["key_a"] = Models.model_column(new_object, String(rel.target_pk))
+      row_join["key_b"] = Models.model_column(reverse_model, String(rel.fk_field))
       # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
       row_join["to_many"] = "1"
-      foreign_table_name = s_model |> string
+      foreign_table_name = reverse_model
       vector = vector[2:end]
       _reverse_advanced = true
       end

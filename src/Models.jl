@@ -80,7 +80,7 @@ registration has `connect_key === nothing` and no reverse relations.
 | `name` | `Model(...)`, or `set_models` from the Julia binding | The table name. For a model you *declare* it is always lowercase — a positional name is rejected unless already lowercase (#300), a binding-derived one is lowercased as it is filled in. A model built by `inspectdb` introspection or the Django importer instead keeps the name read from its source, mixed case and all |
 | `fields` | `Model(...)` | Declared field name → `PormGField`, including many-to-many fields |
 | `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
-| `related_objects` | `set_models` | Reverse accessors installed by foreign keys pointing *at* this model |
+| `related_objects` | `set_models` | Reverse accessors installed by relations pointing *at* this model: accessor name → a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation` (a many-to-many, reversed). Each carries the resolved child model, so a reverse join never re-derives a Julia binding from a name (#343) |
 | `_module` / `connect_key` | `set_models` | The defining module and the connection key it registered under |
 | `cache` | `set_models`, `Model(constraints = …)` | Derived metadata: many-to-many relations, declared unique constraints |
 
@@ -122,6 +122,56 @@ end
   owner_model_resolved::Union{PormGModel, Nothing} = nothing
   related_model_resolved::Union{PormGModel, Nothing} = nothing
 end
+
+# What `related_objects` stores for a REVERSE FOREIGN KEY accessor — the sibling of
+# `ManyToManyRelation` above, and the other half of that Dict's value domain.
+#
+# It replaces a bare 4-tuple (#343). The tuple's third slot was the child's LOGICAL name, written
+# through `get_model_name`, which lowercases unconditionally — so every consumer had to guess the
+# Julia binding back with `uppercasefirst`, and that spelling can only ever be `Xxxxx`. A binding
+# with an internal capital (`Dim_CNES`, `CustomUser`, `Cust_adminHOD`) was therefore unreachable in
+# reverse, by ANY string function: since #300 the positional name is validated lowercase, so the
+# information was not merely folded, it was never stored. Ten of 668 models across the consuming
+# apps were affected, including a central dimension table.
+#
+# `model_resolved` is the fix: the child model is RECORDED at registration, where `set_models`
+# already holds it as the loop variable, and READ at query time. It is deliberately NOT nullable —
+# there is exactly one producer and it always has the model, so a nullable slot would only invite a
+# `=== nothing` fallback back into the consumers, which is the bug wearing a hat.
+#
+# `binding` has no reader in `src/` today, and that is a deliberate exception to the rule that killed
+# the old 4th slot below. The difference is recoverability: `child_pk` is derivable from the model at
+# any time, whereas the binding is derivable from NOTHING once registration ends — that is the whole
+# content of #343. It is the reverse-side counterpart to `ManyToManyRelation`'s
+# `owner_binding`/`related_binding`, and it is the spelling a diagnostic or a code generator has to
+# print for a user to be able to type it (`M.Dim_CNES`). Dropping it would re-create the hole.
+#
+# The old tuple's 4th slot (the child's own pk) is gone: nothing in `src/` ever read it, and it is
+# now derivable as `get_model_pk_field(rel.model_resolved)`. Storing a derived value nothing reads is
+# how the 3rd slot rotted in the first place.
+@kwdef struct ReverseRelation
+  fk_field::Symbol            # the FK column on the CHILD model
+  target_pk::Symbol           # the column on the PARENT (this Dict's owner) that the FK references
+  model_name::Symbol          # the CHILD's LOGICAL name: django_prefix-stripped and lowercased
+  binding::Symbol             # the CHILD's Julia binding in `_module` — the #343 fix
+  model_resolved::PormGModel  # the CHILD model itself
+end
+
+# Single constructor for the three `set_models` branches (>=2 FKs to one target, 1 FK with an
+# implicit accessor, 1 FK with an explicit `related_name`). They differ only in the Dict KEY they
+# store under; the relation itself is identical, and before #343 that identity was three copies of
+# one tuple literal. `Symbol(field.pk_field)` reproduces the old `field.pk_field |> Symbol` exactly,
+# including the `:nothing` degenerate for a pk_field `resolve_fk_target!` could not default.
+_reverse_relation(child::PormGModel, model_name::Symbol, binding::Symbol,
+                  fk_field_name::AbstractString, field::PormGField) =
+  ReverseRelation(
+    fk_field       = Symbol(fk_field_name),
+    target_pk      = Symbol(field.pk_field),
+    model_name     = model_name,
+    binding        = binding,
+    model_resolved = child,
+  )
+
 # A Model_Type is resolved schema state — its `fields`, `_module`, and `related_objects` are built once
 # by `set_models` and treated as an immutable, SHARED reference everywhere (the query builder copies query
 # state but shares the model verbatim: `SQLObjectQuery` deepcopy sets `model=obj.model`). Deep-copying a
@@ -129,36 +179,16 @@ end
 # `.to` (another Model_Type) it descends into `_module::Module` → "deepcopy of Modules not supported".
 # Override the recursion hook to SHARE — return the same model, registered in `stackdict` so its identity
 # is stable across the surrounding copy. So `deepcopy(model) === model`, and any container/field that
-# holds a model shares it rather than cloning the schema graph. Mirrors the `ManyToManyRelation` override
-# below (#65) and resolves the module-traversal throw (#157).
+# holds a model shares it rather than cloning the schema graph. Resolves the module-traversal throw (#157).
+#
+# This one hook is also what makes BOTH relation structs above deep-copy correctly, with no override
+# of their own: they are immutable, every other field is a Symbol/String/Bool, and their resolved-model
+# slots land here and are shared. So Base's default rebuilds a relation whose every field is `===` the
+# original's — and `===` on an immutable is field-wise egality, hence `deepcopy(rel) === rel`.
+# #65 shipped a hand-written `deepcopy_internal(::ManyToManyRelation, …)` that did this by hand; #157
+# added the hook below, which superseded it, and #343 removed it. Do not reintroduce one for a new
+# relation struct without first checking whether the default already does the job.
 Base.deepcopy_internal(m::Model_Type, stackdict::IdDict) = get!(stackdict, m, m)
-
-# #65: a ManyToManyRelation now carries resolved model objects (owner/related). Those are shared,
-# derived state — `set_models` repopulates them — so deep-copying them would needlessly clone the
-# whole related-model graph (a Model_Type's `related_objects` holds these relations). Copy the
-# value-type String/Bool fields; SHARE the two resolved-model references — consistent with the
-# `Model_Type` share hook above (#157) and the targeted override for SQLiteParameterizedQuery.
-function Base.deepcopy_internal(r::ManyToManyRelation, stackdict::IdDict)
-  haskey(stackdict, r) && return stackdict[r]
-  new = ManyToManyRelation(
-    field_name=r.field_name,
-    through_model=r.through_model,
-    owner_model=r.owner_model,
-    owner_binding=r.owner_binding,
-    owner_pk=r.owner_pk,
-    owner_column=r.owner_column,
-    related_model=r.related_model,
-    related_binding=r.related_binding,
-    related_pk=r.related_pk,
-    related_column=r.related_column,
-    inverse_accessor=r.inverse_accessor,
-    reverse=r.reverse,
-    owner_model_resolved=r.owner_model_resolved,
-    related_model_resolved=r.related_model_resolved,
-  )
-  stackdict[r] = new
-  return new
-end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Management/Reflection
@@ -197,12 +227,41 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
   return model_names
 end
 
-function capitalize_symbol(s::Symbol)
-  str = string(s)
-  if isempty(str)
-    return s
+# One walk, two outputs: the model vector `set_models` iterates, and the model → binding map it
+# records into `ReverseRelation.binding` (#343).
+#
+# Split from `get_all_models` rather than folded into its `symbol` kwarg, which returns the Symbol
+# XOR the model and so can never express the PAIRING. Kept separate from `_find_model_binding_name`
+# too, deliberately: that helper is an O(N) identity scan, and calling it once per foreign key across
+# a real app's ~670 models is ~450k `invokelatest` calls per `set_models`. Here the binding is simply
+# not thrown away in the first place.
+#
+# Airtight by construction: both outputs come from the SAME iteration, so every model in `models` is
+# a key of `bindings`, no fallback spelling is needed — and none is offered, because a fallback
+# spelling is exactly what #343 was.
+#
+# `get!` keeps the FIRST binding when one model object is bound under several names, matching
+# `_find_model_binding_name`; `names` returns sorted symbols, so that choice is deterministic.
+function _collect_models_and_bindings(modules::Module)
+  models = PormGModel[]
+  bindings = IdDict{PormGModel, Symbol}()
+  for name in names(modules; all=true, imported=true)
+    # Use invokelatest to avoid World Age issues in Julia 1.12+
+    attr = try
+        Base.invokelatest(getfield, modules, name)
+    catch
+        nothing
+    end
+    isa(attr, PormGModel) || continue
+    # Same binding-derived name fill as `get_all_models` — load-bearing for `Model(; fields...)`,
+    # which leaves `name` empty and relies on registration to derive it from the binding.
+    if attr.name == ""
+      attr.name = name |> format_model_name
+    end
+    push!(models, attr)
+    get!(bindings, attr, name)
   end
-  return Symbol(uppercase(str[1]) * str[2:end])
+  return models, bindings
 end
 
 function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
@@ -411,7 +470,9 @@ See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
 function set_models(_module::Module, path::String)::Nothing
   @pormg_debug false
-  models = get_all_models(_module)  
+  # #343: one walk yields the models AND their Julia bindings. The binding cannot be recovered later
+  # from a model — `name` is validated lowercase (#300) — so it is captured here or it is lost.
+  models, bindings = _collect_models_and_bindings(_module)
 
   # Register for lazy loading / self-healing
   REGISTERED_MODULES[_module] = path
@@ -463,7 +524,12 @@ function set_models(_module::Module, path::String)::Nothing
     dict_tables_c = Dict{String, Int}()
     dict_tables_fiels = Dict{String, Vector{String}}()
     model.connect_key = connect_key
-    # @pormg_debug model.name == "dash_tab_cvat" 
+    # Hoisted: both describe the CHILD (`model`) and are identical for every FK it declares. The
+    # logical name was recomputed per field before #343, inconsistently — sometimes inline, sometimes
+    # into a local of the same name.
+    model_name = get_model_name(model, settings)::Symbol
+    model_binding = bindings[model]
+    # @pormg_debug model.name == "dash_tab_cvat"
     # println(model.name)
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey || field isa sOneToOneField
@@ -487,28 +553,27 @@ function set_models(_module::Module, path::String)::Nothing
         end
         if dict_tables_c[field_to.name] > 1
           @pormg_debug false
-          if field.related_name === nothing 
-            field.related_name = string(get_model_name(model, settings), "_", field_name) |> lowercase
+          if field.related_name === nothing
+            field.related_name = string(model_name, "_", field_name) |> lowercase
             @info("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
           end
           if haskey(field_to.related_objects, field.related_name)
             throw(ModelDefinitionError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
           else
-            field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, get_model_name(model, settings), get_model_pk_field(model) |> Symbol)
+            field_to.related_objects[field.related_name] = _reverse_relation(model, model_name, model_binding, field_name, field)
           end
         elseif dict_tables_c[field_to.name] == 1
           @pormg_debug false
-          model_name = get_model_name(model, settings)
-          if field.related_name === nothing            
-            field_to.related_objects[model_name |> string] = (field_name |> Symbol, field.pk_field |> Symbol, model_name |> Symbol, get_model_pk_field(model) |> Symbol)
+          if field.related_name === nothing
+            field_to.related_objects[model_name |> string] = _reverse_relation(model, model_name, model_binding, field_name, field)
           else
             if haskey(field_to.related_objects, field.related_name)
               throw(ModelDefinitionError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
             else
-              field_to.related_objects[field.related_name] = (field_name |> Symbol, field.pk_field |> Symbol, model_name, get_model_pk_field(model) |> Symbol)
+              field_to.related_objects[field.related_name] = _reverse_relation(model, model_name, model_binding, field_name, field)
             end
           end
-        end        
+        end
         
         # check on_delete — a schema that contradicts itself is rejected at registration (#287).
         # These were `@error` logs until #287: they named the problem and then let the broken model
@@ -957,7 +1022,7 @@ end
 # Resolve a field-name string to its physical column within `model` (db_column when
 # the named field carries one), verbatim when the name is not a field of `model`. For
 # call sites that hold only a model + a field-name string — e.g. reverse-relation join
-# keys assembled from `related_objects` tuples (#50). A strict no-op without db_column.
+# keys read off a `ReverseRelation` (#50). A strict no-op without db_column.
 function model_column(model::PormGModel, name::AbstractString)::String
   haskey(model.fields, name) ? field_db_column(model.fields[name], name) : String(name)
 end
@@ -2181,6 +2246,41 @@ function _same_model_reference(a::Union{String, PormGModel}, b::PormGModel)::Boo
   return format_model_name(_model_reference_name(a)) == format_model_name(b.name)
 end
 
+# Recover a model's Julia binding by identity. Used by the many-to-many registration path, which
+# stores the two bindings on the relation; the reverse-FK path gets its binding straight from
+# `_collect_models_and_bindings` instead, which is a great deal cheaper than one scan per relation.
+#
+# The `uppercasefirst` fallback is lossy in exactly the way #343 is about — it can only ever spell
+# `Xxxxx` — and #343 tried to replace it with a throw. DO NOT: it is load-bearing, for a reason the
+# scan above cannot see. `names(_module; all=true, imported=true)` does NOT list bindings introduced
+# by `using` (only explicitly `import`ed ones), while `isdefined`/`getfield` DO reach them. So for a
+# model declared in one module and pulled into the registering module with `using`, the scan misses,
+# yet `_resolve_m2m_side_model`'s binding branch (`build_joins.jl`, which tests `isdefined`) resolves
+# the guessed `Xxxxx` spelling successfully. Throwing here broke that working layout — and broke it
+# quietly, because both `set_models` callers that matter (the injected `__init__` in `Utils.jl` and
+# the Revise callback) swallow the exception, so the symptom is "no models registered", not an error.
+#
+# Pinned by `test_many_to_many.jl` → "using-scoped M2M target keeps the binding fallback". A comment
+# did not stop this deletion the first time, so the guard is a test.
+#
+# What the fallback does NOT rescue, so nobody reads more into it than is there: it works only where
+# the binding happens to equal `uppercasefirst(name)`. A `using`-scoped model whose binding carries
+# an internal capital (`Dim_CNES`) still fails here and on `main` alike — `isdefined(mod, :Dim_cnes)`
+# is false, and `_resolve_m2m_side_model`'s name-scan fallback misses for the same `names()` reason,
+# so it raises `QueryBuildError`. That intersection is what `ReverseRelation` fixes for reverse
+# foreign keys and cannot fix for many-to-many, because the M2M path still re-resolves by binding
+# instead of reading `related_model_resolved` (#68/#41).
+#
+# The reverse-FK path depends on none of this: `set_models` records its binding directly from
+# `_collect_models_and_bindings`. This helper is many-to-many-only.
+#
+# The real repair is making `using`-scoped models visible to registration at all, and it is NOT the
+# one-word change it looks like. `names(...; usings=true)` exists on the 1.12 floor, but `using Base`
+# is implicit in every module, so it returns ~1112 names where `imported=true` returns 3 (measured on
+# 1.12.6). Both this scan and `_collect_models_and_bindings` do a `getfield` per name, so a straight
+# substitution turns registration into a ~1100-name sweep per module on a 670-model app, and drags in
+# any `PormGModel` an unrelated package re-exported. It needs a filter — `usings=true` on the miss
+# path only, or screening by `parentmodule`/`Base.binding_module`. Tracked in #354.
 function _find_model_binding_name(_module::Module, model::PormGModel)::String
   for name in names(_module; all=true, imported=true)
     attr = try
@@ -2411,10 +2511,22 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
 
   for (model_name, model_info) in current_schema
     source_model = model_info[:model]
-    # Derive from the model's LOGICAL name, symmetric with `related_binding` below — not from the
-    # dict key, which is the resolved PHYSICAL table name (#59) and so would carry a `db_table`
-    # spelling into a Julia-side binding label. Identical output for every model without `db_table`,
-    # since the key is that same logical name lowercased.
+    # These two labels are NOT real Julia bindings, and nothing here reads them as such: on this
+    # lifecycle the relation is a transient carrier for the through-table SHAPE only — the five slots
+    # consumed below are `through_model`, `owner_column`, `related_column`, `owner_pk`, `related_pk`,
+    # and the relation is then discarded rather than stored on a model. So `_resolve_m2m_side_model`
+    # never sees these, and their spelling cannot reach a `getfield`.
+    #
+    # #343 note, so the next reader does not "fix" this into the trap in reverse: the identity scan
+    # `_find_model_binding_name` uses is UNAVAILABLE here. `_load_current_models` (planner.jl) builds
+    # the schema by `Base.include`ing the model file into a throwaway module and deliberately never
+    # runs `set_models`, so `source_model._module` is `nothing` on the makemigrations path. Deriving
+    # from the model's LOGICAL name is therefore the only option — and it is a harmless one, because
+    # these slots are write-only here. Retiring them properly is #68/#41.
+    #
+    # Derive from the LOGICAL name, not the dict key: the key is the resolved PHYSICAL table name
+    # (#59) and would carry a `db_table` spelling into a Julia-side label. Identical output for every
+    # model without `db_table`, since the key is that same logical name lowercased.
     owner_binding = uppercasefirst(format_model_name(source_model.name))
     for (field_name, field) in source_model.fields
       is_many_to_many_field(field) || continue

@@ -1,0 +1,352 @@
+from django import forms
+from django.db import models
+from django.db.models import CharField, Q, UniqueConstraint
+from django.db.models.functions import Lower
+from rest_framework import serializers
+
+# An abstract base living in ANOTHER app. Nothing in this file defines it, so `Relatorio` below
+# cannot merge its columns.
+from core.models import TimeStampedModel
+
+TABELA_LEGADO = "legado_" + "codigos"
+CHAVE_RESERVA = ("hospede",)
+
+
+class Source(models.TextChoices):
+    """A module-level enum. Not a table, and it must be skipped in SILENCE — a warning for every
+    QuerySet/Manager/enum in a real models.py buries the one finding that matters."""
+
+    UPLOAD = "UPLOAD", "Upload manual"
+    GSHEETS = "GSHEETS", "Google Sheets API"
+
+
+class Auditavel(models.Model):
+    """An abstract base: emits NO table of its own, and its two columns merge into every child.
+
+    Its `Meta` carries `unique_together`, which Django installs on a child that declares no Meta
+    at all — and only on such a child. Both halves are asserted below.
+    """
+
+    criado_em = models.DateTimeField(auto_now_add=True)
+    origem = models.CharField(max_length=8, default="base")
+
+    class Meta:
+        abstract = True
+        unique_together = ("criado_em", "origem")
+        # Django DOES inherit db_table onto a child that declares no Meta — which would point every
+        # child of this base at one table. Refused deliberately, and reported. Present here so the
+        # "not inherited" assertion has something that could fail.
+        db_table = "aud_base"
+
+
+class Matricula(Auditavel):
+    """Concrete child. `origem` is REDECLARED here, so the child's max_length=32 must win over the
+    base's max_length=8 — that is what proves the merge order rather than merely the merge.
+
+    It declares its own `Meta`, so Django does NOT install `Auditavel`'s: this model must come out
+    with no `unique_together` constraint at all.
+    """
+
+    numero = models.CharField(max_length=20)
+    origem = models.CharField(max_length=32, default="matricula")
+
+    class Meta:
+        db_table = "rh_matricula_legado"
+        ordering = ["numero"]
+
+
+class Ocorrencia(Auditavel):
+    """Concrete child with NO Meta of its own — so Django installs the abstract base's, and
+    `unique_together` reaches this table while it does not reach Matricula's."""
+
+    descricao = models.CharField(max_length=100)
+
+
+class Setor(models.Model):
+    nome = models.CharField(max_length=40)
+
+
+class Servidor(models.Model):
+    cpf = models.CharField(max_length=11)
+    lotacao = models.ForeignKey(Setor, on_delete=models.CASCADE)
+    ativo = models.BooleanField(default=True)
+    apelido = models.CharField(max_length=30)
+
+    class Meta:
+        constraints = [
+            # IMPORTED. `lotacao` resolves to the imported `lotacao_id` column.
+            models.UniqueConstraint(fields=["cpf", "lotacao"], name="uniq_servidor_cpf_lotacao"),
+            # REJECTED — a PARTIAL unique index. Imported unconditionally it would start rejecting
+            # rows the live database accepts, which is silent data loss on write.
+            models.UniqueConstraint(
+                fields=["apelido"], condition=Q(ativo=True), name="uniq_apelido_ativo"
+            ),
+            # REJECTED — an expression constraint. Django indexes lower(apelido); PormG would index
+            # apelido, which is a different index wearing the same name.
+            models.UniqueConstraint(Lower("apelido"), name="uniq_apelido_lower"),
+            # REJECTED — no PormG equivalent at all.
+            models.CheckConstraint(check=Q(cpf__regex=r"^\d{11}$"), name="chk_cpf_digitos"),
+        ]
+        indexes = [models.Index(fields=["apelido"])]
+
+
+class Venda(models.Model):
+    valor = models.IntegerField()
+
+
+class Pedido(Venda):
+    """Django multi-table inheritance. Django gives this its own table keyed by a `venda_ptr_id`
+    one-to-one to Venda; PormG cannot express that, so nothing is emitted. Venda itself still is."""
+
+    desconto = models.IntegerField()
+
+
+class ServidorAtivo(Servidor):
+    """A proxy: no table of its own. Its base is concrete, which is also the MTI shape — so this
+    doubles as the check that `proxy = True` is read BEFORE the inheritance kind is decided."""
+
+    class Meta:
+        proxy = True
+        ordering = ["cpf"]
+
+
+class Relatorio(TimeStampedModel):
+    """The base is imported from another app, so its columns cannot be merged. The model is still
+    emitted — dropping it is the vanishing-model bug — with a marker naming what is absent."""
+
+    titulo = models.CharField(max_length=80)
+
+
+class RelatorioForm(forms.ModelForm):
+    """An unresolvable base AND no `models.X(...)` in the body. That second half is what keeps
+    every form, serializer and manager subclass in a real models.py out of the schema."""
+
+    class Meta:
+        model = Relatorio
+        fields = ["titulo"]
+
+
+class ServidorSerializer(serializers.ModelSerializer):
+    """Unlike `RelatorioForm` above, a serializer DOES declare field-shaped members — so the field
+    gate alone would import it as a table. `Meta.model` is what keeps it out: it is the signature
+    of a class that describes a model, and Django's own ModelBase rejects the attribute on a real
+    model ("class Meta got invalid attribute(s): model")."""
+
+    apelido = serializers.CharField(max_length=30)
+
+    class Meta:
+        model = Servidor
+        fields = ["apelido"]
+
+
+class ServidorAdminForm(forms.ModelForm):
+    """A form carrying a genuine `models.` field — a copy-paste slip that happens in real code. The
+    namespace rule cannot help here, because the member really is a model field; `Meta.model` is the
+    only thing keeping this out of the schema. The two guards are not redundant."""
+
+    observacao = models.CharField(max_length=50)
+
+    class Meta:
+        model = Servidor
+        fields = ["observacao"]
+
+
+class ContatoForm(forms.Form):
+    """A PLAIN form — no `Meta.model` to exclude it, and its members are field-shaped. What keeps
+    it out is the NAMESPACE: `forms.CharField` differs from `models.CharField` by nothing else, and
+    accepting any field-shaped call put junk `id`-only tables into the schema."""
+
+    nome = forms.CharField(max_length=50)
+    email = forms.EmailField()
+
+
+class RelatorioSerializer(serializers.Serializer):
+    """A plain serializer — same shape as the plain form, different namespace."""
+
+    titulo = serializers.CharField(max_length=80)
+
+
+class Ausencia(models.Model, object):
+    """`object` must come LAST in a Python base list, so this is the only legal ordering — and it is
+    what a Python-2-era codebase writes. A recognised model root has to outrank the non-model base
+    list, or this whole model vanishes without a word."""
+
+    motivo = models.CharField(max_length=30)
+
+
+class Rastreavel(TimeStampedModel):
+    """An abstract base whose OWN base lives in another app. It emits nothing itself, so unless the
+    unresolved-base walk climbs the abstract chain, the columns missing from every child reach the
+    generated file with no marker anywhere."""
+
+    rastreio = models.CharField(max_length=20)
+
+    class Meta:
+        abstract = True
+
+
+class Encomenda(Rastreavel):
+    peso = models.IntegerField()
+
+
+class Duplicada(models.QuerySet):
+    """Helper first, real model second, under ONE name. Classification is memoized by name from the
+    first definition, so the second is never classified on its own — only its own field
+    declarations reveal that a table was lost here. Two helpers under one name lose nothing and
+    must stay silent; this shape must not."""
+
+    def ativos(self):
+        return self
+
+
+class Duplicada(models.Model):
+    ativo = models.BooleanField(default=True)
+
+
+class SoRuido(models.QuerySet):
+    def a(self):
+        return self
+
+
+class SoRuido(models.QuerySet):
+    """Two helpers under one name. Nothing reaches the schema either way, so a comment about a
+    QuerySet in a module that never mentions it would be pure noise."""
+
+    def b(self):
+        return self
+
+
+class SoDocstring(Auditavel):
+    """A child whose `Meta` block carries ONLY a docstring. It DECLARED a Meta, so Django does not
+    inherit the base's — which means no `unique_together` here, and no withheld-db_table marker.
+    Gating on the parsed options instead of on the block would inherit both."""
+
+    nota = models.CharField(max_length=10)
+
+    class Meta:
+        """Intentionally empty of options."""
+
+
+class Manager(models.Model):
+    """A user model whose NAME collides with the non-model base list. A Manager in an HR schema is
+    a person. Matching that list against the raw base list made this class invisible as a base, so
+    its children resolved no parent and were dropped in silence."""
+
+    nome = models.CharField(max_length=40)
+
+
+class SeniorManager(Manager):
+    bonus = models.IntegerField()
+
+
+class RaizConfig(models.Model):
+    """Three-level abstract chain. Django installs the NEAREST ancestor's Meta class, not a merge of
+    the chain — so only that one's withheld db_table concerns the child. Walking the whole chain
+    reported this grandparent's on a child that would never have inherited it."""
+
+    codigo = models.CharField(max_length=8)
+
+    class Meta:
+        abstract = True
+        db_table = "raiz_config"
+
+
+class MeioConfig(RaizConfig):
+    extra = models.CharField(max_length=8)
+
+    class Meta:
+        abstract = True
+        ordering = ["extra"]
+
+
+class FimConfig(MeioConfig):
+    valor = models.IntegerField()
+
+
+class ChaveQuebrada(models.Model):
+    """A field name carrying a REAL newline: a triple-quoted string survives statement folding
+    intact. Interpolated raw into a marker it yields a `#` comment spanning two lines and the
+    generated module stops parsing — so the "evaluates" testset is this class's guard."""
+
+    a = models.IntegerField()
+
+    class Meta:
+        unique_together = ("""nao
+existe""", "a")
+
+
+class ExportMixin:
+    """A plain (non-model) mixin — ordinary Django. It is not a table itself, and Django collects
+    fields only from bases that ARE models, so it contributes no columns either."""
+
+    def to_csv(self):
+        return ""
+
+
+class Lotacao(models.Model, ExportMixin):
+    """A recognised model root beside a base that is definitively not a model. Testing the
+    not-a-model base first dropped this whole model in SILENCE — the shape #341 exists to close."""
+
+    setor = models.CharField(max_length=40)
+
+
+class Frequencia(TimeStampedModel):
+    """Fields declared with a DIRECTLY IMPORTED type (`from django.db.models import CharField`),
+    under a base this file cannot resolve. Gating the model on the dotted `models.X(...)` spelling
+    alone made this vanish without a word, while #340's own warning path already recognises the
+    bare form."""
+
+    competencia = CharField(max_length=7)
+
+
+class Quarto(models.Model):
+    """The two `unique_together` shapes that used to be dropped without a word, kept asymmetric
+    with the `Meta.constraints` path that always reported them."""
+
+    andar = models.IntegerField()
+    numero = models.IntegerField()
+
+    class Meta:
+        unique_together = (("andar", "numero"), "nao_e_um_grupo")
+
+
+class Reserva(models.Model):
+    """`unique_together` as a NAME rather than a literal. The composite key cannot be recovered, and
+    it used to vanish without a word — while the very same shape on `Meta.constraints` was
+    reported. Same loss, same report."""
+
+    hospede = models.CharField(max_length=40)
+
+    class Meta:
+        unique_together = CHAVE_RESERVA
+
+
+class Diaria(models.Model):
+    """A `unique_together` member matching no imported field: warned before, but the generated file
+    said nothing, so a reader of the artifact saw a model with no composite key and no reason."""
+
+    valor = models.IntegerField()
+
+    class Meta:
+        unique_together = ("valor", "nao_existe_esse_campo")
+
+
+class Legado(models.Model):
+    """`db_table` computed rather than literal: applying it verbatim would point the declaration at
+    a table named after the expression's source text. Ignored, reported, model still imported."""
+
+    codigo = models.CharField(max_length=10)
+
+    class Meta:
+        db_table = TABELA_LEGADO
+        nao_existe_essa_opcao = True
+
+
+class Arquivado(models.Model):
+    """A TRIPLE-quoted db_table. It starts with a quote, so a naive literal check accepts it — and
+    the value comes back carrying two stray quote characters, naming a table no database has."""
+
+    ref = models.CharField(max_length=10)
+
+    class Meta:
+        db_table = """arq_legado"""

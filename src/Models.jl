@@ -209,7 +209,9 @@ A vector containing all the models defined in the module.
 """
 function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbol, PormGModel}}
   model_names = []
+  seen_names = Set{Symbol}()
   for name in names(modules; all=true, imported=true)
+    push!(seen_names, name)
     # Check if the attribute is an instance of Model_Type
     # Use invokelatest to avoid World Age issues in Julia 1.12+
     attr = try
@@ -224,10 +226,28 @@ function get_all_models(modules::Module; symbol::Bool=false)::Vector{Union{Symbo
       push!(model_names, symbol ? name : attr)
     end
   end
+  # #354: Miss-path second pass for `using`-scoped models (invisible to `imported=true`).
+  for name in names(modules; all=true, imported=true, usings=true)
+    Base.binding_module(modules, name) === Base && continue
+    name in seen_names && continue
+    attr = try
+        Base.invokelatest(getfield, modules, name)
+    catch
+        nothing
+    end
+    if isa(attr, PormGModel)
+      symbol && (name in model_names) && continue
+      !symbol && any(m === attr for m in model_names) && continue
+      if attr.name == ""
+        attr.name = name |> format_model_name
+      end
+      push!(model_names, symbol ? name : attr)
+    end
+  end
   return model_names
 end
 
-# One walk, two outputs: the model vector `set_models` iterates, and the model → binding map it
+# Two passes, two outputs: the model vector `set_models` iterates, and the model → binding map it
 # records into `ReverseRelation.binding` (#343).
 #
 # Split from `get_all_models` rather than folded into its `symbol` kwarg, which returns the Symbol
@@ -236,16 +256,19 @@ end
 # a real app's ~670 models is ~450k `invokelatest` calls per `set_models`. Here the binding is simply
 # not thrown away in the first place.
 #
-# Airtight by construction: both outputs come from the SAME iteration, so every model in `models` is
-# a key of `bindings`, no fallback spelling is needed — and none is offered, because a fallback
-# spelling is exactly what #343 was.
+# Airtight by construction: every `push!(models, ...)` is paired with a `get!(bindings, ...)` in
+# both passes, so every model in `models` is a key of `bindings`. The second pass (#354) catches
+# `using`-scoped models invisible to `imported=true`, filtered by `Base.binding_module` to avoid
+# sweeping in ~1100 implicit `Base` names.
 #
 # `get!` keeps the FIRST binding when one model object is bound under several names, matching
 # `_find_model_binding_name`; `names` returns sorted symbols, so that choice is deterministic.
 function _collect_models_and_bindings(modules::Module)
   models = PormGModel[]
   bindings = IdDict{PormGModel, Symbol}()
+  seen_names = Set{Symbol}()
   for name in names(modules; all=true, imported=true)
+    push!(seen_names, name)
     # Use invokelatest to avoid World Age issues in Julia 1.12+
     attr = try
         Base.invokelatest(getfield, modules, name)
@@ -255,6 +278,24 @@ function _collect_models_and_bindings(modules::Module)
     isa(attr, PormGModel) || continue
     # Same binding-derived name fill as `get_all_models` — load-bearing for `Model(; fields...)`,
     # which leaves `name` empty and relies on registration to derive it from the binding.
+    if attr.name == ""
+      attr.name = name |> format_model_name
+    end
+    push!(models, attr)
+    get!(bindings, attr, name)
+  end
+  # #354: Miss-path second pass for `using`-scoped models (invisible to `imported=true`).
+  # Filtered by `Base.binding_module` to exclude implicit `using Base` names.
+  for name in names(modules; all=true, imported=true, usings=true)
+    Base.binding_module(modules, name) === Base && continue
+    name in seen_names && continue
+    attr = try
+        Base.invokelatest(getfield, modules, name)
+    catch
+        nothing
+    end
+    isa(attr, PormGModel) || continue
+    haskey(bindings, attr) && continue
     if attr.name == ""
       attr.name = name |> format_model_name
     end
@@ -2250,38 +2291,20 @@ end
 # stores the two bindings on the relation; the reverse-FK path gets its binding straight from
 # `_collect_models_and_bindings` instead, which is a great deal cheaper than one scan per relation.
 #
-# The `uppercasefirst` fallback is lossy in exactly the way #343 is about — it can only ever spell
-# `Xxxxx` — and #343 tried to replace it with a throw. DO NOT: it is load-bearing, for a reason the
-# scan above cannot see. `names(_module; all=true, imported=true)` does NOT list bindings introduced
-# by `using` (only explicitly `import`ed ones), while `isdefined`/`getfield` DO reach them. So for a
-# model declared in one module and pulled into the registering module with `using`, the scan misses,
-# yet `_resolve_m2m_side_model`'s binding branch (`build_joins.jl`, which tests `isdefined`) resolves
-# the guessed `Xxxxx` spelling successfully. Throwing here broke that working layout — and broke it
-# quietly, because both `set_models` callers that matter (the injected `__init__` in `Utils.jl` and
-# the Revise callback) swallow the exception, so the symptom is "no models registered", not an error.
+# Two-pass structure (fixed in #354): the fast path scans `names(_module; all=true, imported=true)`,
+# which lists locally-defined and explicitly `import`ed bindings. The miss path scans with
+# `usings=true`, which additionally lists bindings introduced by `using`. The miss path uses
+# identity matching (`attr === model`) as its filter, so no `binding_module` guard is needed.
 #
-# Pinned by `test_many_to_many.jl` → "using-scoped M2M target keeps the binding fallback". A comment
-# did not stop this deletion the first time, so the guard is a test.
-#
-# What the fallback does NOT rescue, so nobody reads more into it than is there: it works only where
-# the binding happens to equal `uppercasefirst(name)`. A `using`-scoped model whose binding carries
-# an internal capital (`Dim_CNES`) still fails here and on `main` alike — `isdefined(mod, :Dim_cnes)`
-# is false, and `_resolve_m2m_side_model`'s name-scan fallback misses for the same `names()` reason,
-# so it raises `QueryBuildError`. That intersection is what `ReverseRelation` fixes for reverse
-# foreign keys and cannot fix for many-to-many, because the M2M path still re-resolves by binding
-# instead of reading `related_model_resolved` (#68/#41).
+# The `uppercasefirst` fallback is retained as a last resort for the edge case where a model object
+# exists but is not bound under any name in the module (both scans exhausted). DO NOT delete it:
+# #343 tried that and broke registration silently, because both `set_models` callers that matter
+# (the injected `__init__` in `Utils.jl` and the Revise callback) swallow exceptions.
 #
 # The reverse-FK path depends on none of this: `set_models` records its binding directly from
 # `_collect_models_and_bindings`. This helper is many-to-many-only.
-#
-# The real repair is making `using`-scoped models visible to registration at all, and it is NOT the
-# one-word change it looks like. `names(...; usings=true)` exists on the 1.12 floor, but `using Base`
-# is implicit in every module, so it returns ~1112 names where `imported=true` returns 3 (measured on
-# 1.12.6). Both this scan and `_collect_models_and_bindings` do a `getfield` per name, so a straight
-# substitution turns registration into a ~1100-name sweep per module on a 670-model app, and drags in
-# any `PormGModel` an unrelated package re-exported. It needs a filter — `usings=true` on the miss
-# path only, or screening by `parentmodule`/`Base.binding_module`. Tracked in #354.
 function _find_model_binding_name(_module::Module, model::PormGModel)::String
+  # Fast path: explicit imports and locally-defined names.
   for name in names(_module; all=true, imported=true)
     attr = try
       Base.invokelatest(getfield, _module, name)
@@ -2290,6 +2313,17 @@ function _find_model_binding_name(_module::Module, model::PormGModel)::String
     end
     attr === model && return String(name)
   end
+  # Miss path (#354): `using`-scoped names are invisible to `imported=true` but reachable by identity.
+  for name in names(_module; all=true, imported=true, usings=true)
+    attr = try
+      Base.invokelatest(getfield, _module, name)
+    catch
+      nothing
+    end
+    attr === model && return String(name)
+  end
+  # Final fallback: guess from the model's logical name. Works only for Xxxxx-style bindings;
+  # kept for backward compatibility.
   return uppercasefirst(String(model.name))
 end
 

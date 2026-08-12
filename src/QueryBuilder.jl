@@ -7,7 +7,7 @@ import DataFrames, Tables, JSON, CSV, OrderedCollections
 import DataFrames: DataFrame
 using Dates, TimeZones, Decimals, UUIDs
 
-import PormG.Models: CharField, IntegerField, get_model_pk_field, capitalize_symbol, sForeignKey, sManyToManyField, sBinaryField
+import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, sManyToManyField, sBinaryField
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, PormGModel, PormGField, PormGTypeField

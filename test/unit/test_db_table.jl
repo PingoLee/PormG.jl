@@ -315,10 +315,12 @@ DbtPlain.connect_key = "db_table_mock"
       m.connect_key = "db_table_mock"
       Base.eval(rmod, :(const $bind = $m))
     end
-    # The reverse-accessor tuple `set_models` would install: (child FK field, parent's referenced
-    # field, child model's LOGICAL name, child PK). Note the third slot is the logical name — which
-    # is precisely why the reverse renderer must consult the resolved model for a db_table.
-    rparent.related_objects["kids"] = (:parentid, :id, :dbtr_child_scratch, :id)
+    # The reverse accessor `set_models` would install. `model_name` is the child's LOGICAL name —
+    # which is precisely why the reverse renderer must consult `model_resolved` for a db_table, and
+    # (since #343) why `binding` is stored rather than respelled from that name.
+    rparent.related_objects["kids"] = PormG.Models.ReverseRelation(
+      fk_field = :parentid, target_pk = :id, model_name = :dbtr_child_scratch,
+      binding = :Dbtr_child_scratch, model_resolved = rchild)
 
     rev = inspect_query(rparent.objects.values("nome", "kids__note"))[:sql_text]
     @test occursin("\"Dbtr_Child_Legacy\"", rev)

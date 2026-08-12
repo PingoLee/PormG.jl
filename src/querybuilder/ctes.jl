@@ -191,8 +191,10 @@ function _resolve_join_target_model(q::SQLObject, join_path::String)
         # query builder when emitting joins.
         current_model = getfield(current_module, Symbol(related_value.related_binding))
       else
-        reverse_model = Symbol(uppercasefirst(string(related_value[3])))
-        current_model = getfield(current_module, reverse_model)
+        # #343: hop to the resolved child. This arm used to respell the binding as
+        # `uppercasefirst(lowercased_name)` — the mirror of the M2M arm above, except that one reads
+        # a STORED binding and therefore worked, while this one could not reach `Dim_CNES`.
+        current_model = (related_value::Models.ReverseRelation).model_resolved
       end
     else
       throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'."))

@@ -273,7 +273,7 @@ end
         # from closure branches) must be excluded: the rule cannot ask anyone to rename
         # `Base.deepcopy`. But a helper defined in a SIBLING PormG module and imported here is
         # renameable and must stay in scope — a `QueryBuilder`-only test passes a branch routing to,
-        # say, `PormG.Models.capitalize_symbol`, and if that branch were ChainCaller-backed
+        # say, `PormG.Models.get_model_pk_field`, and if that branch were ChainCaller-backed
         # `_fluent_name` would leak the internal spelling, which is the whole regression this guards.
         pormg_owned(mod) = mod === PormG || startswith(string(mod), "PormG.")
         idents = unique(m.match for m in eachmatch(r"[A-Za-z_][A-Za-z0-9_]*!?", code))

@@ -730,7 +730,7 @@ function import_models_from_django(
     has_primary_key = Ref(false)  # Flag to check if a primary key exists
 
     # Process fields separately
-    process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), has_primary_key, autofields_ignore, parameters_ignore, markers)
+    process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), has_primary_key, autofields_ignore, parameters_ignore, markers, graph.enums, _enum_scopes(graph, class))
 
     # Insert IDField if no primary key is defined
     if !has_primary_key[]
@@ -1079,7 +1079,246 @@ function _django_class_graph(model_py_string::AbstractString)
   for c in classes
     _classify_class!(info, index, visiting, c)
   end
-  return (classes = classes, index = index, info = info)
+  return (classes = classes, index = index, info = info, enums = _collect_enums(classes))
+end
+
+# ── Django `TextChoices` / `IntegerChoices` (#342) ───────────────────────────────────────────────
+# `choices=Status.choices` used to parse to the literal STRING "Status.choices", and
+# `default=Status.DRAFT` to "Status.DRAFT". CharField then validated the default against the choices
+# and threw FieldValidationError, which propagated out of `process_class_fields!` and killed the
+# ENTIRE import — every other model in the file lost, output a stack trace.
+#
+# The enum classes were already being parsed: #340 put a nested `class Status(models.TextChoices)`
+# into `PyClass.nested`, and `_lift_meta!` only ever removes `Meta`. This is the seam that consumes
+# them.
+
+# Bases that make a class a Django enumeration. Kept separate from `_NON_MODEL_BASES` — that list
+# says "not a table", this one says "a symbol table entry" — but every entry here is also on it, so
+# an enum is still never emitted as a model.
+const _CHOICES_BASES = ("models.TextChoices", "TextChoices",
+                        "models.IntegerChoices", "IntegerChoices",
+                        "models.Choices", "Choices")
+
+"""
+    _PyEnum
+
+One Django enumeration recovered from source: its `name` and its `members` as
+`(MEMBER, value, label)`.
+
+`value` is kept as the raw source text rather than parsed here, so the consumer can both test it
+(`_is_py_literal`) and convert it (`parse_value`) — an `IntegerChoices` member stays `1` until
+something asks for it. `label` is derived Django-style when omitted.
+
+Text and Integer enums are deliberately NOT distinguished: `parse_choices` stringifies either, and
+`CharField` coerces an `Int` default, so both land identically. A field recording which kind it was
+would be written and never read.
+"""
+struct _PyEnum
+  name::String
+  members::Vector{Tuple{String, String, String}}
+end
+
+# Django derives an omitted label from the member name: `IN_PROGRESS` -> "In Progress".
+_django_enum_label(member::AbstractString)::String = titlecase(replace(String(member), "_" => " "))
+
+# True when the text is a plain Python literal the importer can carry into PormG. Anything else —
+# `auto()`, `uuid.uuid4()`, a concatenation — is an expression whose VALUE this importer cannot know.
+# Keeping such a value verbatim is worse than dropping it: `CARRO = auto()` gives every member the
+# string "auto()", which is duplicate values that then PASS validation because the default is
+# literally in the set.
+function _is_py_literal(v::AbstractString)::Bool
+  t = strip(v)
+  isempty(t) && return false
+  t in ("None", "True", "False") && return true
+  _py_number(t) === nothing || return true
+  # A quoted string, with no unescaped quote of the same kind inside it.
+  return occursin(r"^\"(?:[^\"\\]|\\.)*\"$", t) || occursin(r"^'(?:[^'\\]|\\.)*'$", t)
+end
+
+"""
+    _py_number(t) -> Union{Int, Float64, Nothing}
+
+The NUMBER a Python numeric literal denotes, or `nothing` if `t` is not one.
+
+Denotes, not spells. Django stores what the literal means: `ALTO = 1_000` is the integer 1000 and
+`MEIO = 0x1F` is 31, so carrying the source text into `choices` and `default` declares an
+enumeration no row can ever match. Both halves are wrong identically, which is precisely why
+`CharField`'s default-in-choices validation passes and nothing is reported — a silent wrong value,
+the one outcome this importer exists to prevent.
+
+Handles Python's `_` digit separators, hex/octal/binary, exponents and a leading sign.
+"""
+function _py_number(t::AbstractString)::Union{Int, Float64, Nothing}
+  s = replace(String(strip(t)), "_" => "")
+  isempty(s) && return nothing
+  m = match(r"^([+-]?)0([xXoObB])([0-9a-fA-F]+)$", s)
+  if m !== nothing
+    c = lowercase(m.captures[2])
+    v = tryparse(Int, m.captures[3]; base = c == "x" ? 16 : c == "o" ? 8 : 2)
+    v === nothing && return nothing
+    return m.captures[1] == "-" ? -v : v
+  end
+  occursin(r"^[+-]?\d+$", s) && return tryparse(Int, s)
+  occursin(r"^[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?$", s) && return tryparse(Float64, s)
+  return nothing
+end
+
+# The text PormG should STORE for an enum member's value: a number in canonical form, or the
+# quote-stripped literal.
+function _py_scalar_text(v::AbstractString)::String
+  n = _py_number(v)
+  return n === nothing ? _strip_py_quotes(v) : string(n)
+end
+
+# `_("Azul")` / `gettext_lazy("Azul")` — the standard i18n spelling for a label. The wrapper carries
+# no schema meaning, so the string inside it is the label; leaving it wrapped put `_("Azul")` into
+# the generated file as the display text.
+const _GETTEXT_CALL_RE = r"^(?:_|gettext|gettext_lazy|ugettext|ugettext_lazy)\s*\(\s*(.*?)\s*,?\s*\)$"
+
+function _unwrap_gettext(s::AbstractString)::String
+  m = match(_GETTEXT_CALL_RE, strip(s))
+  return m === nothing ? String(strip(s)) : String(strip(m.captures[1]))
+end
+
+_is_enum_class(cls::PyClass)::Bool = any(b -> b in _CHOICES_BASES, _class_bases(cls))
+
+"""
+    _parse_enum(cls) -> _PyEnum
+
+Read an enum class body into members.
+
+Accepts all three Django spellings: `MEMBER = "VALUE", "Label"`, `MEMBER = "VALUE"` (label derived),
+and the integer form `MEMBER = 1, "Label"`. A `__dunder__` name is skipped — Django's `__empty__`
+declares the blank choice, which is not a member. Method bodies never reach here: `_py_classes`
+already excludes `def` frames.
+"""
+function _parse_enum(cls::PyClass)::_PyEnum
+  members = Tuple{String, String, String}[]
+  for s in cls.body
+    parts = _split_top_level_assign(s.text)
+    parts === nothing && continue
+    name, rhs = parts
+    Base.isidentifier(name) || continue
+    startswith(name, "__") && continue
+    toks = split_field_options(rhs)
+    isempty(toks) && continue
+    value = String(strip(toks[1]))
+    isempty(value) && continue
+    label = length(toks) >= 2 ? String(strip(toks[2])) : ""
+    # A label that is not a plain literal after unwrapping — `_("a") + _("b")`, an f-string, a
+    # conditional — cannot be read, so fall back to the name Django itself would derive rather than
+    # putting a fragment of Python into the generated file as display text. Only the LABEL degrades
+    # this way; a non-literal VALUE is reported and drops the option, because a value is schema.
+    unwrapped = isempty(label) ? "" : _unwrap_gettext(label)
+    label_text = if isempty(label) || !_is_py_literal(unwrapped)
+      _django_enum_label(name)
+    else
+      _strip_py_quotes(unwrapped)
+    end
+    push!(members, (String(name), value, label_text))
+  end
+  return _PyEnum(String(cls.name), members)
+end
+
+"""
+    _collect_enums(classes) -> Dict{String, Dict{String, _PyEnum}}
+
+Every enum in the file, keyed by OWNING class and then by enum name. `""` is the module-level scope.
+
+Scoped rather than flat on purpose: two models may each nest a `Status` with different members, and
+a flat table would silently give both the last one parsed.
+"""
+function _collect_enums(classes::Vector{PyClass})::Dict{String, Dict{String, _PyEnum}}
+  out = Dict{String, Dict{String, _PyEnum}}()
+  module_scope = Dict{String, _PyEnum}()
+  for c in classes
+    if _is_enum_class(c)
+      module_scope[c.name] = _parse_enum(c)
+      continue
+    end
+    nested = Dict{String, _PyEnum}()
+    # Recursive, not one level: `class Outer: class Inner: class Status(TextChoices)` is legal, and
+    # scanning only the roots' direct children reported such an enum as "not defined in this file"
+    # while it sat two lines away.
+    _collect_nested_enums!(nested, c)
+    isempty(nested) || (out[c.name] = nested)
+  end
+  isempty(module_scope) || (out[""] = module_scope)
+  return out
+end
+
+
+# Recursive, and each enum is registered under EXACTLY the name Python would bind it to: its path
+# relative to the model. A direct child is `Situacao`; one nested a level deeper is
+# `Grupo.Situacao`, and only that — because `Situacao` alone is not in the model body's namespace.
+#
+# Registering the bare name as well looked harmless and was not: a module-level `Situacao` is what
+# Python actually resolves in the model body, and an invented bare key for a deep enum SHADOWED it,
+# because `_lookup_enum` searches the class scope before the module scope. The field then imported
+# the wrong enumeration in complete silence, with a marker claiming the real member did not exist.
+function _collect_nested_enums!(into::Dict{String, _PyEnum}, cls::PyClass, prefix::AbstractString = "")
+  for n in cls.nested
+    if _is_enum_class(n)
+      into[string(prefix, n.name)] = _parse_enum(n)
+    else
+      _collect_nested_enums!(into, n, string(prefix, n.name, "."))
+    end
+  end
+  return into
+end
+
+"""
+    _enum_scopes(graph, cls) -> Vector{String}
+
+The scopes an enum reference inside `cls` may name, in precedence order: the class itself, then its
+ABSTRACT BASES (nearest first), then module level (`""`).
+
+The abstract-base step is not optional. `_inherited_statements` merges a base's field statements
+into the child and processes them under the CHILD's name, so a base declaring both
+`class Status(TextChoices)` and a field using it hands the child a reference that is nowhere in the
+child's own scope — which this importer then reported as "not defined in this file" while it sat
+three lines above. An abstract base with an enumerated status column is mainstream Django.
+"""
+function _enum_scopes(graph, cls::PyClass)::Vector{String}
+  out = String[cls.name]
+  seen = Set{String}()
+  function walk(name::AbstractString)
+    info = get(graph.info, String(name), nothing)
+    info === nothing && return
+    for b in info.parents
+      b in seen && continue
+      push!(seen, b)
+      push!(out, b)
+      walk(b)
+    end
+    return
+  end
+  walk(cls.name)
+  push!(out, "")
+  return out
+end
+
+"""
+    _lookup_enum(enums, scopes, ref) -> Union{_PyEnum, Nothing}
+
+Resolve an enum NAME against an ordered list of scopes. First match wins, so a nested enum shadows a
+module-level one of the same name — Python's own rule. A qualified `Owner.Status` is accepted last,
+since Django permits addressing a nested enum through its owner.
+"""
+function _lookup_enum(enums, scopes::Vector{String}, ref::AbstractString)::Union{_PyEnum, Nothing}
+  for s in scopes
+    scope = get(enums, s, nothing)
+    scope === nothing && continue
+    haskey(scope, ref) && return scope[ref]
+  end
+  idx = findlast('.', ref)
+  if idx !== nothing
+    owner = ref[firstindex(ref):prevind(ref, idx)]
+    inner = ref[nextind(ref, idx):end]
+    scope = get(enums, String(owner), nothing)
+    scope === nothing || (haskey(scope, inner) && return scope[inner])
+  end
+  return nothing
 end
 
 """
@@ -1317,7 +1556,7 @@ function _match_field_statement(text::AbstractString)
   return (name = lhs, type = String(m.captures[1]), args = args)
 end
 
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, has_primary_key::Base.RefValue{Bool}, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[])
+function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, has_primary_key::Base.RefValue{Bool}, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[], enums = Dict{String, Dict{String, _PyEnum}}(), enum_scopes::Vector{String} = String[String(class_name), ""])
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -1365,7 +1604,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     field_args_str = parsed.args
 
     # Parse field arguments
-    options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore)
+    options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore;
+                                              enums = enums, class_name = class_name,
+                                              enum_scopes = enum_scopes,
+                                              field_name = field_name, markers = markers)
 
     # Check for primary key
     if haskey(options, :primary_key) && options[:primary_key] == true
@@ -1390,6 +1632,57 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
       end
     catch e
       @pormg_debug
+      # #342's safety net. A choices/default disagreement is the ONE construction failure that used
+      # to abort the entire import — every other model in the file lost to one enum. Retry once
+      # without those two kwargs; the column survives, its enumeration does not, and the generated
+      # file says so.
+      #
+      # Not redundant with the drop rules in `parse_field_args`: this catches the case where both
+      # kwargs resolve perfectly well and the PAIR is invalid — `choices=Status.choices` with a
+      # `default` that is not one of the members.
+      #
+      # The retry SUCCEEDING is the whole safety property, and no inspection of the error is needed
+      # to get it. Removing exactly these two kwargs changes nothing else, so a construction that
+      # starts working without them failed because of them; one that still fails falls through to
+      # the normal path untouched. An unsupported field TYPE (#268) never reaches a different
+      # outcome for the same reason — the retry fails identically and rethrows.
+      #
+      # The `haskey` test below is an OPTIMIZATION, not a guard: with neither kwarg present the
+      # filter removes nothing and the retry would simply repeat the same failing call. Do not read
+      # it as load-bearing — `recovered` is what makes this safe.
+      if haskey(options, :choices) || haskey(options, :default)
+        retry_options = filter(kv -> !(kv.first in (:choices, :default)), options)
+        recovered = try
+          if field_type in ["ForeignKey", "OneToOneField"]
+            fields_dict[Symbol("$(field_name)_id")] = getfield(Models, Symbol(field_type))(related_model; retry_options...)
+          elseif field_type == "ManyToManyField"
+            fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; retry_options...)
+          else
+            fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; retry_options...)
+          end
+          true
+        catch e2
+          # A control-flow exception is not a field-validation failure and must not be swallowed
+          # into `recovered = false` (#322's lesson: an interrupt in the wrong place leaves state
+          # nobody can reason about).
+          (e2 isa InterruptException || e2 isa StackOverflowError) && rethrow()
+          false
+        end
+        if recovered
+          reason = _one_line(sprint(showerror, e), 160)
+          # Name only what was actually there. The blanket "choices and default … the enumeration
+          # is not enforced" claimed an enumeration on fields that had none — an over-long `default`
+          # on a plain CharField recovers through this same path.
+          dropped = join(("`$(k)`" for k in (:choices, :default) if haskey(options, k)), " and ")
+          tail = haskey(options, :choices) ? " The column is real; the enumeration is not enforced." :
+                                             " The column is real, but its default is now unset here" *
+                                             " while Django still declares one."
+          @warn "import: field option rejected; field imported without it" class=class_name field=field_name dropped=dropped reason=reason
+          push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' — $(dropped) rejected " *
+                         "and dropped: $(reason).$(tail)")
+          continue
+        end
+      end
       # A FieldValidationError/InvalidValueError from field construction is already the right
       # type — stringifying it into an ErrorException would eject it from the taxonomy (audit).
       e isa PormGError && rethrow()
@@ -1405,20 +1698,29 @@ function django_field_type(field_type::AbstractString)::String
   return String(field_type)
 end
 
-function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String})
+function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String};
+                         enums = Dict{String, Dict{String, _PyEnum}}(),
+                         class_name::AbstractString = "",
+                         enum_scopes::Vector{String} = String[String(class_name), ""],
+                         field_name::AbstractString = "",
+                         markers::Vector{String} = String[])
   # This function parses field arguments handling nested parentheses and commas
   # and returns a dictionary of options.
   options = Dict{Symbol, Any}()
   options_list = split_field_options(args_str)
   # println(options_list)
   related_model = missing
+  # Enum references this file cannot resolve (`from .enums import Status`), as (option, enum) pairs.
+  # Each one is dropped where it is found — the literal must never reach the field constructor,
+  # since `default="Status.DRAFT"` against an empty `choices` is exactly the FieldValidationError
+  # that aborted the whole import. This list only drives the REPORT, so one field yields one marker
+  # naming every option it lost and why.
+  unresolved_enums = Tuple{String, String}[]
   for option_str in options_list
       key_value = split(option_str, "=", limit=2)
       if length(key_value) == 2
           key = strip(key_value[1])
           value = strip(key_value[2])
-          value_parsed = parse_value(value)
-          # println(value_parsed)
           field_type == "ManyToManyField" && key == "blank" && continue
           key in parameters_ignore && continue
           # Django callable datetime defaults (e.g. default=timezone.now) have no
@@ -1428,7 +1730,42 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
               options[:auto_now_add] = true
               continue
           end
-          options[Symbol(key)] = value_parsed
+          # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would
+          # otherwise hand the literal text through and let CharField reject the pair.
+          resolved = _resolve_enum_reference(value, enums, enum_scopes, class_name, field_name, key, markers, unresolved_enums)
+          # A DISTINCT sentinel, not `nothing`: `parse_value("None")` is `nothing`, so an enum
+          # member declared `NENHUM = None, "Nenhum"` resolved to `nothing` and was read here as
+          # "dropped" — the option vanished with no warn and no marker, which is the one thing this
+          # importer promises never to do.
+          resolved === _ENUM_DROP && continue       # dropped, and already reported
+          if resolved !== _ENUM_NOT_A_REFERENCE
+            options[Symbol(key)] = resolved
+          elseif key == "choices"
+            # Routed explicitly rather than through `parse_value`, whose bracket branch only takes
+            # `(...)`. A `[...]` container fell through to a raw String and was re-parsed much later
+            # by `Models.parse_choices`, which still keeps the quote characters — so one generated
+            # model carried both spellings, the very thing the normalization exists to prevent.
+            bad = String[]
+            parsed = parse_choices(value, bad)
+            for b in bad
+              # Two shapes share this channel and a reader must be able to tell them apart: the
+              # WHOLE option was unreadable (a bare name, nothing parsed), or ONE entry inside a
+              # readable container was malformed and its siblings survived.
+              whole = isempty(parsed) && length(bad) == 1 && b == _one_line(value)
+              @warn "import: choices could not be read; dropped" class=class_name field=field_name entry=_one_line(b) whole_option=whole
+              push!(markers, whole ?
+                "# PormG: field '$(field_name)' on '$(class_name)' has `choices=$(_one_line(b))`, " *
+                "which is a name rather than a literal — the whole option was dropped." :
+                "# PormG: field '$(field_name)' on '$(class_name)' has a choices entry that is not " *
+                "a (value, label) pair — that entry was dropped: $(_one_line(b))")
+            end
+            # Nothing readable means the option is DROPPED, not set to `()`. An empty tuple declares
+            # an enumeration with no members, which is a stranger claim than declaring none — and it
+            # round-trips into the generated file as a literal `choices=()`.
+            isempty(parsed) || (options[Symbol(key)] = parsed)
+          else
+            options[Symbol(key)] = parse_value(value)
+          end
       else
         if field_type in ["ForeignKey", "OneToOneField", "ManyToManyField"]
           related_model = replace(key_value[1], "\"" => "", "'" => "") |> string
@@ -1436,7 +1773,182 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
         end
       end
   end
+
+  # One marker per FIELD, not per option: a `choices=X.choices, default=X.MEMBER` pair naming the
+  # same unknown enum is one problem, and saying it twice is noise. The options themselves were
+  # already dropped at the point each was read.
+  #
+  # Deliberately NOT a blanket "drop both": if `choices` resolves and only `default` does not, the
+  # field keeps its enumeration and loses just the default. Discarding the resolvable half would
+  # throw away information the source actually gave us.
+  if !isempty(unresolved_enums)
+    names = join(("`$(e)`" for e in unique(last.(unresolved_enums))), ", ")
+    opts = join(("`$(k)`" for k in unique(first.(unresolved_enums))), " and ")
+    # "does not define", not "enum": the same shape catches a module constant
+    # (`default=constants.MAX_QTD`), and calling that an enumeration in the artifact is a lie the
+    # reader has no way to check.
+    @warn "import: name is not defined in this file; option dropped" class=class_name field=field_name reference=unique(last.(unresolved_enums)) options=unique(first.(unresolved_enums))
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' references $(names), which " *
+                   "this file does not define — $(opts) dropped. The column is real. If that is an " *
+                   "enumeration, import the module defining it alongside this one, or declare the " *
+                   "choices by hand.")
+  end
+
+  # `choices` only exists on CharField. Every other field type would take it to `_common_kwargs`,
+  # which warns anonymously ("Unexpected parameter for TextField") and drops it — true but useless
+  # for finding the field. Report it here, where the field, class and value are all known.
+  if haskey(options, :choices) && field_type != "CharField"
+    delete!(options, :choices)
+    @warn "import: this field type has no choices slot; the option was dropped" class=class_name field=field_name field_type=field_type
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' declares choices, but " *
+                   "$(field_type) has no choices slot in PormG (only CharField does) — dropped. " *
+                   "The column is unaffected.")
+  end
+
   return options, related_model
+end
+
+# Sentinels. Two distinct ones, because `nothing` is a legitimate RESOLVED value: an enum member
+# declared `NENHUM = None, "Nenhum"` parses to `nothing`, and conflating that with "drop" made the
+# option disappear with no warn and no marker.
+const _ENUM_NOT_A_REFERENCE = :_enum_not_a_reference   # not a reference — parse it normally
+const _ENUM_DROP = :_enum_drop                         # drop this option; already reported
+
+# A dotted reference whose head could name an enum: `Status.choices`, `Status.DRAFT`,
+# `ImportBatch.Status.DRAFT`. Anything with a call, a bracket or a quote is not one.
+const _ENUM_REF_RE = r"^([A-Za-z_][\w.]*)\.([A-Za-z_]\w*)$"
+
+# Django enum attributes that are not a single value and have no PormG equivalent.
+const _ENUM_PLURAL_ATTRS = ("values", "labels", "names")
+
+# The attribute shapes worth claiming as an enumeration when the head is NOT a name this file
+# defines. `.choices` and its plural siblings are unambiguous, and a member of a Python `Enum` is
+# conventionally SHOUTY_CASE.
+#
+# Without this test, EVERY dotted `default=` was captured: `default=uuid.uuid4`,
+# `default=timezone.now` and `default=datetime.date.today` were all dropped and reported as
+# enumerations — an undocumented behavior change on fields that have nothing to do with enums, with
+# a diagnostic that named the wrong thing.
+_looks_like_enum_attr(attr::AbstractString)::Bool =
+  attr == "choices" || attr in _ENUM_PLURAL_ATTRS || attr in _ENUM_MEMBER_ATTRS ||
+  occursin(r"^[A-Z][A-Z0-9_]*$", attr)
+
+# Single-value attributes OF A MEMBER: `Status.NOVO.value`, `.label`, `.name`. Django's own
+# `TextChoices` exposes all three, and `.value` is an ordinary way to spell a default.
+const _ENUM_MEMBER_ATTRS = ("value", "label", "name")
+
+"""
+    _resolve_enum_reference(value, enums, class_name, field_name, key, markers, unresolved) -> Any
+
+Resolve a Django enum reference in a field option.
+
+Returns the resolved value, `_ENUM_NOT_A_REFERENCE` when `value` is not one, or `_ENUM_DROP` to mean
+"drop this option" (already warned and marked).
+"""
+function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vector{String},
+                                 class_name::AbstractString,
+                                 field_name::AbstractString, key::AbstractString,
+                                 markers::Vector{String},
+                                 unresolved::Vector{Tuple{String, String}})
+  m = match(_ENUM_REF_RE, strip(value))
+  m === nothing && return _ENUM_NOT_A_REFERENCE
+  head = String(m.captures[1])
+  attr = String(m.captures[2])
+
+  # `Status.NOVO.value` — a single-value attribute OF A MEMBER. Peel it so the rest of this
+  # function sees the member reference it already knows how to resolve. `.label` and `.name` have
+  # no PormG equivalent as a column default, so they are reported like the plural attributes.
+  if attr in _ENUM_MEMBER_ATTRS
+    inner = findlast('.', head)
+    if inner !== nothing
+      enum_ref = head[firstindex(head):prevind(head, inner)]
+      member = head[nextind(head, inner):end]
+      if _lookup_enum(enums, enum_scopes, enum_ref) !== nothing
+        if attr != "value"
+          @warn "import: enum member attribute has no PormG equivalent; the option was dropped" class=class_name field=field_name attribute="$(head).$(attr)"
+          push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses " *
+                         "`$(head).$(attr)`, which is the member's $(attr) rather than its stored " *
+                         "value — PormG has no equivalent, so `$(key)` was dropped.")
+          return _ENUM_DROP
+        end
+        head = String(enum_ref)
+        attr = String(member)
+      end
+    end
+  end
+
+  enum = _lookup_enum(enums, enum_scopes, head)
+
+  if enum === nothing
+    # Only `choices`/`default` can carry an enum, and only an enum-SHAPED attribute is worth
+    # DROPPING — `on_delete=models.CASCADE` and `default=timezone.now` must keep flowing to
+    # `parse_value` exactly as before.
+    (key == "choices" || key == "default") || return _ENUM_NOT_A_REFERENCE
+    if !_looks_like_enum_attr(attr)
+      # Kept verbatim, as before this change — but REPORTED. `default=Externo.ativo` is an enum
+      # member spelled unconventionally, and it is indistinguishable from `default=uuid.uuid4` by
+      # syntax alone. Guessing either way is wrong for the other, so the value is left untouched
+      # and the reader is told a dotted expression landed in the schema as a literal.
+      key == "default" || return _ENUM_NOT_A_REFERENCE
+      @warn "import: dotted default kept verbatim; the importer cannot evaluate it" class=class_name field=field_name value=_one_line(value)
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' has " *
+                     "`default=$(_one_line(value))`, an expression the importer cannot evaluate — " *
+                     "kept verbatim as text. Check it: if it names an enum member or a constant, " *
+                     "the stored default is the expression, not its value.")
+      return _ENUM_NOT_A_REFERENCE
+    end
+    push!(unresolved, (String(key), head))
+    return _ENUM_DROP
+  end
+
+  if attr == "choices"
+    bad = [n for (n, v, _) in enum.members if !_is_py_literal(v)]
+    if !isempty(bad)
+      # `CARRO = auto()` is a documented Django idiom, and importing it verbatim gives every member
+      # the value "auto()" — duplicates that then PASS validation, because the default is literally
+      # in the set. Wrong metadata kept in silence is the mirror of a silent drop.
+      @warn "import: enum has members whose values are not literals; choices dropped" class=class_name field=field_name enum=head members=bad
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses `$(head).choices`, but " *
+                     "$(join(("`$(head).$(b)`" for b in bad), ", ")) " *
+                     "$(length(bad) == 1 ? "has a value" : "have values") the importer cannot read " *
+                     "(a call or an expression, not a literal) — `$(key)` was dropped.")
+      return _ENUM_DROP
+    end
+    if isempty(enum.members)
+      @warn "import: enum declares no members; choices dropped" class=class_name field=field_name enum=head
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses `$(head).choices`, " *
+                     "but `$(head)` declares no members — `$(key)` was dropped.")
+      return _ENUM_DROP
+    end
+    return Tuple((_py_scalar_text(v), l) for (_, v, l) in enum.members)
+  elseif attr in _ENUM_PLURAL_ATTRS
+    @warn "import: enum attribute has no PormG equivalent; the option was dropped" class=class_name field=field_name attribute="$(head).$(attr)"
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses `$(head).$(attr)`, " *
+                   "which is a list of $(attr) rather than (value, label) pairs — PormG has no " *
+                   "equivalent, so `$(key)` was dropped.")
+    return _ENUM_DROP
+  end
+
+  idx = findfirst(t -> t[1] == attr, enum.members)
+  if idx === nothing
+    @warn "import: enum has no such member; the option was dropped" class=class_name field=field_name reference="$(head).$(attr)"
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' references " *
+                   "`$(head).$(attr)`, which is not a member of `$(head)` — `$(key)` was dropped.")
+    return _ENUM_DROP
+  end
+  member_value = enum.members[idx][2]
+  if !_is_py_literal(member_value)
+    @warn "import: enum member value is not a literal; the option was dropped" class=class_name field=field_name reference="$(head).$(attr)" value=_one_line(member_value)
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' references " *
+                   "`$(head).$(attr)`, whose value is `$(_one_line(member_value))` — a call or an " *
+                   "expression the importer cannot read, not a literal. `$(key)` was dropped.")
+    return _ENUM_DROP
+  end
+  # The member's VALUE, canonicalized the same way the `choices` tuple is — otherwise a `1_000`
+  # default and a `"1_000"` choice agree with each other and with nothing in the database.
+  # `parse_value` handles the non-numeric literals (quoted strings, `None`, booleans).
+  n = _py_number(member_value)
+  return n === nothing ? parse_value(member_value) : n
 end
 
 # Django field types that map to PormG date/time fields carrying auto_now_add.
@@ -1517,20 +2029,76 @@ function parse_value(value::AbstractString)
   end
 end
 
-function parse_choices(choices_str::AbstractString)
-  # Parse a string into a tuple of tuples
+"""
+    _strip_py_quotes(s) -> String
+
+Strip one layer of matching Python quotes, if present. `"UP"` -> `UP`; `UP` -> `UP`.
+
+Not folded into `parse_value`: this is for text that is already known to be a bare literal, where
+`parse_value`'s type inference (`True`, `None`, integers, nested tuples) would be wrong.
+"""
+function _strip_py_quotes(s::AbstractString)::String
+  t = strip(s)
+  if length(t) >= 2 &&
+     ((startswith(t, '"') && endswith(t, '"')) || (startswith(t, '\'') && endswith(t, '\'')))
+    return String(t[nextind(t, firstindex(t)):prevind(t, lastindex(t))])
+  end
+  return String(t)
+end
+
+"""
+    parse_choices(choices_str, skipped = String[]) -> NTuple{N, Tuple{String, String}}
+
+Django `choices=((value, label), …)` -> PormG's choices tuple. Both `(...)` and `[...]` containers,
+and both bracket styles for the inner pairs.
+
+Rebased on the shared scanner (#342), which fixes an abort of exactly the kind this issue exists to
+remove. The old body found pairs with `r"\\(([^()]+)\\)"` and split them on EVERY comma, so an
+ordinary human label — `("APPLIED", "Aplicado, com ressalvas")` — produced three fragments and threw
+`InvalidMigrationError` from *outside* the field-construction `try`. Nothing caught it, no file was
+written, and every model in the file was lost. `split_field_options` does not split inside a string,
+so that label now parses correctly.
+
+A genuinely malformed element (a bare value where a pair belongs, or a 3-tuple) is appended to
+`skipped` rather than thrown, so the caller can report it and keep going. That also makes
+`choices=[["A", "Alpha"]]` — a list of *lists*, valid Django — import correctly, where it used to
+yield an empty `choices=()` with no warning.
+
+Quotes are STRIPPED from both halves. They used to be kept as part of the value, so a Django
+`("UP", "Upload")` imported as the four-character string `"UP"` — quote marks included. Nothing
+downstream broke, because `choices` is Julia-side metadata that never reaches DDL and
+`return_just_strings` strips quotes again before validating a default; but it is the wrong value, and
+enum resolution produces the clean form, so one generated model would otherwise have carried two
+spellings of the same concept.
+"""
+function parse_choices(choices_str::AbstractString, skipped::Vector{String} = String[])
+  inner = _balanced_group(choices_str)
+  if inner === nothing
+    # `choices=STATUS_CHOICES` — a module-level constant, not a literal. There is nothing to read,
+    # and returning an empty tuple in silence is how a field lost its entire enumeration with no
+    # trace. The old docs called this out as the one shape to avoid; the code never did.
+    push!(skipped, String(strip(choices_str)))
+    return ()
+  end
   choices = ()
-  pattern = r"\(([^()]+)\)"
-  for m in eachmatch(pattern, choices_str)
-      inner = m.captures[1]
-      values = split(inner, ",")
-      if length(values) == 2
-          key = strip(values[1])
-          value = strip(values[2])
-          choices = (choices..., (key, value))
-      else
-          throw(InvalidMigrationError("Invalid choices format"))
-      end
+  for element in split_field_options(inner)
+    el = String(strip(element))
+    isempty(el) && continue
+    if !(startswith(el, '(') || startswith(el, '['))
+      push!(skipped, el)          # a bare value where a (value, label) pair belongs
+      continue
+    end
+    pair = _balanced_group(el)
+    if pair === nothing
+      push!(skipped, el)
+      continue
+    end
+    parts = split_field_options(pair)
+    if length(parts) != 2
+      push!(skipped, el)
+      continue
+    end
+    choices = (choices..., (_strip_py_quotes(parts[1]), _strip_py_quotes(parts[2])))
   end
   return choices
 end

@@ -780,8 +780,514 @@ end
 
         # The import completed despite the warning.
         generated = read(joinpath(config_key, output_file), String)
-        @test !occursin("tags", generated)
+        # `tags` must not become a COLUMN. Since #341 the word does appear in the file — in a
+        # `# PormG:` marker naming the field — which is the point: the gap is recorded in the
+        # artifact, not only in a console warning that scrolls away. So assert the absence of the
+        # DECLARATION, which is what this test always meant, rather than the absence of the word.
+        @test !occursin("tags = Models.", generated)
+        @test occursin("# PormG: field 'tags' on 'ImportBatch'", generated)
         @test occursin("ImportBatch = Models.Model(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: Meta.db_table pins the physical table (#341)
+# The importer read exactly ONE Meta option before this. A model declaring
+# `db_table` therefore generated a declaration addressing a table that does not
+# exist — the schema was wrong, and nothing said so.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads Meta.db_table" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_db_table_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The positional slot stays the LOGICAL name while `db_table` carries the physical one —
+        # the #59 split. Asserted as ONE string so a regression emitting only half fails here.
+        @test occursin(
+            "Matricula = Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"",
+            generated,
+        )
+
+        # A model that declares no db_table must not acquire one.
+        @test !occursin("Setor = Models.Model(\"setor\", db_table", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a computed Meta.db_table is refused, not applied (#341)
+# `parse_value` returns anything it cannot classify verbatim, so applying the
+# option without a literal check would pin the table name to the expression's
+# own source text (`TABELA_LEGADO`). The model still imports.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer refuses a non-literal Meta.db_table" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_db_table_computed_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The expression's source text must never reach a `db_table=` kwarg, quoted or bare.
+        @test !occursin("db_table = \"TABELA_LEGADO\"", generated)
+        @test !occursin("db_table = TABELA_LEGADO", generated)
+
+        # ...and the model is still imported, under its derived name, with the reason stated.
+        @test occursin("Legado = Models.Model(\"legado\"", generated)
+        @test occursin("# PormG: Meta.db_table on 'Legado' is not a string literal", generated)
+
+        # A TRIPLE-quoted literal is the case a naive "starts with a quote" test lets through:
+        # `parse_value` strips one character per side, so the value keeps two stray quotes.
+        @test !occursin("arq_legado", generated)
+        @test occursin("# PormG: Meta.db_table on 'Arquivado' is not a string literal", generated)
+        @test occursin("Arquivado = Models.Model(\"arquivado\"", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: Meta.constraints, accepted by whitelist (#341)
+# The modern Django spelling of composite uniqueness. Argument acceptance is a
+# whitelist rather than a blacklist because the failure direction is asymmetric:
+# a `condition=` partial index imported as an unconditional one starts silently
+# rejecting rows the live database accepts.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer converts Meta.constraints and rejects what it cannot express" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_constraints_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The plain constraint is imported with its Django name, and `lotacao` is resolved to the
+        # imported `lotacao_id` column — FK fields gain that suffix at import.
+        @test occursin(
+            "constraints = [Models.UniqueConstraint(fields = (\"cpf\", \"lotacao_id\",), " *
+            "name = \"uniq_servidor_cpf_lotacao\")]",
+            generated,
+        )
+
+        # The rejected forms never become constraints. `apelido` is the column all three of them
+        # cover, so a single-field UniqueConstraint over it is the signature of any leaking through.
+        @test !occursin("Models.UniqueConstraint(fields = (\"apelido\",)", generated)
+
+        # ...and each rejection says which argument it could not express.
+        @test occursin("`condition=` changes what the index means", generated)
+        @test occursin("it takes a positional expression", generated)
+        @test occursin("CheckConstraint has no PormG equivalent", generated)
+
+        # Rejection is PER CONSTRAINT. Three dropped and the fourth kept, on one model — the
+        # assertion above proves the survivor, this one proves the other three did not take it with
+        # them, which is exactly what the coarse try/catch this replaces used to do.
+        # Scoped to Servidor's own markers: other models in the fixture report dropped
+        # `unique_together` groups with the same wording, and a file-wide count would silently
+        # stop measuring this model the moment one of those changed.
+        @test count("a constraint on 'Servidor' was dropped", generated) == 3
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: abstract bases merge into their children (#341)
+# `class Matricula(Auditavel):` matched neither literal base list before this, so
+# the model was not imported at all and nothing said so. The base itself must
+# emit no table — Django never created one for it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer merges abstract base fields into concrete children" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_abstract_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The abstract base emits no TABLE. It is named in the file — in the marker explaining that
+        # its `db_table` is not inherited — so the assertion is on the declaration, not the word.
+        @test !occursin("Auditavel = Models.Model(", generated)
+        @test !occursin("Models.Model(\"auditavel\"", generated)
+
+        # Its columns reach EVERY child — Matricula, Ocorrencia and SoDocstring. A count rather than
+        # three `occursin`s, so a merge that fires for only some of them fails here.
+        @test count("criado_em = Models.DateTimeField(auto_now_add=true)", generated) == 3
+
+        # The CHILD's redeclaration wins. This pair proves merge ORDER, not merely that a merge
+        # happened: Matricula redeclares `origem` at max_length=32 over the base's 8, Ocorrencia
+        # does not redeclare it and keeps 8. Reversing the concatenation order flips both.
+        @test occursin("origem = Models.CharField(max_length=32, default=\"matricula\")", generated)
+        @test occursin("origem = Models.CharField(max_length=8, default=\"base\")", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: an abstract base's Meta reaches only a child with no Meta
+# Django installs an abstract base's Meta on a child that declares none of its
+# own. Both halves matter, so the fixture pairs a child that declares Meta with
+# one that does not, and the same `unique_together` must reach exactly one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer inherits an abstract base's Meta only when the child declares none" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_inherit_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # Ocorrencia declares no Meta, so the base's unique_together applies to it...
+        @test occursin(
+            "constraints = [Models.UniqueConstraint(fields = (\"criado_em\", \"origem\",))]",
+            generated,
+        )
+        # ...exactly once. Matricula declares its own Meta, so Django does NOT install the base's.
+        # The count is what discriminates "inherited by the right child" from "inherited by all".
+        @test count("UniqueConstraint(fields = (\"criado_em\", \"origem\",))", generated) == 1
+
+        # `db_table` is deliberately NOT inherited even though Django inherits it: otherwise every
+        # child of one abstract base would point at a single table. `Auditavel` declares
+        # `db_table = "aud_base"` precisely so this assertion has something that could fail —
+        # without it on the base, no implementation could ever put one on the child.
+        @test !occursin("Ocorrencia = Models.Model(\"ocorrencia\", db_table", generated)
+        @test !occursin("aud_base", generated)
+        # ...and the refusal is REPORTED, not silent — otherwise a reader sees a model addressing a
+        # different table from the one Django would have given it, with nothing to explain why.
+        @test occursin("abstract base 'Auditavel' declares Meta.db_table — NOT inherited", generated)
+
+        # ...and it is reported for exactly the base Django would have inherited from, not for every
+        # ancestor. In the three-level chain RaizConfig -> MeioConfig -> FimConfig, `FimConfig`
+        # inherits `MeioConfig`'s Meta (the nearest with a Meta block), which declares no db_table —
+        # so `RaizConfig`'s must NOT be reported against it, and `MeioConfig`'s ordering must be.
+        @test !occursin("abstract base 'RaizConfig' declares Meta.db_table", generated)
+        @test occursin("Meta.ordering on 'FimConfig'", generated)
+        @test occursin("FimConfig = Models.Model(\"fimconfig\"", generated)
+
+        # A `class Meta:` carrying ONLY a docstring is still a declaration, so Django inherits
+        # nothing past it. Gating on the parsed OPTIONS instead of on the block would hand
+        # `SoDocstring` the base's unique_together and the withheld-db_table marker; gating on the
+        # block — which is what the code does — gives it neither.
+        # The `== 1` count above already covers the constraint half: SoDocstring is a third child of
+        # Auditavel, so inheriting past its docstring-only Meta would make it 2.
+        @test occursin("SoDocstring = Models.Model(\"sodocstring\"", generated)
+        @test !occursin("abstract base 'Auditavel' declares Meta.db_table — NOT inherited by 'SoDocstring'", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: multi-table inheritance and proxies emit no table (#341)
+# Django gives an MTI child its own table keyed by a `<parent>_ptr_id` one-to-one;
+# a proxy gets no table at all. PormG can express neither, and any table emitted
+# for them would contradict the live schema — so the omission is recorded in the
+# generated file rather than left to a console warning nobody re-reads.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer refuses multi-table inheritance and proxy models" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_mti_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # Neither child is declared...
+        @test !occursin("Pedido = Models.Model(", generated)
+        @test !occursin("ServidorAtivo = Models.Model(", generated)
+        # ...nor do the MTI child's own fields leak into any other model.
+        @test !occursin("desconto", generated)
+
+        # The parents still import — refusing the child must not cost the parent.
+        @test occursin("Venda = Models.Model(\"venda\"", generated)
+        @test occursin("Servidor = Models.Model(\"servidor\"", generated)
+
+        # The generated file states each omission and its reason. ServidorAtivo doubles as the
+        # check that `proxy = True` is read BEFORE the inheritance kind is decided: its base is
+        # concrete, which is otherwise exactly the multi-table-inheritance shape.
+        @test occursin("# PormG: model 'Pedido' inherits the concrete model 'Venda'", generated)
+        @test occursin("# PormG: model 'ServidorAtivo' is a Django proxy", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: an unresolvable base degrades, it does not delete (#341)
+# A base living in another app cannot be merged from one file. Skipping the model
+# would re-create the exact bug this issue closes, so it is imported with its own
+# fields and a marker naming what is absent. #346 resolves these by importing the
+# defining app alongside this one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer imports a model whose base is defined in another file" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_unresolved_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        @test occursin("Relatorio = Models.Model(\"relatorio\"", generated)
+        @test occursin("titulo = Models.CharField(max_length=80)", generated)
+        @test occursin("# PormG: model 'Relatorio' inherits 'TimeStampedModel'", generated)
+
+        # The other half of the rule: an unresolvable base with NO field declarations in the body
+        # is a form/serializer/manager, not a model. Without that gate every such class in a real
+        # models.py would import as a table.
+        @test !occursin("RelatorioForm", generated)
+
+        # A ModelSerializer does declare field-shaped members, so the field gate alone lets it
+        # through. `Meta.model` is what keeps it out — the signature of a class that describes a
+        # model, which Django's ModelBase rejects on a real one.
+        @test !occursin("ServidorSerializer", generated)
+
+        # A PLAIN form and a PLAIN serializer have no `Meta.model` at all, so that rule cannot help
+        # here — the NAMESPACE does. `forms.CharField` and `models.CharField` differ by nothing
+        # else, and accepting any field-shaped call turned both of these into `id`-only tables that
+        # would reach makemigrations as real CREATE TABLEs. Silent junk in the schema is the mirror
+        # of silent loss, and the worse of the two.
+        @test !occursin("ContatoForm", generated)
+        @test !occursin("RelatorioSerializer", generated)
+
+        # ...and the two guards are not redundant. `ServidorAdminForm` carries a genuine
+        # `models.CharField(...)`, so the namespace rule sees a real model field and cannot help —
+        # `Meta.model` is the only thing keeping the form out of the schema.
+        @test !occursin("ServidorAdminForm", generated)
+
+        # The unresolved-base walk climbs the ABSTRACT chain. `Encomenda` inherits the abstract
+        # `Rastreavel`, whose own base is the one missing — and `Rastreavel` emits nothing, so
+        # without the walk its gap would reach the file with no marker anywhere.
+        @test occursin("Encomenda = Models.Model(\"encomenda\"", generated)
+        @test occursin("rastreio = Models.CharField(max_length=20)", generated)
+        @test occursin("# PormG: model 'Encomenda' inherits 'TimeStampedModel'", generated)
+
+        # A module-level enum is skipped in silence. Note this is carried by the field gate above,
+        # not by `_NON_MODEL_BASES` — a TextChoices declares no field-shaped members either way.
+        # The blacklist's own coverage comes from `PlainHelper(object)`, which DOES declare a field.
+        @test !occursin("Source = Models.Model(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a plain mixin beside a model root does not delete the model
+# `class Servidor(models.Model, ExportMixin)` is ordinary Django. Classifying on
+# the non-model base first dropped the whole model in SILENCE — the very shape
+# #341 exists to close, and one the code's own comments claimed to support.
+# Django collects fields only from bases that are themselves models, so the
+# mixin correctly contributes no columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer keeps a model that mixes a model root with a plain mixin" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_mixin_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        @test occursin("Lotacao = Models.Model(\"lotacao\"", generated)
+        @test occursin("setor = Models.CharField(max_length=40)", generated)
+
+        # ...and the same for a BLACKLISTED base rather than an in-file helper. `object` must come
+        # last in a Python base list, so `class Ausencia(models.Model, object)` is the only legal
+        # ordering — and it is asserted separately because the two exclusions are separate flags:
+        # fixing one and leaving the other still deletes the model in silence.
+        @test occursin("Ausencia = Models.Model(\"ausencia\"", generated)
+        @test occursin("motivo = Models.CharField(max_length=30)", generated)
+
+        # The mixin itself is not a table, and contributes nothing — matching Django, which only
+        # collects fields from bases that carry `_meta`.
+        @test !occursin("ExportMixin = Models.Model(", generated)
+        @test !occursin("to_csv", generated)
+
+        # A class this file DEFINES outranks the non-model name list. `Manager` is a perfectly good
+        # model name — in an HR schema a manager is a person — and matching that list against the
+        # raw base list made the class invisible as a base, so `SeniorManager` resolved no parent
+        # and was dropped in silence. It is multi-table inheritance, and must be reported as such.
+        @test occursin("Manager = Models.Model(\"manager\"", generated)
+        @test occursin("# PormG: model 'SeniorManager' inherits the concrete model 'Manager'", generated)
+
+        # A duplicated class name is pathological Python, and reporting it is conditional on what is
+        # actually at stake. Helper-first / model-second loses a TABLE — and classification is
+        # memoized by name from the first definition, so only the duplicate's own field declarations
+        # reveal it.
+        @test occursin("# PormG: 'Duplicada' is declared more than once", generated)
+        # ...while two helpers under one name lose nothing that reaches the schema, so a comment
+        # about a QuerySet in a module that never mentions it would be pure noise.
+        @test !occursin("SoRuido", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a directly-imported field type still counts as a field (#341)
+# `from django.db.models import CharField` then `titulo = CharField(...)` is
+# ordinary Django. Gating "is this a model?" on the dotted `models.X(...)`
+# spelling alone made such a class vanish with no warning — while #340's own
+# reporter already recognised the bare form. The gate and the reporter must
+# agree, or the gate wins and the model disappears.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer recognises a directly-imported field type" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_bare_field_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The model survives...
+        @test occursin("Frequencia = Models.Model(\"frequencia\"", generated)
+        # ...and the field it could not read is named in the file, not merely warned about.
+        @test occursin("field 'competencia' on 'Frequencia'", generated)
+        @test occursin("is a field-shaped call the importer cannot read", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: unique_together loses nothing in silence (#341)
+# Three paths used to drop a composite key with neither a warn nor a marker,
+# while the SAME shapes on `Meta.constraints` were always reported. The
+# asymmetry is the bug: a reader of the generated file could not tell a model
+# with no composite key from one whose key was thrown away.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reports every unique_together it cannot recover" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_meta_ut_reported_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # (a) the value is a NAME, not a literal — nothing to parse.
+        @test occursin("Meta.unique_together on 'Reserva' is not a tuple or list literal", generated)
+        # (b) a member matches no imported field.
+        @test occursin("field 'nao_existe_esse_campo' matches no imported field", generated)
+        # (c) an entry in a grouped list is not itself a group...
+        @test occursin("a unique_together entry on 'Quarto' is not a field group", generated)
+        # ...and the well-formed group beside it still survives, so (c) is a targeted drop rather
+        # than the whole option being abandoned.
+        @test occursin("Models.UniqueConstraint(fields = (\"andar\", \"numero\",))", generated)
+
+        # All three models are still imported — reporting is not refusing.
+        @test occursin("Reserva = Models.Model(\"reserva\"", generated)
+        @test occursin("Diaria = Models.Model(\"diaria\"", generated)
+        @test occursin("Quarto = Models.Model(\"quarto\"", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: Meta options with no PormG equivalent are reported (#341)
+# Every option the importer cannot honor is named in the generated file with its
+# reason. A dropped option that only ever appeared in a console warning is the
+# silent loss this issue exists to remove — one level up from #340's fields.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reports Meta options it cannot honor" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    config_key, db_dir_existed = temp_import_config!()
+    output_file = "django_meta_dropped_options_unit.jl"
+
+    try
+        # The option name is STRUCTURED metadata on the warning, not text inside the message, so a
+        # message-only matcher would silently stop discriminating.
+        logs, _ = Test.collect_test_logs() do
+            import_models_from_django(
+                fixture; db = config_key, file = output_file, force_replace = true,
+            )
+        end
+        dropped = [get(Dict(r.kwargs), :option, nothing) for r in logs
+                   if r.level == Logging.Warn && occursin("Meta option", string(r.message))]
+
+        @test "indexes" in dropped
+        @test "ordering" in dropped
+        # An UNRECOGNISED key is reported too: it is a typo or a Django option this importer has
+        # not met, and passing over either quietly is how a real option gets lost.
+        @test "nao_existe_essa_opcao" in dropped
+
+        # Options the importer consumes itself are never reported as dropped. Asserted one by one
+        # because a blanket "report everything" regression passes the three assertions above.
+        @test !("db_table" in dropped)
+        @test !("abstract" in dropped)
+        @test !("constraints" in dropped)
+        @test !("unique_together" in dropped)
+        @test !("proxy" in dropped)
+
+        generated = read(joinpath(config_key, output_file), String)
+        @test occursin("# PormG: Meta.indexes on 'Servidor' — dropped: PormG has no composite-index", generated)
+        @test occursin("# PormG: Meta.nao_existe_essa_opcao on 'Legado' is not recognised", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: the generated Meta output is loadable Julia (#341)
+# Everything above is downstream of this. `db_table=` and `constraints=` are
+# emitted as kwargs on Models.Model, and `_apply_unique_constraints!` rejects a
+# constraint naming a field the model does not carry — so a file that renders but
+# does not evaluate is the failure that actually reaches a user.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer emits a Meta-carrying module that evaluates" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    output_file = "django_meta_evaluates_unit.jl"
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = output_file,
+    )
+
+    try
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(read(generated_path, String)))
+        # Each binding is read back through `Core.eval` rather than `getfield`: the module was
+        # defined during this call, so its bindings are newer than this frame's world age and a
+        # direct `getfield` raises UndefVarError.
+        modelof(sym) = Core.eval(sandbox, :(django_meta_evaluates_unit.$sym))
+
+        # `db_table` survives the round trip as the PHYSICAL table while the logical name stays
+        # lowercase. Reloading is where a wrong kwarg actually bites — rendering it is not enough.
+        matricula = modelof(:Matricula)
+        @test PormG.model_table_name(matricula) == "rh_matricula_legado"
+        @test matricula.name == "matricula"
+
+        # ...and so do the constraints, including the FK `_id` resolution and the Django name.
+        rc = modelof(:Servidor).cache["unique_constraints"]["constraints"]
+        @test length(rc) == 1
+        @test rc[1].fields == ["cpf", "lotacao_id"]
+        @test rc[1].name == "uniq_servidor_cpf_lotacao"
+
+        # A model declaring no db_table must not have acquired one on the way through.
+        @test !PormG.model_has_db_table(modelof(:Setor))
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

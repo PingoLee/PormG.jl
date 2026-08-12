@@ -1292,3 +1292,505 @@ end
         cleanup_import_test!(config_key, db_dir_existed)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: TextChoices / IntegerChoices resolve (#342)
+# `choices=Status.choices` used to parse to the literal string "Status.choices"
+# and `default=Status.DRAFT` to "Status.DRAFT"; CharField then rejected the pair
+# and the FieldValidationError killed the ENTIRE import — every other model in
+# the file lost to one enum. The enum classes were already parsed into
+# `PyClass.nested` by #340; this is the seam that consumes them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer resolves nested TextChoices" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_nested_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # Both kwargs resolve through the enum — the exact shape from the issue.
+        @test occursin(
+            "status = Models.CharField(max_length=20, default=\"DRAFT\", " *
+            "choices=((\"DRAFT\", \"Em processamento\"), (\"APPLIED\", \"Aplicado\"), " *
+            "(\"IN_PROGRESS\", \"In Progress\")))",
+            generated,
+        )
+        # Neither literal survives anywhere: those are what CharField choked on.
+        @test !occursin("Status.choices", generated)
+        @test !occursin("Status.DRAFT", generated)
+
+        # An omitted label is derived Django-style: IN_PROGRESS -> "In Progress".
+        @test occursin("(\"IN_PROGRESS\", \"In Progress\")", generated)
+        # `__empty__` declares Django's blank choice; it is not a member.
+        @test !occursin("Desconhecido", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: enum resolution is class-scoped (#342)
+# Two models may each nest a `Status` with different members. A flat symbol
+# table silently gives both the last one parsed, and the failure is invisible —
+# the field still imports, with the wrong enumeration.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer scopes enum lookup to the declaring class" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_scope_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # ImportRow.Status, not ImportBatch.Status — the whole point.
+        @test occursin(
+            "situacao = Models.CharField(max_length=20, default=\"OK\", " *
+            "choices=((\"OK\", \"Validada\"), (\"REJECTED\", \"Rejeitada\")))",
+            generated,
+        )
+        # A module-level enum reaches a model that nests one of its own...
+        @test occursin(
+            "prioridade = Models.CharField(max_length=2, default=\"1\", " *
+            "choices=((\"1\", \"Baixa\"), (\"2\", \"Alta\")))",
+            generated,
+        )
+        # ...and a nested enum can be addressed through its owner, as Django allows. This resolves
+        # to ImportBatch's members from inside ImportRow, which a class-scoped-only lookup misses.
+        @test occursin(
+            "espelho = Models.CharField(max_length=20, " *
+            "choices=((\"DRAFT\", \"Em processamento\"), (\"APPLIED\", \"Aplicado\"), " *
+            "(\"IN_PROGRESS\", \"In Progress\")))",
+            generated,
+        )
+
+        # A DOUBLY-nested enum. Python resolves it as `Grupo.Situacao`, so it has to be registered
+        # under that dotted path — collecting it under the bare `Situacao` finds the enum and then
+        # reports it as undefined, because the reference the source actually contains never matches.
+        @test occursin(
+            "campo = Models.CharField(max_length=2, default=\"a\", " *
+            "choices=((\"a\", \"Aa\"), (\"b\", \"Bb\")))",
+            generated,
+        )
+        @test !occursin("`Grupo.Situacao`, which this file does not define", generated)
+
+        # ...and the dotted key is the ONLY one a deep enum gets. Registering the bare name too
+        # shadows the module scope, because lookup searches the class before `""` — `Sombreado`
+        # would then silently import `Interno.Prioridade2` where Python binds the module-level one.
+        #
+        # The numeric members pin the other half: Django stores what a literal MEANS, so `1_000` is
+        # 1000 and `0x1F` is 31. Carrying the source spelling declares an enumeration no row can
+        # match — and because the default would be wrong identically, validation passes and nothing
+        # is reported. A silent wrong value is worse than the reported drop it replaced.
+        # The DEFAULT is the non-canonical member on purpose: normalizing only the choices leaves
+        # `default="1_000"` agreeing with nothing, and both halves have to go through the same path.
+        @test occursin(
+            "nivel = Models.CharField(max_length=5, default=\"1000\", " *
+            "choices=((\"1000\", \"Mil\"), (\"31\", \"Meio\"), (\"1\", \"Um\")))",
+            generated,
+        )
+        @test !occursin("1_000", generated)
+        @test !occursin("0x1F", generated)
+        @test !occursin("(\"F\", \"Fundo\")", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: every choices degrade is reported, and costs one field (#342)
+# The bug is not that some enums cannot be resolved — it is that one of them
+# used to cost the whole file. Each degrade names itself in the generated file,
+# and a model declared after all of them must still be there.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer degrades unresolvable choices without losing the file" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_degrade_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # An enum defined in another module: choices AND default drop together. Dropping only one
+        # leaves the survivor carrying the unresolvable literal — which is the original abort.
+        # "which this file does not define", not "enum": the same shape catches a module constant
+        # (`default=constants.MAX`), and calling that an enumeration in the artifact is a claim the
+        # reader has no way to check.
+        @test occursin("references `Externo`, which this file does not define", generated)
+        @test occursin("origem = Models.CharField(max_length=10)", generated)
+        # The literal must never reach the field as a VALUE. Both names do appear in the file now —
+        # inside markers naming what was dropped — so the assertion is on the declaration form,
+        # which is what it always meant.
+        @test !occursin("default=\"Externo.ATIVO\"", generated)
+        @test !occursin("\"Externo.choices\"", generated)
+
+        # When only the DEFAULT is unresolvable, the resolvable `choices` stays. A blanket
+        # "drop both" is tidier to write and throws away what the source did give us — this is the
+        # assertion that keeps it honest.
+        @test occursin(
+            "parcial = Models.CharField(max_length=10, " *
+            "choices=((\"1\", \"Baixa\"), (\"2\", \"Alta\")))",
+            generated,
+        )
+        @test occursin("`default` dropped", generated)
+
+        # `.values` is a list of values, not (value, label) pairs.
+        @test occursin("uses `Prioridade.values`", generated)
+        @test occursin("listagem = Models.CharField(max_length=10)", generated)
+
+        # A member that does not exist on the enum.
+        @test occursin("`Prioridade.INEXISTENTE`, which is not a member", generated)
+        @test occursin("fantasma = Models.CharField(max_length=10)", generated)
+
+        # Only CharField has a choices slot. `_common_kwargs` would warn anonymously
+        # ("Unexpected parameter for TextField"); this names the field and class.
+        @test occursin("TextField has no choices slot in PormG", generated)
+        @test occursin("corpo = Models.TextField()", generated)
+
+        # ...and the model declared AFTER all of them is still here. This is the assertion that
+        # actually pins the issue: one bad enum must cost one field's metadata, not the file.
+        @test occursin("Posterior = Models.Model(\"posterior\"", generated)
+        # Every model in the fixture reaches the file. A count rather than nine `occursin`s, so a
+        # regression that loses one anywhere in the middle fails here.
+        # Bump this when the fixture gains a model — that maintenance is the price of catching a
+        # model that silently disappears from the middle of the file.
+        @test count("Models.Model(", generated) == 14
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: the construction-time safety net (#342)
+# `choices=Prioridade.choices, default="NOPE"` — both kwargs resolve perfectly
+# well and the PAIR is invalid. Nothing in parse_field_args can see that; only
+# CharField's own validation can, and before #342 it aborted the whole import.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer recovers from a rejected choices/default pair" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_safetynet_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The field survives without its enumeration...
+        @test occursin("combinado = Models.CharField(max_length=10)", generated)
+        # ...and says why, naming ONLY the kwargs that were actually present and quoting the
+        # validation that rejected them. The blanket wording claimed "the enumeration is not
+        # enforced" on fields that had no enumeration — an over-long `default` on a plain CharField
+        # recovers through this same path.
+        @test occursin("`choices` and `default` rejected and dropped", generated)
+        @test occursin("The default value must be one of the choices", generated)
+        # The bad default never reaches the output.
+        @test !occursin("\"NOPE\"", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: inline choice values carry no quote characters (#342)
+# `parse_value` stored a Django ("UP", "Upload") as the four-character string
+# `"UP"` — quote marks kept as part of the value. Metadata-only, so nothing
+# downstream broke, but enum resolution produces the clean form and one model
+# would otherwise have carried two spellings of the same concept.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer strips quotes from inline choice values" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_quotes_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        @test occursin(
+            "canal = Models.CharField(max_length=2, default=\"UP\", " *
+            "choices=((\"UP\", \"Upload\"), (\"GS\", \"Sheets\")))",
+            generated,
+        )
+        # The old shape, spelled out so the assertion cannot pass by accident: the value used to be
+        # the four-character string including its quote marks.
+        @test !occursin("\\\"UP\\\"", generated)
+
+        # ...and a LIST container gets the same treatment. It used to bypass the importer's
+        # parse_choices entirely (which only handled `(...)`) and be re-parsed much later by the
+        # field layer, which still keeps the quotes — so one generated model carried both spellings
+        # of the same concept, the very thing the normalization exists to prevent.
+        @test occursin(
+            "lista = Models.CharField(max_length=2, default=\"UP\", " *
+            "choices=((\"UP\", \"Upload\"), (\"GS\", \"Sheets\")))",
+            generated,
+        )
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a choices literal is read with the shared scanner (#342)
+# `parse_choices` split on EVERY comma and threw InvalidMigrationError from
+# OUTSIDE the field-construction try. A comma inside a human-readable label —
+# "Aplicado, com ressalvas" — therefore aborted the whole import: no file
+# written, every model lost. That is verbatim the failure this issue exists to
+# remove, in the function the issue asks to rewrite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads choices literals with the bracket-aware scanner" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_scanner_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # A comma inside a label is content, not a separator.
+        @test occursin(
+            "virgula = Models.CharField(max_length=3, default=\"a\", " *
+            "choices=((\"a\", \"Alpha, primeiro\"),))",
+            generated,
+        )
+
+        # A list of LISTS is valid Django. It used to import as an empty `choices=()` with no
+        # warning at all — a documented limitation that the scanner rebase removes.
+        @test occursin(
+            "listas = Models.CharField(max_length=2, default=\"A\", " *
+            "choices=((\"A\", \"Alpha\"), (\"B\", \"Beta\")))",
+            generated,
+        )
+
+        # A genuinely malformed entry is reported and skipped; the good one beside it survives, so
+        # the leniency is per entry rather than a blanket bail-out.
+        @test occursin("has a choices entry that is not a (value, label) pair", generated)
+        @test occursin(
+            "torto = Models.CharField(max_length=2, default=\"A\", choices=((\"A\", \"Alpha\"),))",
+            generated,
+        )
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: an abstract base's enum resolves from its children (#342)
+# Inherited statements are merged into the child and processed under the CHILD's
+# name, so a base declaring both the enum and a field using it hands the child a
+# reference that is nowhere in its own scope. The importer then reported it as
+# "not defined in this file" about an enum three lines above — a marker stating
+# something the reader can see is false.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer resolves an enum declared on an abstract base" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_abstract_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        @test occursin(
+            "estado = Models.CharField(max_length=3, default=\"ON\", " *
+            "choices=((\"ON\", \"Ligado\"), (\"OFF\", \"Desligado\")))",
+            generated,
+        )
+        # ...and no marker claims the base's enum is missing.
+        @test !occursin("`Estado`, which this file does not define", generated)
+        # The abstract base itself emits no table.
+        @test !occursin("Auditavel = Models.Model(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a dotted default that is not an enum is left alone (#342)
+# Enum resolution runs on EVERY option value. Capturing any dotted `default=`
+# made `default=uuid.uuid4` and `default=timezone.now` disappear from fields
+# that have nothing to do with enumerations — an undocumented behavior change,
+# reported with a diagnostic that named the wrong thing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer does not treat every dotted default as an enum" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_dotted_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # Kept exactly as before this change.
+        @test occursin("ident = Models.CharField(max_length=36, default=\"uuid.uuid4\")", generated)
+        # ...and the datetime-callable mapping still wins for `timezone.now`.
+        @test occursin("criado = Models.DateTimeField(auto_now_add=true)", generated)
+        # Neither is reported as an enumeration.
+        @test !occursin("`uuid`, which this file does not define", generated)
+        @test !occursin("`timezone`, which this file does not define", generated)
+
+        # But a dotted default that IS kept verbatim is still reported. `Externo.ativo` is an enum
+        # member spelled unconventionally and is indistinguishable from `uuid.uuid4` by syntax
+        # alone — so the value is left untouched and the reader is told an expression landed in the
+        # schema as literal text. Keeping it AND saying nothing is the silent gain the contract
+        # forbids.
+        @test occursin("a = Models.CharField(max_length=40, default=\"Externo.ativo\")", generated)
+        @test occursin("an expression the importer cannot evaluate — kept verbatim as text", generated)
+
+        # `.value` on an UNRESOLVABLE enum. The member-attribute peel cannot fire, so `.value`
+        # counting as an enum-shaped attribute is the only thing keeping the literal out of the
+        # schema — dropped and reported, not kept verbatim like `Externo.ativo` above.
+        @test occursin("b = Models.CharField(max_length=40)", generated)
+        @test !occursin("\"Externo.ATIVO.value\"", generated)
+
+        # `.value` resolves to the member's stored value — it is an ordinary way to spell a default,
+        # and rejecting it cost the resolvable `choices` as well via the safety net.
+        @test occursin(
+            "com_value = Models.CharField(max_length=10, default=\"NOVO\", " *
+            "choices=((\"NOVO\", \"Novo\"), (\"VELHO\", \"Velho\")))",
+            generated,
+        )
+        # `.label` is display text, not a stored value: dropped and named, choices kept.
+        @test occursin("which is the member's label rather than its stored value", generated)
+        @test occursin(
+            "com_label = Models.CharField(max_length=10, " *
+            "choices=((\"NOVO\", \"Novo\"), (\"VELHO\", \"Velho\")))",
+            generated,
+        )
+
+        # `choices` naming a module-level constant: nothing to read, and an empty tuple in silence
+        # is how a field lost its whole enumeration without a trace. The marker must say the WHOLE
+        # option went — the per-entry phrasing shares this channel and would leave a reader thinking
+        # the rest survived.
+        @test occursin("s = Models.CharField(max_length=3)", generated)
+        @test occursin(
+            "has `choices=SITUACAO_CONSTANTE`, which is a name rather than a literal — the whole " *
+            "option was dropped.",
+            generated,
+        )
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: enum member values the importer cannot read (#342)
+# `CARRO = auto()` is a documented Django idiom. Imported verbatim it gives
+# every member the value "auto()" — duplicates that then PASS validation,
+# because the default is literally in the set. Wrong metadata kept in silence is
+# the mirror of a silent drop, and this importer's contract forbids both.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reports enum members whose values are not literals" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_nonliteral_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # `auto()` never reaches the output as a value...
+        @test !occursin("auto()\"", generated)
+        @test occursin("have values the importer cannot read", generated)
+        @test occursin("tipo = Models.CharField(max_length=10)", generated)
+
+        # An enum with no members cannot supply choices.
+        @test occursin("`Vazia` declares no members", generated)
+        @test occursin("vazia = Models.CharField(max_length=5)", generated)
+
+        # A gettext-wrapped label is unwrapped: the wrapper is i18n plumbing, not the display text.
+        @test occursin(
+            "cor = Models.CharField(max_length=10, default=\"AZUL\", " *
+            "choices=((\"AZUL\", \"Azul\"), (\"VERDE\", \"Verde\"), (\"MISTO\", \"Misto\")))",
+            generated,
+        )
+        @test !occursin("_(\\\"Azul\\\")", generated)
+
+        # A COMPOUND label unwraps to the fragment `a") + _("b`. Falling back to Django's derived
+        # label keeps that fragment out of the generated file as display text. Only the LABEL
+        # degrades this way; a non-literal VALUE drops the option, because a value is schema.
+        @test occursin("(\"MISTO\", \"Misto\")", generated)
+        @test !occursin("+ _(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a resolved `None` member is not mistaken for a drop (#342)
+# `parse_value("None")` is `nothing`, and `nothing` was also the "drop this
+# option" signal. A member declared `NENHUM = None, "Nenhum"` therefore made the
+# option vanish with no warn and no marker — the one thing this importer
+# promises never to do. The two now use distinct sentinels.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer distinguishes a None member value from a dropped option" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = "django_choices_none_unit.jl",
+    )
+
+    try
+        generated = read(generated_path, String)
+
+        # The field imports with its choices...
+        @test occursin("x = Models.CharField(max_length=3, null=true, choices=(", generated)
+        # ...and nothing about it is reported, because nothing about it was dropped. A silent drop
+        # would look identical in the declaration, so the absence of a marker is the assertion.
+        @test !occursin("on 'NoneMembro'", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: the choices output is loadable Julia (#342)
+# Everything above is downstream of this. The whole issue is an import that ends
+# as a stack trace and no file at all, so the file existing, parsing, evaluating
+# and carrying the right choices on the right field is the real assertion.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer emits a choices-carrying module that evaluates" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_choices_forms.txt")
+    output_file = "django_choices_evaluates_unit.jl"
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(
+        fixture;
+        output_file = output_file,
+    )
+
+    try
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(read(generated_path, String)))
+        # Read back through `Core.eval`: the module was defined during this call, so its bindings
+        # are newer than this frame's world age and a direct `getfield` raises UndefVarError.
+        modelof(sym) = Core.eval(sandbox, :(django_choices_evaluates_unit.$sym))
+
+        batch = modelof(:ImportBatch)
+        @test batch.fields["status"].choices ==
+              (("DRAFT", "Em processamento"), ("APPLIED", "Aplicado"), ("IN_PROGRESS", "In Progress"))
+        @test batch.fields["status"].default == "DRAFT"
+
+        # An IntegerChoices on a CharField: parse_choices stringifies the values and CharField
+        # coerces the Int default, so both enum kinds land correctly.
+        row = modelof(:ImportRow)
+        @test row.fields["prioridade"].choices == (("1", "Baixa"), ("2", "Alta"))
+        @test row.fields["prioridade"].default == "1"
+
+        # A degraded field keeps its column and loses only the enumeration.
+        rel = modelof(:Relatorio)
+        @test rel.fields["origem"].choices === nothing
+        @test rel.fields["origem"].default === nothing
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end

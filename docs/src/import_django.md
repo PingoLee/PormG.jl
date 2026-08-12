@@ -150,7 +150,7 @@ Django parameters are automatically converted to PormG equivalents:
 | `unique=True` | `unique=true` | Boolean conversion |
 | `default=value` | `default=value` | Value conversion |
 | `on_delete=CASCADE` | `on_delete=CASCADE` | Direct mapping |
-| `choices=[]` | `choices=()` | List to tuple conversion |
+| `choices=[…]` | `choices=(…)` | List to tuple; also resolves `TextChoices`/`IntegerChoices` — see [Choices](#Choices) |
 
 ### Meta Options
 
@@ -264,40 +264,85 @@ Relatorio = Models.Model("relatorio",
 Dropping the model instead would be the worse trade: a table that silently disappears is harder to
 notice than one that is present and annotated.
 
-### ⚠️ Important: CharField with Choices Syntax
+### Choices
 
-When using `CharField` with choices, PormG requires the choices to be defined **inline** for proper parsing. External variables are not supported.
+Both Django spellings are imported: an inline literal, and a `TextChoices` / `IntegerChoices`
+enumeration.
 
 ```python
-# ✅ CORRECT - Use this pattern:
-user_type = models.CharField(
-    default=3,
-    choices=((1,"Type 1"),(2,"Type 2"),(3,"Type 3"),(4,"Type 4"),(5,"Type 5")),
-    max_length=10
-)
+class ImportBatch(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Em processamento"
+        APPLIED = "APPLIED", "Aplicado"
+        IN_PROGRESS = "IN_PROGRESS"          # label derived: "In Progress"
 
-# ❌ INCORRECT - Don't use this pattern:
-user_type_data=((1,"Type 1"),(2,"Type 2"),(3,"Type 3"),(4,"Type 4"),(5,"Type 5"))
-user_type = models.CharField(
-    max_length=10,
-    choices=user_type_data
-)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    canal  = models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets")))
 ```
 
-**Key Requirements:**
-- **Inline definition**: Define choices directly in the field, not as external variables
-- **Either outer bracket**: The choices *container* may be a list `[...]` or a tuple `(...)`. Before
-  the importer read Python source with a bracket-aware scanner, a list silently kept only its
-  *first* choice — the argument splitter counted parentheses only, so it split at the comma between
-  two bracketed pairs.
-- **Parenthesized pairs**: Each choice must be a `(value, display_name)` tuple. The *inner* bracket
-  is **not** free: `choices=[["A", "Alpha"]]` is valid Django but imports as an empty `choices=()`,
-  with no warning. Write `choices=[("A", "Alpha")]`.
-- **Parameter order**: Place `default` before `choices` for better parsing reliability
+imports as (fields are emitted in sorted order, so `canal` precedes `status`):
+
+```julia
+ImportBatch = Models.Model("importbatch",
+  id = Models.IDField(),
+  canal = Models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets"))),
+  status = Models.CharField(max_length=20, default="DRAFT", choices=(("DRAFT", "Em processamento"), ("APPLIED", "Aplicado"), ("IN_PROGRESS", "In Progress"))))
+```
+
+**Enumerations.** An enum is found whether it is nested inside the model, declared at module level,
+or declared on an **abstract base** the model inherits. Lookup is scoped in that order, so two models
+may each nest a `Status` with different members and each resolves to its own. A nested enum can also
+be addressed through its owner (`ImportBatch.Status.choices`), as Django allows.
+
+| Reference | Result |
+|---|---|
+| `Status.choices` | the full `(value, label)` set |
+| `Status.MEMBER` | that member's value — typically what `default=` uses |
+| `Status.values` / `.labels` / `.names` | dropped and reported: a flat list, not `(value, label)` pairs |
+| a member the enum does not declare | dropped and reported |
+| an enum whose members are not literals (`CARRO = auto()`) | dropped and reported — the importer cannot know the value, and keeping `"auto()"` would give every member the same one |
+| a numeric member (`ALTO = 1_000`, `MEIO = 0x1F`) | imported as the value it **denotes** — `1000`, `31` — not as the source spelling, which would declare an enumeration no row can match |
+| a name this file does not define (`from .enums import Status`) | the option naming it is dropped and reported |
+
+That last row is per option, not per field: if `choices=Status.choices` resolves and only
+`default=Externo.ATIVO` does not, the field keeps its enumeration and loses just the default.
+Dropping the resolvable half as well would throw away what the source did give you. The reason
+neither is ever passed through as a literal is that `default="Externo.ATIVO"` against an empty
+`choices` is exactly what used to make `CharField` reject the field and abort the **entire** import.
+
+A member's own attributes work too: `Status.NOVO.value` resolves to the stored value, while
+`.label` and `.name` are display text and the member name rather than a value, so they are dropped
+and reported.
+
+The same rule catches a dotted name that is not an enum at all — a module constant such as
+`default=constants.MAX_QTD` — so the diagnostic says "this file does not define" rather than naming
+an enumeration it cannot verify. The test is the attribute's *shape*: `.choices`, `.values`,
+`.labels`, `.names`, `.value`, `.label`, `.name`, or a `SHOUTY_CASE` member. Any other dotted
+`default` (`uuid.uuid4`, `timezone.now`, an unconventionally-spelled `Externo.ativo`) is **kept
+verbatim as text**, exactly as before — and reported, because an expression landing in the schema as
+a literal default is not something to discover later.
+
+A `choices` naming a module-level constant (`choices=STATUS_CHOICES`) has nothing to read: the
+option is dropped and reported rather than becoming an empty enumeration.
+
+**`choices` needs a `CharField`.** It is the only PormG field type with a `choices` slot, so a Django
+`TextField(choices=…)` imports as a plain `TextField` with the option dropped and reported. The column
+is unaffected.
+
+!!! note "Values carry no quote characters"
+    An inline `("UP", "Upload")` imports as the value `UP`. Before this, it was stored as the
+    four-character string `"UP"` — the quote marks kept as part of the value. `choices` is Julia-side
+    metadata that never reaches DDL, so nothing downstream misbehaved, but regenerating an existing
+    import now produces the clean form.
+
+**Both containers, both pair styles.** `choices` may be a tuple or a list, and so may each pair —
+`[["A", "Alpha"]]` imports correctly. A comma inside a *label* (`("APPLIED", "Aplicado, com
+ressalvas")`) is content, not a separator. An entry that is not a `(value, label)` pair at all is
+dropped and reported, and the well-formed entries beside it survive.
 
 The field itself may be wrapped across several lines — that is what `black` produces, and it is read
-correctly. Note that a field whose declaration the importer cannot read is reported with a warning
-naming the field and its source line; it is never dropped silently.
+correctly. A field whose declaration the importer cannot read is reported with a warning naming the
+field and its source line; it is never dropped silently.
 
 ### Automatic Additions
 
@@ -319,8 +364,8 @@ naming the field and its source line; it is never dropped silently.
 
 | | |
 |---|---|
-| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField`, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints` (see the whitelist above), abstract-base inheritance, `AbstractUser` auth columns |
-| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import |
+| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField`, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints` (see the whitelist above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
+| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them |
 | **Reported and skipped** | `Meta.indexes` and every other option with no PormG equivalent; a `UniqueConstraint` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
 | **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
 
@@ -328,9 +373,6 @@ Nothing in the middle two rows is dropped in silence: each one produces a `@warn
 a `# PormG:` comment in the generated file. That is the contract this importer holds itself to — if
 something did not survive, the artifact says so.
 
-!!! note "`choices` as a list of lists"
-    `choices=[["A", "Alpha"]]` is valid Django but imports as an empty `choices=()`, with no warning.
-    Write the inner pair as a tuple: `choices=[("A", "Alpha")]`.
 
 ## API Naming Differences from Django
 

@@ -1,0 +1,233 @@
+from django.db import models
+
+# An enum living in another module. Nothing here defines it, so a single-file import cannot resolve
+# `Externo.ATIVO` — and passing the literal through is exactly the abort #342 exists to remove.
+from .enums import Externo
+
+
+class Prioridade(models.IntegerChoices):
+    """A MODULE-LEVEL enum, used by a model below. Django allows both placements and real projects
+    use both, so both must reach the symbol table."""
+
+    BAIXA = 1, "Baixa"
+    ALTA = 2, "Alta"
+
+
+class ImportBatch(models.Model):
+    class Status(models.TextChoices):
+        """A NESTED enum. `_lift_meta!` removes only `Meta`, so this has been sitting in
+        `PyClass.nested` unused since #340 — it is the seam #342 consumes."""
+
+        DRAFT = "DRAFT", "Em processamento"
+        APPLIED = "APPLIED", "Aplicado"
+        # Label omitted: Django derives it from the member name, IN_PROGRESS -> "In Progress".
+        IN_PROGRESS = "IN_PROGRESS"
+        # Django's blank-choice idiom. Not a member; must be skipped.
+        __empty__ = "(Desconhecido)"
+
+    filename = models.CharField(max_length=255)
+    # The shape from the issue: both kwargs resolve through the enum. Before #342 this threw
+    # FieldValidationError and killed the whole import.
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+
+
+class ImportRow(models.Model):
+    class Status(models.TextChoices):
+        """A DIFFERENT enum under the SAME name. Resolution is class-scoped, so this must not
+        collide with ImportBatch.Status — a flat table would silently give both the last one
+        parsed."""
+
+        OK = "OK", "Validada"
+        REJECTED = "REJECTED", "Rejeitada"
+
+    # Scoped resolution: this default is "OK", never "DRAFT".
+    situacao = models.CharField(max_length=20, choices=Status.choices, default=Status.OK)
+    # A module-level IntegerChoices on a CharField: parse_choices stringifies and CharField coerces
+    # an Int default, so both enum kinds land correctly here.
+    prioridade = models.CharField(max_length=2, choices=Prioridade.choices, default=Prioridade.BAIXA)
+    # Qualified through the owning class — Django permits it.
+    espelho = models.CharField(max_length=20, choices=ImportBatch.Status.choices)
+
+
+class Relatorio(models.Model):
+    """Every degrade path. This model must still import, and every other model in the file must
+    survive it — one bad enum costing a whole file is the bug."""
+
+    titulo = models.CharField(max_length=80)
+    # An enum this file cannot see: choices AND default are dropped TOGETHER. Dropping only one
+    # reproduces the abort, because the survivor still carries the unresolvable literal.
+    origem = models.CharField(max_length=10, choices=Externo.choices, default=Externo.ATIVO)
+    # Only the DEFAULT is unresolvable; `choices` resolves fine. The field must keep its
+    # enumeration and lose only the default — a blanket "drop both" would throw away what the
+    # source actually gave us.
+    parcial = models.CharField(max_length=10, choices=Prioridade.choices, default=Externo.BAIXA)
+    # `.values` is a list of values, not (value, label) pairs — no PormG equivalent.
+    listagem = models.CharField(max_length=10, choices=Prioridade.values)
+    # A member that does not exist on the enum.
+    fantasma = models.CharField(max_length=10, default=Prioridade.INEXISTENTE)
+    # Only CharField has a choices slot; TextField does not, so the option is dropped and named.
+    corpo = models.TextField(choices=Prioridade.choices)
+    # Both kwargs resolve, but the PAIR is invalid: "NOPE" is not one of the members. Nothing in
+    # parse_field_args can catch this — it is the case the construction-time safety net exists for.
+    combinado = models.CharField(max_length=10, choices=Prioridade.choices, default="NOPE")
+    # An INLINE literal, to pin the quote normalization: the stored values must be UP and Upload,
+    # not "UP" and "Upload" with the quote characters kept as part of the string.
+    canal = models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets")), default="UP")
+
+
+class Auditavel(models.Model):
+    """An ABSTRACT base declaring both an enum and a field that uses it. Inherited statements are
+    processed under the CHILD's name, so unless the lookup walks the abstract chain the child sees a
+    reference that is nowhere in its own scope — and the marker then says 'not defined in this file'
+    about an enum three lines above it."""
+
+    class Estado(models.TextChoices):
+        ON = "ON", "Ligado"
+        OFF = "OFF", "Desligado"
+
+    estado = models.CharField(max_length=3, choices=Estado.choices, default=Estado.ON)
+
+    class Meta:
+        abstract = True
+
+
+class Equipamento(Auditavel):
+    nome = models.CharField(max_length=10)
+
+
+class Rotulo(models.Model):
+    """Every shape that used to be read wrongly rather than reported."""
+
+    # A comma inside a LABEL. The old splitter cut on every comma, produced three fragments, and
+    # threw from OUTSIDE the field-construction try — no file written, whole import lost.
+    virgula = models.CharField(max_length=3, choices=(("a", "Alpha, primeiro"),), default="a")
+    # A list container. It used to bypass the importer's parse_choices entirely and be re-parsed
+    # much later by the field layer, which keeps the quote characters — so one generated model
+    # carried both spellings of the same concept.
+    lista = models.CharField(max_length=2, choices=[("UP", "Upload"), ("GS", "Sheets")], default="UP")
+    # A list of LISTS. Valid Django; used to import as an empty choices=() with no warning at all.
+    listas = models.CharField(max_length=2, choices=[["A", "Alpha"], ["B", "Beta"]], default="A")
+    # A genuinely malformed entry beside a good one: reported, and the good one survives.
+    torto = models.CharField(max_length=2, choices=(("A", "Alpha"), ("B", "Beta", "extra")), default="A")
+
+
+class NaoEnum(models.Model):
+    """Dotted defaults that are NOT enums. Capturing these was an undocumented behavior change on
+    fields with nothing to do with enumerations, reported with a diagnostic naming the wrong thing."""
+
+    ident = models.CharField(max_length=36, default=uuid.uuid4)
+    criado = models.DateTimeField(default=timezone.now)
+
+
+class ValorEstranho(models.Model):
+    """Enum member values the importer cannot read. `auto()` is a documented Django idiom, and
+    keeping it verbatim gives every member the value "auto()" — duplicates that then PASS validation
+    because the default is literally in the set. Wrong metadata kept in silence."""
+
+    class Tipo(models.IntegerChoices):
+        CARRO = auto()
+        CAMINHAO = auto()
+
+    class Cor(models.TextChoices):
+        # gettext-wrapped labels are the standard i18n spelling; the wrapper is not the label.
+        AZUL = "AZUL", _("Azul")
+        VERDE = "VERDE", _("Verde")
+        # A COMPOUND label. Unwrapping it naively yields the fragment `a") + _("b`, which would go
+        # into the generated file as display text; the derived label is used instead. Only the
+        # LABEL degrades this way — a non-literal VALUE drops the option, because a value is schema.
+        MISTO = "MISTO", _("a") + _("b")
+
+    class Vazia(models.TextChoices):
+        """No members at all."""
+
+    tipo = models.CharField(max_length=10, choices=Tipo.choices)
+    cor = models.CharField(max_length=10, choices=Cor.choices, default=Cor.AZUL)
+    vazia = models.CharField(max_length=5, choices=Vazia.choices)
+
+
+class NoneMembro(models.Model):
+    """A member whose value is `None`. `parse_value("None")` is `nothing`, which the caller used to
+    read as "dropped" — the option vanished with no warn and no marker."""
+
+    class E(models.TextChoices):
+        NENHUM = None, "Nenhum"
+        A = "a", "Aa"
+
+    x = models.CharField(max_length=3, choices=E.choices, default=E.NENHUM, null=True)
+
+
+class Agrupado(models.Model):
+    """A doubly-nested enum. Python resolves it as `Grupo.Situacao`, so collecting it under the bare
+    name `Situacao` puts it behind a key the real reference can never reach — the enum is found and
+    still reported as undefined."""
+
+    class Grupo:
+        class Situacao(models.TextChoices):
+            A = "a", "Aa"
+            B = "b", "Bb"
+
+    campo = models.CharField(max_length=2, choices=Grupo.Situacao.choices, default=Grupo.Situacao.A)
+
+
+SITUACAO_CONSTANTE = (("A", "Ativo"), ("I", "Inativo"))
+
+
+class Prioridade2(models.IntegerChoices):
+    """A module-level enum whose name a DEEPLY nested one also uses. Python binds the module-level
+    one inside a model body — a nested enum two levels down is not in that namespace — so an
+    invented bare-name key for the deep one silently imports the wrong enumeration."""
+
+    # Django stores what the literal MEANS, not how it is spelled: 1_000 is 1000 and 0x1F is 31.
+    # Importing the source text gives an enumeration no row can ever match — and since the default
+    # is wrong the same way, validation passes and nothing is reported.
+    MIL = 1_000, "Mil"
+    MEIO = 0x1F, "Meio"
+    UM = 1, "Um"
+
+
+class Sombreado(models.Model):
+    class Interno(models.Model):
+        class Prioridade2(models.TextChoices):
+            FUNDO = "F", "Fundo"
+
+    # Resolves to the MODULE-LEVEL Prioridade2, exactly as Python does. The default is deliberately
+    # the NON-CANONICAL member: `1_000` must reach the field as 1000, or the default and the
+    # choices agree with each other and with nothing in the database.
+    nivel = models.CharField(max_length=5, choices=Prioridade2.choices, default=Prioridade2.MIL)
+
+
+class Atributos(models.Model):
+    class Status(models.TextChoices):
+        NOVO = "NOVO", "Novo"
+        VELHO = "VELHO", "Velho"
+
+    # `.value` is an ordinary way to spell a default and resolves to the member's value.
+    com_value = models.CharField(max_length=10, choices=Status.choices, default=Status.NOVO.value)
+    # `.label`/`.name` are the display text and the member name, not the stored value.
+    com_label = models.CharField(max_length=10, choices=Status.choices, default=Status.NOVO.label)
+
+
+class Constante(models.Model):
+    """`choices` naming a module-level constant. There is nothing to read, and returning an empty
+    tuple in silence is how a field lost its whole enumeration without a trace."""
+
+    s = models.CharField(max_length=3, choices=SITUACAO_CONSTANTE)
+
+
+class MinusculoMembro(models.Model):
+    """An enum member spelled unconventionally. It is indistinguishable from `uuid.uuid4` by syntax
+    alone, so the value is kept verbatim — but reported, because an expression landing in the schema
+    as literal text is exactly what must never happen quietly."""
+
+    a = models.CharField(max_length=40, default=Externo.ativo)
+    # `.value` on an UNRESOLVABLE enum. The member-attribute peel cannot fire (the enum is unknown),
+    # so the only thing that stops the literal reaching the schema is `.value` counting as an
+    # enum-shaped attribute — drop and report, rather than keep verbatim.
+    b = models.CharField(max_length=40, default=Externo.ATIVO.value)
+
+
+class Posterior(models.Model):
+    """Declared AFTER every degrade above. Its presence is what proves a bad enum costs one field's
+    metadata rather than the rest of the file."""
+
+    nome = models.CharField(max_length=30)

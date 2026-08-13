@@ -291,6 +291,12 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       # throws `ModelDefinitionError` at `set_models`, and regenerating produced the identical
       # broken file. Routed through `_fk_default_or_warn` so an unrepresentable default warns
       # rather than throwing from inside introspection.
+      # #338: this `uppercasefirst` must match the BINDING `Model_to_str` derives for the target
+      # table — `_resolve_target_model` resolves `.to` by binding lookup alone. If that binding
+      # collides with a sibling table's and gets suffixed with a digit, `.to` still names this
+      # un-suffixed spelling and can resolve to the wrong model. Pre-existing ambiguity, not
+      # introduced by #338's dedup — see docs/src/schema_conventions.md → "Generated files:
+      # colliding bindings and names are disambiguated".
       field_instance = Models.ForeignKey(uppercasefirst(fk_map[column_name]["fk_table"] |> string); pk_field=fk_map[column_name]["fk_column"] |> string,
       on_delete=_normalize_introspected_on_delete(fk_map[column_name]["on_delete"]),
       on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=(nullable === nothing),
@@ -393,6 +399,8 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         # with the `unique` flag below, a live `INTEGER UNIQUE REFERENCES parent(id)` now regenerates
         # LOSSLESSLY as `INTEGER UNIQUE` + the foreign key, where an O2O would regenerate as `TEXT`
         # with no foreign key. The flag is what #318 is actually about; the field type is not.
+        # #338: same binding-collision caveat as the FK path above — `.to` resolves by binding
+        # lookup alone, so a suffixed sibling binding can leave this pointing at the wrong model.
         field = Models.ForeignKey(uppercasefirst(fk_info.table); pk_field=fk_info.to,
             on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
             default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
@@ -1292,6 +1300,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       elseif haskey(fk_map, col_name)
         fk_info = fk_map[col_name]
+        # #338: same binding-collision caveat as the other FK introspection paths in this file.
         fk_table = uppercasefirst(fk_info.table)
         fk_column = fk_info.pk
         # #292: `on_delete` is now carried (it was never even queried), and `default_value` goes

@@ -70,9 +70,14 @@ function import_models_from_sqlite(db::String = "db";
   end
 
   # Collect all create instructions
+  # #338: one binding/name registry PER GENERATED FILE, shared across every model rendered into it —
+  # seeded with what the file's own boilerplate already imports, so a table literally named "models"
+  # collides too. Without this, two tables that render the same binding silently shadow one another.
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-    push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true))
+    push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
   end
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
@@ -133,16 +138,19 @@ function import_models_from_postgres(db::String;
   
   # Convert the database schema to models
   models_array = convert_schema_to_models(conn, ignore_table=ignore_table, include_table=include_table)
-  
+
   if isempty(models_array)
       @warn("No tables found in the database to import.")
       return nothing
   end
-  
+
   # Convert each model to string representation
+  # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true))
+      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
   end
   
   # Generate the models file
@@ -171,16 +179,19 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
     
   # Convert the database schema to models
   models_array = convert_schema_to_models(db, ignore_table=ignore_table, include_table=include_table)
-  
+
   if isempty(models_array)
       @warn("No tables found in the database to import.")
       return nothing
   end
-  
+
   # Convert each model to string representation
+  # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true))
+      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
   end
   
   # Generate the models file
@@ -638,6 +649,11 @@ function import_models_from_django(
   # and the first model is gone. `graph.index` already keeps the first definition for base
   # resolution; this keeps emission agreeing with it.
   seen_names = Set{String}()
+  # #338: the GENERAL case of the same defect `seen_names` above guards one instance of — two
+  # DIFFERENT class names can still sanitize/uppercasefirst to the same Julia binding. One registry
+  # per generated file, shared across every class rendered into it.
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
 
   for class in graph.classes
     class_name = class.name
@@ -797,7 +813,7 @@ function import_models_from_django(
           end
         end
 
-        rendered = Models.Model_to_str(model, render_settings)
+        rendered = Models.Model_to_str(model, render_settings; taken_bindings=taken_bindings, taken_names=taken_names)
         push!(Instructions, isempty(markers) ? rendered : join(markers, "\n") * "\n" * rendered)
     end
 

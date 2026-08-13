@@ -77,20 +77,59 @@ function _build_row_join(field::Vector{SubString{String}}, instruct::SQLInstruct
   _build_row_join(vector, instruct, as=as)  
 end
 
-function _resolve_django_join_field(model::PormGModel, field_name::String, instruct::SQLInstruction)::String
-  instruct.django === nothing && return field_name
-
+# Resolve one join-path segment to the field that actually carries the relation, so a Django-style
+# `driver__forename` reaches the FK column `driver_id`.
+#
+# #345 removed the `instruct.django === nothing && return field_name` gate that used to sit on top.
+# It made this conditional on `Settings.django_prefix`, a **table-naming** option — the same "a naming
+# flag silently switches behaviour on" shape #344 removed from sequence syncing, and worse here,
+# because #345 is precisely the change that stops anyone needing the prefix for naming. Unsetting it
+# turned working Django-style join paths into `UnknownFieldError`s, with nothing in the message
+# pointing at the setting.
+#
+# The prefix was never needed for this to be correct: the `_id` convention lives on the MODEL, which
+# is what the lookups below read. Ungating is additive for a prefix-less connection — every branch
+# below is reached only when the segment resolves to nothing on its own, so a path that worked before
+# still resolves the same way and one that used to throw a few frames later now joins. It is NOT
+# universally additive: see the `related_objects` guard below, which is where the one behaviour change
+# for PREFIXED connections is described.
+#
+# #345 also DELETED the rejection of the explicit `driver_id__forename` spelling that lived here.
+# That was a style rule, not a correctness one — both spellings render identical SQL — and it was
+# only ever enforced for prefixed connections. Making it universal broke `cjoin`, whose key must be
+# in `model.field_names` and is therefore necessarily the `_id` column (`ctes.jl`), and
+# `PormGRow.save()`, which splits a projected key on `__` and looks the prefix up verbatim in
+# `model.fields` — so the short form it recommended raises `KeyError` on the write path. PormG's own
+# `test/integration/test_row_mutation.jl` uses the explicit spelling. There is no spelling that
+# satisfies both paths, which is the tell that the rule was wrong rather than the call sites.
+#
+# `instruct` went with the gate — it was the only thing this function read it for.
+function _resolve_fk_short_form(model::PormGModel, field_name::String)::String
+  # The field exists directly — including the explicit `<fk>_id` form, which resolves to itself.
   # Single O(1) dict lookup replaces the previous O(n) vector scan + dict access.
-  field = get(model.fields, field_name, nothing)
+  haskey(model.fields, field_name) && return field_name
 
-  if field !== nothing
-    # The field exists directly. Reject the explicit "_id" FK form (callers must use the short form).
-    if endswith(field_name, "_id") && hasfield(typeof(field), :to)
-      short_name = field_name[1:end-3]
-      throw(QueryBuildError("In Django-style join paths use '$(short_name)__...' instead of '$(field_name)__...'."))
-    end
-    return field_name
-  end
+  # An EXPLICIT relation claims the name, so the implicit rewrite defers to it (#345).
+  #
+  # `_build_row_join` tries the forward-FK branch on the RESOLVED column and the reverse branch on
+  # the RAW segment, in that order. So rewriting `x` to `x_id` here when `x` is also a reverse
+  # accessor moves the path from one branch to the other: a different table, joined on a different
+  # column, with no error. Take a model with FK `circuit_id` and a child declaring
+  # `related_name = "circuit"` — `circuit__name` means the child, in reverse.
+  #
+  # This is a genuine ambiguity that PormG has to resolve one way, and it resolved it BOTH ways
+  # before #345, depending on a table-naming option: prefix-less connections read the reverse
+  # relation (the gate returned early), prefixed ones read the forward FK (resolution ran). The rule
+  # is now the same for everyone, and it is the one that keeps an author's explicit declaration
+  # authoritative: `related_name = "circuit"` is a name someone chose, while `circuit` -> `circuit_id`
+  # is a convenience this function invents. An invented name must not displace a declared one.
+  #
+  # Do NOT reach for Django's `fields.E302` to argue the clash is already ill-formed — it is not, for
+  # PormG. E302 compares a reverse accessor against the target's FIELD names, and a Django FK spelled
+  # `driver` IS the field `driver`, so it collides. A PormG-native model declares that FK as
+  # `driver_id`, which `driver` does not collide with, so the model set is perfectly legal here.
+  # `test/unit/test_complex_queries.jl`'s `FkShortFormModels` is exactly such a set.
+  haskey(model.related_objects, field_name) && return field_name
 
   # Short-form resolution: "driver" → "driver_id" when a FK with that name exists.
   # This only applies to snake_case FK convention (e.g. driver_id).
@@ -178,8 +217,12 @@ end
 # Physical table for a REVERSE join target (#59). The reverse path reaches its target through
 # `related_objects`, which stores the model's LOGICAL name — so the resolved model is the only place
 # a `db_table` can be read from, and it must win. Without an override this reproduces the previous
-# derivation byte for byte, including the `django_prefix` arm: a prefixed deployment's physical table
-# IS `<prefix>_<logical>`, which no model declares as `db_table`.
+# derivation byte for byte, including the `django_prefix` arm.
+#
+# That arm used to be the ONLY way a prefixed deployment's table got spelled, because no generated
+# model declared one. Since #345 the Django importer pins `db_table` on every model it emits, so a
+# regenerated file takes the early return and the arm is dead for it. It stays for the files that
+# have not been regenerated, and for a hand-written model on a prefixed connection.
 function _reverse_join_table(reverse_model::PormGModel, logical_name::AbstractString, django)::String
   Models.model_has_db_table(reverse_model) && return Models.model_table_name(reverse_model)
   return django !== nothing ? string(django, lowercase(logical_name)) : lowercase(logical_name)
@@ -252,7 +295,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
  
   @pormg_debug false
 
-  first_column = _resolve_django_join_field(instruct.object.model, vector[1], instruct)
+  first_column = _resolve_fk_short_form(instruct.object.model, vector[1])
   last_field::Union{Nothing, PormGField} = nothing
   join_path = field[1]
   m2m_inserted = false
@@ -449,7 +492,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     @pormg_debug false
     join_path = join(field[1:length(field)-length(vector) + 1], "__")
     new_object = foreign_table_name isa PormGModel ? foreign_table_name : getfield(foreing_table_module, foreign_table_name |> Symbol)
-    first_column = _resolve_django_join_field(new_object, vector[1], instruct)
+    first_column = _resolve_fk_short_form(new_object, vector[1])
 
     # #27: a non-terminal JSON field reached through FK joins (e.g. `fk__payload__key`) is a value
     # extraction on the joined table's alias, not a further hop. size(vector) > 1 here, so the

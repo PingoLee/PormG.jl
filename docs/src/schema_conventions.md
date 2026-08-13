@@ -28,8 +28,18 @@ Driver = Models.Model("driver", …)   # → table  driver
 ```
 
 The Julia binding stays capitalized (`Result`), while the stored `name` ("result") is what becomes
-the table. To use a different physical table name (e.g. to match an existing database), name the
-model accordingly: `Models.Model("f1_results", …)` → table `f1_results`.
+the table. To point a model at a *different* physical table — an existing database, a Django app's
+`f1_` prefix, a legacy spelling — pin it with [`db_table`](#Pinning-an-explicit-table-name-with-db_table)
+rather than folding the difference into `name`:
+
+```julia
+Result = Models.Model("result", db_table = "f1_results", …)   # → table  f1_results
+```
+
+Naming the model `"f1_results"` outright also reaches that table, but it spends the logical name on a
+physical detail: every accessor, reverse relation and `related_name` is then keyed on `f1_results`,
+and the model can only ever belong to one prefix. `db_table` keeps the two separable, which is what
+lets one models file carry tables from several Django apps at once.
 
 Lowercase is **enforced, not merely conventional**. A name given positionally must already be
 lowercase — `Models.Model("Driver_Profile", …)` raises `ModelDefinitionError` — while a name derived
@@ -116,6 +126,14 @@ exactly as it always has, so no existing schema changes and nothing needs re-mig
     from the models' *logical* names, so pinning `db_table` on a model does not silently rename a join
     table PormG generated for you.
 
+    The join **columns** follow the logical name too (`<model>_<pk field>`), which is why they are
+    unaffected by a `db_table` pin. Against a Django-owned schema that closes most of the gap but not
+    all of it: Django's through table is `<the owning model's table>_<field>`, so the table needs the
+    pin the importer applies, while the columns line up on their own — *provided the primary key is
+    named `id`*. Django always spells its m2m columns `<model_name>_id`; PormG uses the target's
+    actual pk field name, so a model keyed on `codigo` derives `matricula_codigo` where Django wrote
+    `matricula_id`. Pin the field's `source_field` / `target_field` in that case.
+
 ### Generated files: colliding bindings and names are disambiguated
 
 `inspectdb`-style import (`import_models_from_sqlite` / `import_models_from_postgres` /
@@ -149,24 +167,55 @@ loaded — no error, no warning, one model just gone.
 
 ### `django_prefix` interop
 
-A connection may set `django_prefix` in its `connection.yml` (default: unset). It is a convenience
-for working alongside a Django app, whose tables are named `<app_label>_<model>`:
+A connection may set `django_prefix` in its `connection.yml` `config:` block (default: unset). It
+names the Django **app label** whose tables the connection reads, since Django names them
+`<app_label>_<model>`:
 
-- When PormG **generates** a model file (e.g. via the Django importer), it prepends `<prefix>_` to
-  the stored model `name`, so the physical table matches Django's `f1_results`.
+- When PormG **generates** a model file (via the Django importer), the prefix is emitted as the
+  model's [`db_table`](#Pinning-an-explicit-table-name-with-db_table). The positional slot keeps the
+  logical handle:
+
+  ```julia
+  # class Dim_uf(models.Model) imported with django_prefix = "dash"
+  Dim_uf = Models.Model("dim_uf", db_table = "dash_dim_uf", …)
+  ```
+
+  A `Meta.db_table` in the Django source still wins outright, exactly as in Django.
+- Each auto-derived `ManyToManyField` also has its join table pinned to Django's spelling —
+  `<the owning model's table>_<field>`, which is `<prefix>_<model>_<field>` normally but follows
+  `Meta.db_table` when the class declares one. PormG's own derivation reproduces neither.
 - When PormG derives **relationship accessor names**, it strips the prefix so Julia-side names stay
-  clean.
+  clean. With the prefix out of `name`, that strip is a no-op — the name it would strip from is
+  already clean.
+- It remains the fallback that spells a **physical table** for a reverse-join target that declares no
+  `db_table`. A regenerated file never reaches that fallback (every model carries a `db_table`), but
+  a hand-written model on the same connection still does.
 
-The physical-table rule is unchanged: the table is still `name`, which is always lowercase —
-`django_prefix` only shapes how `name` is generated and how accessors read.
+The physical-table rule is unchanged: the table is `db_table` when set, else `name`.
 
-!!! note "Naming only — it does not switch any behaviour on"
-    That list is exhaustive. In particular, `django_prefix` has **no** effect on PostgreSQL sequence
-    synchronisation: setting it does not enable the repair, and leaving it unset does not disable it.
-    Earlier versions silently did both, so a connection that dropped the prefix also stopped
-    resyncing its `id` sequences and eventually failed inserts with a duplicate-key error. Sequence
-    repair is now decided by the call site — see [Sequence synchronisation](#Sequence-synchronisation)
-    below — never by `django_prefix`.
+!!! note "Why the prefix is no longer fused into `name`"
+    `django_prefix` is one value per *connection*, so it could only ever express one app label. A
+    real Django project splits models across `core_`, `access_` and `imports_` at once, and no value
+    of a single field covers three. Moving the prefix to per-model `db_table` is what lets one models
+    file — which is what `makemigrations` and `migrate` operate on, one per database — carry every
+    app in the project.
+
+    Files generated before this keep working untouched: `Models.Model("dash_dim_uf", …)` still means
+    the table `dash_dim_uf`. The new spelling only appears when you regenerate.
+
+!!! note "What `django_prefix` does and does not switch on"
+    The list above is exhaustive for *naming*. Two carve-outs worth knowing:
+
+    - It has **no** effect on PostgreSQL sequence synchronisation. Setting it does not enable the
+      repair and leaving it unset does not disable it; earlier versions silently did both, so a
+      connection that dropped the prefix also stopped resyncing its `id` sequences and eventually
+      failed inserts with a duplicate-key error. Sequence repair is decided by the call site — see
+      [Sequence synchronisation](#Sequence-synchronisation) below — never by `django_prefix`.
+    - It has **no** effect on Django-style short-form join paths. `filter("driver__forename" => …)`
+      resolves to the FK column `driver_id` on every connection. Earlier versions gated that on the
+      prefix, so unsetting it turned a working join into an `UnknownFieldError` — which mattered the
+      moment the prefix stopped being needed for naming. The explicit `"driver_id__forename"`
+      spelling also works everywhere and renders the same join; use whichever reads better.
 
 ## Sequence synchronisation
 
@@ -416,8 +465,9 @@ CREATE TABLE IF NOT EXISTS result (
 
 | Convention | Rule (final) |
 | :--- | :--- |
-| Table name | `model.name` verbatim — no pluralization. The name is always lowercase: enforced at declaration for a positional name, derived lowercase from the Julia binding otherwise |
-| `django_prefix` | optional Django-interop prefix; shapes generated `name`/accessors, not the physical-table rule |
+| Table name | `db_table` when set, else `model.name` verbatim — no pluralization. The name is always lowercase: enforced at declaration for a positional name, derived lowercase from the Julia binding otherwise |
+| `db_table` | authoritative: pins a model to a differently-named (or mixed-case) physical table (default: table == `model.name`). The table-level mirror of `db_column` |
+| `django_prefix` | optional Django app label; the importer emits it as `db_table`, and accessors strip it. Naming only — it gates neither sequence syncing nor short-form join paths |
 | Primary key | explicit `IDField` on native models; no implicit `id` (importer auto-adds `id`) |
 | FK column | declared field name, verbatim (case preserved), or `db_column` when set — no `_id` suffix (importer adds `_id`) |
 | `db_column` | authoritative: maps a field to a differently-named column (default: column == field name) |

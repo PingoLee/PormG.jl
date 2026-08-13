@@ -368,6 +368,61 @@ DbtPlain.connect_key = "db_table_mock"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # #345: `Model_to_str` under a `django_prefix`, at the level below the importer.
+  #
+  # Two callers, two meanings of `model.name`, and they must not be confused:
+  #   * the Django importer (`name_is_physical_table = false`) — `model.name` is a Python CLASS name,
+  #     so the physical table is `<prefix>_<lowercased name>` and that belongs in `db_table`;
+  #   * `inspectdb` (`name_is_physical_table = true`) — `model.name` IS the live table, already
+  #     carrying the prefix, so prepending it again produced `dash_dash_…`. Live defect before #345,
+  #     unnoticed only because no fixture in the repo configures a prefix.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Model_to_str puts a django_prefix in db_table, never in the positional name (#345)" begin
+    prefixed = PormG.Configuration.Settings(connections = MockPostgresDbTable(), change_data = true,
+                                            django_prefix = "dash")
+    rmod = Module(:DbtPrefixRoundTripScratch)
+    Base.eval(rmod, :(using PormG))
+    Base.eval(rmod, :(const Models = PormG.Models))
+
+    # --- importer path: model.name is a class name ---
+    klass = Model("Dim_uf", Dict{String, PormG.PormGField}("id" => IDField()))
+    gen = Model_to_str(klass, prefixed)
+    @test occursin("Models.Model(\"dim_uf\", db_table = \"dash_dim_uf\"", gen)
+    @test !occursin("Models.Model(\"dash_dim_uf\"", gen)     # prefix out of the positional slot
+    @test occursin("Dim_uf = Models.Model(", gen)            # binding is the class name, untouched
+    reloaded = Base.eval(rmod, Meta.parse(gen))
+    @test model_table_name(reloaded) == "dash_dim_uf"
+    @test reloaded.name == "dim_uf"
+
+    # --- inspectdb path: model.name IS the physical table, already prefixed ---
+    live = Model("dash_dim_uf", Dict{String, PormG.PormGField}("id" => IDField()))
+    igen = Model_to_str(live, prefixed; name_is_physical_table = true)
+    @test occursin("Models.Model(\"dash_dim_uf\"", igen)
+    @test !occursin("dash_dash_dim_uf", igen)                # the double-prefix regression
+    ireloaded = Base.eval(rmod, Meta.parse(igen))
+    @test model_table_name(ireloaded) == "dash_dim_uf"
+
+    # A mixed-case live table still pins its own spelling under a prefix. Before #345 the
+    # `!django_prefix` clause on `pin_introspected` suppressed the pin outright, so `inspectdb`
+    # generated a declaration addressing a table that does not exist.
+    mixed = Model("Dash_Dim_Uf", Dict{String, PormG.PormGField}("id" => IDField()))
+    mgen = Model_to_str(mixed, prefixed; name_is_physical_table = true)
+    @test occursin("db_table = \"Dash_Dim_Uf\"", mgen)
+    mreloaded = Base.eval(rmod, Meta.parse(mgen))
+    @test model_table_name(mreloaded) == "Dash_Dim_Uf"
+
+    # `Meta.db_table` is absolute in Django and stays absolute here — the prefix never composes
+    # with it, in either direction. Built through the Dict constructor + `_apply_db_table!`, which is
+    # the importer's own path: the kwargs constructor would reject the CLASS-shaped positional name
+    # via the #300 lowercase guard, which the importer deliberately does not go through.
+    pinned = Model("Matricula", Dict{String, PormG.PormGField}("id" => IDField()))
+    PormG.Models._apply_db_table!(pinned, "rh_matricula_legado")
+    pgen = Model_to_str(pinned, prefixed)
+    @test occursin("Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"", pgen)
+    @test !occursin("dash_", pgen)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # `db_table` is an IDENTIFIER, so it is quoted rather than bound as a parameter — and it is
   # deliberately not shape-validated, so an embedded `"` must be escaped or it closes the quoted
   # identifier early and the rest of the value becomes SQL. Asserted across every DDL renderer that

@@ -405,7 +405,11 @@ function build(object::SQLObject;
     table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
     alias=get_alias(table_alias),
     connection=connection,
-    django=settings.django_prefix === nothing ? nothing : settings.django_prefix * "_", # TODO, remover
+    # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the
+    # absence of one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree
+    # about the same connection. With `django_prefix: ''` the old spelling produced `django == "_"`,
+    # so the reverse-join table fallback below prefixed every unpinned table with an underscore.
+    django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
     parameters=parameters,
     outer=outer,
   )

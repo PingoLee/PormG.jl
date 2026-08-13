@@ -62,7 +62,7 @@ ResultDjangoModel.connect_key = "django_test"
 ResultDjangoModel._module = Main
 
 # For multi-hop testing: ConstrResult → result_id (FK→Result) → driver_id (FK→Driver) → forename.
-# This exercises the while-loop call site of _resolve_django_join_field.
+# This exercises the while-loop call site of _resolve_fk_short_form.
 ConstructorDjangoModel = Model("constructor",
   id=IDField(),
   name=CharField()
@@ -89,6 +89,26 @@ ResultCamelDjangoModel = Model("result_camel",
 )
 ResultCamelDjangoModel.connect_key = "django_test"
 ResultCamelDjangoModel._module = Main
+
+# #345: the same `<x>_id` FK convention on a connection with NO django_prefix. Before #345,
+# `_resolve_fk_short_form` returned immediately when `instruct.django === nothing`, so short-form
+# join paths were switched on by a TABLE-NAMING option — the shape #344 removed from sequence
+# syncing. #345 is what makes the prefix unnecessary for naming, so anyone who unset it silently
+# lost Django-style join paths. These fixtures reuse "default" (no prefix) deliberately.
+DriverNoPrefixModel = Model("np_drivers",
+  id=IDField(),
+  forename=CharField()
+)
+DriverNoPrefixModel.connect_key = "default"
+DriverNoPrefixModel._module = Main
+
+ResultNoPrefixModel = Model("np_results",
+  id=IDField(),
+  driver_id=ForeignKey(DriverNoPrefixModel, pk_field="id"),
+  points=IntegerField(null=true)
+)
+ResultNoPrefixModel.connect_key = "default"
+ResultNoPrefixModel._module = Main
 
 @testset "Complex Query Coverage" begin
 
@@ -161,7 +181,7 @@ ResultCamelDjangoModel._module = Main
 
     # ---- 3b-1: Short form via values() ----
     # Django convention: caller writes "driver__forename", not "driver_id__forename".
-    # _resolve_django_join_field maps the logical name "driver" → physical FK column "driver_id".
+    # _resolve_fk_short_form maps the logical name "driver" → physical FK column "driver_id".
     q_short = ResultDjangoModel.objects
     q_short.values("driver__forename")
     res_short = q_short.list(show_query=:dict)
@@ -172,20 +192,22 @@ ResultCamelDjangoModel._module = Main
     @test contains(res_short[:sql_text], "forename")
     @test !contains(res_short[:sql_text], "driver_id_id")  # must not double-suffix
 
-    # ---- 3b-2: Explicit _id form via values() must throw ----
-    # "driver_id__forename" is rejected because "driver_id" is the raw FK column name.
-    # Callers must use the short logical form "driver__forename".
+    # ---- 3b-2: the explicit _id form is ACCEPTED and renders the same join (#345) ----
+    # This used to throw, telling the caller to write "driver__forename" instead. The rejection was a
+    # style rule with no correctness content — both spellings name the same FK and produce identical
+    # SQL — and it was enforced only when `django_prefix` was set. Universalising it broke `cjoin`
+    # (whose key must be in `model.field_names`, hence necessarily `driver_id`) and `PormGRow.save()`
+    # (which splits a projected key on `__` and looks `driver` up in `model.fields` → KeyError). With
+    # no spelling satisfying both paths, the rule was removed rather than the call sites rewritten.
     q_explicit = ResultDjangoModel.objects
     q_explicit.values("driver_id__forename")
-    err_values = try
-      q_explicit.list(show_query=:dict)
-      nothing
-    catch e
-      e
-    end
-    @test err_values isa PormGError
-    @test contains(sprint(showerror, err_values), "driver__...")
-    @test contains(sprint(showerror, err_values), "driver_id__...")
+    res_explicit = q_explicit.list(show_query=:dict)
+
+    @test res_explicit isa Dict
+    @test contains(res_explicit[:sql_text], "INNER JOIN")
+    @test contains(res_explicit[:sql_text], "driver_id")
+    @test contains(res_explicit[:sql_text], "forename")
+    @test !contains(res_explicit[:sql_text], "driver_id_id")   # must not double-suffix
 
     # ---- 3b-3: Short form via filter() ----
     # The same resolution must happen in the WHERE clause path, not just SELECT.
@@ -200,18 +222,21 @@ ResultCamelDjangoModel._module = Main
     @test contains(res_filter[:sql_text], "driver_id")  # ON clause uses the physical column
     @test res_filter[:parameters] == ["Lewis"]
 
-    # ---- 3b-4: Explicit _id form via filter() must also throw ----
-    # Ensures the guard is active on the filter path, not just the values path.
-    q_filter_bad = ResultDjangoModel.objects
-    q_filter_bad.filter("driver_id__forename" => "Lewis")
-    err_filter = try
-      q_filter_bad.list(show_query=:dict)
-      nothing
-    catch e
-      e
-    end
-    @test err_filter isa PormGError
-    @test contains(sprint(showerror, err_filter), "driver__...")
+    # ---- 3b-4: the explicit _id form is accepted on the filter path too (#345) ----
+    # Both spellings must agree everywhere, not just in values() — the two paths reach
+    # `_resolve_fk_short_form` through different call sites.
+    q_filter_explicit = ResultDjangoModel.objects
+    q_filter_explicit.filter("driver_id__forename" => "Lewis")
+    res_filter_explicit = q_filter_explicit.list(show_query=:dict)
+
+    @test contains(res_filter_explicit[:sql_text], "INNER JOIN")
+    @test contains(res_filter_explicit[:sql_text], "driver_id")
+    @test res_filter_explicit[:parameters] == ["Lewis"]
+
+    # The two spellings are interchangeable: same SQL, byte for byte.
+    q_short_cmp = ResultDjangoModel.objects
+    q_short_cmp.filter("driver__forename" => "Lewis")
+    @test q_short_cmp.list(show_query=:dict)[:sql_text] == res_filter_explicit[:sql_text]
 
     # ---- 3b-5: Multi-hop join (tests the while-loop call site) ----
     # ConstrResult → result_id (FK→Result) → driver_id (FK→Driver) → forename.
@@ -239,6 +264,57 @@ ResultCamelDjangoModel._module = Main
     @test contains(res_camel[:sql_text], "INNER JOIN")
     @test contains(res_camel[:sql_text], "driverid")   # full camelCase field name in ON clause
     @test contains(res_camel[:sql_text], "forename")
+  end
+
+  # ===== Section 3c: the same spellings WITHOUT a django_prefix (#345) =====
+  # The prefix-free twin of 3b above. `_resolve_fk_short_form` used to return immediately when
+  # `instruct.django === nothing`, so on a connection with no prefix 3c-1 raised UnknownFieldError.
+  # 3c-2 is a different kind of assertion: it passes on `main` too, and guards against the rejection
+  # being re-added rather than against the old gate.
+  @testset "Django Join Syntax Works Without a Prefix (#345)" begin
+
+    # ---- 3c-1: short form resolves with django_prefix === nothing ----
+    # `np_results` has no field `driver`; the FK is `driver_id`. Ungating this is additive only
+    # because resolution now defers to anything that already claims the raw name — see the
+    # reverse-accessor testset at the end of this file, which is what makes that true.
+    q_short = ResultNoPrefixModel.objects
+    q_short.values("driver__forename")
+    res_short = q_short.list(show_query=:dict)
+
+    @test res_short isa Dict
+    @test contains(res_short[:sql_text], "INNER JOIN")
+    @test contains(res_short[:sql_text], "driver_id")
+    @test contains(res_short[:sql_text], "forename")
+    @test !contains(res_short[:sql_text], "driver_id_id")   # must not double-suffix
+
+    # ---- 3c-2: the explicit _id form keeps working, and renders the SAME join ----
+    # Ungating resolution must not cost anyone the spelling they already use. `cjoin` can only ever
+    # name the `_id` column (its key must be in `model.field_names`) and `PormGRow.save()` resolves a
+    # projected key by splitting on `__` and looking the prefix up in `model.fields` — so the explicit
+    # form is load-bearing, not merely tolerated. PormG's own `test/integration/test_row_mutation.jl`
+    # writes `required_parent_id__label` against a connection with no prefix.
+    q_explicit = ResultNoPrefixModel.objects
+    q_explicit.values("driver_id__forename")
+    res_explicit = q_explicit.list(show_query=:dict)
+
+    @test res_explicit isa Dict
+    # The JOIN is identical; only the projection ALIAS differs, because a result column is keyed by
+    # the path the caller wrote. Comparing whole SQL would assert the wrong thing.
+    join_of(sql) = sql[findfirst("INNER JOIN", sql).start:end]
+    @test join_of(res_explicit[:sql_text]) == join_of(res_short[:sql_text])
+    @test contains(res_explicit[:sql_text], "as \"driver_id__forename\"")
+    @test contains(res_short[:sql_text], "as \"driver__forename\"")
+
+    # ---- 3c-3: the filter() path too, not just values() ----
+    q_filter = ResultNoPrefixModel.objects
+    q_filter.filter("driver__forename" => "Lewis")
+    res_filter = q_filter.list(show_query=:dict)
+
+    @test contains(res_filter[:sql_text], "INNER JOIN")
+    @test contains(res_filter[:sql_text], "driver_id")
+    @test res_filter[:parameters] == ["Lewis"]
+
+
   end
 
   # ===== Section 4: Multiple Filters =====
@@ -516,3 +592,200 @@ ResultCamelDjangoModel._module = Main
 
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #345: short-form resolution must defer to a relation that already claims the name
+#
+# `_build_row_join` matches the forward-FK branch on the RESOLVED column but the
+# reverse branch on the RAW segment, in that order. So rewriting `x` -> `x_id`
+# unconditionally moves a path that reached the reverse branch onto the forward
+# one: a different table, joined on a different column, with no error and no
+# warning. Needs a real `set_models` run, because the collision is with
+# `related_objects`, which only registration populates.
+# ─────────────────────────────────────────────────────────────────────────────
+PormG.config["fkshort_mock"] = PormG.Configuration.Settings(
+  connections = MockPostgres(), change_data = true, db_def_folder = "fkshort_mock")
+
+module FkShortFormModels
+import PormG
+import PormG.Models
+
+Fkscircuit = Models.Model("fkscircuit", id = Models.IDField(), name = Models.CharField())
+
+# Race carries a forward FK spelled `circuit_id`...
+Race = Models.Model("fks_race",
+  id = Models.IDField(),
+  year = Models.IntegerField(),
+  circuit_id = Models.ForeignKey(Fkscircuit, pk_field = "id"))
+
+# ...and Lap claims the reverse accessor "circuit" on Race. This model set is LEGAL — do not reach
+# for Django's fields.E302 to call it ill-formed. E302 compares a reverse accessor against the
+# target's FIELD names, and a Django FK spelled `circuit` IS the field `circuit`, so it collides
+# there. PormG declares that FK as `circuit_id`, which `circuit` does not collide with. The clash is
+# only between the reverse name and the SHORT FORM the resolver would invent, which is exactly why
+# the resolver must defer rather than silently pick a side.
+Lap = Models.Model("fks_lap",
+  id = Models.IDField(),
+  name = Models.CharField(),
+  race_id = Models.ForeignKey(Race, pk_field = "id", related_name = "circuit"))
+
+PormG.Models.set_models(@__MODULE__, "fkshort_mock")
+end
+
+@testset "Short-form FK resolution defers to an existing reverse accessor (#345)" begin
+  FKS = FkShortFormModels
+  @test haskey(FKS.Race.related_objects, "circuit")   # the collision exists
+  @test haskey(FKS.Race.fields, "circuit_id")
+
+  q = FKS.Race.objects
+  q.values("circuit__name")
+  sql = q.list(show_query=:dict)[:sql_text]
+
+  # The REVERSE reading wins, unchanged from before the gate was lifted: join the child on the
+  # parent's PK. Resolving to `circuit_id` would join fkscircuit on "Tb"."circuit_id" instead —
+  # a working query silently reading a different table.
+  @test contains(sql, "fks_lap")
+  @test contains(sql, "\"Tb\".\"id\" = \"Tb_1\".\"race_id\"")
+  # The table is `fkscircuit`, with no underscore — spelling this `fks_circuit` would make the
+  # negative assertion pass no matter which branch the resolver took.
+  @test !contains(sql, "fkscircuit")
+
+  # The short form still resolves where nothing else claims the name: `fks_lap` has no reverse
+  # accessor "race", so `race__year` reaches the FK column `race_id`.
+  q2 = FKS.Lap.objects
+  q2.values("race__year")
+  sql2 = q2.list(show_query=:dict)[:sql_text]
+  @test contains(sql2, "fks_race")
+  @test contains(sql2, "\"Tb\".\"race_id\"")
+
+  # `cjoin` can only ever name the `_id` column — `_cjoin` requires its key to be in
+  # `model.field_names`, and for an FK that is `circuit_id`. Rejecting that spelling at
+  # query-build time left cjoin with no legal key at all, and its own error message recommended
+  # a form it then refused. Guards the whole path end to end.
+  q3 = FKS.Race.objects
+  q3.cjoin("circuit_id" => "Fkscircuit", filters = ["name" => "Monza"], warn = false)
+  q3.values("year")
+  res3 = q3.list(show_query=:dict)
+  @test res3 isa Dict
+  @test contains(res3[:sql_text], "fkscircuit")
+  @test res3[:parameters] == ["Monza"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #345: the reverse-accessor rule is the SAME on a prefixed connection
+#
+# The rule this pins is a real behaviour change, not a restoration. Before #345
+# the clash resolved BOTH ways depending on `django_prefix`: prefix-less
+# connections read the reverse relation (the gate returned early), prefixed ones
+# read the forward FK (resolution ran). A prefixed app therefore changes here.
+# The rule chosen is that an author's explicit `related_name` outranks a name
+# this ORM invents — asserted for the prefixed direction so nobody "fixes" the
+# guard back into a prefix-conditional one.
+# ─────────────────────────────────────────────────────────────────────────────
+PormG.config["fkshort_prefixed"] = PormG.Configuration.Settings(
+  connections = MockPostgres(), change_data = true,
+  db_def_folder = "fkshort_prefixed", django_prefix = "dash")
+
+module FkShortFormPrefixedModels
+import PormG
+import PormG.Models
+
+Fkspcircuit = Models.Model("fkspcircuit", id = Models.IDField(), name = Models.CharField())
+
+Race = Models.Model("fksp_race",
+  id = Models.IDField(),
+  year = Models.IntegerField(),
+  circuit_id = Models.ForeignKey(Fkspcircuit, pk_field = "id"))
+
+Lap = Models.Model("fksp_lap",
+  id = Models.IDField(),
+  name = Models.CharField(),
+  race_id = Models.ForeignKey(Race, pk_field = "id", related_name = "circuit"))
+
+PormG.Models.set_models(@__MODULE__, "fkshort_prefixed")
+end
+
+@testset "The reverse-accessor rule is prefix-independent (#345)" begin
+  FKSP = FkShortFormPrefixedModels
+  @test haskey(FKSP.Race.related_objects, "circuit")
+  @test haskey(FKSP.Race.fields, "circuit_id")
+
+  q = FKSP.Race.objects
+  q.values("circuit__name")
+  sql = q.list(show_query=:dict)[:sql_text]
+
+  # Reverse wins here too. On `main` this connection resolved `circuit` -> `circuit_id` and joined
+  # the parent forward, so this assertion is the one that would go red if the guard were made
+  # conditional on the prefix again — in either direction.
+  @test contains(sql, "fksp_lap")
+  @test contains(sql, "\"Tb\".\"id\" = \"Tb_1\".\"race_id\"")
+  @test !contains(sql, "fkspcircuit")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #345: an EMPTY django_prefix is the absence of one, not a prefix of ""
+#
+# `Settings` is populated generically from connection.yml's `config:` block
+# (`hasfield` -> `setfield!`), so `django_prefix: ''` reaches the field. Every
+# consumer composes "$(prefix)_", so treating "" as set derives `_dim_uf` for a
+# table named `dim_uf`. Before #345 that at least failed loudly — the generated
+# `Model("_dim_uf", …)` was rejected at include time — but with the prefix moved
+# into `db_table` the file would load and every query would read `_dim_uf`.
+# ─────────────────────────────────────────────────────────────────────────────
+const EMPTY_PREFIX_SETTINGS = PormG.Configuration.Settings(
+  connections = MockPostgres(), change_data = true,
+  django_prefix = "", db_def_folder = "empty_prefix_q")
+PormG.config["empty_prefix_q"] = EMPTY_PREFIX_SETTINGS
+
+@testset "An empty django_prefix is treated as unset (#345)" begin
+  empty_prefix = EMPTY_PREFIX_SETTINGS
+  unset_prefix = PormG.Configuration.Settings(
+    connections = MockPostgres(), change_data = true, db_def_folder = "empty_prefix_q")
+
+  m = PormG.Models.Model("Dim_uf", Dict{String, PormG.PormGField}("id" => PormG.Models.IDField()))
+
+  # No db_table pinned, and no leading underscore anywhere.
+  gen = PormG.Models.Model_to_str(m, empty_prefix)
+  @test !contains(gen, "db_table")
+  @test contains(gen, "Models.Model(\"dim_uf\"")
+  @test !contains(gen, "_dim_uf")
+
+  # Byte-identical to the genuinely-unset case — that is the whole contract.
+  @test gen == PormG.Models.Model_to_str(m, unset_prefix)
+
+  # `get_model_name` must not strip a bare "_" from every logical name either.
+  named = PormG.Models.Model("dim_uf", Dict{String, PormG.PormGField}("id" => PormG.Models.IDField()))
+  @test PormG.Models.get_model_name(named, empty_prefix, false) == "dim_uf"
+end
+
+# The QUERY side must agree with the render side. `build_query.jl` stashes the prefix on
+# `instruct.django` as `"$(prefix)_"`, which the reverse-join fallback prepends to any table not
+# pinned by `db_table` — so an empty prefix there means every such table is looked up with a leading
+# underscore. A reverse join is the shortest path to observing it. The config this module registers
+# against is `EMPTY_PREFIX_SETTINGS` above, at top level: `set_models` runs at MODULE LOAD time, so
+# the registration cannot live inside a @testset body without making the file's load order depend on
+# a test having run.
+module EmptyPrefixReverseModels
+import PormG
+import PormG.Models
+
+Epteam = Models.Model("epteam", id = Models.IDField(), name = Models.CharField())
+Epdriver = Models.Model("epdriver",
+  id = Models.IDField(),
+  surname = Models.CharField(),
+  team_id = Models.ForeignKey(Epteam, pk_field = "id", related_name = "drivers"))
+
+PormG.Models.set_models(@__MODULE__, "empty_prefix_q")
+end
+
+@testset "An empty django_prefix does not underscore-prefix reverse join tables (#345)" begin
+  q = EmptyPrefixReverseModels.Epteam.objects
+  q.values("drivers__surname")
+  sql = q.list(show_query=:dict)[:sql_text]
+
+  # `epdriver` declares no db_table, so the reverse join takes the prefix fallback. With `""` read
+  # as a real prefix that fallback emits `_epdriver`, and the query targets a table that does not
+  # exist — silently, since nothing validates a table name at build time.
+  @test contains(sql, "epdriver")
+  @test !contains(sql, "_epdriver")
+end

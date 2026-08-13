@@ -21,6 +21,8 @@ import_models_from_django(
     force_replace::Bool = false,
     ignore_table::Vector{String} = postgres_ignore_table,
     file::String = "automatic_models.jl",
+    output_path::Union{Nothing, String} = nothing,
+    django_prefix::Union{Nothing, String, Missing} = missing,
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
 )
@@ -104,6 +106,86 @@ import_models_from_django("/path/to/your/models.py")
   import_models_from_django(content, parameters_ignore=["help_text", "verbose_name"])
   ```
 
+- **`output_path::Union{Nothing, String}`**: Directory to write the generated file into, overriding the
+  resolved config's `db_def_folder` (default: `nothing`). Use it to stage a *foreign* Django app's
+  `models.py` next to its own copy while still resolving `db` for the connection Settings.
+
+- **`django_prefix::Union{Nothing, String, Missing}`**: The Django **app label** whose tables are being
+  imported (default: `missing`). `missing` inherits the resolved config's `django_prefix`; `nothing`
+  imports unprefixed; a `String` forces that label. See [The app prefix](#The-app-prefix) below.
+
+  ```julia
+  # A foreign app staged in db_gal/, written to its own folder with its own label:
+  import_models_from_django("db_gal/models.py"; db="db", file="gal_models.jl",
+                            output_path="db_gal", django_prefix="estoque", force_replace=true)
+  ```
+
+Neither override mutates the shared `db` config: when either is set, a throwaway render-only
+`Settings` (no database connection) carries them.
+
+## The app prefix
+
+Django names a model's table `<app_label>_<lowercased class name>`. PormG carries that prefix as the
+model's **`db_table`**, leaving the positional slot as the logical handle:
+
+```python
+# server/dash/models.py
+class Dim_uf(models.Model):
+    nome = models.CharField(max_length=50)
+
+class DimIbge(models.Model):
+    cidade = models.CharField(max_length=10)
+    ufs = models.ManyToManyField(Dim_uf)
+```
+
+imported with `django_prefix = "dash"` becomes:
+
+```julia
+Dim_uf = Models.Model("dim_uf", db_table = "dash_dim_uf",
+  id = Models.IDField(),
+  nome = Models.CharField(max_length=50))
+
+DimIbge = Models.Model("dimibge", db_table = "dash_dimibge",
+  id = Models.IDField(),
+  cidade = Models.CharField(max_length=10),
+  ufs = Models.ManyToManyField("Dim_uf", db_table="dash_dimibge_ufs"))
+```
+
+Three things to read off that output:
+
+- **The positional name is `class.__name__.lower()`** — Django's own derivation. `DimIbge` becomes
+  `"dimibge"`, with no underscore inserted, because that is what Django's table is called. Whichever
+  class-naming convention the project uses, the derived name matches.
+- **The Julia binding is the class name, unchanged.** It never carried the prefix, so `M.Dim_uf` in a
+  consuming app is unaffected.
+- **An auto-derived `ManyToManyField` gets its join table pinned** to Django's spelling, which is
+  `<the owning model's table>_<field>` — so `dash_dimibge_ufs` here, but
+  `rh_matricula_legado_setores` for a class declaring `Meta.db_table = "rh_matricula_legado"`.
+  PormG's own derivation is `<logical model>_<field>`, which addresses a table Django never created.
+  A `db_table=` written on the field is left alone, and a field with `through=` is skipped entirely —
+  Django ignores `db_table` there, because the join table *is* the through model's table.
+
+Without a `django_prefix` nothing is pinned: no app label is known, so the models import unprefixed
+and no `db_table` is emitted.
+
+!!! note "Why `db_table` rather than the model name"
+    `django_prefix` is one value per *connection*, so it can only ever express one app label. A real
+    Django project splits models across `core_`, `access_` and `imports_` at once — and PormG is
+    structurally one models file per **database**, not per app. Carrying the prefix per model is what
+    lets a single generated file hold every app in the project.
+
+!!! note "Keep `django_prefix` set even though the names no longer need it"
+    Two things still read it: relationship accessor names strip it, and it is the fallback that spells
+    the physical table of a reverse-join target declaring no `db_table`. Both become no-ops once every
+    model in the file carries a `db_table`, but a hand-written model on the same connection still
+    relies on the fallback, so there is no reason to unset it. It does **not** gate Django-style
+    short-form join paths (`"driver__forename"`) — those work on every connection.
+
+!!! note "Existing generated files keep working"
+    The older spelling, `Models.Model("dash_dim_uf", …)`, still addresses the table `dash_dim_uf`.
+    The new form only appears when you regenerate — see `UPGRADING.md` for the one case that forces
+    an edit.
+
 ## Supported Django Fields
 
 The function supports conversion of the following Django field types:
@@ -156,7 +238,7 @@ Django parameters are automatically converted to PormG equivalents:
 
 | Django `Meta` option | Outcome | Notes |
 |----------------------|---------|-------|
-| `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The positional slot keeps the derived logical name (`"matricula"`, or `"dash_matricula"` under a prefix). |
+| `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The positional slot keeps the derived logical name (`"matricula"`) either way — see [The app prefix](#The-app-prefix). |
 | `unique_together = ('a', 'b')` | **imported** as `constraints = [Models.UniqueConstraint(fields = ("a", "b"))]` | A tuple-of-tuples (several composite keys) becomes one `UniqueConstraint` per group. |
 | `constraints = [UniqueConstraint(fields=…, name=…)]` | **imported** | The modern spelling. See the acceptance rule below — it is narrower than Django's. |
 | `constraints = [CheckConstraint(…)]` | **rejected**, reported | No PormG equivalent. |

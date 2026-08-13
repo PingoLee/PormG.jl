@@ -314,3 +314,8 @@ function PROTECT end
 function SET_NULL end
 function SET_DEFAULT end
 function DO_NOTHING end
+
+# Names a generated models file's own boilerplate already binds (#338) — the module import plus the
+# six on_delete handlers above. Single source for Generator.jl's `import PormG.Models: ...` line and
+# the cross-model binding-collision dedup seed in Models.jl/importers.jl, so the two cannot drift.
+const GENERATED_MODULE_RESERVED_BINDINGS = ["Models", "RESTRICT", "CASCADE", "SET_NULL", "SET_DEFAULT", "DO_NOTHING", "PROTECT"]

@@ -316,4 +316,84 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     @test occursin("teams = Models.ManyToManyField(\"Team\")", Model_to_str(ok, MTS_SETTINGS))
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # #338: every test above calls `Model_to_str` ONCE, so its default fresh `taken`/`taken_names`
+  # sets never see a collision. A real importer call site shares ONE pair of sets across every
+  # model it renders into the same generated file — that is what these tests do. Without the fix,
+  # the SECOND `Binding = Models.Model(...)` line silently overwrites the first Julia global when
+  # the generated file is `include`d: no error, no warning, one model just vanishes.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "cross-model binding/name collisions are disambiguated, not silently shadowed (#338)" begin
+
+    # "driver profile" sanitizes to `Driver_profile`; "driver_profile" is already legal and
+    # `uppercasefirst`s to the SAME string.
+    @testset "driver profile / driver_profile" begin
+      taken_bindings = Set{String}()
+      taken_names = Set{String}()
+      m1 = Model("driver profile", Dict{String, PormGField}("id" => IDField()))
+      m2 = Model("driver_profile", Dict{String, PormGField}("id" => IDField()))
+      g1 = Model_to_str(m1, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      g2 = Model_to_str(m2, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      b1 = first(split(g1, " = "))
+      b2 = first(split(g2, " = "))
+      @test b1 == "Driver_profile"
+      @test b2 != b1 && Base.isidentifier(b2)   # the whole point — no shared binding
+      r1 = _reload(g1)
+      r2 = _reload(g2)
+      @test PormG.model_table_name(r1) == "driver profile"
+      @test PormG.model_table_name(r2) == "driver_profile"
+      # Neither shadowed the other — both bindings independently resolve to their own model.
+      @test getfield(MTS_MOD, Symbol(b1)).name == "driver profile"
+      @test getfield(MTS_MOD, Symbol(b2)).name == "driver_profile"
+    end
+
+    # A live table literally named "models" collides with the generated file's OWN
+    # `import PormG.Models` line, not with a sibling model — the seed, not another call, catches it.
+    @testset "a table named models collides with the generated import" begin
+      taken_bindings = Set{String}(PormG.GENERATED_MODULE_RESERVED_BINDINGS)
+      taken_names = Set{String}()
+      m = Model("models", Dict{String, PormGField}("id" => IDField()))
+      generated = Model_to_str(m, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      binding = first(split(generated, " = "))
+      @test binding == "Models2"          # not "Models" — would shadow `import PormG.Models`
+      @test PormG.model_table_name(_reload(generated)) == "models"
+    end
+
+    # All-underscore tables all sanitize to the same positional name "col" — three of them must not
+    # all collapse to one.
+    @testset "an all-underscore trio gets three distinct positional names" begin
+      taken_bindings = Set{String}()
+      taken_names = Set{String}()
+      positions = String[]
+      for tbl in ["_", "__", "___"]
+        m = Model(tbl, Dict{String, PormGField}("id" => IDField()))
+        generated = Model_to_str(m, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+        @test PormG.model_table_name(_reload(generated)) == tbl   # db_table is always pinned on this branch
+        push!(positions, something(match(r"Models\.Model\(\"([^\"]*)\"", generated)).captures[1])
+      end
+      @test length(positions) == length(Set(positions))
+    end
+
+    # THE TRAP: dedup on the positional name must not just invent "driver2" and walk away — that
+    # string can BE the physical table (`model_table_name` falls back to it whenever `db_table` is
+    # unset). A naive unconditional dedup would leave this model loading cleanly while querying a
+    # table that does not exist — worse than the shadowing bug #338 reports. "Driver" is processed
+    # FIRST (mixed-case ⇒ `db_table` already pinned to "Driver", positional slot "driver"); "driver"
+    # is processed SECOND and collides on both the binding ("Driver") and the positional name
+    # ("driver") — it must come out re-pinned, not silently wrong.
+    @testset "positional-name dedup re-pins db_table instead of inventing a nonexistent table" begin
+      taken_bindings = Set{String}()
+      taken_names = Set{String}()
+      m1 = Model("Driver", Dict{String, PormGField}("id" => IDField()))
+      m2 = Model("driver", Dict{String, PormGField}("id" => IDField()))
+      g1 = Model_to_str(m1, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      g2 = Model_to_str(m2, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      @test occursin("Driver = Models.Model(\"driver\"", g1)
+      @test occursin("db_table = \"Driver\"", g1)
+      @test occursin("Driver2 = Models.Model(\"driver2\"", g2)    # binding ALSO collided — suffixed too
+      @test occursin("db_table = \"driver\"", g2)                 # re-pinned to the pre-dedup name
+      @test PormG.model_table_name(_reload(g2)) == "driver"       # NOT "driver2"
+    end
+  end
+
 end

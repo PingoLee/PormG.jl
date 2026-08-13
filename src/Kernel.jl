@@ -345,6 +345,10 @@ export sqlite_type_map, postgres_type_map, sqlite_type_map_reverse, postgres_typ
 # on_delete handlers
 export CASCADE, RESTRICT, PROTECT, SET_NULL, SET_DEFAULT, DO_NOTHING
 
+# Generated-module boilerplate registry (#338) — single source for Generator.jl's `import
+# PormG.Models: ...` line and Model_to_str's per-file binding-collision dedup seed.
+export GENERATED_MODULE_RESERVED_BINDINGS
+
 # `register_ignore_tables!` is exported by constants.jl itself (it is part of the documented
 # downstream-extension surface), so it needs no re-listing here.
 

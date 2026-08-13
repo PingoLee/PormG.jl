@@ -966,6 +966,20 @@ function _julia_field_identifier(column::AbstractString,
   return ident
 end
 
+# Disambiguate `ident` against names already claimed elsewhere in the same generated file (#338),
+# appending a digit — never another underscore, matching `_julia_field_identifier`'s convention.
+# Unlike that function, this has no `raw_keys`-style second concern: a generated file has exactly
+# one binding and one positional name per model, not a set of columns a rename must not steal from.
+function _dedupe_taken(ident::String, taken::Set{String})::String
+  base = ident
+  suffix = 2
+  while ident in taken
+    ident = "$(base)$(suffix)"
+    suffix += 1
+  end
+  return ident
+end
+
 # Physical SQL column for a field given its declared identity `name` (#50). Returns
 # `db_column` when the field carries a non-empty one, else the field name. The
 # default (column == field name) keeps every existing schema unchanged; only fields
@@ -1504,7 +1518,7 @@ end
 Converts a model object to a string representation to create the model.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false)::String
+    Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
 - `settings::PormGSettings`: Connection settings; supplies `django_prefix` and the target output folder.
 - `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
@@ -1518,6 +1532,18 @@ Converts a model object to a string representation to create the model.
   `false` for the Django importer, whose `model.name` is a **Python class name**: there the physical
   table genuinely is the lowercased form, and pinning the class spelling would invent a table that
   does not exist. The two are indistinguishable from the name alone, so the caller states which it has.
+- `taken_bindings::Set{String}=Set{String}()`: Julia bindings already claimed elsewhere in the SAME
+  generated file (#338) — mutated in place: this call's resolved binding is added before returning.
+  Two tables whose names would otherwise render the same binding (e.g. `driver profile` and
+  `driver_profile`) get the second suffixed with a digit instead of silently shadowing the first at
+  `include` time. A caller rendering more than one model into one file must share ONE set across every
+  call; the default fresh set reproduces the old, uncollision-checked behavior for a single call.
+  (Named `taken_bindings`, not `taken` — the latter is already a local inside this function for
+  per-field identifier dedup; a same-named kwarg would silently shadow it.)
+- `taken_names::Set{String}=Set{String}()`: same idea, for the positional name (the first string
+  argument to `Model(...)`) rather than the binding. When dedup changes the name AND nothing already
+  pins `db_table`, the pre-dedup name is pinned as `db_table` so the model still addresses the right
+  table — see the implementation comment at the positional-name computation below.
 
 # Returns
 - `String`: The string representation of the model object. A field whose rendering fails is
@@ -1537,7 +1563,7 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false)::String
+function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
   fields::String = ""
   render_failures::Vector{String} = String[]
   django_prefix::Bool = settings.django_prefix === nothing ? false : true
@@ -1660,6 +1686,13 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   model_var_name = (Base.isidentifier(_plain_var) && !isempty(lstrip(_plain_var, '_'))) ? _plain_var :
     uppercasefirst(_julia_field_identifier(String(model.name), contants_julia,
                                            Set{String}(), Set{String}()))
+  # #338: two tables can independently arrive at the same binding above — via either branch, since
+  # the fast path deliberately bypasses the sanitizer's own dedup. Applied uniformly, AFTER either
+  # path, against the caller's shared `taken_bindings`: the second model in a batch gets a digit
+  # suffix instead of silently overwriting the first model's Julia global when the generated file is
+  # `include`d.
+  model_var_name = _dedupe_taken(model_var_name, taken_bindings)
+  push!(taken_bindings, model_var_name)
   # Round-trip the physical table name as `db_table=` (#59). Two sources, one kwarg:
   #
   #  1. An explicit `db_table` on the model — emitted verbatim so a reload reproduces it.
@@ -1710,6 +1743,23 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
     lowercase(_julia_field_identifier(_lowered, contants_julia, Set{String}(), Set{String}()))
   else
     _lowered
+  end
+  # #338: two tables can independently arrive at the same POSITIONAL name too — not just the
+  # all-underscore case above, but also e.g. `Driver` (pin_introspected, db_table already pinned)
+  # and `driver` (not pin_introspected, db_table_abs still `nothing` above) both lowering to
+  # "driver". Dedup against the caller's shared `taken_names` same as the binding above — but unlike
+  # the binding, this string can BE the physical table (`model_table_name` falls back to it whenever
+  # `db_table` is unset), so a dedup that invents "driver2" with nothing pinning "driver" would leave
+  # the model loading cleanly while querying a table that does not exist — worse than the shadowing
+  # bug this issue is about. So: when dedup actually changes the string AND nothing already pinned
+  # the table (`db_table_abs === nothing`), pin the PRE-dedup name explicitly, the same way
+  # `pin_introspected` already pins one for a leading-underscore/mixed-case name above.
+  _pre_dedupe_name_abs = model_name_abs
+  model_name_abs = _dedupe_taken(model_name_abs, taken_names)
+  push!(taken_names, model_name_abs)
+  if model_name_abs != _pre_dedupe_name_abs && db_table_abs === nothing
+    db_table_abs = _pre_dedupe_name_abs
+    db_table_part = ", db_table = $(format_string(db_table_abs))"
   end
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"

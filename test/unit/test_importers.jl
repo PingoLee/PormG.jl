@@ -90,4 +90,64 @@ end
     end
   end
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # 4. End-to-end regression for #338: two REAL tables in the same database that render to the
+  #    same Julia binding must not have the second silently vanish — pre-fix, the SECOND
+  #    `Binding = Models.Model(...)` line overwrites the first's Julia global when the generated
+  #    file is `include`d, with no error anywhere. Unit coverage for the dedup itself lives in
+  #    test_model_to_str_identifiers.jl; this proves import_models_from_sqlite's loop actually
+  #    shares one taken_bindings/taken_names pair across the whole file, not just that Model_to_str
+  #    supports it.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "colliding table names both survive the generated file (#338)" begin
+    mktempdir() do dir
+      dbfile   = joinpath(dir, "scratch_collision.sqlite")
+      modeldir = joinpath(dir, "generated_models_collision")
+      mkpath(modeldir)
+
+      pool = SQLiteConnectionPool(dbfile; pool_size = 1)
+      # "driver profile" sanitizes to the binding `Driver_profile` — the SAME binding the
+      # already-legal `driver_profile` uppercasefirst's to. (Not `driver`/`Driver`: SQLite table
+      # names are case-insensitive, so that pair can't exist as two tables in one database.)
+      fetch(pool, "CREATE TABLE \"driver profile\" (id INTEGER PRIMARY KEY);")
+      fetch(pool, "CREATE TABLE driver_profile (id INTEGER PRIMARY KEY);")
+
+      key = "importer_collision_test"
+      PormG.config[key] = Configuration.Settings(
+        connections   = pool,
+        db_def_folder = modeldir,
+        change_data   = true,
+      )
+      try
+        PormG.Migrations.import_models_from_sqlite(key)
+
+        outfile = joinpath(modeldir, "automatic_models.jl")
+        @test isfile(outfile)
+        content = read(outfile, String)
+
+        # Both bindings present and DISTINCT in the source text — the whole point of the fix.
+        @test occursin("Driver_profile = Models.Model(", content)
+        @test occursin("Driver_profile2 = Models.Model(", content)
+
+        # And the file actually loads, with BOTH models independently addressable — neither
+        # shadowed the other — each still pointing at its own real physical table.
+        # `Base.invokelatest`: `Base.eval` below bumps the world age (Julia 1.12), so reading the
+        # freshly-defined bindings back in this same closure needs the LATEST world, not the one
+        # captured when the enclosing `mktempdir` do-block was compiled.
+        scratch = Module(:ImporterCollisionScratch338)
+        Base.eval(scratch, :(using PormG))
+        Base.eval(scratch, Meta.parse(content))   # the generated `module automatic_models ... end`
+        Base.invokelatest() do
+          gen_mod = getfield(scratch, :automatic_models)
+          m1 = getfield(gen_mod, Symbol("Driver_profile"))
+          m2 = getfield(gen_mod, Symbol("Driver_profile2"))
+          @test Set([PormG.model_table_name(m1), PormG.model_table_name(m2)]) ==
+                Set(["driver profile", "driver_profile"])
+        end
+      finally
+        delete!(PormG.config, key)
+      end
+    end
+  end
+
 end

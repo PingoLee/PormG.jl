@@ -116,6 +116,37 @@ exactly as it always has, so no existing schema changes and nothing needs re-mig
     from the models' *logical* names, so pinning `db_table` on a model does not silently rename a join
     table PormG generated for you.
 
+### Generated files: colliding bindings and names are disambiguated
+
+`inspectdb`-style import (`import_models_from_sqlite` / `import_models_from_postgres` /
+`import_models_from_django`) derives both the Julia **binding** and — when the positional name would
+otherwise be empty, e.g. an all-underscore table — the **positional name** from the table name. Two
+tables can independently arrive at the same one: `driver profile` sanitizes to the same binding an
+already-legal `driver_profile` also produces; a table literally named `models` collides with the
+generated file's own `import PormG.Models` line.
+
+Within a single generated file, each newly-derived binding and positional name is checked against
+everything already emitted into that file and, on a collision, suffixed with a digit — never another
+underscore, mirroring how a hostile *field* name is disambiguated (see
+[Field Naming Rules](fields.md#Field-Naming-Rules)). Without this, the second colliding
+`Binding = Models.Model(...)` line would silently overwrite the first Julia global when the file is
+loaded — no error, no warning, one model just gone.
+
+!!! note "`db_table` is pinned automatically when disambiguation would otherwise be wrong"
+    The positional name can *be* the physical table (whenever `db_table` is not otherwise set,
+    PormG falls back to it at query time). Suffixing it blindly would leave a model that loads
+    cleanly but queries a table that does not exist — worse than the collision it replaces. So when
+    disambiguating the positional name changes it and nothing already pins `db_table`, PormG pins
+    the original name to `db_table` for you — the same escape valve described above.
+
+!!! note "Residual limitation: `ForeignKey` target resolution"
+    A `ForeignKey`'s `.to` is derived independently, from the live parent table name, and resolved by
+    binding-name lookup alone. If disambiguation suffixes the binding a `.to` was counting on, the
+    reference still resolves — just to whichever sibling kept the un-suffixed binding, not necessarily
+    the table the key originally pointed at. This is not new: before disambiguation existed, every such
+    reference was already ambiguous, since both tables shared one binding. Review a generated file's
+    foreign keys by hand when your schema has tables whose names collide after sanitizing.
+
 ### `django_prefix` interop
 
 A connection may set `django_prefix` in its `connection.yml` (default: unset). It is a convenience

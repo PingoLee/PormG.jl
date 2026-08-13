@@ -1,7 +1,7 @@
 module Generator
 
 import PormG
-import PormG: MODEL_PATH, PormGSettings, DB_PATH
+import PormG: MODEL_PATH, PormGSettings, DB_PATH, GENERATED_MODULE_RESERVED_BINDINGS
 import OrderedCollections: OrderedDict
 
 """
@@ -86,12 +86,16 @@ test:
     nothing
 end
 
-function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::PormGSettings; path::String = MODEL_PATH) :: Nothing 
+function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::PormGSettings; path::String = MODEL_PATH) :: Nothing
+
+  # #338: built from the same list Model_to_str's caller seeds its binding-collision `taken` set
+  # with, so the boilerplate this file actually imports and the collision guard can never drift.
+  reserved_import = join(filter(!=("Models"), GENERATED_MODULE_RESERVED_BINDINGS), ", ")
 
   open(joinpath(path, file), "w") do f
     write(f, """module $(basename(file) |> x -> replace(x, ".jl" => ""))\n
     import PormG.Models
-    import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
+    import PormG.Models: $(reserved_import)
 
     """)
     for table in Instructions
@@ -175,12 +179,14 @@ function create_models_jl(path::String, filename::String = "models.jl")::Nothing
         return nothing
     end
 
+    reserved_import = join(filter(!=("Models"), GENERATED_MODULE_RESERVED_BINDINGS), ", ")
+
     open(models_file, "w") do f
         write(f, """
 module $module_name
 
 import PormG.Models
-import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
+import PormG.Models: $(reserved_import)
 
 # Define your models here
 # Example:

@@ -40,10 +40,28 @@ end
 @testset "db_column: primary key with db_column round-trips (sequence sync)" begin
     M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
     try
-        # Explicit PK value → triggers _update_sequence on the db_column PK column.
+        # Explicit PK value on a row-level write no longer auto-resyncs (#358) — the explicit
+        # resync_sequences() call below is what exercises _update_sequence against the db_column
+        # PK column (proving it targets the PHYSICAL "pk_code" column, not the field name "code").
         created = M.Db_column_pk_scratch.objects.create("code" => 100, "label" => "first")
         @test created[:code] == 100            # returned keyed by the FIELD name
         @test !haskey(created, :pk_code)
+        resync_sequences(M.Db_column_pk_scratch)
+
+        # Prove it here, before the bulk_insert below — bulk_insert runs its own unconditional
+        # resync over the whole table regardless of this call, so an assertion placed only after it
+        # would pass even if resync_sequences did nothing.
+        #
+        # PostgreSQL-discriminating only: `code` is an IDField, which SQLite renders as
+        # AUTOINCREMENT, and SQLite's own AUTOINCREMENT bookkeeping tracks MAX(explicit value,
+        # previous) as a side effect of ANY insert — independent of PormG entirely — so `auto_check
+        # == 101` would hold on db_sl even with the resync_sequences() call above deleted. Real
+        # SQLite regression coverage for resync_sequences() itself (via corrupt-then-repair on an
+        # AUTOINCREMENT column, which SQLite's own bookkeeping can't spontaneously reproduce) lives
+        # in test/unit/test_resync_sequences.jl.
+        auto_check = M.Db_column_pk_scratch.objects.create("label" => "auto-check")
+        @test auto_check[:code] == 101
+        M.Db_column_pk_scratch.objects.filter("code" => 101).delete()
 
         row = M.Db_column_pk_scratch.objects.filter("code" => 100).values("code", "label").first()
         @test row.code == 100

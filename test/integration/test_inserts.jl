@@ -934,11 +934,26 @@ end
         reread = M.Status.objects.filter("statusid" => status_id).values("status").list() |> first
         @test reread[:status] == "Collision"
 
-        # 4. Sequence consistency: after the explicit-pk upsert, a pk-less create() must not collide.
+        # 4. Sequence consistency: row-level writers no longer auto-resync (#358) — an explicit-pk
+        #    upsert like step 1 needs resync_sequences() called explicitly before a pk-less create()
+        #    is safe again. Asserting merely `!= status_id` would pass whether or not the repair ran
+        #    (status_id is a huge constant nowhere near the table's ordinary auto-increment range,
+        #    so any normal auto-generated id already satisfies `!=`) — that is not a real regression
+        #    guard. Asserting the EXACT next value (`status_id + 1`, what resync_sequences sets the
+        #    sequence to) is meaningful on PostgreSQL: without the call, the sequence would still be
+        #    at its ordinary low position from earlier fixture rows.
+        #
+        #    PostgreSQL-discriminating only: `statusid` is an IDField, which SQLite renders as
+        #    AUTOINCREMENT, and SQLite's own bookkeeping already tracks MAX(explicit value,
+        #    previous) as a side effect of step 1's insert, independent of PormG — so on db_sl this
+        #    assertion holds even with the resync_sequences() call above deleted. Real SQLite
+        #    regression coverage for resync_sequences() itself lives in
+        #    test/unit/test_resync_sequences.jl (via corrupt-then-repair on an AUTOINCREMENT
+        #    column, which SQLite's own bookkeeping can't spontaneously reproduce).
+        resync_sequences(M.Status)
         next_row = M.Status.objects.create("status" => "Seq Check (#30)")
         created_pk[] = next_row[:statusid]
-        @test next_row[:statusid] isa Integer
-        @test next_row[:statusid] != status_id
+        @test next_row[:statusid] == status_id + 1
     finally
         cleanup_ids = created_pk[] === nothing ? [status_id] : [status_id, created_pk[]]
         q = M.Status.objects.filter("statusid__@in" => cleanup_ids)

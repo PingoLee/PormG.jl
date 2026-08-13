@@ -628,7 +628,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # Fill defaults/auto_now/auto_now_add/UUID, reserve SQLite ids, validate, and collect the quoted
   # physical columns + bound VALUES params. Shared with _update_or_create (#30) so both build the
   # identical INSERT body from one place.
-  quoted_field_columns, param_values, pk_exist, pk_field =
+  quoted_field_columns, param_values, _, _ =
     _prepare_row_insert!(real_obj, model, settings, connection, parameters)
 
   # construct the SQL statement
@@ -652,7 +652,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # include every column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
   if connection isa PormGPostgres
     result = fetch(settings, sql * " RETURNING *;", parameters)
-    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+    # write supplied an explicit primary key.
     return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model), model)
   elseif connection isa PormGSQLite
     # SQLite: deliberately avoid `INSERT ... RETURNING *`. RETURNING can hang
@@ -686,7 +687,8 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     result_dict = transaction_connection_for(settings) !== nothing ?
       do_insert() : run_in_transaction(do_insert, settings)
 
-    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+    # write supplied an explicit primary key.
     return PormGRow(result_dict, model)
   else
     throw(_unsupported_conn("insert()", connection))
@@ -721,7 +723,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
 
   !settings.change_data && throw(_write_not_allowed("update_or_create", conn_key))
 
-  quoted_field_columns, param_values, pk_exist, pk_field =
+  quoted_field_columns, param_values, _, _ =
     _prepare_row_insert!(real_obj, model, settings, connection, parameters)
 
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
@@ -751,7 +753,8 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
     created_raw = pop!(dict, Symbol("__pormg_created"), false)
     created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
-    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+    # write supplied an explicit primary key.
     return (PormGRow(dict, model), created)
 
   elseif connection isa PormGSQLite
@@ -792,7 +795,8 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     dict, created = transaction_connection_for(settings) !== nothing ?
       do_upsert() : run_in_transaction(do_upsert, settings)
 
-    pk_exist && _update_sequence(model, connection, pk_field, settings)
+    # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+    # write supplied an explicit primary key.
     return (PormGRow(dict, model), created)
   else
     throw(_unsupported_conn("update_or_create()", connection))
@@ -848,29 +852,28 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
 
   # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
   # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only
-  # when we actually insert. Returns (insert_sql, pk_exist, pk_field).
+  # when we actually insert.
   build_insert = (parameters) -> begin
     set_context!(parameters, :select)
-    quoted_field_columns, param_values, pk_exist, pk_field =
+    quoted_field_columns, param_values, _, _ =
       _prepare_row_insert!(real_obj, model, settings, connection, parameters)
     safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
     qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
     clause  = Dialect.on_conflict_clause(:nothing, qtarget, String[], connection)
-    sql = """
+    """
     INSERT INTO $(safe_table_name) (
       $(join(quoted_field_columns, ", "))
     ) VALUES (
       $(join(param_values, ", "))
     )
     $(clause)"""
-    (sql, pk_exist, pk_field)
   end
 
   if show_query !== :execute
     # Honest to what a miss executes: the INSERT + ON CONFLICT DO NOTHING (the get() + read-back are
     # out-of-band SELECTs). Mirrors _update_or_create's inspect contract.
     parameters = get_parameter(connection)
-    insert_sql, _, _ = build_insert(parameters)
+    insert_sql = build_insert(parameters)
     return _show_query_result(show_query, insert_sql, connection, model.name, :insert; parameters = parameters)
   end
 
@@ -881,7 +884,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
 
     # Miss → create, guarded by ON CONFLICT DO NOTHING against a concurrent insert of the same key.
     parameters = get_parameter(connection)
-    insert_sql, pk_exist, pk_field = build_insert(parameters)
+    insert_sql = build_insert(parameters)
 
     if connection isa PormGPostgres
       exec_sql = insert_sql * " RETURNING *;"
@@ -893,7 +896,8 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       rows = Tables.rowtable(result)
       if !isempty(rows)
         dict = _row_to_field_keyed_dict(Base.first(rows), model)
-        pk_exist && _update_sequence(model, connection, pk_field, settings)
+        # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
+        # this write supplied an explicit primary key.
         return (PormGRow(dict, model), true)
       end
       # Lost the insert race → the row exists now; return the winner, created == false.
@@ -913,7 +917,8 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
         throw(QueryBuildError("get_or_create: insert reported success but the $(model.name) row could not be read back."))
       # Under the serialized write lock (the transaction below) no writer can interleave between the
       # miss-check and this insert, so a fetched-nothing-then-insert is always a real creation.
-      pk_exist && _update_sequence(model, connection, pk_field, settings)
+      # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+      # write supplied an explicit primary key.
       return (row, true)
     else
       throw(_unsupported_conn("get_or_create()", connection))

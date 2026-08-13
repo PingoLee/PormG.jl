@@ -94,6 +94,7 @@ end
     @testset "Connection-Leak Detection (#127)" include("unit/test_connection_pool_leak.jl")
     @testset "Savepoint Naming (#26)" include("unit/test_savepoint_naming.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
+    @testset "Sequence Resync as an Operation (#358)" include("unit/test_resync_sequences.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Physical-column Identity (#325)" include("unit/test_column_equivalence.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")

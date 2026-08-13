@@ -119,7 +119,7 @@ export PormGError, FieldAccessError, UnknownFieldError, LazyTraversalError, Filt
   QueryBuildError, UnsafeMutationError, InvalidValueError, WritesDisabledError, UnsupportedConnectionError, BackendCapabilityError, ProtectedError
 # _count and _exists are un-exported (#202); the public form is the fluent query.count() /
 # query.exists(). They still have internal callers — deletion.jl uses both.
-export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys
+export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
 
 # ---
 # `public` (Julia 1.11+) — user-facing but deliberately NOT exported (#289).

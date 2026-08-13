@@ -43,7 +43,7 @@ const EXPECTED_TOPLEVEL = Set([
     # it. `TransactionError` is transaction-API misuse — nothing was sent.
     :DatabaseError, :IntegrityError, :OperationalError, :StatementError, :TransactionError,
     # Bulk operations
-    :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys,
+    :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys, :resync_sequences,
     # Async API
     :fetch_async, :await_result, :FetchTask,
     # Transactions

@@ -808,7 +808,7 @@ end
 ```
 
 ### Bulk Operations
-`bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`
+`bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`, `resync_sequences`
 
 ### Async API
 `fetch_async`, `await_result`, `FetchTask` — see [Async & Concurrency](async.md)

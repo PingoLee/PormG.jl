@@ -308,6 +308,65 @@ end
 allocate_primary_keys(model::PormGModel, df::DataFrames.DataFrame; kwargs...) =
   allocate_primary_keys(model |> object, df; kwargs...)
 
+"""
+    resync_sequences(objct::SQLObjectHandler) -> Vector{String}
+    resync_sequences(model::PormGModel) -> Vector{String}
+    resync_sequences(models::AbstractVector{<:PormGModel}) -> Nothing
+
+Explicitly repair `model`'s primary-key sequence(s) to `MAX(pk) + 1`, without performing an
+insert (#358).
+
+`bulk_insert`/`bulk_copy` still resynchronize automatically after a bulk write with explicit
+primary keys — that is where sequence drift is actually produced in volume. The row-level
+writers (`create`/`insert`, `update_or_create`, `get_or_create`) do **not** auto-resync:
+call this explicitly after one of them writes an explicit primary key, or after any
+out-of-band load that can leave a sequence behind — a `pg_restore`, a manual `COPY`, or
+data seeded outside PormG entirely.
+
+# Arguments
+- `objct` / `model`: the model (or its `SQLObjectHandler`, e.g. `M.Model.objects`) whose
+  declared primary-key field(s) should be resynchronized. `models`: a collection, resynced
+  one at a time.
+
+# Returns
+The names of the pk fields the repair was attempted for (empty if the model has none) —
+`nothing` for the plural form. Per-field failure is not raised as an exception here; it
+follows `_update_sequence`'s own reporting (`@warn` outside a transaction, propagates inside
+one — see [Sequence synchronisation](@ref) in `schema_conventions.md`).
+
+# Example
+```julia
+# A migration replays historical drivers with their original ids.
+for row in eachrow(legacy_drivers)
+    M.Driver.objects.create("driverid" => row.id, "forename" => row.forename)
+end
+resync_sequences(M.Driver)   # once, after the batch — not per row
+
+# A later ordinary create() is safe again:
+M.Driver.objects.create("forename" => "Auto")
+```
+"""
+function resync_sequences(objct::SQLObjectHandler)
+  model = objct.object.model
+  ensure_model_transaction_scope(model)
+  settings, connection, conn_key = get_settings(objct)
+  !settings.change_data && throw(_write_not_allowed("resync_sequences", conn_key))
+
+  # ALL of the model's declared pk fields — unlike _prepare_row_insert!'s pk_field (built from
+  # one specific insert dict), resync_sequences has no "this call" to condition on. Iterate
+  # model.field_names (the canonical ordered field list every other call site in this file uses
+  # for this purpose), not `keys(model.fields)`, which is an unordered Dict.
+  pk_field = String[f for f in model.field_names if model.fields[f].primary_key]
+  isempty(pk_field) && return pk_field
+
+  connection isa Union{PormGPostgres, PormGSQLite} ||
+    throw(_unsupported_conn("resync_sequences()", connection))
+  _update_sequence(model, connection, pk_field, settings)
+  return pk_field
+end
+resync_sequences(model::PormGModel) = resync_sequences(model |> object)
+resync_sequences(models::AbstractVector{<:PormGModel}) = (foreach(resync_sequences, models); nothing)
+
 function _single_auto_generated_primary_key(model::PormGModel)
   pk_fields = [field for field in model.field_names if _is_auto_generated_bulk_primary_key(model.fields[field])]
   isempty(pk_fields) && return nothing

@@ -342,6 +342,10 @@ new_driver = M.Driver.objects.create(
 # new_driver[:driverid] will be the next available ID after the bulk copy
 ```
 
+Row-level writers (`create`, `update_or_create`, `get_or_create`) do not resync automatically — see
+[`resync_sequences`](../schema_conventions.md#Explicit-repair:-resync_sequences) for repairing a
+sequence after one of those, or after any load that happened outside PormG entirely.
+
 ### Real-World Example: Loading F1 Season Data
 
 ```julia

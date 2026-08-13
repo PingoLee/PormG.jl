@@ -209,8 +209,8 @@ The physical-table rule is unchanged: the table is `db_table` when set, else `na
     - It has **no** effect on PostgreSQL sequence synchronisation. Setting it does not enable the
       repair and leaving it unset does not disable it; earlier versions silently did both, so a
       connection that dropped the prefix also stopped resyncing its `id` sequences and eventually
-      failed inserts with a duplicate-key error. See
-      [Sequence synchronisation](#Sequence-synchronisation) below.
+      failed inserts with a duplicate-key error. Sequence repair is decided by the call site — see
+      [Sequence synchronisation](#Sequence-synchronisation) below — never by `django_prefix`.
     - It has **no** effect on Django-style short-form join paths. `filter("driver__forename" => …)`
       resolves to the FK column `driver_id` on every connection. Earlier versions gated that on the
       prefix, so unsetting it turned a working join into an `UnknownFieldError` — which mattered the
@@ -223,13 +223,20 @@ A PostgreSQL `SERIAL`/`IDENTITY` column only advances its sequence when the **da
 the value. Insert a row with an explicit primary key and the sequence stays where it was; a later
 auto-generated key then collides with the row you inserted by hand.
 
-PormG repairs this automatically. Whenever a write supplies an explicit primary key —
-`create`, `get_or_create`, `update_or_create`, `bulk_insert`, `bulk_copy` — it resynchronises the
-sequence afterwards, to `MAX(pk) + 1` on PostgreSQL and by rewriting `sqlite_sequence` on SQLite.
+**PormG repairs this automatically only where drift is produced in bulk** — `bulk_insert` and
+`bulk_copy` resynchronise the sequence afterwards whenever the write supplied explicit primary keys,
+to `MAX(pk) + 1` on PostgreSQL and by rewriting `sqlite_sequence` on SQLite. `bulk_insert` also
+resyncs (once) before retrying an unexpected duplicate-key error.
 
-**No configuration governs it.** The repair is not gated by `change_db` or `django_prefix` on either
-engine; an insert that cannot drift the sequence never pays for it. (`change_data: false` is a
-different matter — it rejects the write itself, long before any resync would run.)
+**Row-level writers — `create`/`insert`, `update_or_create`, `get_or_create` — do NOT auto-resync.**
+Matching every comparable ORM checked when this was decided (Django, Rails, SQLAlchemy, Ecto, Prisma:
+none resyncs on a row-level write), the cost of two extra round-trips is not paid on every explicit-pk
+row write. Call [`resync_sequences`](#Explicit-repair:-resync_sequences) yourself after one of these
+writes an explicit primary key, if a later auto-generated write to the same table needs to be safe.
+
+**No configuration governs any of this.** The repair is not gated by `change_db` or `django_prefix` on
+either engine. (`change_data: false` is a different matter — it rejects the write itself, long before
+any resync would run, on both the automatic bulk paths and an explicit `resync_sequences` call.)
 
 ### What differs between the engines
 
@@ -251,10 +258,11 @@ later statement, and answers the `COMMIT` with a rollback.
   which run in a transaction by construction, and for any write inside your own `atomic` block.
 - **Outside one, PormG logs a warning and continues** — naming the table, the column, and the
   sequence when it got as far as resolving one. This applies to a failure of the database round-trip
-  or the connection pool; anything else (including a cancellation) still raises. The row is already
-  committed and only the *next* auto-generated key is at risk. On PostgreSQL the row-level writers
-  (`create`, `get_or_create`, `update_or_create`) run transaction-free by design, so this is their
-  normal path.
+  or the connection pool; anything else (including a cancellation) still raises. The row (or, for a
+  standalone repair, nothing) is already committed and only the *next* auto-generated key is at risk.
+  A standalone [`resync_sequences`](#Explicit-repair:-resync_sequences) call takes this path unless you
+  wrap it in your own `atomic` block — row-level writers no longer call this machinery at all (see
+  above), so it is reached almost exclusively through an explicit call now.
 
 If the primary-key column has no *owned* sequence — a table PormG did not create, or a natural key —
 PormG looks for PostgreSQL's conventional `<table>_<column>_seq` **in the table's own schema**, and
@@ -266,6 +274,32 @@ the name it expected — run with `JULIA_DEBUG=PormG` to see it.
 A recurring cause is a role holding `USAGE` but not `UPDATE` on the sequence: PostgreSQL requires
 `UPDATE` for `setval` while `nextval` accepts either, so such a role inserts rows perfectly well and
 can never resync. The logged exception tells you whether that is what happened.
+
+### Explicit repair: `resync_sequences`
+
+`resync_sequences(model)` runs the same repair `bulk_insert`/`bulk_copy` run automatically, on
+demand, with no accompanying insert. Reach for it after:
+
+- a row-level write (`create`, `update_or_create`, `get_or_create`) that supplied an explicit
+  primary key, if a later auto-generated write to the same table needs to be safe;
+- a `pg_restore`, a manual `COPY`, or any load that wrote rows outside PormG entirely.
+
+```julia
+# A migration replays historical drivers with their original ids.
+for row in eachrow(legacy_drivers)
+    M.Driver.objects.create("driverid" => row.id, "forename" => row.forename)
+end
+resync_sequences(M.Driver)   # once, after the batch — not per row
+
+# A later ordinary create() is safe again:
+M.Driver.objects.create("forename" => "Auto")
+```
+
+`resync_sequences(models)` (a collection) resyncs each in turn. Both forms return the pk field
+name(s) the repair was attempted for (empty if the model declares none); a per-field failure follows
+the same warn-or-propagate rule described above, not an exception from `resync_sequences` itself.
+Accepts a bare model (`M.Driver`) or its handler (`M.Driver.objects`) — same dual form as
+`bulk_insert`/`bulk_copy`.
 
 ## Primary keys
 

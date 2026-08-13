@@ -90,6 +90,14 @@ At the core of `connection.yml` is the `config` sub-dictionary. This section dec
 - **`true`**: DDL operations (Data Definition Language) are permitted. PormG's migration subsystem is authorized to create tables, alter columns, and perform schema patches directly against the database.
 - **`false`**: Blocks schema changes. All `Migrations.migrate()` commands will be defensively rejected, protecting your production database from unintended, automated alteration.
 
+!!! note "DDL only"
+    `change_db` governs schema changes and nothing else. Earlier versions also secretly switched
+    PostgreSQL sequence synchronisation on, so the `change_db: false` production posture shown above
+    silently stopped repairing `id` sequences after an explicit-primary-key insert — until a later
+    insert failed with a duplicate-key error. Sequence repair no longer consults this key (or
+    `django_prefix`); see
+    [Sequence synchronisation](../schema_conventions.md#Sequence-synchronisation).
+
 ## PostgreSQL Extensions
 
 PostgreSQL extensions can be declared in the active environment block with a simple `extensions` list.

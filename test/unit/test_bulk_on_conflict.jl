@@ -213,7 +213,6 @@ end
       true,
       ["id"],
       settings,
-      false,
       :execute,
       params;
       on_conflict_sql = "ON CONFLICT DO NOTHING",   # pre-rendered clause; non-nothing gates the retry off

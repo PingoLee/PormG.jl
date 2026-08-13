@@ -129,6 +129,64 @@ for working alongside a Django app, whose tables are named `<app_label>_<model>`
 The physical-table rule is unchanged: the table is still `name`, which is always lowercase —
 `django_prefix` only shapes how `name` is generated and how accessors read.
 
+!!! note "Naming only — it does not switch any behaviour on"
+    That list is exhaustive. In particular, `django_prefix` has **no** effect on PostgreSQL sequence
+    synchronisation: setting it does not enable the repair, and leaving it unset does not disable it.
+    Earlier versions silently did both, so a connection that dropped the prefix also stopped
+    resyncing its `id` sequences and eventually failed inserts with a duplicate-key error. Sequence
+    repair is now decided solely by whether the insert supplied an explicit primary key — see
+    [Sequence synchronisation](#Sequence-synchronisation) below.
+
+## Sequence synchronisation
+
+A PostgreSQL `SERIAL`/`IDENTITY` column only advances its sequence when the **database** generates
+the value. Insert a row with an explicit primary key and the sequence stays where it was; a later
+auto-generated key then collides with the row you inserted by hand.
+
+PormG repairs this automatically. Whenever a write supplies an explicit primary key —
+`create`, `get_or_create`, `update_or_create`, `bulk_insert`, `bulk_copy` — it resynchronises the
+sequence afterwards, to `MAX(pk) + 1` on PostgreSQL and by rewriting `sqlite_sequence` on SQLite.
+
+**No configuration governs it.** The repair is not gated by `change_db` or `django_prefix` on either
+engine; an insert that cannot drift the sequence never pays for it. (`change_data: false` is a
+different matter — it rejects the write itself, long before any resync would run.)
+
+### What differs between the engines
+
+| | PostgreSQL | SQLite |
+| :--- | :--- | :--- |
+| Mechanism | resolve the column's owned sequence, then `setval` it to `MAX(pk) + 1` | upsert into `sqlite_sequence` |
+| `bulk_copy` | supported | not supported — raises `BackendCapabilityError` |
+| `bulk_insert` self-heal | on an unexpected duplicate-key error, repairs and retries the chunk once | no retry; the error propagates |
+| A failed repair | see below | always propagates |
+
+### When the repair itself fails
+
+On PostgreSQL the handling depends on whether the write is inside a transaction, because a failed
+statement there is not a local event — PostgreSQL marks the whole transaction aborted, rejects every
+later statement, and answers the `COMMIT` with a rollback.
+
+- **Inside a transaction the error propagates.** Returning a row that the pending rollback is about
+  to erase would be worse than raising. This is always the case for `bulk_insert` and `bulk_copy`,
+  which run in a transaction by construction, and for any write inside your own `atomic` block.
+- **Outside one, PormG logs a warning and continues** — naming the table, the column, and the
+  sequence when it got as far as resolving one. This applies to a failure of the database round-trip
+  or the connection pool; anything else (including a cancellation) still raises. The row is already
+  committed and only the *next* auto-generated key is at risk. On PostgreSQL the row-level writers
+  (`create`, `get_or_create`, `update_or_create`) run transaction-free by design, so this is their
+  normal path.
+
+If the primary-key column has no *owned* sequence — a table PormG did not create, or a natural key —
+PormG looks for PostgreSQL's conventional `<table>_<column>_seq` **in the table's own schema**, and
+does nothing if it is absent. One consequence is worth knowing: PostgreSQL truncates generated object
+names at 63 bytes, so a table and column whose combined name exceeds that owns a sequence under a
+shortened name this lookup will not find. The skipped resync is logged at debug level together with
+the name it expected — run with `JULIA_DEBUG=PormG` to see it.
+
+A recurring cause is a role holding `USAGE` but not `UPDATE` on the sequence: PostgreSQL requires
+`UPDATE` for `setval` while `nextval` accepts either, so such a role inserts rows perfectly well and
+can never resync. The logged exception tells you whether that is what happened.
+
 ## Primary keys
 
 PormG does **not** auto-create an `id` primary key for a native model. You declare one explicitly:

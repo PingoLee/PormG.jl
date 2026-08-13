@@ -218,8 +218,9 @@ later insert fails durably burns its range (a harmless gap, exactly like Postgre
   `Vector{Union{Missing,Int}}` pk column, the missing-able element type is dropped after
   allocation.
 - The PostgreSQL backend currently assumes the model lives in the default search path
-  (typically `public`). Models in other schemas are not supported by this helper — the
-  same limitation applies to `_update_sequence`.
+  (typically `public`). Models in other schemas are not supported by this helper.
+  (`_update_sequence` no longer shares the limitation: since #344 it resolves the sequence
+  through the table's own `relnamespace`.)
 
 # Example
 ```julia
@@ -929,10 +930,6 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Resolve settings
   settings, connection, conn_key = get_settings(objct)
 
-  django_prefix = settings.django_prefix === nothing ? false : true
-
-  
-
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_insert", conn_key))
 
@@ -986,7 +983,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
         param_placeholders = [add_parameter!(parameters, model.fields[field].formatter(row[mapping[field]])) for field in fields_df]
         # param_placeholders = add_parameter!(parameters, values)
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, row, index, django_prefix)
+        _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end
@@ -994,7 +991,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       count += 1
       if count == effective_chunk || index == total
         # @pormg_debug
-        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, django_prefix, show_query, parameters; on_conflict_sql = on_conflict_sql)
+        res = _bulk_insert(model, connection, fields_df, rows, pk_exist, pk_field, settings, show_query, parameters; on_conflict_sql = on_conflict_sql)
         push!(results, res)
         count = 0
         rows = String[]
@@ -1193,7 +1190,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 end
 bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(model |> object, df; kwargs...)
 
-function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer, django_prefix::Bool)
+function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, row::DataFrames.DataFrameRow, index::Integer)
   for field in fields
     # Check if field exists in the mapping and row
     col_name = get(mapping, field, field)
@@ -1298,7 +1295,7 @@ end
 function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGSQLite},
   fields::Vector{String}, rows::Vector{String},
   pk_exist::Bool, pk_field::Vector{String}, settings::PormGSettings,
-  django_prefix::Bool, show_query::Symbol, parameters:: AbstractPormGParam;
+  show_query::Symbol, parameters:: AbstractPormGParam;
   on_conflict_sql::Union{Nothing, String} = nothing)
 
   # Security: Quote table name and physical column names (db_column when set, #50).
@@ -1535,7 +1532,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
 
         param_placeholders = [add_parameter!(instruction.parameters, model.fields[field].formatter(row[mapping[field]])) for field in joined_columns]
       catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, row, index, settings.django_prefix !== nothing)
+        _depuration_values_bulk_insert(fields_df, mapping, model, row, index)
         e isa PormGError && rethrow()   # keep the taxonomy type; the depuration log above carries the row context
         throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
       end

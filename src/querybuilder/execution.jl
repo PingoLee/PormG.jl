@@ -935,15 +935,26 @@ _sql_literal(value::AbstractString)::String = replace(String(value), "'" => "''"
 
 # Quote an identifier WITHOUT charset validation (#59) — escape-only, unlike `quote_identifier`,
 # which also rejects anything outside SAFE_IDENTIFIER_PATTERN. For identifiers that come from the
-# database catalog (a `pg_sequences` row) or that PormG constructs itself: they are not user input,
-# and validating them would newly reject legacy names that previously worked.
+# database catalog (a `pg_class` row) or from a model's own `db_table`: neither is free-form user
+# input on this path, and validating them would newly reject legacy names that previously worked.
+#
+# Load-bearing for the unowned-sequence fallback (#344): `setval`'s first argument is `regclass`,
+# so PostgreSQL re-parses it as an identifier and CASE-FOLDS any unquoted part. A catalog row
+# reading `public | Db_Table_id_seq` interpolated bare becomes `public.db_table_id_seq`, which does
+# not exist. `pg_get_serial_sequence` returns its answer already quoted, which is why the owned path
+# never needed this.
 _quote_ident_raw(name::AbstractString)::String = "\"$(replace(String(name), "\"" => "\"\""))\""
 
+# A model's physical table as a SQL *string literal* holding a *quoted identifier* — `'"Db_Table"'`.
+# The shape both `pg_get_serial_sequence` and `to_regclass` need: each takes TEXT that it re-parses
+# as an identifier, so an unquoted mixed-case name folds to lowercase and resolves to nothing (#59).
+# Correct for an all-lowercase name too. The two escapes are disjoint — `_quote_ident_raw` only
+# touches `"`, `_sql_literal` only `'` — so composing them cannot double-process.
+_table_ident_literal(model::PormGModel)::String =
+  _sql_literal(_quote_ident_raw(Models.model_table_name(model)))
+
 function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)
-  # `pg_get_serial_sequence` takes TEXT that it re-parses as an identifier, so an unquoted
-  # mixed-case table folds to lowercase and resolves to nothing. Pass the double-quoted form inside
-  # the literal — `'"Db_Table"'` — which is also correct for an all-lowercase name (#59).
-  table_literal = _sql_literal("\"$(replace(Models.model_table_name(model), "\"" => "\"\""))\"")
+  table_literal = _table_ident_literal(model)
   sequence_df = fetch(
     connection,
     "SELECT pg_get_serial_sequence('$(table_literal)', '$(_sql_literal(field))');";
@@ -961,77 +972,157 @@ end
 function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::PormGSettings; ignore_tx::Bool = false)
   @pormg_debug true
 
-  !(settings.change_db || settings.django_prefix !== nothing) && return nothing
-
+  # There is deliberately NO configuration gate here (#344) — do not add one back.
+  #
+  # `!(settings.change_db || settings.django_prefix !== nothing) && return nothing` used to sit on
+  # this line, and it was a second guard for an outcome the call sites already decide. A PostgreSQL
+  # sequence can only drift when the INSERT supplied an explicit primary key, and every caller
+  # already tests exactly that: `pk_exist` (set in `_prepare_row_insert!` only when the insert dict
+  # contains a pk field), or — in `execution_bulk.jl`'s recovery path — a duplicate-key error that
+  # actually happened. So the old line could never prevent a wasted sync, only suppress a needed one.
+  #
+  # What it suppressed: every connection with `change_db: false` (the documented production posture)
+  # and every connection built by `register_connection`, which defaults both flags off. Those
+  # silently accumulated sequence drift, and the bulk duplicate-key self-heal — resync, then retry
+  # the same INSERT — re-ran an unrepaired statement and failed identically.
+  #
+  # `settings` is still read below — but only to ask whether we are inside the caller's
+  # transaction when a repair fails, never to decide whether to attempt one.
   for field in pk_field
     # Resolve the PK field to its physical column (db_column when set) — #50.
     col = Models.model_column(model, field)
-    sequence_name = _get_owned_sequence_name(connection, model, col; ignore_tx=ignore_tx)
+    sequence_name = nothing
 
-    if isnothing(sequence_name)
-      # Fallback for Django-managed tables where sequence ownership is not set:
-      # scan pg_sequences for any sequence whose name starts with the table name.
-      seqs_df = fetch(
-        connection,
+    # The WHOLE body is guarded, not just `setval` (#344). The two catalog reads below run on every
+    # explicit-pk insert now that the gate is gone, and they can fail the same ways `setval` can —
+    # a pool timeout on the extra acquisition, a connection dropped between the INSERT and the
+    # resync. Outside a transaction those would otherwise raise *after* the row was durably
+    # committed, which is the exact "successful create() looks failed" outcome this design avoids.
+    try
+      sequence_name = _get_owned_sequence_name(connection, model, col; ignore_tx=ignore_tx)
+
+      if isnothing(sequence_name)
+        # Fallback for a PK column with no OWNED sequence — a Django-managed table, or a natural
+        # key. Matched on PostgreSQL's conventional `<table>_<column>_seq` and restricted to the
+        # search path.
+        #
+        # NOT `LIKE '<table>%'`, which is what this used to be: that matches any sequence sharing
+        # the prefix — `f1_driver` and `f1_driverstanding` both answer `LIKE 'f1_driver%'` — and the
+        # result was unordered with row 1 taken blind, so a resync could `setval` a NEIGHBOURING
+        # table's sequence to this table's MAX(pk). With `is_called=false` the victim table then
+        # hands out a colliding id on its next insert. Removing the gate above made that path
+        # reachable on every connection, so it is tightened here rather than left to widen.
+        #
         # NOT lowercased (#59): PostgreSQL names the implicit sequence for a quoted `"Db_Table"` as
-        # `Db_Table_id_seq`, and LIKE is case-sensitive — folding here would match nothing and the
-        # sequence would silently never sync. Matches `_fix_sequence_name`'s pattern below.
-        "SELECT sequencename FROM pg_sequences WHERE sequencename LIKE '$(_sql_literal(Models.model_table_name(model)))%'";
+        # `Db_Table_id_seq`, and the comparison is case-sensitive — folding would match nothing.
+        # Constrained to the TABLE'S OWN namespace, not merely to some schema on the search path.
+        # A membership test (`schemaname = ANY(current_schemas(…))`) is not equivalent, and the gap
+        # is the same corruption in schema form: with `search_path = tenant, public`, a
+        # `tenant.drivers` whose own sequence is absent would match `public.drivers_id_seq` — which
+        # belongs to `public.drivers` — and the `setval` below would set it from
+        # `MAX(tenant.drivers.id)`, because the table in that statement is referenced unqualified.
+        #
+        # `to_regclass` resolves by exactly the same search_path rule as that unqualified reference,
+        # so pinning the sequence to its `relnamespace` makes the two agree by construction — as
+        # strict as the table, not stricter. It also yields at most one row (`relname` is unique per
+        # namespace), so no ordering or tiebreak is needed. `to_regclass` returns NULL rather than
+        # raising for a missing relation, so a vanished table degrades to zero rows and the
+        # `continue` below.
+        conventional = string(Models.model_table_name(model), "_", col, "_seq")
+        seqs_df = fetch(
+          connection,
+          "SELECT n.nspname AS schemaname, c.relname AS sequencename " *
+          "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " *
+          "WHERE c.relkind = 'S' AND c.relname = '$(_sql_literal(conventional))' " *
+          "AND c.relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = to_regclass('$(_table_ident_literal(model))'))";
+          ignore_tx=ignore_tx,
+        ) |> DataFrames.DataFrame
+
+        if size(seqs_df, 1) == 0
+          # Not an error: a natural-key PK legitimately has no sequence, and `pk_exist` fires for
+          # those too, so @debug rather than @warn keeps ordinary inserts quiet.
+          #
+          # `expected=` is what makes the other case diagnosable. PostgreSQL truncates a generated
+          # object name at 63 bytes, so a table+column pair longer than that owns a sequence whose
+          # real name is shorter than `conventional` and will not be found here. Logging the name we
+          # searched for is the difference between a puzzling non-sync and an obvious one.
+          @debug "No sequence to resync for this primary key" table=Models.model_table_name(model) column=col expected=conventional
+          continue
+        end
+        # Quoted, not interpolated bare: `setval` takes regclass and case-folds unquoted parts, so
+        # `public.Db_Table_id_seq` would be looked up as `public.db_table_id_seq` and fail.
+        sequence_name = string(_quote_ident_raw(seqs_df[1, :schemaname]), ".",
+                               _quote_ident_raw(seqs_df[1, :sequencename]))
+      end
+
+      safe_field_name = quote_identifier(col, connection)
+      safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+      fetch(
+        connection,
+        "SELECT setval('$(_sql_literal(sequence_name))', COALESCE((SELECT MAX($safe_field_name) FROM $safe_table_name), 0) + 1, false)";
         ignore_tx=ignore_tx,
-      ) |> DataFrames.DataFrame
-      
-      size(seqs_df, 1) == 0 && continue
-      sequence_name = seqs_df[1, :sequencename]
-    end
+      )
+    catch e
+      # A cancellation is never ours to swallow. `e isa InterruptException` would NOT catch it:
+      # every driver failure crosses `_as_database_error`, which wraps the interrupt in a
+      # `StatementError`. `_await_abandoned` sees through that wrapper.
+      #
+      # This MUST stay ahead of the allowlist below, and the order is not stylistic: a cancellation
+      # arrives as `StatementError(…, InterruptException())`, which IS a `DatabaseError`, so an
+      # allowlist running first would swallow every Ctrl-C on this path.
+      _await_abandoned(e) && rethrow()
 
-    safe_field_name = quote_identifier(col, connection)
-    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-    fetch(
-      connection,
-      "SELECT setval('$sequence_name', COALESCE((SELECT MAX($safe_field_name) FROM $safe_table_name), 0) + 1, false)";
-      ignore_tx=ignore_tx,
-    )
+      # Swallow ONLY what this block set out to tolerate: a failure of the database round-trip
+      # itself. Widening the `try` to the whole loop body also brought `quote_identifier` and
+      # `safe_table_identifier` inside it, and those are PormG's fail-closed identifier guards —
+      # they raise `InvalidValueError`, which is a `PormGError` but NOT a `DatabaseError`. Reporting
+      # a rejected `db_column` as "sequence resync failed, check your GRANTs" would bury the real
+      # error and break the fail-closed contract.
+      #
+      # An allowlist, not "rethrow non-DatabaseError PormGErrors": `PoolTimeoutError <: PoolError`
+      # is also outside the `DatabaseError` branch and IS one we mean to tolerate. `PoolError` is
+      # the one family that reaches here un-wrapped, because `acquire_connection` runs outside
+      # `fetch`'s own try and so never crosses `_as_database_error`.
+      #
+      # Anything raised on THIS task — a bug in this function, PormG's fail-closed identifier
+      # guards — propagates. Note the limit of that claim: a failure raised inside the driver task
+      # is wrapped into a `DatabaseError` before it arrives, so it is tolerated regardless of what
+      # it originally was. That is the intended reading of "the round-trip failed".
+      !(e isa DatabaseError || e isa PoolError) && rethrow()
+
+      # Inside a transaction this failure is NOT recoverable and must propagate. PostgreSQL poisons
+      # a transaction the moment any statement in it errors: every later statement returns "current
+      # transaction is aborted, commands ignored until end of transaction block", and the COMMIT is
+      # answered with ROLLBACK. Swallowing would hand the caller a PormGRow for a row that is
+      # already doomed, which is strictly worse than raising.
+      #
+      # This is the common path for the bulk writers: `bulk_insert` and `bulk_copy` ALWAYS run
+      # inside a transaction (`execution_bulk.jl:1004`, `:1176` — ambient, or their own
+      # `run_in_transaction`). On PostgreSQL the row-level writers are the opposite: `insert`,
+      # `_update_or_create` and `_get_or_create` deliberately run transaction-free (`ON CONFLICT` is
+      # atomic on its own, `execution.jl:924-928`), so they take the warn path unless the caller
+      # opened an `atomic` block.
+      #
+      # `!ignore_tx` is currently always true — no call site overrides the kwarg — but the condition
+      # belongs with the check: `ignore_tx=true` makes `fetch` take a separate pooled connection,
+      # which leaves the caller's transaction untouched and the failure genuinely recoverable.
+      if !ignore_tx && transaction_connection_for(settings) !== nothing
+        rethrow()
+      end
+
+      # Outside a transaction the INSERT was its own committed statement, so the row is durable and
+      # only the NEXT auto-generated key is at risk. Report and carry on.
+      #
+      # The message names the LIKELY cause without asserting it: a role holding USAGE but not UPDATE
+      # on the sequence hits this every time (PostgreSQL requires UPDATE for `setval` while
+      # `nextval` accepts either, so such a role inserts rows fine and can never resync) — but a
+      # pool timeout or a dropped connection lands here too, and sending that operator to GRANT
+      # would be a wild goose chase. `exception=e` carries the truth.
+      @warn "Sequence resync failed — the next auto-generated primary key may collide. If the cause is a permission error, the role needs UPDATE on the sequence." model=model.name table=Models.model_table_name(model) column=col sequence=something(sequence_name, "unresolved") exception=e
+    end
   end
 end
 
-function _fix_sequence_name(connection::PormGPostgres, model::PormGModel; ignore_tx::Bool = false) # TODO maby i need use Migration get_sequence_name aproach
-  pk_field = [field for field in keys(model.fields) if model.fields[field].primary_key]
-  # #197 review: guard BEFORE anything indexes pk_field[1] — the empty-PK check used to sit
-  # after an indexing condition, so BoundsError always won and the guard could never fire.
-  length(pk_field) == 0 && throw(QueryBuildError("Cannot fix the PK sequence for model $(model.name): the model does not define a primary key."))
-  length(pk_field) > 1 && throw(QueryBuildError("Cannot fix the PK sequence for model $(model.name): composite primary keys are not supported here."))
-  # PostgreSQL names a table's implicit sequence after the table itself, so the pattern and the
-  # rename target both follow the RESOLVED physical name (db_table when set, #59). Byte-identical to
-  # the previous `model.name |> lowercase` for every already-lowercase model.
-  table_name = Models.model_table_name(model)
-  sequences = fetch(connection, """SELECT *
-      FROM pg_sequences
-      WHERE sequencename LIKE '$(_sql_literal(table_name))%';"""; ignore_tx=ignore_tx) |> DataFrames.DataFrame
-  for (index, row) in enumerate(eachrow(sequences))
-    if index == 1 && row.sequencename != "$(table_name)_$(pk_field[1])_seq"
-      # Both sequence names are IDENTIFIERS, so they are quoted rather than escaped as literals — but
-      # via `_quote_ident_raw`, NOT `quote_identifier`. The latter also *validates* the charset and
-      # throws, which would newly abort this call for a legacy sequence named with a `-`, a space or
-      # a leading digit that previously interpolated bare and worked. `row.sequencename` comes from
-      # the `pg_sequences` catalog, not from user input, so escaping is the correct posture here.
-      new_seq = _quote_ident_raw("$(table_name)_$(pk_field[1])_seq")
-      fetch(connection, "ALTER SEQUENCE $(_quote_ident_raw(row.sequencename)) RENAME TO $(new_seq);"; ignore_tx=ignore_tx)
-    else
-      fetch(connection, "DROP SEQUENCE $(_quote_ident_raw(row.sequencename));"; ignore_tx=ignore_tx)
-    end
-  end
-end
-
-# function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String})
-#   sequences = fetch(connection, """SELECT *
-#       FROM pg_sequences
-#       WHERE sequencename LIKE '$(model.name |> lowercase)%';""") |> DataFrames.DataFrame
-#   for row in eachrow(sequences)
-#     if row.sequenceowner == model.name
-#       fetch(connection, "SELECT setval('$(row.sequencename)', (SELECT MAX($(pk_field[1])) FROM $(model.name)), true);")
-#     end
-#   end
-# end
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
   for field in pk_field
     safe_field_name = quote_identifier(Models.model_column(model, field), connection)  # db_column (#50)

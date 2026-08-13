@@ -21,12 +21,18 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalErro
   DoesNotExist, MultipleObjectsReturned,
   # Not thrown here — CAUGHT here: last()/save()/delete() convert Models' composite-pk failure
   # into an actionable QueryBuildError (#239).
-  ModelDefinitionError
+  ModelDefinitionError,
+  # Also CAUGHT, not thrown (#344): the two abstract roots `_update_sequence` allowlists when it
+  # decides whether a failed sequence repair is tolerable. Everything outside them propagates.
+  DatabaseError, PoolError
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
 import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!
+# #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,
+# which a bare `e isa InterruptException` test cannot (every driver error crosses `_as_database_error`).
+import PormG.ConnectionPool: _await_abandoned
 import PormG.Configuration: with_tx_context, ensure_model_transaction_scope, transaction_connection_for,
 	get_sqlite_reserved_primary_key_max, register_sqlite_reserved_primary_key_max!,
 	in_transaction_context,

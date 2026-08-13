@@ -90,6 +90,30 @@ At the core of `connection.yml` is the `config` sub-dictionary. This section dec
 - **`true`**: DDL operations (Data Definition Language) are permitted. PormG's migration subsystem is authorized to create tables, alter columns, and perform schema patches directly against the database.
 - **`false`**: Blocks schema changes. All `Migrations.migrate()` commands will be defensively rejected, protecting your production database from unintended, automated alteration.
 
+### `django_prefix`
+
+Optional (default: unset). Names the Django **app label** whose tables this connection reads, when the
+schema is owned by a Django project:
+
+```yaml
+dev:
+  adapter: PostgreSQL
+  database: sgrh
+  config:
+    change_data: true
+    django_prefix: dash      # Django tables are dash_<model>
+```
+
+It only ever shapes **names**. The Django importer emits it as each generated model's `db_table`;
+relationship accessor names strip it; and it is the fallback used to spell the physical table of a
+reverse-join target that declares no `db_table`. It does **not** switch any behaviour on: not
+sequence synchronisation, not Django-style short-form join paths. See
+[`django_prefix` interop](../schema_conventions.md#django_prefix-interop).
+
+`django_prefix: ''` means the same as omitting the key — an empty app label is the absence of one,
+not a prefix that happens to be empty. Earlier versions composed `"$(prefix)_"` regardless and
+derived table names beginning with `_`.
+
 !!! note "DDL only"
     `change_db` governs schema changes and nothing else. Earlier versions also secretly switched
     PostgreSQL sequence synchronisation on, so the `change_db: false` production posture shown above

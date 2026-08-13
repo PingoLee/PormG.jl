@@ -562,7 +562,18 @@ Imports Django models from a given `model.py` file content string and generates 
 - `ignore_table::Vector{String}`: Tables to ignore during the import process. Defaults to `postgres_ignore_table`.
 - `file::String`: The name of the file to save the generated models. Defaults to `"automatic_models.jl"`.
 - `output_path::Union{Nothing, String}`: Directory to write the generated file into, overriding the resolved config's `db_def_folder`. Use this to stage a *foreign* Django app's models next to their copied `model.py` (e.g. `"db_gal"`) while still resolving `db` for its Settings. Defaults to `nothing` (use `db_def_folder`).
-- `django_prefix::Union{Nothing, String, Missing}`: Overrides the generated table-name prefix. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"estoque"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
+- `django_prefix::Union{Nothing, String, Missing}`: The Django **app label** whose tables are being imported — in practice, the prefix Django puts on them. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"estoque"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
+
+  Since #345 the prefix is written into **`db_table`**, not into the positional model name:
+  `class Dim_ibge` under `django_prefix = "estoque"` emits
+  `Dim_ibge = Models.Model("dim_ibge", db_table = "estoque_dim_ibge", …)`. A `Meta.db_table` in the
+  Django source still overrides it, exactly as in Django. An empty string is treated as no prefix.
+
+  Each auto-derived `ManyToManyField` also gets its join table pinned to Django's spelling, which is
+  `<the owning model's table>_<field>` — so `estoque_dim_ibge_ufs` normally, but
+  `<Meta.db_table>_<field>` when the class declares one. PormG's own derivation
+  (`<logical model>_<field>`) reproduces neither. A field carrying its own `db_table`, or a
+  `through=`, is left alone.
 - `autofields_ignore::Vector{String}`: Fields to ignore automatically. Defaults to `["Manager"]`.
 - `parameters_ignore::Vector{String}`: Parameters to ignore during field processing. Defaults to `["help_text"]`.
 
@@ -770,6 +781,44 @@ function import_models_from_django(
                            "ignored; the table name below is derived from the class name.")
           else
             Models._apply_db_table!(model, dt)
+          end
+        end
+
+        # Pin the join table of every AUTO-DERIVED ManyToManyField (#345). Django names it
+        # `<owning model's db_table>_<field>` (`ManyToManyField._get_m2m_db_table`, which reads
+        # `opts.db_table`); PormG's `_many_to_many_table_name` derives `<logical model>_<field>` with
+        # the app label stripped, so on a prefixed app the two have never agreed and PormG addressed
+        # a table Django did not create.
+        #
+        # `model_table_name(model)` is what makes this Django's rule rather than an approximation of
+        # it: `_apply_db_table!` ran just above, so a `Meta.db_table` is already in place and the join
+        # table must be derived from THAT, not from the app prefix. `Meta.db_table =
+        # "rh_matricula_legado"` under prefix `dash` gives Django `rh_matricula_legado_setores` —
+        # composing the prefix with the class name instead would name a table that does not exist.
+        #
+        # Only when a prefix is configured: without one the app label is unknown, `model_table_name`
+        # falls back to the class name, and pinning that would freeze PormG's own derivation as if it
+        # were Django's. A `db_table=` written on the field in the Django source is authoritative and
+        # left alone — same precedence as `Meta.db_table` above.
+        #
+        # `through` fields are skipped because Django ignores `db_table` entirely when a through model
+        # is given: the join table IS the through model's table. Emitting one anyway is inert today
+        # (`_relation_from_many_to_many` overwrites it) but writes a false claim into the artifact.
+        m2m_app_label = Models._django_app_label(render_settings)
+        if m2m_app_label !== nothing
+          # Mirrors `Model_to_str`'s own `db_table_abs` precedence, and must keep mirroring it: the
+          # prefix is applied at RENDER time, so the model object here still carries the bare class
+          # name and `model_table_name` alone would yield `Matricula_setores`. `_django_app_label`
+          # rather than a bare `!== nothing` for the same reason `Model_to_str` uses it — an empty
+          # prefix is the absence of one, and the two must agree or they derive different tables.
+          owner_table = Models.model_has_db_table(model) ?
+            Models.model_table_name(model) :
+            string(m2m_app_label, "_", lowercase(class_name))
+          for (field_name, field) in model.fields
+            Models.is_many_to_many_field(field) || continue
+            field.db_table === nothing || continue
+            field.through === nothing || continue
+            field.db_table = string(owner_table, "_", field_name)
           end
         end
 

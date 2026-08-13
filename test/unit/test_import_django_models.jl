@@ -16,16 +16,37 @@ function import_fixture_to_temp(fixture; output_file = "django_models_from_txt_u
     return config_key, db_dir_existed, joinpath(config_key, output_file)
 end
 
-function temp_import_config!()
+"""
+    temp_import_config!(; django_prefix = nothing)
+
+Register a throwaway config keyed on a fresh temp directory. `django_prefix` defaults to `nothing`
+(the unprefixed case every pre-#345 testset in this file relies on); pass an app label to exercise
+the prefixed path, where the prefix lands in `db_table` rather than in the positional model name.
+"""
+function temp_import_config!(; django_prefix::Union{Nothing, String} = nothing)
     config_key = mktempdir()
     db_dir_existed = isdir(PormG.MODEL_PATH)
 
     PormG.config[config_key] = PormG.Configuration.Settings(
         db_def_folder = config_key,
-        django_prefix = nothing,
+        django_prefix = django_prefix,
     )
 
     return config_key, db_dir_existed
+end
+
+"""
+    import_django_source(source; django_prefix = nothing, output_file = ...)
+
+Import `source` under a throwaway config and return `(generated_text, config_key, db_dir_existed)`.
+Callers must `cleanup_import_test!(config_key, db_dir_existed)` in a `finally`.
+"""
+function import_django_source(source::String;
+                              django_prefix::Union{Nothing, String} = nothing,
+                              output_file::String = "django_345_unit.jl")
+    config_key, db_dir_existed = temp_import_config!(django_prefix = django_prefix)
+    import_models_from_django(source; db = config_key, file = output_file, force_replace = true)
+    return read(joinpath(config_key, output_file), String), config_key, db_dir_existed
 end
 
 function cleanup_import_test!(config_key, db_dir_existed)
@@ -289,10 +310,16 @@ class Dim_ibge(models.Model):
         @test !isfile(joinpath(folder, output_file))
 
         generated = read(joinpath(out_folder, output_file), String)
-        # Table name uses the overridden prefix...
-        @test occursin("Models.Model(\"estoque_dim_ibge\"", generated)
-        # ...never the config's "dash" prefix.
-        @test !occursin("dash_dim_ibge", generated)
+        # #345: the prefix rides in `db_table`, not in the positional slot. The positional slot is
+        # the LOGICAL handle — `lowercase(class_name)`, which is Django's own derivation.
+        @test occursin("Models.Model(\"dim_ibge\", db_table = \"estoque_dim_ibge\"", generated)
+        # The old spelling (prefix fused into the positional name) must be gone entirely.
+        @test !occursin("Models.Model(\"estoque_dim_ibge\"", generated)
+        # The overridden prefix wins over the config's "dash" — asserted on the db_table VALUE, not
+        # merely on the substring's absence. The pre-#345 assertion here was `!occursin("dash_dim_ibge")`,
+        # which passed both before and after the override was honored: nothing in this file ever
+        # contained that string. This one fails if the override is ignored.
+        @test !occursin("db_table = \"dash_dim_ibge\"", generated)
 
         # The shared config Settings must be left untouched by the overrides.
         @test PormG.config[config_key].db_def_folder == folder
@@ -304,6 +331,250 @@ class Dim_ibge(models.Model):
         if !db_dir_existed && isdir(PormG.MODEL_PATH) && isempty(readdir(PormG.MODEL_PATH))
             rm(PormG.MODEL_PATH)
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): the app prefix rides in db_table, not the positional name
+# `Settings.django_prefix` is ONE value per connection, so it cannot express the
+# `core_` / `access_` / `imports_` of a multi-app project. The prefix therefore
+# moves to per-model `db_table`. Every model gains one; the positional slot keeps
+# the logical handle; the JULIA BINDING is untouched, because it was always
+# derived from `model.name` (the Python class name) and never saw the prefix.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer carries the app prefix in db_table (#345)" begin
+    # Two class-naming conventions on purpose: `Dim_uf` (Capitalized_snake_case) and `DimIbge`
+    # (Django house style). Both must land on Django's own derivation, `class.__name__.lower()`.
+    source = """
+from django.db import models
+
+class Dim_uf(models.Model):
+    nome = models.CharField(max_length=50)
+
+class DimIbge(models.Model):
+    cidade = models.CharField(max_length=10)
+"""
+
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "dash")
+    try
+        # Positional slot = logical handle; db_table = the physical Django table.
+        @test occursin("Models.Model(\"dim_uf\", db_table = \"dash_dim_uf\"", generated)
+        @test occursin("Models.Model(\"dimibge\", db_table = \"dash_dimibge\"", generated)
+
+        # `DimIbge` lowers to "dimibge", NOT "dim_ibge" — Django inserts no underscore either, so a
+        # camel-cased class still addresses the table Django actually created.
+        @test !occursin("\"dim_ibge\"", generated)
+
+        # The prefix must be GONE from the positional slot. Without this the change is a no-op that
+        # merely also emits db_table.
+        @test !occursin("Models.Model(\"dash_dim_uf\"", generated)
+        @test !occursin("Models.Model(\"dash_dimibge\"", generated)
+
+        # The binding is unchanged by the prefix — it comes from the class name, so it is the same
+        # string a consuming app already writes as `M.Dim_uf`.
+        @test occursin("Dim_uf = Models.Model(", generated)
+        @test occursin("DimIbge = Models.Model(", generated)
+        @test !occursin("Dash_dim_uf", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): without a prefix the output is byte-for-byte unchanged
+# The un-prefixed path is what every other testset in this file exercises, and it
+# is the overwhelmingly common case. Pinning it here states plainly that #345 adds
+# a db_table only where a prefix exists to carry — a model with no prefix and no
+# Meta.db_table must still emit NO db_table at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer emits no db_table without a prefix (#345)" begin
+    source = """
+from django.db import models
+
+class Dim_uf(models.Model):
+    nome = models.CharField(max_length=50)
+"""
+
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = nothing)
+    try
+        @test occursin("Dim_uf = Models.Model(\"dim_uf\",", generated)
+        @test !occursin("db_table", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): Meta.db_table stays ABSOLUTE, as in Django
+# Django's Meta.db_table overrides the derived `<app>_<model>` name outright. That
+# precedence has to survive the prefix moving into the same slot — otherwise the
+# app label would silently win over an explicitly declared legacy table name.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer keeps Meta.db_table absolute under a prefix (#345)" begin
+    source = """
+from django.db import models
+
+class Matricula(models.Model):
+    codigo = models.CharField(max_length=10)
+
+    class Meta:
+        db_table = "rh_matricula_legado"
+"""
+
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "dash")
+    try
+        # The declared table wins; the positional slot is still the logical handle.
+        @test occursin("Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"", generated)
+        # The app prefix must NOT be applied on top of, or instead of, the declared name.
+        @test !occursin("dash_matricula", generated)
+        @test !occursin("dash_rh_matricula_legado", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): an auto-derived ManyToMany join table is pinned
+# Django names the implicit through table `<the owning model's table>_<field>`
+# (`ManyToManyField._get_m2m_db_table`, which reads `opts.db_table`) — so
+# `<app>_<model>_<field>` only when the class does NOT declare Meta.db_table.
+# PormG's `_many_to_many_table_name` derives `<logical model>_<field>` with the
+# app label stripped, so on a prefixed app the ORM addressed a table Django never
+# created. The importer is the only place that knows the app label, so it pins.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer pins the ManyToMany join table under a prefix (#345)" begin
+    source = """
+from django.db import models
+
+class Dim_uf(models.Model):
+    nome = models.CharField(max_length=50)
+
+class DimIbge(models.Model):
+    ufs = models.ManyToManyField(Dim_uf)
+    regioes = models.ManyToManyField(Dim_uf, db_table="legado_regioes")
+    vinculos = models.ManyToManyField(Dim_uf, through='Vinculo')
+
+class Matricula(models.Model):
+    setores = models.ManyToManyField(Dim_uf)
+
+    class Meta:
+        db_table = "rh_matricula_legado"
+"""
+
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "dash")
+    try
+        # Django's spelling for the implicit table: <app>_<lowercased class>_<field>.
+        @test occursin("ufs = Models.ManyToManyField(\"Dim_uf\", db_table=\"dash_dimibge_ufs\")", generated)
+        # A db_table written in the Django source is authoritative — never overwritten by the prefix.
+        @test occursin("db_table=\"legado_regioes\"", generated)
+        @test !occursin("dash_legado_regioes", generated)
+        @test !occursin("dash_dimibge_regioes", generated)
+
+        # Django derives the join table from `opts.db_table` (`ManyToManyField._get_m2m_db_table`),
+        # NOT from the app label + class name. With a Meta.db_table the two diverge, and composing
+        # the prefix with the class name would name a table that does not exist.
+        @test occursin("setores = Models.ManyToManyField(\"Dim_uf\", db_table=\"rh_matricula_legado_setores\")", generated)
+        @test !occursin("dash_matricula_setores", generated)
+
+        # `through=` means the join table IS the through model's table; Django ignores db_table
+        # entirely there, so pinning one would write a false claim into the artifact.
+        @test occursin("vinculos = Models.ManyToManyField(\"Dim_uf\", through=\"Vinculo\")", generated)
+        @test !occursin("dash_dimibge_vinculos", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): no join-table pin without a prefix
+# Without a configured prefix the app label is unknown, so there is nothing to
+# reproduce Django's `<app>_…` spelling from. Guessing would be worse than the
+# existing derivation, so the M2M field must be left exactly as it was.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer leaves the ManyToMany join table derived without a prefix (#345)" begin
+    source = """
+from django.db import models
+
+class Dim_uf(models.Model):
+    nome = models.CharField(max_length=50)
+
+class DimIbge(models.Model):
+    ufs = models.ManyToManyField(Dim_uf)
+"""
+
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = nothing)
+    try
+        @test occursin("ufs = Models.ManyToManyField(\"Dim_uf\")", generated)
+        @test !occursin("db_table", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # An EMPTY prefix is the absence of one, and the M2M pin must agree with `Model_to_str` about
+    # that (#345). Gating on a bare `!== nothing` here would compose `string("", "_", "dimibge")` and
+    # pin `_dimibge_ufs` — a table with a leading underscore that nothing creates, emitted into a file
+    # that otherwise looks unprefixed.
+    generated_empty, key_empty, existed_empty = import_django_source(source; django_prefix = "")
+    try
+        @test occursin("ufs = Models.ManyToManyField(\"Dim_uf\")", generated_empty)
+        @test !occursin("db_table", generated_empty)
+        @test !occursin("_dimibge", generated_empty)
+        # ...and identical to the genuinely-unset run, which is the contract.
+        @test generated_empty == generated
+    finally
+        cleanup_import_test!(key_empty, existed_empty)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): an underscore-prefixed class still produces a file that LOADS
+# `_validate_positional_model_name` rejects a leading-underscore positional name
+# REGARDLESS of db_table (#306). Moving the app prefix out of that slot therefore
+# re-exposed the class of name the prefix used to mask: `class _Internal` under
+# prefix "dash" emitted the loadable `Model("dash__internal")` before, and would
+# emit `Model("_internal", …)` — a ModelDefinitionError at include time — after.
+# The positional slot is free to drop the underscore precisely because db_table is
+# now pinning the real table, which is the same trade `inspectdb` already makes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer emits a loadable file for an underscore-prefixed class (#345)" begin
+    source = """
+from django.db import models
+
+class _Internal(models.Model):
+    nome = models.CharField(max_length=5)
+
+class ___(models.Model):
+    valor = models.CharField(max_length=5)
+"""
+    output_file = "django_345_underscore_unit.jl"
+    config_key, db_dir_existed = temp_import_config!(django_prefix = "dash")
+
+    try
+        import_models_from_django(source; db = config_key, file = output_file, force_replace = true)
+        generated = read(joinpath(config_key, output_file), String)
+
+        # The physical table keeps the underscore Django gave it; the logical handle drops it.
+        @test occursin("Models.Model(\"internal\", db_table = \"dash__internal\"", generated)
+        @test !occursin("Models.Model(\"_internal\"", generated)
+
+        # An ALL-underscore class strips to the empty string, which as a positional name silently
+        # means "derive from the binding". The sanitizer's placeholder (`col`) is used instead —
+        # free to be arbitrary precisely because db_table carries the real table.
+        @test occursin("Models.Model(\"col\", db_table = \"dash____\"", generated)
+        @test !occursin("Models.Model(\"___\"", generated)
+
+        # The assertion that actually matters: the file loads. String-matching the output cannot
+        # establish this — the pre-#345 spelling rendered fine and threw on include.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        m = Core.eval(sandbox, :(django_345_underscore_unit._Internal))
+        @test PormG.model_table_name(m) == "dash__internal"
+        @test m.name == "internal"
+
+        allunder = Core.eval(sandbox, :(django_345_underscore_unit.Col))
+        @test PormG.model_table_name(allunder) == "dash____"
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
     end
 end
 
@@ -1287,7 +1558,61 @@ end
         @test rc[1].name == "uniq_servidor_cpf_lotacao"
 
         # A model declaring no db_table must not have acquired one on the way through.
+        # (#345 note: this fixture imports with NO prefix — `temp_import_config!` defaults to
+        # `django_prefix = nothing`. Under a prefix every model legitimately gains a db_table, which
+        # is what the prefixed round-trip below asserts instead.)
         @test !PormG.model_has_db_table(modelof(:Setor))
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#345): the PREFIXED generated module is loadable Julia
+# The sharpest test of the change: rendering the right string proves nothing if
+# the file does not load, or if the reloaded model addresses a different table
+# than the one Django owns. This evaluates the generated module and reads the
+# physical table, the logical name and the binding back off the live objects.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer emits a loadable prefixed module (#345)" begin
+    source = """
+from django.db import models
+
+class Dim_uf(models.Model):
+    nome = models.CharField(max_length=50)
+
+class Matricula(models.Model):
+    codigo = models.CharField(max_length=10)
+
+    class Meta:
+        db_table = "rh_matricula_legado"
+"""
+    output_file = "django_345_roundtrip_unit.jl"
+    config_key, db_dir_existed = temp_import_config!(django_prefix = "dash")
+
+    try
+        import_models_from_django(source; db = config_key, file = output_file, force_replace = true)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(read(joinpath(config_key, output_file), String)))
+        # Same world-age dance as the testset above.
+        modelof(sym) = Core.eval(sandbox, :(django_345_roundtrip_unit.$sym))
+
+        # The reloaded model queries Django's real table while its logical name — the thing every
+        # accessor and reverse relation is keyed on — stays un-prefixed.
+        dim_uf = modelof(:Dim_uf)
+        @test PormG.model_table_name(dim_uf) == "dash_dim_uf"
+        @test dim_uf.name == "dim_uf"
+        @test PormG.model_has_db_table(dim_uf)
+
+        # Meta.db_table remains absolute after a reload, not just at render time.
+        matricula = modelof(:Matricula)
+        @test PormG.model_table_name(matricula) == "rh_matricula_legado"
+        @test matricula.name == "matricula"
+
+        # The BINDING is the class name, unchanged by the prefix. Asserted by resolving the exact
+        # symbol a consuming app writes — `Dash_dim_uf` would raise here.
+        @test modelof(:Dim_uf) isa PormG.PormGModel
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

@@ -321,10 +321,25 @@ function get_model_pk_field(model::PormGModel)::Union{Symbol, Nothing}
   end
 end
 
+# The connection's Django app label, or `nothing` when there is none (#345). An EMPTY string is not a
+# prefix — it is the absence of one, spelled badly. The distinction matters because `Settings` is
+# populated generically from `connection.yml`'s `config:` block (`hasfield(Settings, Symbol(k))` ->
+# `setfield!`), so `django_prefix: ''` reaches this field, and every consumer composes
+# `"$(prefix)_"`. Treating `""` as set derives `_dim_uf` for a table named `dim_uf`, and strips a
+# bare `"_"` from every logical name. Before #345 the first of those was at least loud — the
+# generated `Model("_dim_uf", …)` was rejected at include time by the leading-underscore guard — but
+# with the prefix moved into `db_table` the file loads and every query silently reads `_dim_uf`.
+function _django_app_label(settings::PormGSettings)::Union{Nothing, String}
+  prefix = settings.django_prefix
+  (prefix === nothing || isempty(prefix)) && return nothing
+  return String(prefix)
+end
+
 function get_model_name(model::PormGModel, settings::PormGSettings, symbol::Bool=true)::Union{String, Symbol}
   value::Union{String, Symbol, Nothing} = nothing
-  if settings.django_prefix !== nothing
-    django_prefix = """$(settings.django_prefix)_"""
+  app_label = _django_app_label(settings)
+  if app_label !== nothing
+    django_prefix = """$(app_label)_"""
     value = replace(model.name, django_prefix => "") |> lowercase
   else
     value = model.name |> lowercase
@@ -1521,6 +1536,9 @@ Converts a model object to a string representation to create the model.
     Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
 - `settings::PormGSettings`: Connection settings; supplies `django_prefix` and the target output folder.
+  A non-empty `django_prefix` is emitted as `db_table = "<prefix>_<lowercased name>"` rather than
+  folded into the positional slot (#345) — see the `db_table` block below. `nothing` and `""` both
+  mean "no app label" (`_django_app_label`).
 - `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
   the words that cannot be a Julia keyword-argument name. A column named after one of them (or after a
   model option, or otherwise not a legal identifier) is emitted under a sanitized name with the real
@@ -1566,7 +1584,9 @@ users = Models.Model("users",
 function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
   fields::String = ""
   render_failures::Vector{String} = String[]
-  django_prefix::Bool = settings.django_prefix === nothing ? false : true
+  # `_django_app_label` rather than a bare `!== nothing`: an empty prefix is the absence of one (#345).
+  app_label::Union{Nothing, String} = _django_app_label(settings)
+  django_prefix::Bool = app_label !== nothing
   # Iterate fields by name for deterministic output. Use `sort(collect(...))` rather than
   # `sort(::Dict)` (via `pairs(...) |> sort`), which is deprecated and emits a Warn-level
   # depwarn — that surfaces under CI's depwarn-enabled `Pkg.test` run and trips the #70
@@ -1705,39 +1725,66 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   #
   # The caller must SAY which it has: the Django importer's `model.name` is a Python CLASS name, not
   # a table name — its physical table genuinely IS the lowercased form — so inferring "not lowercase
-  # ⇒ physical" from the string would make it pin a table that does not exist. Skipped under
-  # `django_prefix` too, where the prefixed lowercase name IS the physical one.
+  # ⇒ physical" from the string would make it pin a table that does not exist.
   #
   # `model_has_db_table`/`model_table_name` rather than `model.db_table`: the signature accepts any
   # `PormGModel`, and only `Model_Type` is guaranteed to carry the field.
-  pin_introspected = name_is_physical_table && !django_prefix &&
+  pin_introspected = name_is_physical_table &&
                      (model.name != lowercase(model.name) || startswith(model.name, "_"))
+  #  3. A Django app prefix (#345). `django_prefix` used to be prepended to the POSITIONAL slot, which
+  #     made the app label a property of the connection: `Settings.django_prefix` is one
+  #     `Union{Nothing, String}`, so a project splitting models across `core_`, `access_` and
+  #     `imports_` had no value that expresses all three. The prefix now lands in `db_table`, where it
+  #     is per model — which is what unblocks the multi-app importer (#346).
+  #
+  #     `!name_is_physical_table` is the whole guard, and it is not a nicety. On that path `model.name`
+  #     IS the live table name, ALREADY prefixed, so prepending again produced `dash_dash_dim_uf` —
+  #     a real defect in `inspectdb` under a prefix, latent only because no fixture sets one. The old
+  #     `!django_prefix` clause on `pin_introspected` above existed to paper over the same confusion
+  #     ("under a prefix the prefixed lowercase name IS the physical one"); with the prefix out of the
+  #     positional slot that premise is gone, and so is the clause.
+  pin_django_prefix = django_prefix && !name_is_physical_table
+  # Order is Django's: `Meta.db_table` is ABSOLUTE and overrides the app prefix, so it stays first.
   db_table_abs = if model_has_db_table(model)
     model_table_name(model)
+  elseif pin_django_prefix
+    string(app_label, "_", lowercase(model.name))
   elseif pin_introspected
     String(model.name)
   else
     nothing
   end
   db_table_part = db_table_abs === nothing ? "" : ", db_table = $(format_string(db_table_abs))"
-  # The positional slot drops leading underscores ONLY when the original is being pinned as
+  # The positional slot drops leading underscores ONLY when the real table is being pinned as
   # `db_table` above — the two are one decision, not two. Stripping without pinning is precisely the
   # "generated declaration silently addresses a different table" defect the `name_is_physical_table`
-  # gate exists to prevent: the Django importer's `_InternalThing` maps to table `_internalthing`,
-  # so emitting `internalthing` there would be wrong.
+  # gate exists to prevent: an unprefixed Django import of `_InternalThing` maps to table
+  # `_internalthing`, so emitting `internalthing` there would be wrong.
+  #
+  # The condition is `db_table_abs !== nothing` rather than `pin_introspected` (#345). Those agreed
+  # while the introspection pin was the only pin; they no longer do, and the difference is a file
+  # that does not load. `_validate_positional_model_name` rejects a leading underscore REGARDLESS of
+  # `db_table`, so with the app prefix now living in `db_table`, `class _Internal` under prefix
+  # `dash` would emit `Model("_internal", db_table = "dash__internal")` and throw at include time —
+  # where before #345 it emitted the (loadable) `Model("dash__internal")`. Keying on the pin instead
+  # restores that, and closes the same hole for an explicit `Meta.db_table`, which had it all along.
   #
   # An ALL-underscore table (`_`, `___`) strips to the empty string, which as a positional name
   # silently means "derive from the binding". Emitting the unstripped `_` instead is no better — the
   # #306 guard rejects it, so the generated file did not load. Since this branch is only reached when
   # `db_table` is pinning the real name anyway, the positional slot is free to take a placeholder that
   # the guard accepts (#317).
+  #
+  # The positional slot is the LOGICAL handle and nothing else (#345). It is `lowercase(model.name)`,
+  # which for the Django importer is `lowercase(<class name>)` — Django's own derivation
+  # (`model.__name__.lower()`), so `Dim_uf` -> "dim_uf" and `ImportBatch` -> "importbatch" both agree
+  # with the app's real table minus its prefix. The prefix itself is pinned as `db_table` above.
+  _pins_table = db_table_abs !== nothing
   _lowered = model.name |> lowercase
-  _stripped_name = pin_introspected ? lstrip(_lowered, '_') : _lowered
-  model_name_abs = if django_prefix
-    string(settings.django_prefix, "_", _lowered)
-  elseif !isempty(_stripped_name)
+  _stripped_name = _pins_table ? lstrip(_lowered, '_') : _lowered
+  model_name_abs = if !isempty(_stripped_name)
     String(_stripped_name)
-  elseif pin_introspected
+  elseif _pins_table
     # `db_table` carries the truth; this is only the logical handle, so any name the guard accepts
     # will do. The sanitizer yields `col` for an all-underscore name.
     lowercase(_julia_field_identifier(_lowered, contants_julia, Set{String}(), Set{String}()))
@@ -1754,6 +1801,12 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   # bug this issue is about. So: when dedup actually changes the string AND nothing already pinned
   # the table (`db_table_abs === nothing`), pin the PRE-dedup name explicitly, the same way
   # `pin_introspected` already pins one for a leading-underscore/mixed-case name above.
+  #
+  # #345 adds a third way `db_table_abs` is already non-`nothing` here, and the guard handles it
+  # unchanged: under a Django app prefix the physical table is pinned for every model, so a dedup
+  # renames only the handle. Two classes that collide on `lowercase(name)` then both point at the one
+  # table the prefix derives — which is correct, and is a project Django itself rejects
+  # ("Conflicting 'x' models in application"), so there is nothing to disambiguate toward.
   _pre_dedupe_name_abs = model_name_abs
   model_name_abs = _dedupe_taken(model_name_abs, taken_names)
   push!(taken_names, model_name_abs)

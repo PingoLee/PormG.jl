@@ -532,3 +532,51 @@ end
   dc_driver = deepcopy(M2M.Driver)
   @test Models.get_many_to_many_relation(dc_driver, "championships").related_model_resolved === M2M.Driver_championship
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #345: the derived join COLUMN follows the logical model name, and that name is
+# now un-prefixed.
+#
+# CHARACTERIZATION test, not a regression test for #345: it pins behaviour of
+# `_many_to_many_column_name` / `_many_to_many_table_name`, which #345 does not
+# modify, so it passes against the pre-#345 tree too. It earns its place because
+# #345 changes what `model.name` CONTAINS, which makes this derivation newly
+# load-bearing and its output DDL-visible — the assertion that the column follows
+# `name` and not `db_table` is the one a future refactor would break. The
+# discriminating test for #345's own M2M behaviour is the importer round-trip in
+# `test_import_django_models.jl`.
+#
+# `_many_to_many_table_name` strips `django_prefix` (via `get_model_name`) but
+# `_many_to_many_column_name` never did — it reads `model.name` raw. So a model
+# named `dash_dim_uf` derived the column `dash_dim_uf_id` while Django's real
+# through-table column is `dim_uf_id`: PormG queried a column that did not exist.
+# After #345 the importer emits `Model("dim_uf", db_table = "dash_dim_uf")`, and
+# the derivation lands on Django's spelling. This pins that the column follows
+# `name` (the logical handle) and NOT `db_table` (the physical table).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ManyToMany join columns follow the logical name, not db_table (#345)" begin
+  no_prefix = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  # The post-#345 shape: logical name un-prefixed, physical table pinned.
+  post = Models.Model("dim_uf", db_table = "dash_dim_uf", id = Models.IDField())
+  @test Models._many_to_many_column_name(post, "id") == "dim_uf_id"   # == Django's column
+
+  # The pre-#345 shape, for contrast: prefix fused into the name.
+  pre = Models.Model("dash_dim_uf", id = Models.IDField())
+  @test Models._many_to_many_column_name(pre, "id") == "dash_dim_uf_id"
+
+  # The derived join TABLE reads the logical name too, so it is unchanged by the move — with the
+  # prefix out of `name`, `get_model_name`'s strip is simply a no-op on the same string.
+  m2m = Models.ManyToManyField("Dim_uf")
+  @test Models._many_to_many_table_name(post, "ufs", m2m, no_prefix) == "dim_uf_ufs"
+  prefixed = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true,
+                                          django_prefix = "dash")
+  @test Models._many_to_many_table_name(post, "ufs", m2m, prefixed) == "dim_uf_ufs"
+
+  # ...which is exactly why the importer pins `db_table` on the field: PormG's derivation is
+  # `<logical model>_<field>`, Django's is `<the owning model's table>_<field>` (its `opts.db_table`,
+  # which is `<app>_<model>` only by default and follows `Meta.db_table` otherwise), and only a pin
+  # reconciles them.
+  pinned = Models.ManyToManyField("Dim_uf", db_table = "dash_dimibge_ufs")
+  @test Models._many_to_many_table_name(post, "ufs", pinned, prefixed) == "dash_dimibge_ufs"
+end

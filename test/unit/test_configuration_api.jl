@@ -1,5 +1,6 @@
 using Test
 using PormG
+import Logging
 
 if !haskey(ENV, "PORMG_ENV")
     ENV["PORMG_ENV"] = "test"
@@ -550,6 +551,153 @@ end
             @test err isa MDCE
             @test occursin("staging", err.msg)
             @test occursin("dev", err.msg) && occursin("test", err.msg)
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+end
+
+# ── #365: connection.yml unrecognised config keys + typo suggestions ──────────────────────────
+# An unrecognised key in a `config:` block must emit a structured `@warn` naming the key and the
+# environment. Plausible typos receive a `did_you_mean` nearest candidate; distant garbage does not.
+# Internal `Settings` fields (app_env, db_def_folder, etc.) are excluded from the allowlist.
+@testset "unrecognised config keys emit warnings with suggestions (#365)" begin
+    @testset "typo in config key suggests nearest valid key" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            open(joinpath(db_dir, "connection.yml"), "w") do f
+                write(f,
+                    "dev:\n" *
+                    "  adapter: SQLite\n" *
+                    "  database: \":memory:\"\n" *
+                    "  config:\n" *
+                    "    change_data: true\n" *
+                    "    djago_prefix: dash\n" *
+                    "    chnge_db: true\n" *
+                    "    timezone: 'UTC'\n"
+                )
+            end
+
+            logs, _ = Test.collect_test_logs() do
+                PormG.Configuration.load(db_dir; env="dev")
+            end
+
+            warns = filter(l -> l.level == Logging.Warn && occursin("unrecognised config key", l.message), logs)
+            @test length(warns) == 3
+
+            warn_map = Dict(String(Dict(w.kwargs)[:key]) => Dict(w.kwargs) for w in warns)
+            @test haskey(warn_map, "djago_prefix")
+            @test warn_map["djago_prefix"][:env] == "dev"
+            @test warn_map["djago_prefix"][:did_you_mean] == "django_prefix"
+
+            @test haskey(warn_map, "chnge_db")
+            @test warn_map["chnge_db"][:env] == "dev"
+            @test warn_map["chnge_db"][:did_you_mean] == "change_db"
+
+            @test haskey(warn_map, "timezone")
+            @test warn_map["timezone"][:env] == "dev"
+            @test warn_map["timezone"][:did_you_mean] == "time_zone"
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "garbage key emits warning without did_you_mean" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            open(joinpath(db_dir, "connection.yml"), "w") do f
+                write(f,
+                    "dev:\n" *
+                    "  adapter: SQLite\n" *
+                    "  database: \":memory:\"\n" *
+                    "  config:\n" *
+                    "    completely_unknown_key: 123\n"
+                )
+            end
+
+            logs, _ = Test.collect_test_logs() do
+                PormG.Configuration.load(db_dir; env="dev")
+            end
+
+            warns = filter(l -> l.level == Logging.Warn && occursin("unrecognised config key", l.message), logs)
+            @test length(warns) == 1
+            w = first(warns)
+            kw = Dict(w.kwargs)
+            @test kw[:key] == "completely_unknown_key"
+            @test kw[:env] == "dev"
+            @test !haskey(kw, :did_you_mean)
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "internal Settings fields cannot be set from config: and are warned" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            open(joinpath(db_dir, "connection.yml"), "w") do f
+                write(f,
+                    "dev:\n" *
+                    "  adapter: SQLite\n" *
+                    "  database: \":memory:\"\n" *
+                    "  config:\n" *
+                    "    app_env: hacked_env\n" *
+                    "    db_def_folder: /tmp/fake\n" *
+                    "    connections: null\n"
+                )
+            end
+
+            logs, _ = Test.collect_test_logs() do
+                PormG.Configuration.load(db_dir; env="dev")
+            end
+
+            warns = filter(l -> l.level == Logging.Warn && occursin("unrecognised config key", l.message), logs)
+            @test length(warns) == 3
+
+            s = PormG.Configuration.get_settings(db_dir)
+            @test s.app_env == "dev"
+            @test s.db_def_folder == db_dir
+            @test s.connections !== nothing
+
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+
+    @testset "all valid config: keys are accepted with no warning" begin
+        mktempdir() do temp_root
+            db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+            open(joinpath(db_dir, "connection.yml"), "w") do f
+                write(f,
+                    "dev:\n" *
+                    "  adapter: SQLite\n" *
+                    "  database: \":memory:\"\n" *
+                    "  config:\n" *
+                    "    change_db: true\n" *
+                    "    change_data: true\n" *
+                    "    django_prefix: myapp\n" *
+                    "    time_zone: 'America/Sao_Paulo'\n" *
+                    "    log_queries: false\n" *
+                    "    log_level: 'warn'\n" *
+                    "    log_to_file: false\n" *
+                    "    model_file: 'custom_models.jl'\n"
+                )
+            end
+
+            logs, _ = Test.collect_test_logs() do
+                PormG.Configuration.load(db_dir; env="dev")
+            end
+
+            unrec_warns = filter(l -> l.level == Logging.Warn && occursin("unrecognised config key", l.message), logs)
+            @test isempty(unrec_warns)
+
+            s = PormG.Configuration.get_settings(db_dir)
+            @test s.change_db == true
+            @test s.change_data == true
+            @test s.django_prefix == "myapp"
+            @test s.time_zone == "America/Sao_Paulo"
+            @test s.log_queries == false
+            @test s.log_level == Logging.Warn
+            @test s.log_to_file == false
+            @test s.model_file == "custom_models.jl"
 
             _cleanup_configuration_test_keys([db_dir])
         end

@@ -129,12 +129,29 @@ function _is_auto_generated_bulk_primary_key(field_meta)
     getfield(field_meta, :auto_increment)
 end
 
+# #334: a UUIDField(primary_key = true, auto_add = true) is also PormG-minted, but through
+# `auto_add` rather than `auto_increment`. `_is_auto_generated_bulk_primary_key` alone must stay
+# auto_increment-only — `allocate_primary_keys` uses it to find a pk to reserve sequence values
+# for, and a UUID pk has no sequence to reserve from. This is the wider "the DataFrame may leave
+# this pk column out or blank; PormG can mint it" check, used only by the blank-rescue below.
+function _is_pormg_minted_bulk_primary_key(field_meta)
+  return _is_auto_generated_bulk_primary_key(field_meta) ||
+    (field_meta.primary_key && field_meta.type == "UUID" && field_meta.auto_add)
+end
+
 # The single deliberate exception to the #331 rule ("a column the DataFrame carries is caller data;
-# PormG never rewrites its cells"): an auto-generated primary key column whose values are ALL blank
-# counts as ABSENT and is dropped from `mapping`/`fields_df` entirely, so the backend allocates the
-# ids. Note it REMOVES the column rather than rewriting cells, so the rule itself still holds — a
-# blank the caller wrote is never silently replaced by a different value. Mixed blank/explicit stays
-# a hard error. Documented for users in docs/src/write/bulk.md → Auto-Generated Primary Keys.
+# PormG never rewrites its cells"): a PormG-minted primary key column — auto-increment, or a UUID
+# `auto_add` (#334) — whose values are ALL blank counts as ABSENT and is dropped from
+# `mapping`/`fields_df` entirely, so the backend/PormG allocates the ids. Note it REMOVES the
+# column rather than rewriting cells, so the rule itself still holds — a blank the caller wrote is
+# never silently replaced by a different value. Mixed blank/explicit stays a hard error. Documented
+# for users in docs/src/write/bulk.md → Auto-Generated Primary Keys.
+#
+# #334 exception-type note: before this fix, a UUID `auto_add` pk never reached this function at
+# all (the old narrow predicate excluded it), so a mixed blank/explicit UUID pk column fell through
+# to the ordinary NOT NULL sweep and raised `InvalidValueError`. It now hits the SAME mixed-value
+# guard below as an auto-increment pk always has, and raises `QueryBuildError` — intentional, not a
+# regression: the two pk kinds now agree on both the error type and the message shape.
 function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
   model::PormGModel,
   fields_df::Vector{String},
@@ -147,7 +164,7 @@ function _drop_blank_auto_primary_keys!(df::DataFrames.DataFrame,
     haskey(mapping, field) || continue
 
     f_meta = model.fields[field]
-    _is_auto_generated_bulk_primary_key(f_meta) || continue
+    _is_pormg_minted_bulk_primary_key(f_meta) || continue
 
     col_name = mapping[field]
     blank_mask = map(_is_blank_bulk_primary_key_value, df[!, col_name])
@@ -478,7 +495,11 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   mapping = Dict{String, String}() # model_field => df_column
 
   # What PormG fills into a column the DataFrame does NOT carry: a static `default`, an
-  # auto_now/auto_now_add timestamp, or a UUID `auto_add` value. Returns (should_fill, value).
+  # auto_now/auto_now_add timestamp, or a UUID `auto_add` value. Returns
+  # (should_fill, value_or_values, per_row). `per_row` is true only for the UUID `auto_add` case,
+  # where `value_or_values` is already a Vector sized to `DataFrames.nrow(df)` — one fresh UUID
+  # per row. For every other fill kind `per_row` is false and `value_or_values` is the single
+  # value broadcast across the whole batch, unchanged from before #334.
   #
   # #331: this is consulted ONLY where the field has no mapped source column in the frame — both
   # call sites below are guarded on exactly that (`!haskey(mapping, field)` in one arm, the
@@ -496,24 +517,27 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   # `pit_stops` binds `laps`'s default instead of the frame's numbers. Narrow (it needs the name
   # collision) but silent. The guard belongs at the injection sites, not here.
   #
-  # Second hole (#334): the UUID branch below calls `uuid4()` ONCE per field, and the injection
-  # sites broadcast that one value across the frame — so every row of an `auto_add` UUID column
-  # gets the same value, colliding immediately on a primary key. Correct for the temporal fills
-  # this idiom was written for (one `now()` per batch is intentional), wrong for UUIDs.
+  # #334 (fixed): the UUID branch below used to call `uuid4()` ONCE per field, and the two
+  # injection sites broadcast that single value across the whole frame — every row of an
+  # absent `auto_add` UUID column got the SAME value, colliding immediately on a primary or
+  # unique column. It now returns one fresh UUID PER ROW (`per_row = true`), while the
+  # temporal fills stay deliberately ONE value per batch (one `now()` per batch is
+  # intentional, matching `_prepare_row_insert!`'s comment above). The two injection sites
+  # stay generic: they branch on `per_row`, never on field type.
   #
   # The chain is deliberately EXCLUSIVE and default-first, mirroring `_prepare_row_insert!`
   # (execution.jl:557-572): a field carrying BOTH a static `default` and `auto_now` takes the
   # default, on the single-row and bulk paths alike.
   function resolve_absent_column_fill(f_meta)
     if f_meta.default !== nothing
-      return true, f_meta.default
+      return true, f_meta.default, false
     elseif f_meta.type == "TIMESTAMPTZ"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
         value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
-        return true, value
+        return true, value, false
       elseif operation == :update && f_meta.auto_now
         value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
-        return true, value
+        return true, value, false
       end
     elseif f_meta.type == "DATE"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
@@ -524,17 +548,18 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         # Sanitization handles both `Date` objects and date strings correctly, so
         # bypassing the formatter is intentional. If `DateField` ever gains a
         # custom value-transforming formatter, this path must be updated to call it.
-        return true, today()
+        return true, today(), false
       elseif operation == :update && f_meta.auto_now
-        return true, today()
+        return true, today(), false
       end
     elseif f_meta.type == "UUID" && f_meta.auto_add
       if operation in [:insert, :copy]
-        return true, UUIDs.uuid4()
+        # #334: one distinct UUID per row, not one for the whole batch.
+        return true, [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)], true
       end
     end
 
-    return false, nothing
+    return false, nothing, false
   end
   
   # 1. Identify mappings and check required columns
@@ -637,7 +662,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       if !haskey(mapping, field)
         # ABSENT column: the field was requested via `columns=` but the DataFrame has no column
         # for it. The fill rule applies — inject one whole column of the fill value.
-        should_auto_populate, fill_value = resolve_absent_column_fill(f_meta)
+        should_auto_populate, fill_value, per_row = resolve_absent_column_fill(f_meta)
 
         if should_auto_populate
           # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
@@ -650,7 +675,9 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
             # Add new column to DF and update mapping
             # Use first mapped column as a length reference
             ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-            df[!, field] = map(x -> fill_value, df[!, ref_col])
+            # #334: per_row means fill_value is already a Vector, one distinct value per row
+            # (currently only the UUID auto_add case) — otherwise broadcast the one value.
+            df[!, field] = per_row ? fill_value : map(x -> fill_value, df[!, ref_col])
             mapping[field] = field
           end
         elseif f_meta.primary_key
@@ -682,7 +709,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       # is a worse contract than the one above. (A *narrow* deferral, only when `field in
       # names(df)`, would keep genuinely-absent columns injected and so would not break
       # auto_now_add stamping — the objection is the contract, not a NOT NULL failure.)
-      should_auto_populate, fill_value = resolve_absent_column_fill(f_meta)
+      should_auto_populate, fill_value, per_row = resolve_absent_column_fill(f_meta)
 
       if should_auto_populate
         # For an explicit-scope UPDATE (columns= was provided), a static `default`
@@ -693,7 +720,8 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         is_explicit_update = operation == :update && !isempty(normalized_columns)
         if !(is_explicit_update && is_static_default)
           ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-          df[!, field] = map(x -> fill_value, df[!, ref_col])
+          # #334: see the sibling injection site above.
+          df[!, field] = per_row ? fill_value : map(x -> fill_value, df[!, ref_col])
           mapping[field] = field
           push!(fields_df, field)
         end

@@ -48,13 +48,7 @@ Qualifications:
 - **A field you leave out of `columns=` is out of scope, not "your data".** If your frame carries a column for it, those cells are not written — you said not to write that field. On `bulk_insert()`/`bulk_copy()` PormG still supplies the field's default or timestamp, which is what lets a partial `columns=` insert satisfy the model's `null=false` columns.
 - `bulk_update(..., columns = [...])` does **not** synthesize a static `default` for an absent column — that would overwrite live rows merely because your frame lacks the column. `auto_now`/`auto_now_add` still inject, so timestamps stay current.
 - **`match_on` key columns are not null-checked.** They identify rows rather than being written, so a blank cell in one does not raise — it simply matches nothing, since `column = NULL` is never true. Before this rule changed, such a blank was quietly back-filled with the field's `default` and matched the default-valued row instead. (`filters=` fields are exempt from the check too, but they carry constants rather than `DataFrame` columns, so no cell can be blank there.)
-- An auto-increment primary key column whose values are **all** blank counts as absent, so the database allocates the ids. See [Auto-Generated Primary Keys](#Auto-Generated-Primary-Keys). This does **not** extend to a `UUIDField(auto_add = true)` primary key — carrying that column blank now raises. Fill it yourself, which works because a present column is honored verbatim:
-
-    ```julia
-    df[!, :token] = [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)]
-    ```
-
-    Dropping the column is *not* the fix: the absent path currently mints one UUID for the whole batch ([#334](https://github.com/PingoLee/PormG.jl/issues/334)), so a multi-row insert collides on the key.
+- An auto-increment primary key column whose values are **all** blank counts as absent, so the database allocates the ids. A `UUIDField(auto_add = true)` primary key follows the same rule too — see [Auto-Generated Primary Keys](#Auto-Generated-Primary-Keys) for both.
 
 ---
 
@@ -156,6 +150,12 @@ Do not prefill an auto-increment primary key with `max(id) + 1` before calling `
 - If you want to load explicit primary key values, provide a value for every row. Mixed blank and explicit values are rejected because the bulk path cannot safely express a row-by-row mix of generated and manual ids.
 
 This keeps id allocation concurrency-safe and avoids the collision risks of a client-side `SELECT MAX(id)` allocator.
+
+A `UUIDField(primary_key = true, auto_add = true)` column follows the same absent/all-blank/mixed rules ([#334](https://github.com/PingoLee/PormG.jl/issues/334)): omit the column, or carry it with every cell blank, and PormG mints a fresh, **distinct** `uuid4()` per row; mix blank and explicit cells and it raises, same as an auto-increment pk. `allocate_primary_keys()` (below) does **not** support pre-reserving UUID pks, though — there is nothing to reserve from a database sequence. Generate the values locally instead, before the bulk call, if you need them ahead of the insert:
+
+```julia
+df[!, :token] = [UUIDs.uuid4() for _ in 1:DataFrames.nrow(df)]
+```
 
 ### Pre-allocating Primary Keys for Cross-Table FK Wiring
 

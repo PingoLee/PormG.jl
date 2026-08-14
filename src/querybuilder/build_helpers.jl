@@ -124,43 +124,11 @@ end
 # "did you mean" suggestion for typos.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Iterative Levenshtein edit distance (two-row, O(min(m,n)) memory). Runs only when
-# building a typo suggestion, never on the happy path.
-function _levenshtein(a::AbstractString, b::AbstractString)::Int
-  av, bv = collect(a), collect(b)
-  m, n = length(av), length(bv)
-  m == 0 && return n
-  n == 0 && return m
-  prev = collect(0:n)
-  curr = Vector{Int}(undef, n + 1)
-  for i in 1:m
-    curr[1] = i
-    @inbounds for j in 1:n
-      cost = av[i] == bv[j] ? 0 : 1
-      curr[j + 1] = min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
-    end
-    prev, curr = curr, prev
-  end
-  return prev[n + 1]
-end
-
 # Nearest valid operator suffix to `suffix`, or nothing when nothing is close enough
 # to be a plausible typo (so garbage input does not get a nonsense suggestion).
-function _suggest_operator(suffix::AbstractString)::Union{Nothing,String}
-  best = nothing
-  best_d = typemax(Int)
-  for k in keys(PormGsuffix)
-    d = _levenshtein(suffix, k)
-    if d < best_d
-      best_d = d
-      best = k
-    end
-  end
-  # Suggest only when the edit is small relative to the typed length: keeps real
-  # near-misses (@notin→@nin, @containx→@contains) but rejects short garbage
-  # (@xy is 2 edits from @in — the whole word — so no suggestion).
-  return 2 * best_d <= length(suffix) ? best : nothing
-end
+# Uses the shared Kernel `_suggest_name` helper with the same threshold (#365).
+_suggest_operator(suffix::AbstractString)::Union{Nothing,String} =
+  _suggest_name(suffix, keys(PormGsuffix))
 
 # Consistent, actionable error for a filter operator that is not valid for the given
 # value shape. `field_path` is the split lookup (…, suffix); `shape` is a human word
@@ -1050,8 +1018,156 @@ function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
   return v.column._as === nothing ? nothing : get(instruc.tab_field_cache, v.column._as, nothing)
 end
 
+# #352: sargable rewrite for `col__@yyyy_mm` / `col__@year` / `col__@date` comparisons.
+#
+# `to_char(col, 'YYYY-MM') <= $1` (and the EXTRACT(YEAR ...) equivalent) puts a function call on
+# the indexed column: no index on `col` applies, and PostgreSQL cannot estimate selectivity
+# through it (issue #352 measured a 193x row-count misestimate cascading into an 18+ minute plan).
+# Rewritten as a plain comparison/range on the raw column:
+#
+#   @exact (bare `=`)  col >= F AND col < N
+#   @gte               col >= F
+#   @gt                col >= N
+#   @lte               col < N
+#   @lt                col < F
+#
+# where F = first day of the bucket period and N = first day of the following period. `@date`
+# needs no range at all (F == the literal) since to_char at day granularity on a DATE column
+# preserves chronological order exactly — the rewrite there is just "drop the to_char".
+#
+# Scope (v1, deliberately narrow):
+#   - Only a bare (non-joined) column: a dotted join path only resolves its field TYPE after the
+#     join has rendered, which this function runs before — falling through to the existing
+#     to_char/EXTRACT rendering is always correct, just non-sargable for that case.
+#   - Only a plain DATE column (`_is_date_field`) — TIMESTAMPTZ/TIMESTAMP are excluded because
+#     to_char renders in the session TimeZone, so naively computing F/N would shift the boundary
+#     around midnight. Left on the existing rendering.
+#   - Only a plain scalar RHS (String/Number) — an F()/subquery/Case RHS falls through unchanged.
+#
+# Returns the rendered SQL string, or `nothing` to fall through to the existing rendering.
+function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::Union{String,Nothing}
+  isa(v.column, SQLTypeField) || return nothing
+  fobj = v.column.field
+  isa(fobj, FObject) || return nothing
+  raw_field = fobj.column
+  isa(raw_field, String) || return nothing
+  contains(raw_field, "__") && return nothing                       # bare-field-only in v1
+  v.operator in ("=", ">=", ">", "<=", "<") || return nothing
+  (v.values isa AbstractString || v.values isa Number) || return nothing
+  haskey(instruc.object.model.fields, raw_field) || return nothing
+  f_meta = instruc.object.model.fields[raw_field]
+  _is_date_field(f_meta) || return nothing                          # DATE only, not TIMESTAMP(TZ)
+
+  bucket = if fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM"
+    :yyyy_mm
+  elseif fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM-DD"
+    :date
+  elseif fobj.function_name == "EXTRACT" && get(fobj.kwargs, "part", nothing) == "YEAR" && !haskey(fobj.kwargs, "format")
+    :year
+  else
+    return nothing
+  end
+
+  column_sql = _get_select_query(raw_field, instruc)
+  bind(x) = add_parameter!(instruc, f_meta.formatter(x))
+
+  if bucket == :date
+    # Same granularity as the column: no range, operator unchanged — just drop the to_char.
+    return string(column_sql, " ", v.operator, " ", bind(v.values))
+  end
+
+  first_of_period, next_period = bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(v.values) : _year_bucket_bounds(v.values)
+
+  if v.operator == ">="
+    return string(column_sql, " >= ", bind(first_of_period))
+  elseif v.operator == ">"
+    return string(column_sql, " >= ", bind(next_period))
+  elseif v.operator == "<="
+    return string(column_sql, " < ", bind(next_period))
+  elseif v.operator == "<"
+    return string(column_sql, " < ", bind(first_of_period))
+  else # "="
+    p1, p2 = bind(first_of_period), bind(next_period)
+    return string("(", column_sql, " >= ", p1, " AND ", column_sql, " < ", p2, ")")
+  end
+end
+
+# Reuses Models.format_yyyy_mm for shape/type validation (String "YYYY-MM" regex, or 6-digit
+# Integer YYYYMM), then parses the normalized string for range math. format_yyyy_mm does NOT
+# validate the month is 01-12 (only the regex shape) — Dates.Date(y, m, 1) does, and its
+# ArgumentError is caught and rethrown as a FilterError so a filter-level defect isn't a bare
+# Dates.jl exception (consistent with the catch/rethrow pattern below for BETWEEN-style errors).
+# A year outside 1..9999 cannot be expressed as a date bound: `Dates.Date` happily accepts year 0
+# and negatives and stringifies them as "0000-01-01" / "-0005-01-01", which both backends reject at
+# execution with an opaque server-side error — and `format_date_sql(::Date)` is a bare `string(...)`
+# that validates nothing. Takes any `Real` so it can run before `Int(...)` narrowing.
+function _check_year_bound(y::Real)
+  (1 <= y <= 9999) || throw(FilterError("The year \e[31m$(y)\e[0m is out of the range a date bound can express (1-9999)."))
+  return nothing
+end
+
+function _yyyy_mm_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
+  normalized = Models.format_yyyy_mm(value)   # throws InvalidValueError on bad shape/type
+  y = parse(Int, normalized[1:4])
+  m = parse(Int, normalized[6:7])
+  # The regex admits "0000-01", which would render the unusable "0000-01-01". Same bound as @year.
+  _check_year_bound(y)
+  try
+    first_of_period = Dates.Date(y, m, 1)
+    return first_of_period, first_of_period + Dates.Month(1)
+  catch e
+    throw(FilterError("The value \e[31m$(value)\e[0m is not a valid YYYY-MM bucket: $(sprint(showerror, e))"))
+  end
+end
+
+# Resolve `@year`'s RHS to a calendar year, accepting every value shape the pre-#352 rendering
+# accepted via `Models.format_number_sql` — Integer, Decimal, and a whole-valued Float (an ETL
+# app pulling a year out of a Float64 DataFrame column is the common case), plus a numeric
+# String. Narrowing this would be a breaking change for consuming apps, not a tightening.
+#
+# What IS rejected, because the range rewrite cannot express it while `EXTRACT(YEAR ...)` could:
+#   - Bool (`Bool <: Integer` in Julia; format_number_sql carries a ::Bool overload for exactly
+#     this trap) — `false` would silently become year 0.
+#   - a fractional year (1991.7) — no single date bound represents it.
+#   - a year outside 1..9999 — `Dates.Date` accepts year 0 and negatives and renders them
+#     "0000-01-01" / "-0005-01-01", which both backends reject at execution with an opaque
+#     server-side error; `format_date_sql(::Date)` is a bare `string(...)` and validates nothing.
+# The string branch parses base-10 explicitly: `tryparse(Int, "0x10")` returns 16 in Julia, so
+# the default would silently accept a hex literal as a year.
+function _year_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
+  # The range check runs BEFORE `Int(...)` narrowing on every numeric branch: `Int(big(10)^20)`
+  # and `Int(1e30)` throw a raw `InexactError`, which is not a PormGError at all and whose message
+  # never mentions a year filter. `isinteger(1e30)` is `true`, so the whole-year guard alone does
+  # not stop it. Comparing first works on any Real — BigInt, BigFloat, Rational, Decimal.
+  y = if value isa Bool
+    throw(FilterError("A __@year filter requires a year, not a Bool; got \e[31m$(value)\e[0m."))
+  elseif value isa Integer
+    _check_year_bound(value)
+    Int(value)
+  elseif value isa Real
+    isinteger(value) || throw(FilterError("The value \e[31m$(value)\e[0m is not a whole year for a __@year filter."))
+    _check_year_bound(value)
+    Int(value)
+  elseif value isa AbstractString
+    n = tryparse(Int, strip(value), base=10)
+    n === nothing && throw(FilterError("The value \e[31m$(value)\e[0m is not a valid year for a __@year filter."))
+    _check_year_bound(n)
+    n
+  else
+    throw(FilterError("A __@year filter requires a year as an Integer, a whole Real, or a numeric String; got $(typeof(value))."))
+  end
+  first_of_period = Dates.Date(y, 1, 1)
+  return first_of_period, first_of_period + Dates.Year(1)
+end
+
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
+  # #352: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
+  # plain range/comparison directly on the column, so an index on the column — and the planner's
+  # selectivity estimate — both apply. See _render_sargable_date_range for scope.
+  sargable = _render_sargable_date_range(v, instruc)
+  sargable !== nothing && return sargable
+
   column = _get_filter_query(v.column, instruc)
   # #27: JSONB containment/overlap operators (@>, ?, ?|, ?&) — dedicated binding + PG-only render.
   if v.operator in JSON_CONTAINMENT_OPERATORS

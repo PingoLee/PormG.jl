@@ -70,9 +70,12 @@ dev:
     time_zone: 'UTC'
 ```
 
-## Security and Write Permissions (`change_data` & `change_db`)
+## Configuration Settings (`config:`)
 
-At the core of `connection.yml` is the `config` sub-dictionary. This section decides whether the application acts internally as a read-only client or a full administrative client:
+At the core of `connection.yml` is the `config` sub-dictionary. This section governs runtime permissions, logging, timezones, and naming conventions for the loaded environment:
+
+!!! warning "Unrecognised keys are warned with suggestions"
+    Only valid user-facing keys (`change_db`, `change_data`, `django_prefix`, `time_zone`, `log_queries`, `log_level`, `log_to_file`, `model_file`) are accepted under `config:`. Any unrecognised key emits a `@warn` on load naming the key and the environment, along with a "did you mean" suggestion if the key is a near-miss typo (e.g. `djago_prefix` → `django_prefix`).
 
 !!! warning "Both default to `false`, and a misplaced key is silent"
     Omit the `config:` block and you get `change_data: false` **and** `change_db: false` — writes

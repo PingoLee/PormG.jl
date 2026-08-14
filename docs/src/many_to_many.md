@@ -82,6 +82,26 @@ M2m_membership_scratch = Models.Model("m2m_membership_scratch",
 
 This pattern matches Django exactly and keeps your model definitions clean and readable.
 
+!!! note "The through model's `db_table` is the join table"
+    A through model is an ordinary model, so it may pin its physical table with
+    [`db_table`](schema_conventions.md#Pinning-an-explicit-table-name-with-db_table) like any other.
+    Keeping the model above and adding the pin:
+
+    ```julia
+    M2m_membership_scratch = Models.Model("m2m_membership_scratch",
+      db_table = "racing_membership",      # the real table, whatever the logical name is
+      id = Models.IDField(),
+      driver = Models.ForeignKey(M2m_driver_explicit_scratch, on_delete=Models.CASCADE),
+      team = Models.ForeignKey(M2m_team_scratch, on_delete=Models.CASCADE),
+      joined_year = Models.IntegerField()
+    )
+    ```
+
+    The join table PormG addresses is then `racing_membership` — in the joins behind `teams__name`
+    and `drivers__driverref`, and in the manager mutators for a through model that permits them.
+    The `db_table` option on the `ManyToManyField` itself names the *auto-generated* join table only;
+    with an explicit `through=` there is no generated table to name, so that option is ignored.
+
 ### Relationship Mutator Limitations on Custom Through Tables
 
 !!! warning

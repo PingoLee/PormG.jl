@@ -33,6 +33,64 @@ end
 
 const M2M = ManyToManyUnitModels
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #363 fixture: explicit `through=` models that declare a `db_table`.
+#
+# Every model here pins a physical table that differs from its logical name — the shape the Django
+# importer produces for an app-labelled project (#345/#346) and the one a hand-written model gets
+# from `db_table` (#59). No fixture in this file combined `through=` with `db_table` before, which is
+# exactly why #363 survived: the two spellings were always equal, so a slot that confused them read
+# as correct.
+#
+# TWO through models on purpose. `Membership` carries an extra column (`joined_year`) and
+# `Enrolment` carries only the two foreign keys, so the mutator guard is tested on both arms rather
+# than only on the one that refuses.
+# ─────────────────────────────────────────────────────────────────────────────
+module ManyToManyDbTableModels
+  import PormG
+  import PormG.Models
+
+  Team = Models.Model("team", db_table = "racing_team",
+    id = Models.IDField(),
+    name = Models.CharField(),
+  )
+
+  Driver = Models.Model("driver", db_table = "racing_driver",
+    id = Models.IDField(),
+    surname = Models.CharField(),
+    # A string forward reference, the documented form — `Membership` is declared below.
+    teams = Models.ManyToManyField(Team, through = "Membership", related_name = "drivers"),
+  )
+
+  Membership = Models.Model("membership", db_table = "racing_membership",
+    id = Models.IDField(),
+    driver = Models.ForeignKey(Driver, on_delete = Models.CASCADE),
+    team = Models.ForeignKey(Team, on_delete = Models.CASCADE),
+    joined_year = Models.IntegerField(null = true),   # the extra column that locks the mutators
+  )
+
+  Squad = Models.Model("squad", db_table = "racing_squad",
+    id = Models.IDField(),
+    name = Models.CharField(),
+  )
+
+  Tester = Models.Model("tester", db_table = "racing_tester",
+    id = Models.IDField(),
+    surname = Models.CharField(),
+    squads = Models.ManyToManyField(Squad, through = "Enrolment", related_name = "testers"),
+  )
+
+  Enrolment = Models.Model("enrolment", db_table = "racing_enrolment",
+    id = Models.IDField(),
+    tester = Models.ForeignKey(Tester, on_delete = Models.CASCADE),
+    squad = Models.ForeignKey(Squad, on_delete = Models.CASCADE),
+  )
+
+  PormG.Models.set_models(@__MODULE__, "m2m_mock")
+end
+
+const M2MDBT = ManyToManyDbTableModels
+
 @testset "ManyToManyField metadata and query generation" begin
   @test Models.is_many_to_many_field(M2M.Driver_championship.fields["drivers"])
   @test !("drivers" in M2M.Driver_championship.field_names)
@@ -244,55 +302,77 @@ end
   @test result_empty_vec === nothing
 end
 
-module BadBindingModule
-  import PormG
-  import PormG.Models
-  # Intentionally define the expected through-table name as a non-PormGModel
-  # so _m2m_model_from_binding raises QueryBuildError ("not a PormG model").
-  const drivers_championships_drivers = 42   # Integer, not PormGModel
+# Detach a registered model from its module, keeping everything else. Severing `_module` cuts EVERY
+# module-reflection route at once, which is the hostile input for the guard below.
+function _m2m_detach_module(model::PormGModel)
+  return Models.Model_Type(
+    name = model.name,
+    db_table = Models.model_has_db_table(model) ? Models.model_table_name(model) : nothing,
+    fields = model.fields,
+    field_names = model.field_names,
+    related_objects = model.related_objects,
+    connect_key = model.connect_key,
+    _module = nothing,
+    cache = Dict{String, Any}(),
+  )
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BUG-3 regression: _m2m_has_extra_fields must only swallow QueryBuildError (binding
-# not found); any other exception should propagate so the caller cannot silently
-# proceed with a through model that has extra fields.
+# The extra-fields mutator guard is STRUCTURAL, not reflective (#363).
+#
+# `_m2m_has_extra_fields` decides whether `add`/`remove`/`clear`/`set` may write to the through table
+# at all. It used to answer by re-resolving the through model out of the owner's module by name and
+# reading a `QueryBuildError` as "not registered ⇒ auto-generated ⇒ safe" — fail-OPEN: every way the
+# lookup could miss silently unlocked the mutators on a table with columns PormG cannot fill.
+#
+# This replaces the old BUG-3 testset, whose premise (only swallow `QueryBuildError`) died with the
+# try/catch. Worth recording why that testset was weaker than it looked: its `BadBindingModule`
+# defined `drivers_championships_drivers`, but the real auto table is `driver_championships_drivers`
+# (singular `driver`), so the "binding exists but is not a model" path it claimed to exercise was
+# never reached — resolution failed at the name scan instead. It passed for the wrong reason, which
+# is the standing hazard of pinning a reflective mechanism rather than the property it should have.
+#
+# The property, now that the relation carries the through model itself: the answer does not depend on
+# module state at all. Every case below runs with `_module = nothing`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "_m2m_has_extra_fields exception propagation (BUG-3)" begin
-  # Build a manager whose owner_model has _module set to a module that raises a
-  # TypeError when binding lookup is attempted (we simulate by using a model whose
-  # through_model binding exists as a non-PormGModel object in a module).
+@testset "the extra-fields mutator guard is structural, not reflective (#363)" begin
+  # ── The money assertion. Explicit `through=` + an extra column + a `db_table`, with no module to
+  # reflect through. Pre-#363 this returned `false` on the function's first line and the mutators
+  # went through, writing rows with `joined_year` unset.
+  rel_extras = Models.get_many_to_many_relation(M2MDBT.Driver, "teams")
+  severed_driver = _m2m_detach_module(M2MDBT.Driver)
+  mgr_extras = PormG.QueryBuilder.ManyToManyManager(severed_driver, M2MDBT.Team, rel_extras, 1)
+  @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_extras) == true
 
-  # The auto-generated through model for Driver_championship.drivers is
-  # "driver_championships_drivers". Since BadBindingModule doesn't have it as a
-  # PormGModel, _m2m_model_from_binding should raise QueryBuildError which is caught
-  # → returns false (no extra fields).
-  rel = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
-  fake_owner = Models.Model_Type(
-    name = M2M.Driver_championship.name,
-    fields = M2M.Driver_championship.fields,
-    field_names = M2M.Driver_championship.field_names,
-    related_objects = M2M.Driver_championship.related_objects,
-    connect_key = M2M.Driver_championship.connect_key,
-    _module = BadBindingModule,
-    cache = Dict{String,Any}(),
-  )
-  manager_bad = PormG.QueryBuilder.ManyToManyManager(fake_owner, M2M.Driver, rel, 1)
+  # All four mutators refuse, and they refuse BEFORE touching the connection: the guard is the first
+  # statement in each, ahead of `_m2m_target_ids`/`_m2m_settings`. That ordering is what makes the
+  # refusal testable without a database, so it is asserted rather than assumed.
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder.add(mgr_extras)
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder.remove(mgr_extras)
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder.clear(mgr_extras)
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder.set(mgr_extras)
 
-  # QueryBuildError is silently caught → returns false (through model "not found" is expected)
-  @test PormG.QueryBuilder._m2m_has_extra_fields(manager_bad) == false
+  # ── Negative control 1: the guard did not simply become "always true". An explicit `through=` whose
+  # model carries ONLY the two foreign keys still permits the mutators, `db_table` and all.
+  rel_plain = Models.get_many_to_many_relation(M2MDBT.Tester, "squads")
+  mgr_plain = PormG.QueryBuilder.ManyToManyManager(
+    _m2m_detach_module(M2MDBT.Tester), M2MDBT.Squad, rel_plain, 1)
+  @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_plain) == false
 
-  # A manager with _module = nothing should also return false safely
-  no_module_owner = Models.Model_Type(
-    name = M2M.Driver_championship.name,
-    fields = M2M.Driver_championship.fields,
-    field_names = M2M.Driver_championship.field_names,
-    related_objects = M2M.Driver_championship.related_objects,
-    connect_key = M2M.Driver_championship.connect_key,
-    _module = nothing,
-    cache = Dict{String,Any}(),
-  )
-  manager_no_mod = PormG.QueryBuilder.ManyToManyManager(no_module_owner, M2M.Driver, rel, 1)
-  @test PormG.QueryBuilder._m2m_has_extra_fields(manager_no_mod) == false
+  # ── Negative control 2: the auto-generated join table. `through_model_resolved === nothing` is the
+  # signal, and the answer is a fact about how the planner builds that table (`id` + the two FKs),
+  # not a lookup that failed.
+  rel_auto = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
+  @test rel_auto.through_model_resolved === nothing
+  mgr_auto = PormG.QueryBuilder.ManyToManyManager(
+    _m2m_detach_module(M2M.Driver_championship), M2M.Driver, rel_auto, 1)
+  @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_auto) == false
+
+  # ── `_m2m_model_from_binding` keeps exactly one caller (the descriptor) and still signals a miss
+  # with `QueryBuildError` (#231). It is no longer a SIGNAL anyone branches on — pinned here so the
+  # type does not drift now that the guard stopped catching it.
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder._m2m_model_from_binding(
+    ManyToManyDbTableModels, "NoSuchBinding", "no_such_model")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -526,6 +606,11 @@ end
   @test fwd_copy.related_model_resolved === M2M.Driver
   @test fwd_copy.field_name == fwd.field_name                      # value fields still deep-copied
 
+  # #363's `through_model_resolved` is a third resolved slot and rides the same hook — checked here
+  # rather than given its own `deepcopy_internal`, which is what #343's comment asks of a new slot.
+  through_rel = Models.get_many_to_many_relation(M2MDBT.Driver, "teams")
+  @test deepcopy(through_rel).through_model_resolved === M2MDBT.Membership
+
   # A relation-bearing model whose own fields are all scalar (Driver is the M2M target) still
   # deep-copies cleanly — its related_objects reverse relation routes through the same override.
   # Guards that adding the resolved slots did not regress model deepcopy for such models.
@@ -579,4 +664,132 @@ end
   # reconciles them.
   pinned = Models.ManyToManyField("Dim_uf", db_table = "dash_dimibge_ufs")
   @test Models._many_to_many_table_name(post, "ufs", pinned, prefixed) == "dash_dimibge_ufs"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #363: an explicit `through=` model's `db_table` IS the join table.
+#
+# `ManyToManyRelation` recorded the through model's LOGICAL name and six of its seven readers
+# rendered that string as a table — the four manager mutators and both through-side slots of
+# `_insert_many_to_many_joins`. So `Model("membership", db_table = "racing_membership")` produced a
+# relation addressing `membership`, and every read and every write hit a table that does not exist.
+#
+# The slot is now `through_table` and is always physical; the model it used to stand in for is
+# recorded separately. This is the discriminating test: it asserts the recorded value AND the
+# rendered SQL, in both directions, because `_reverse_many_to_many_relation` is its own code path.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "explicit through= records the physical table, not the logical name (#363)" begin
+  # Precondition — without it every assertion below would pass vacuously on a fixture whose logical
+  # and physical spellings happen to agree, which is the condition that hid this bug for so long.
+  @test M2MDBT.Membership.name == "membership"
+  @test Models.model_table_name(M2MDBT.Membership) == "racing_membership"
+
+  fwd = Models.get_many_to_many_relation(M2MDBT.Driver, "teams")
+  @test fwd.through_table == "racing_membership"          # was "membership" — the bug
+  @test fwd.through_model_resolved === M2MDBT.Membership
+
+  # The reverse relation is built by a separate function and stores the swapped sides. The through
+  # table is NOT a side — one join table serves both directions — so it must be carried unchanged.
+  rev = Models.get_many_to_many_relation(M2MDBT.Team, "drivers")
+  @test rev.reverse
+  @test rev.through_table == "racing_membership"
+  @test rev.through_model_resolved === M2MDBT.Membership
+
+  # ── The half only SQL can prove. Note the shape of the negative assertion: a bare
+  # `occursin("membership", sql)` is vacuous here because "racing_membership" contains it, and a
+  # bare `!occursin("membership", sql)` can never pass. Both spellings must be tested as quoted
+  # identifiers, which is how every table reaches the rendered statement.
+  fwd_sql = M2MDBT.Driver.objects.filter(
+      "teams__name" => "Renault"
+    ).values(
+      "surname"
+    ).list(show_query=:dict)[:sql_text]
+  @test occursin("\"racing_membership\"", fwd_sql)
+  @test !occursin("\"membership\"", fwd_sql)
+  # The two sides join through it, so their physical tables are in the statement too (#59).
+  @test occursin("\"racing_driver\"", fwd_sql)
+  @test occursin("\"racing_team\"", fwd_sql)
+
+  rev_sql = M2MDBT.Team.objects.filter(
+      "drivers__surname" => "Senna"
+    ).values(
+      "name"
+    ).list(show_query=:dict)[:sql_text]
+  @test occursin("\"racing_membership\"", rev_sql)
+  @test !occursin("\"membership\"", rev_sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #363 did not disturb the AUTO-derived path.
+#
+# That path already stored a physical name (`_many_to_many_table_name` returns `field.db_table`
+# verbatim when the field pins one), so the fix had to leave it byte-identical. This matters beyond
+# tidiness: `synthesize_many_to_many_through_models` builds the join table's name AND its unique
+# index from this slot, so a value that shifted by even one character would make `makemigrations`
+# propose dropping a live index and creating a differently-named twin.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the auto-derived through table is unchanged by #363" begin
+  auto = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
+  @test auto.through_table == "driver_championships_drivers"
+  @test auto.through_model_resolved === nothing          # the "no through model" tag
+
+  # A field-level `db_table` pin still wins on the auto path — it names the synthesized join table,
+  # and it must NOT be confused with a through MODEL's `db_table` (#345, and the note in
+  # `docs/src/schema_conventions.md`).
+  owner = Models.Model("dim_uf", db_table = "dash_dim_uf", id = Models.IDField())
+  target = Models.Model("regiao", db_table = "dash_regiao", id = Models.IDField())
+  pinned = Models.ManyToManyField(target, db_table = "dash_dimibge_ufs")
+  pinned_rel = Models._relation_from_many_to_many(
+    owner, "Dim_uf", "ufs", pinned, target, "Regiao",
+    PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true),
+    model_map = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(),
+  )
+  @test pinned_rel.through_table == "dash_dimibge_ufs"
+  @test pinned_rel.through_model_resolved === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHARACTERIZATION test, not a #363 regression test — it passes against the pre-#363 tree too, and
+# saying so is the point. `synthesize_many_to_many_through_models` skips every relation that declares
+# `through=` (`field.through === nothing || continue`), so it never constructs one and never reads
+# the slot #363 changed; the planned table name comes from `model_table_name` (#59), which was
+# already correct. Nothing here can go red on the bug.
+#
+# It earns its place as the no-churn pin on the OTHER side of that `continue`. #363 rewrote what
+# `_relation_from_many_to_many` returns, and this loop consumes that return value to name both the
+# auto join table and its unique index — so this fixes the planner's output for the explicit path
+# while that rewrite lands.
+#
+# What the two `!haskey` assertions guard is narrower than "someone deletes the gate": deleting it
+# does not reach them at all. `through_key` would become `Symbol(model_table_name(Membership))` —
+# already in `expanded` from the first loop, with no `many_to_many_auto` cache — so
+# `synthesize_many_to_many_through_models` throws `ModelDefinitionError` and the testset fails by
+# erroring out. The assertions catch the quieter regression: the explicit branch starting to derive
+# an auto table name ALONGSIDE the real through model, which plans a phantom table instead of
+# throwing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an explicit through= model is planned as itself, not as a synthesized join table" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  # Keyed by PHYSICAL table, which is how the planner keys both sides of its diff (#59).
+  current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+    :racing_driver     => Dict{Symbol, Union{Bool, PormGModel}}(:model => M2MDBT.Driver,     :exist => false),
+    :racing_team       => Dict{Symbol, Union{Bool, PormGModel}}(:model => M2MDBT.Team,       :exist => false),
+    :racing_membership => Dict{Symbol, Union{Bool, PormGModel}}(:model => M2MDBT.Membership, :exist => false),
+  )
+
+  plan = Migrations.get_migration_plan(PormGModel[], current_schema, M2MMockPostgres(), settings, interactive=false)
+
+  @test haskey(plan, :racing_membership)
+  through_sql = join(values(plan[:racing_membership]), "\n")
+  @test occursin("CREATE TABLE", through_sql)
+  @test occursin("racing_membership", through_sql)
+
+  # No auto join table was synthesized alongside it: the through model IS the join table.
+  @test !haskey(plan, :driver_teams)
+  @test !haskey(plan, :racing_driver_teams)
+
+  # And the M2M field still owns no column on the source table.
+  source_sql = join(values(plan[:racing_driver]), "\n")
+  @test !occursin("\"teams\"", source_sql)
 end

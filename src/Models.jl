@@ -104,7 +104,15 @@ end
 
 @kwdef struct ManyToManyRelation
   field_name::String
-  through_model::String
+  # The PHYSICAL join table (#363) — `db_table` when the through model declares one, else the
+  # derived/logical spelling. It was named `through_model` and carried the through model's LOGICAL
+  # name on the explicit-`through=` branch, while all but one of its readers rendered it as a table:
+  # `safe_table_identifier` in the four manager mutators, and both through-table slots in
+  # `_insert_many_to_many_joins`. So an explicit through model with a `db_table` (every model from a
+  # prefixed or multi-app Django import, #345/#346) made every read and write address a table that
+  # does not exist. The name is now the contract: this slot is a table, never a model key. The one
+  # reader that wanted a model reads `through_model_resolved` below instead.
+  through_table::String
   owner_model::String
   owner_binding::String
   owner_pk::String
@@ -121,6 +129,25 @@ end
   # re-resolves by binding today; consuming these slots to retire that reflection is #68/#41.
   owner_model_resolved::Union{PormGModel, Nothing} = nothing
   related_model_resolved::Union{PormGModel, Nothing} = nothing
+  # The explicit `through=` model, resolved (#363). Unlike the two slots above it has a live reader:
+  # `QueryBuilder._m2m_has_extra_fields` needs the through model's FIELDS to decide whether the
+  # direct mutators are allowed, and it used to recover them by re-resolving `through_model` as a
+  # binding/logical name. That reflection is what made the slot's two meanings load-bearing at once;
+  # recording the model the way #343 records `ReverseRelation.model_resolved` retires it.
+  #
+  # `nothing` here is a discriminated-union TAG — "there is no through model, the join table is
+  # synthesized" — not the "resolution failed" nullability #343 argues against. That distinction is
+  # what keeps the `=== nothing` branch out of the consumers: a synthesized join table is `id` + the
+  # two FKs by construction (`synthesize_many_to_many_through_models`), so `nothing` answers the
+  # extra-fields question outright rather than sending the caller back to a module scan. The tag is
+  # exact: the slot is set on precisely the branch that resolves `field.through`, and that branch
+  # throws when the reference cannot be resolved.
+  #
+  # REQUIRED on purpose, unlike its two neighbours — they default because #65 bolted them onto an
+  # existing struct with no readers, whereas this one is the discriminant. A silent default would
+  # let a future constructor mean "auto-generated" by omission, which is the fail-open hole #363
+  # closed wearing a different hat.
+  through_model_resolved::Union{PormGModel, Nothing}
 end
 
 # What `related_objects` stores for a REVERSE FOREIGN KEY accessor — the sibling of
@@ -2503,7 +2530,10 @@ function _relation_from_many_to_many(
 
   owner_pk = String(owner_pk_sym)
   related_pk = String(related_pk_sym)
-  through_model_name = _many_to_many_table_name(owner_model, field_name, field, settings)
+  # The auto path already yields a PHYSICAL table: `_many_to_many_table_name` returns `field.db_table`
+  # verbatim when the field pins one, and the synthesized name otherwise (#59/#345).
+  through_table_name = _many_to_many_table_name(owner_model, field_name, field, settings)
+  through_resolved = nothing
   owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
   related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
 
@@ -2518,7 +2548,13 @@ function _relation_from_many_to_many(
       throw(ModelDefinitionError("Cannot resolve explicit through model $(field.through) for $(owner_model.name).$(field_name)"))
     end
 
-    through_model_name = through_model.name
+    # The through model's PHYSICAL table (#363), not its logical `.name`. Same rule — and the same
+    # reason — as the related side in `_insert_many_to_many_joins`: the logical name is what
+    # IDENTIFIES the model, but this slot is rendered as a table. Reading `.name` here is what made
+    # every join and every mutator address `membership` where the real table is `racing_membership`.
+    # The model itself is recorded below, so nothing has to recover it from this string.
+    through_table_name = model_table_name(through_model)
+    through_resolved = through_model
     owner_column = field.source_field === nothing ? _infer_through_field(through_model, owner_model, "source") : field.source_field
     related_column = field.target_field === nothing ? _infer_through_field(through_model, related_model, "target") : field.target_field
     owner_fk = through_model.fields[owner_column]
@@ -2530,7 +2566,7 @@ function _relation_from_many_to_many(
   inverse_accessor = field.related_name === nothing ? get_model_name(owner_model, settings, false) : field.related_name
   return ManyToManyRelation(
     field_name=field_name,
-    through_model=through_model_name,
+    through_table=through_table_name,
     owner_model=owner_model.name,
     owner_binding=owner_binding,
     owner_pk=owner_pk,
@@ -2545,13 +2581,15 @@ function _relation_from_many_to_many(
     # load lifecycle) so the relation is a fully-resolved reference, not just strings.
     owner_model_resolved=owner_model,
     related_model_resolved=related_model,
+    # `nothing` on the auto path — see the slot's comment on `ManyToManyRelation` (#363).
+    through_model_resolved=through_resolved,
   )
 end
 
 function _reverse_many_to_many_relation(relation::ManyToManyRelation, reverse_accessor::String)::ManyToManyRelation
   return ManyToManyRelation(
     field_name=reverse_accessor,
-    through_model=relation.through_model,
+    through_table=relation.through_table,
     owner_model=relation.related_model,
     owner_binding=relation.related_binding,
     owner_pk=relation.related_pk,
@@ -2565,6 +2603,9 @@ function _reverse_many_to_many_relation(relation::ManyToManyRelation, reverse_ac
     # #65: swap the resolved sides to match the swapped string fields above.
     owner_model_resolved=relation.related_model_resolved,
     related_model_resolved=relation.owner_model_resolved,
+    # NOT swapped (#363): there is one join table and it sits between the two sides, so it is the
+    # same model read from either direction — unlike every slot above, which names one side.
+    through_model_resolved=relation.through_model_resolved,
   )
 end
 
@@ -2655,7 +2696,7 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
     source_model = model_info[:model]
     # These two labels are NOT real Julia bindings, and nothing here reads them as such: on this
     # lifecycle the relation is a transient carrier for the through-table SHAPE only — the five slots
-    # consumed below are `through_model`, `owner_column`, `related_column`, `owner_pk`, `related_pk`,
+    # consumed below are `through_table`, `owner_column`, `related_column`, `owner_pk`, `related_pk`,
     # and the relation is then discarded rather than stored on a model. So `_resolve_m2m_side_model`
     # never sees these, and their spelling cannot reach a `getfield`.
     #
@@ -2682,13 +2723,16 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
         Symbol(relation.owner_column) => ForeignKey(source_model, pk_field=relation.owner_pk, on_delete=CASCADE),
         Symbol(relation.related_column) => ForeignKey(target_model, pk_field=relation.related_pk, on_delete=CASCADE),
       )
-      through_model = Model(relation.through_model, through_fields)
+      # `through_table` is the physical name on both branches of `_relation_from_many_to_many`, but
+      # this loop only ever reaches the AUTO one (`field.through === nothing || continue` above), so
+      # the synthesized model's own name IS its table and the planner's physical keying holds (#363).
+      through_model = Model(relation.through_table, through_fields)
       through_model.cache["many_to_many_auto"] = Dict{String, Any}(
         "owner_column" => relation.owner_column,
         "related_column" => relation.related_column,
-        "unique_index" => "$(relation.through_model)_$(relation.owner_column)_$(relation.related_column)_uniq",
+        "unique_index" => "$(relation.through_table)_$(relation.owner_column)_$(relation.related_column)_uniq",
       )
-      through_key = Symbol(relation.through_model)
+      through_key = Symbol(relation.through_table)
       if haskey(expanded, through_key)
         existing = expanded[through_key][:model]
         existing_auto = existing.cache !== nothing ? get(existing.cache, "many_to_many_auto", nothing) : nothing
@@ -2696,7 +2740,7 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
            get(existing_auto, "owner_column", nothing) != relation.owner_column ||
            get(existing_auto, "related_column", nothing) != relation.related_column
           throw(ModelDefinitionError(
-            "Auto-generated through table $(relation.through_model) for $(source_model.name).$(field_name) " *
+            "Auto-generated through table $(relation.through_table) for $(source_model.name).$(field_name) " *
             "collides with an existing model or another ManyToManyField. " *
             "Define an explicit `through=` model or override `db_table=` to disambiguate."))
         end

@@ -245,18 +245,6 @@ whole connection, and relationship accessor names strip it — so `racing_circui
 names that do not exist. Remove it from the connection's config; a single-app import that still wants
 it can pass `django_prefix=` to that call.
 
-!!! warning "Known limitation: an explicit `through=` model addresses the logical name ([#363](https://github.com/PingoLee/PormG.jl/issues/363))"
-    A `ManyToManyField` with an explicit `through=` builds its join from the through model's
-    **logical name**, not its `db_table`. Once a model carries a `db_table` that differs — which is
-    every model in an app-labelled import — that join addresses `vinculo` where the real table is
-    `racing_vinculo`.
-
-    This is not new to multi-app import: it bites any model with an explicit `db_table` (so, any
-    single-app import under a `django_prefix` too). Until [#363](https://github.com/PingoLee/PormG.jl/issues/363)
-    is fixed, give such a relation an explicit `db_table` on the through *model* that matches its
-    logical name, or query the through model directly. Auto-derived `ManyToManyField`s — the common
-    case — are unaffected: the importer pins their join table to Django's real spelling.
-
 ### When two apps use the same class name
 
 Both sides are app-qualified — never just the second one:

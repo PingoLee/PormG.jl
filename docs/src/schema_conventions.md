@@ -107,6 +107,7 @@ DriverProfile = Models.Model("driver_profile",
 | `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, `ADD CONSTRAINT` | ✔ |
 | `SELECT` / `INSERT` / `UPDATE` / `DELETE` | ✔ |
 | `JOIN` targets, including through a foreign key | ✔ |
+| The join table of a many-to-many with an explicit `through=` model | ✔ |
 | A `ForeignKey`'s `REFERENCES` target, when it points at this model | ✔ |
 | Migration add/drop/rename detection | ✔ |
 
@@ -126,13 +127,21 @@ exactly as it always has, so no existing schema changes and nothing needs re-mig
     from the models' *logical* names, so pinning `db_table` on a model does not silently rename a join
     table PormG generated for you.
 
-    The join **columns** follow the logical name too (`<model>_<pk field>`), which is why they are
+    On the auto-derived path the join **columns** follow the logical name too (`<model>_<pk field>`),
+    which is why they are
     unaffected by a `db_table` pin. Against a Django-owned schema that closes most of the gap but not
     all of it: Django's through table is `<the owning model's table>_<field>`, so the table needs the
     pin the importer applies, while the columns line up on their own — *provided the primary key is
     named `id`*. Django always spells its m2m columns `<model_name>_id`; PormG uses the target's
     actual pk field name, so a model keyed on `codigo` derives `matricula_codigo` where Django wrote
     `matricula_id`. Pin the field's `source_field` / `target_field` in that case.
+
+    All of the above is the *auto-generated* case. Give the field an explicit `through=` and the join
+    table **is** that model's table — its own `db_table` if it declares one — so the field-level
+    `db_table` has nothing left to name and is ignored. Same rule as Django, and the same rule the
+    Django importer already assumes when it declines to pin a `db_table` on a `through=` field. The
+    join columns are then the through model's own FK fields, so `source_field` / `target_field` is
+    again the pin to reach for when those field names differ from the physical columns.
 
 ### Generated files: colliding bindings and names are disambiguated
 

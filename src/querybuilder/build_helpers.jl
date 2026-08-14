@@ -1035,10 +1035,11 @@ end
 # needs no range at all (F == the literal) since to_char at day granularity on a DATE column
 # preserves chronological order exactly — the rewrite there is just "drop the to_char".
 #
-# Scope (v1, deliberately narrow):
-#   - Only a bare (non-joined) column: a dotted join path only resolves its field TYPE after the
-#     join has rendered, which this function runs before — falling through to the existing
-#     to_char/EXTRACT rendering is always correct, just non-sargable for that case.
+# #373 extended the rewrite to a JOINED path (`fk__col__@yyyy_mm`), which #352 had left out
+# because the terminal field's TYPE — what the DATE-only gate below needs — is not readable off
+# `instruc.object.model`. See `_resolve_bucket_column` for how that is answered.
+#
+# Scope:
 #   - Only a plain DATE column (`_is_date_field`) — TIMESTAMPTZ/TIMESTAMP are excluded because
 #     to_char renders in the session TimeZone, so naively computing F/N would shift the boundary
 #     around midnight. Left on the existing rendering.
@@ -1051,13 +1052,11 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   isa(fobj, FObject) || return nothing
   raw_field = fobj.column
   isa(raw_field, String) || return nothing
-  contains(raw_field, "__") && return nothing                       # bare-field-only in v1
   v.operator in ("=", ">=", ">", "<=", "<") || return nothing
   (v.values isa AbstractString || v.values isa Number) || return nothing
-  haskey(instruc.object.model.fields, raw_field) || return nothing
-  f_meta = instruc.object.model.fields[raw_field]
-  _is_date_field(f_meta) || return nothing                          # DATE only, not TIMESTAMP(TZ)
 
+  # The bucket gate runs BEFORE the column is resolved: resolving a joined path renders its join,
+  # and a non-bucket transform (`@month`, `@quarter`, …) must never reach that.
   bucket = if fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM"
     :yyyy_mm
   elseif fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM-DD"
@@ -1068,7 +1067,10 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
     return nothing
   end
 
-  column_sql = _get_select_query(raw_field, instruc)
+  f_meta, column_sql = _resolve_bucket_column(raw_field, instruc)
+  f_meta === nothing && return nothing
+  _is_date_field(f_meta) || return nothing                          # DATE only, not TIMESTAMP(TZ)
+
   bind(x) = add_parameter!(instruc, f_meta.formatter(x))
 
   if bucket == :date
@@ -1090,6 +1092,59 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
     p1, p2 = bind(first_of_period), bind(next_period)
     return string("(", column_sql, " >= ", p1, " AND ", column_sql, " < ", p2, ")")
   end
+end
+
+# Terminal field metadata + rendered SQL for the column a date-bucket comparison targets, or
+# `(nothing, "")` to fall through to the existing rendering.
+#
+# A bare column reads its metadata straight off the queried model. A JOINED path (#373) cannot:
+# `FObject.column` still holds the unsplit dotted string at this point, and the terminal field only
+# becomes knowable once the path has actually been walked. So the path is RENDERED first and the
+# type read back out of `tab_field_cache`, which `_build_row_join` populates as it goes.
+#
+# Rendering first is the design, not a compromise. `_build_row_join` is the only authority on which
+# model and field a dotted path resolves to — forward FK, reverse relation, many-to-many, and the
+# `driver` → `driver_id` short-form rewrite whose ambiguity against a declared `related_name` is
+# documented on `_resolve_fk_short_form`. Re-deriving that walk here would be a SECOND resolver able
+# to disagree with the renderer, and a disagreement puts the date range on a different table's
+# column with no error and wrong rows. Nothing is saved by not rendering, either: the rewritten
+# predicate references the joined column, so the join is built either way.
+#
+# The early render is side-effect-free in every way that matters here: `build_joins.jl` binds no
+# parameters, and `_insert_join` dedups on (a, b, key_a, key_b, alias_a) — so when the DATE gate
+# rejects the field, the fall-through renders the same path again and gets the same alias back.
+# Identical SQL, one extra traversal.
+function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
+  if !contains(raw_field, "__")
+    f_meta = get(instruc.object.model.fields, raw_field, nothing)
+    f_meta === nothing && return (nothing, "")
+    return _checked_bucket_column(f_meta, raw_field, _get_select_query(raw_field, instruc), instruc)
+  end
+
+  # A CTE-rooted path needs no special case, which is worth recording because it is not obvious.
+  # A CTE model's column types are INFERRED (`_set_field_from_sql_function`, ctes.jl), so the
+  # question is whether one can ever be typed DATE while the column holds something else. It cannot:
+  # a plain-column projection reads the real field; COUNT/SUM yield IntegerField; CASE/WHEN route
+  # through `_infer_case_output_type`, which only ever returns Integer/Float/CharField; MIN/MAX
+  # carry the base DateField and genuinely produce a date; and every OTHER function — `ToChar`
+  # included, which is what would actually produce a "1991-10" text column — is rejected outright
+  # when the CTE model is built. So the DATE gate is as trustworthy here as anywhere else.
+  column_sql = _get_select_query(raw_field, instruc)
+  f_meta = get(instruc.tab_field_cache, raw_field, nothing)
+  f_meta === nothing && return (nothing, "")
+  return _checked_bucket_column(f_meta, String(last(split(raw_field, "__"))), column_sql, instruc)
+end
+
+# Drift guard: the rewrite may only range on a column that IS the one `f_meta` describes. That holds
+# by construction on every branch today — `_build_row_join` renders the terminal column through
+# `_solve_field` and caches `last_field` from the same model and segment — which is precisely why it
+# is worth pinning. If the correspondence ever breaks, the rewrite falls back to the existing
+# (correct, merely non-sargable) rendering instead of quietly ranging on some other column.
+# Fail-safe, never fail-loud: a mismatch is a PormG-internal invariant, not a user error.
+function _checked_bucket_column(f_meta, last_segment::String, column_sql::String, instruc::SQLInstruction)
+  expected = quote_identifier(Models.field_db_column(f_meta, last_segment), instruc.connection)
+  endswith(column_sql, string(".", expected)) || return (nothing, "")
+  return (f_meta, column_sql)
 end
 
 # Reuses Models.format_yyyy_mm for shape/type validation (String "YYYY-MM" regex, or 6-digit
@@ -1162,9 +1217,10 @@ end
 
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
-  # #352: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
+  # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
   # plain range/comparison directly on the column, so an index on the column — and the planner's
-  # selectivity estimate — both apply. See _render_sargable_date_range for scope.
+  # selectivity estimate — both apply. Covers joined paths as well as bare ones; see
+  # _render_sargable_date_range and _resolve_bucket_column for scope.
   sargable = _render_sargable_date_range(v, instruc)
   sargable !== nothing && return sargable
 

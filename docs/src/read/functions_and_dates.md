@@ -131,6 +131,22 @@ query = M.Race.objects.filter("date__@yyyy_mm__@lte" => "1991-12")
 # renders:  "Tb"."date" < $1         with $1 = "1992-01-01"
 ```
 
+The same applies to a date column reached **through a join**, at any depth and through any relation
+— a foreign key, a reverse relation, or a many-to-many:
+
+```julia
+# Results from races in October 1991 — the range lands on the joined table's column
+query = M.Result.objects.filter("raceid__date__@yyyy_mm" => "1991-10")
+# renders:  ("Tb_1"."date" >= $1 AND "Tb_1"."date" < $2)
+
+# Drivers born from 1960 onwards
+query = M.Result.objects.filter("driverid__dob__@year__@gte" => 1960)
+# renders:  "Tb_1"."dob" >= $1       with $1 = "1960-01-01"
+```
+
+(The `Tb_N` alias is assigned per query in join order — a query joining both paths above would
+reach `dob` through `"Tb_2"`.)
+
 Because the column is not wrapped in a function call, an index on it applies and the query
 planner can estimate how many rows the filter selects — on a large table this is the difference
 between an index range scan and a full scan with a poisoned join plan.
@@ -143,13 +159,18 @@ numeric string. A value no single date can express (a fraction, a year outside t
 `Bool`) raises a `FilterError` rather than silently comparing against an unusable bound.
 
 !!! note "Scope of the rewrite"
-    The rewrite applies to `@yyyy_mm`, `@date` and `@year` on a **plain `DateField`** referenced
-    directly on the queried model. A `DateTimeField` keeps the formatted-string comparison, since
-    `to_char` on a timestamp renders in the session time zone and the range boundaries would shift
-    around midnight. Fields reached through a join, and the `@month`/`@day`/`@quarter`/
-    `@quadrimester` buckets (which repeat every year rather than covering one contiguous range),
-    also keep the original rendering. For the cases it covers the rewrite selects the same rows as
-    before — only the query plan changes.
+    The rewrite applies to `@yyyy_mm`, `@date` and `@year` on a **plain `DateField`**, whether the
+    column sits on the queried model or is reached through a join. Two things keep the original
+    rendering: a `DateTimeField`, because `to_char` on a timestamp renders in the session time zone
+    and the range boundaries would shift around midnight; and the `@month`/`@day`/`@quarter`/
+    `@quadrimester` buckets, which repeat every year rather than covering one contiguous range over
+    the column.
+
+    For every value the bucket can express, the rewrite selects the same rows as before — only the
+    query plan changes. The one behavioural difference is at the edges: because the comparison is
+    now computed as a date bound, a value that no date bound can represent (`"1991-13"`, a
+    fractional or out-of-range year, a `Bool`) raises a `FilterError` instead of building SQL that
+    silently matched nothing. Joined paths and columns on the queried model behave identically here.
 
 ---
 

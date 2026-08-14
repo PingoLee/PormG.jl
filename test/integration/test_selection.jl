@@ -487,6 +487,71 @@ end
     @test d_lte == d_lt + 1            # exactly the Japanese GP itself
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Date Operations: sargable rewrite through a JOIN (#373)
+# #352 covered bare columns only, because a dotted path's terminal field type is not readable
+# before the join renders. #373 answers that by rendering the path first and reading the terminal
+# field back out of `tab_field_cache` — the same walk that produced the alias — so the rewrite now
+# fires on `raceid__date__@yyyy_mm` too. That is the larger half of the exposure: a joined date
+# filter sits on a fact table reached through a join, exactly where a row-count misestimate does
+# the most damage to the plan above it.
+#
+# Same verification shape as the #352 block: every bucket comparison pinned against an INDEPENDENT
+# plain-date baseline over the SAME join path, which never routes through the rewrite — so the
+# asymmetric boundary mapping is verified absolutely against live data on both backends, not just
+# for internal self-consistency.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Date Operations — sargable rewrite through a join (#373)" begin
+    # `Result.raceid` → `Race.date` (a plain DateField on the JOINED table). No to_char
+    # (PostgreSQL) / strftime (SQLite): the comparison runs on the joined column itself.
+    sql_join = M.Result.objects.filter("raceid__date__@yyyy_mm__@lte" => "1991-10").list(show_query=:sql)
+    @test !occursin("to_char", lowercase(sql_join)) && !occursin("strftime", lowercase(sql_join))
+    # The join the predicate depends on is still emitted — the rewrite moves the comparison onto
+    # the joined column, it never drops the join.
+    @test occursin("join", lowercase(sql_join))
+
+    j_lte = M.Result.objects.filter("raceid__date__@yyyy_mm__@lte" => "1991-10").count()
+    j_lt  = M.Result.objects.filter("raceid__date__@yyyy_mm__@lt"  => "1991-10").count()
+    j_gte = M.Result.objects.filter("raceid__date__@yyyy_mm__@gte" => "1991-10").count()
+    j_gt  = M.Result.objects.filter("raceid__date__@yyyy_mm__@gt"  => "1991-10").count()
+    j_eq  = M.Result.objects.filter("raceid__date__@yyyy_mm"       => "1991-10").count()
+
+    # Absolute boundaries, against plain-date comparisons over the same join path.
+    @test j_lte == M.Result.objects.filter("raceid__date__@lt"  => "1991-11-01").count()
+    @test j_lt  == M.Result.objects.filter("raceid__date__@lt"  => "1991-10-01").count()
+    @test j_gte == M.Result.objects.filter("raceid__date__@gte" => "1991-10-01").count()
+    @test j_gt  == M.Result.objects.filter("raceid__date__@gte" => "1991-11-01").count()
+    @test j_eq  == M.Result.objects.filter("raceid__date__@gte" => "1991-10-01",
+                                           "raceid__date__@lt"  => "1991-11-01").count()
+    # The October 1991 rows are what @lte includes and @lt excludes — a non-trivial delta, so the
+    # equalities above are not all comparing zero to zero.
+    @test j_eq > 0
+    @test j_lte == j_lt + j_eq
+    @test j_gte == j_gt + j_eq
+
+    # A SECOND join target, so the coverage is not one FK's accident: `Result.driverid` →
+    # `Driver.dob`, a DateField on a different table, at year granularity.
+    sql_dob = M.Result.objects.filter("driverid__dob__@year__@gte" => 1960).list(show_query=:sql)
+    @test !occursin("extract", lowercase(sql_dob)) && !occursin("strftime", lowercase(sql_dob))
+
+    d_gte = M.Result.objects.filter("driverid__dob__@year__@gte" => 1960).count()
+    d_lt  = M.Result.objects.filter("driverid__dob__@year__@lt"  => 1960).count()
+    @test d_gte == M.Result.objects.filter("driverid__dob__@gte" => "1960-01-01").count()
+    @test d_lt  == M.Result.objects.filter("driverid__dob__@lt"  => "1960-01-01").count()
+    @test d_gte > 0 && d_lt > 0
+
+    # Two joined bucket filters over DIFFERENT join paths in one query: each must rewrite onto its
+    # own alias, and both joins must still be emitted. (The TIMESTAMPTZ exclusion through a join is
+    # pinned in test/unit/test_sargable_date_range.jl — the F1 schema has no DateTimeField reachable
+    # by a join from a seeded table.)
+    both = M.Result.objects.filter("raceid__date__@yyyy_mm__@lte" => "1991-10",
+                                   "driverid__dob__@year__@gte" => 1960)
+    sql_both = both.list(show_query=:sql)
+    @test !occursin("to_char", lowercase(sql_both)) && !occursin("extract", lowercase(sql_both))
+    @test both.count() == M.Result.objects.filter("raceid__date__@lt"  => "1991-11-01",
+                                                  "driverid__dob__@gte" => "1960-01-01").count()
+end
+
 @testset "Comparison and In Operations" begin
   query = M.Result.objects;
   query.filter("positionorder__@lt" => 3);

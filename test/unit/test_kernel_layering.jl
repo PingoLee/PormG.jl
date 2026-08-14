@@ -26,6 +26,8 @@ using PormG
         @test parentmodule(PormG.PormGModel) === PormG.Kernel
         @test parentmodule(PormG.PormGField) === PormG.Kernel
         @test parentmodule(PormG._emsg) === PormG.Kernel
+        @test parentmodule(PormG._levenshtein) === PormG.Kernel
+        @test parentmodule(PormG._suggest_name) === PormG.Kernel
 
         # Kernel must not reach back into PormG — that is what makes it safe to include first.
         # `using PormG` inside Kernel would create the cycle this design removes.

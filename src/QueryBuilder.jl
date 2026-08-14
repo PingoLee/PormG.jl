@@ -28,7 +28,7 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, LazyTraversalErro
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
 import PormG: backend_num_affected_rows  # PG matched-row count (driver body in the weakdep extension)
 import PormG: backend_sqlite_version  # SQLite library-version probe for the bind-parameter limit (#84)
-import PormG: _emsg  # shared TTY-aware error-message strip helper (tools.jl)
+import PormG: _emsg, _suggest_name  # shared helpers (Kernel)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!
 # #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,
 # which a bare `e isa InterruptException` test cannot (every driver error crosses `_as_database_error`).

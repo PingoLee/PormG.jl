@@ -247,6 +247,19 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
   photo = Models.ImageField(null = true)
 )
 
+# No SQLite counterpart for #334's `Bulk_uuid_pk_scratch` (db_2/models.jl) — deliberate, not an
+# oversight. SQLite collapses UUIDField, TextField, JSONField and ImageField all onto bare `TEXT`
+# (see the comment in `src/migrations/introspection.jl`'s SQLite reader — CharField is NOT in this
+# group, it keeps a length suffix, `TEXT(n)`), so a UUID primary key is indistinguishable from a
+# TextField/JSONField/ImageField primary key by introspection alone — and
+# `Dialect.describes_same_column` refuses its usual "different declared type, same physical
+# column" leniency for ANY primary key, on either backend, on purpose. Declaring this
+# fixture here would make `assert_no_schema_drift` propose the same bogus alteration forever, for
+# a reason that has nothing to do with #334's actual bug (which is fully backend-agnostic and
+# already covered by the DB-free unit tests). The #334 integration coverage that needs a real
+# `bulk_copy` call is PostgreSQL-only anyway (`bulk_copy` itself is a COPY-protocol feature with no
+# SQLite equivalent), so nothing here goes untested on this backend.
+
 # Fixture for the bulk_copy data-fidelity regression (#86): bulk_copy must store the SAME
 # values as bulk_insert/create() (the field formatter is applied — e.g. a naive DateTime is
 # labelled UTC) and must distinguish an empty string from NULL. Nullable char/float/bool/datetime

@@ -38,6 +38,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField, CharField, DateTimeField, UUIDField
 using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update
 using PormG: InvalidValueError, PormGError
+using UUIDs
 import DataFrames
 
 # Mock connection under a dedicated key so this file cannot contaminate (or be
@@ -73,6 +74,14 @@ Bdfs_pitlane = Model("bdfs_pitlane",
 )
 Bdfs_pitlane.connect_key = "bdfs_mock"
 
+# A UUID auto_add PRIMARY KEY, for the #334 blank-rescue testset — `Bdfs_stint.token` is not a
+# pk, so it cannot exercise `_drop_blank_auto_primary_keys!`.
+Bdfs_uuid_pk = Model("bdfs_uuid_pk",
+    token  = UUIDField(primary_key = true, auto_add = true),
+    driver = CharField(),
+)
+Bdfs_uuid_pk.connect_key = "bdfs_mock"
+
 # ------------------------------------------------------------------
 # Read a bound value back BY COLUMN NAME rather than by a hard-coded index.
 #
@@ -102,6 +111,18 @@ function source_param_for(res, col)
     idx = findfirst(==(col), cols)
     idx === nothing && error("column $(col) is not in the source list: $(res[:sql_text])")
     return res[:parameters][idx]
+end
+
+# Every bound value for `col`, across all rows — for asserting per-row DISTINCTNESS (#334) rather
+# than just presence. `parameters` is a flat, row-major vector: bulk_insert renders one
+# `VALUES (?,?),(?,?),...` clause per row in the same column order, so column `idx` out of `n`
+# total columns appears at flat positions `idx, idx+n, idx+2n, ...`.
+function params_for(res, col)
+    cols = insert_columns(res)
+    idx = findfirst(==(col), cols)
+    idx === nothing && error("column $(col) is not in the INSERT: $(res[:sql_text])")
+    n = length(cols)
+    return res[:parameters][idx:n:end]
 end
 
 @testset "#331: PormG fills only absent columns" begin
@@ -237,6 +258,56 @@ end
         @test !ismissing(param_for(res, "checked_at"))
         @test !ismissing(param_for(res, "updated_at"))
         @test !ismissing(param_for(res, "token"))
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # #334: absent UUID auto_add column — a distinct value per row, not one per batch
+    # `resolve_absent_column_fill` used to call `uuid4()` ONCE per field and the injection
+    # site broadcast that single value across the whole frame, so every row of an absent
+    # `auto_add` UUID column got the identical value — an immediate collision on a primary
+    # or unique column. The other three fill kinds (static default, TIMESTAMPTZ auto_now/
+    # auto_now_add, DATE auto_now/auto_now_add) are deliberately UNCHANGED: one value per
+    # batch remains correct and is asserted below alongside the UUID fix so a future change
+    # cannot silently make everything per-row.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "#334: absent UUID auto_add column mints a distinct value per row" begin
+        res = bulk_insert(Bdfs_stint.objects,
+                          DataFrames.DataFrame(driver = ["Fangio", "Moss", "Hawthorn"]),
+                          show_query = :dict)
+
+        tokens = params_for(res, "token")
+        @test length(tokens) == 3
+        @test all(!ismissing, tokens)
+        @test length(unique(tokens)) == 3   # pre-#334: all three were the SAME uuid4()
+
+        # Control: the temporal and static fill kinds must stay ONE value for the whole
+        # batch — this fix must not turn them per-row too.
+        @test length(unique(params_for(res, "checked_at"))) == 1
+        @test length(unique(params_for(res, "updated_at"))) == 1
+        @test all(==(0), params_for(res, "laps"))
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # #334: a blank UUID auto_add PRIMARY KEY column is rescued, not raised
+    # `_drop_blank_auto_primary_keys!` only recognized `auto_increment` primary keys before
+    # this fix — a UUID `auto_add` pk has no `auto_increment` field at all, so an all-blank
+    # present column fell through to the NOT NULL check and raised. It is now rescued the
+    # same way: dropped, treated as absent, and minted per row by the fix above. A mixed
+    # blank/explicit column still raises — unchanged.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "#334: an all-blank UUID auto_add primary key column is rescued, not raised" begin
+        res = bulk_insert(Bdfs_uuid_pk.objects,
+                          DataFrames.DataFrame(token = [missing, missing], driver = ["Senna", "Prost"]),
+                          show_query = :dict)
+        tokens = params_for(res, "token")
+        @test length(tokens) == 2
+        @test all(!ismissing, tokens)
+        @test length(unique(tokens)) == 2   # dropped → absent → per-row mint, not a raise
+
+        # Mixed blank/explicit still raises, unchanged.
+        @test_throws PormG.QueryBuildError bulk_insert(Bdfs_uuid_pk.objects,
+            DataFrames.DataFrame(token = [string(uuid4()), missing], driver = ["Senna", "Prost"]),
+            show_query = :dict)
     end
 
     # ─────────────────────────────────────────────────────────────────────────────

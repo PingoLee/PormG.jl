@@ -26,9 +26,15 @@
 #     and `alter_field` has nothing to emit for them: every `DateTimeField(auto_now_add=true)`
 #     produced an empty alteration on every `makemigrations`, forever (#325). On SQLite that empty
 #     alteration was still a full table rebuild.
+#   * `auto_add` (UUIDField) is the same story as `auto_now`/`auto_now_add` just above: PormG
+#     mints the UUID in Julia on write (`UUIDs.uuid4()`), never as a column DEFAULT, so
+#     introspection always reads it back as `false` regardless of the declared value. Left out of
+#     this tuple until #334 — unnoticed only because no fixture had ever declared `auto_add=true`
+#     on a field introspection also had to reconstruct (a primary key, or any column round-tripped
+#     through `assert_no_schema_drift`).
 const _NON_SCHEMA_FIELD_ATTRS = (:blank, :on_delete, :related_name, :verbose_name, :editable,
                                  :how, :formatter, :db_column, :db_index,
-                                 :auto_now, :auto_now_add)
+                                 :auto_now, :auto_now_add, :auto_add)
 
 function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
   _hash = randstring(8) 

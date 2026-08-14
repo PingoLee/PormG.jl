@@ -342,6 +342,35 @@ M2m_link_plain_scratch = Models.Model("m2m_link_plain_scratch",
   team = Models.ForeignKey(M2m_team_plain_scratch, on_delete=Models.CASCADE),
 )
 
+# Explicit through whose model declares a `db_table` (#363). Every other `through=` fixture in this
+# file has a logical name equal to its physical table, which is precisely why the bug survived: the
+# relation stored the LOGICAL name and rendered it as a table, and the two agreed everywhere it was
+# tested. This is the shape of every model in an app-labelled Django import (#345/#346).
+#
+# The physical name is a DIFFERENT STRING, not merely a different case — SQLite compares identifiers
+# case-insensitively, so a case-only difference would address the same table and `db_sl` could not
+# tell a fixed tree from a broken one.
+#
+# FK-only on purpose: the mutators are then permitted, so the raw-SQL write path
+# (`INSERT`/`DELETE ... FROM <through table>`) is exercised alongside the join path.
+M2m_squad_dbtable_scratch = Models.Model("m2m_squad_dbtable_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_tester_dbtable_scratch = Models.Model("m2m_tester_dbtable_scratch",
+  id = Models.IDField(),
+  driverref = Models.CharField(unique=true),
+  squads = Models.ManyToManyField(M2m_squad_dbtable_scratch, through="M2m_enrolment_dbtable_scratch", related_name="testers")
+)
+
+M2m_enrolment_dbtable_scratch = Models.Model("m2m_enrolment_dbtable_scratch",
+  db_table = "m2m_enrolment_join_tbl",
+  id = Models.IDField(),
+  tester = Models.ForeignKey(M2m_tester_dbtable_scratch, on_delete=Models.CASCADE),
+  squad = Models.ForeignKey(M2m_squad_dbtable_scratch, on_delete=Models.CASCADE),
+)
+
 # Default reverse accessor (no related_name): target uses owner model name lowercase.
 M2m_brand_scratch = Models.Model("m2m_brand_scratch",
   id = Models.IDField(),

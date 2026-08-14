@@ -482,7 +482,7 @@ table with two foreign keys and a composite unique index.
 # Keyword Arguments
 - `through::Union{String, PormGModel, Nothing} = nothing`: explicit through model; skips auto table synthesis.
 - `related_name::Union{String, Nothing} = nothing`: reverse accessor on the target model.
-- `db_table::Union{String, Nothing} = nothing`: auto-through table name override.
+- `db_table::Union{String, Nothing} = nothing`: auto-through table name override. Ignored when `through` is given — the join table is then the through model's own table (its `db_table` if it declares one).
 - `source_field::Union{String, Nothing} = nothing`: through-table column pointing to the source model.
 - `target_field::Union{String, Nothing} = nothing`: through-table column pointing to the target model.
 """

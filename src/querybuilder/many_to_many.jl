@@ -76,25 +76,32 @@ function _m2m_target_ids(manager::ManyToManyManager, targets)::Vector{Any}
   return ids
 end
 
+# Does the through table carry columns beyond `id` and the two relationship FKs? `true` disables the
+# direct mutators below — PormG cannot invent values for a column it does not know about.
+#
+# #363 made this STRUCTURAL. It used to re-resolve the through model out of the owner's module by
+# name and read a `QueryBuildError` as "not registered ⇒ auto-generated ⇒ safe to mutate", which is
+# fail-OPEN: any relation whose through model the scan could not reach silently unlocked the
+# mutators. That was reachable, not theoretical — `through = <a PormGModel object>` is taken inline
+# by `_relation_from_many_to_many`'s `field.through isa PormGModel` arm, with no module lookup at
+# all (it does not even reach `Models._resolve_model_reference`), so a model that
+# is not reachable BY NAME from the owner's module was invisible here while its extra columns were
+# very real. (Only by name: `Models.get_all_models` makes a second pass with `usings=true` since
+# #354, so a `using`-brought binding did resolve. A qualified `Other.Membership` reference, or a
+# model built and passed by value, did not.)
+#
+# The relation now records the model itself (`through_model_resolved`, `Models.jl`), so the question
+# is answered from the relation alone: no module, no reflection, no exception-as-signal. `nothing`
+# means the join table is synthesized by the migration planner, which builds it as exactly `id` plus
+# the two FKs — so `false` there is a fact about how that table is constructed, not an assumption
+# about a lookup that failed.
+#
+# `_m2m_model_from_binding` keeps one caller (the descriptor below), where a `QueryBuildError` is now
+# just an error rather than a signal; retiring that last reflection against `related_model_resolved`
+# is #68/#41.
 function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
-  owner_module = manager.owner_model._module
-  owner_module === nothing && return false
-
-  # Only catch PormGError ("binding not found") — the expected failure when
-  # the through model is auto-generated and not registered in the module.
-  # Any other exception (type error, module error, etc.) should propagate so
-  # the caller is not silently allowed to mutate a through table with extra fields.
-  through_model = try
-    _m2m_model_from_binding(owner_module, manager.relation.through_model, manager.relation.through_model)
-  catch e
-    # The binding-not-found signal from _m2m_model_from_binding is QueryBuildError (#231, was
-    # ArgumentError). Match THAT type, not the taxonomy root: since #239 `PormGError` also covers
-    # Models/config/migration failures, and catching the root here would silently swallow a future
-    # model-definition error raised deeper in this call path — exactly the "silently allowed to
-    # mutate a through table with extra fields" outcome the comment above warns against.
-    e isa QueryBuildError && return false
-    rethrow(e)
-  end
+  through_model = manager.relation.through_model_resolved
+  through_model === nothing && return false
 
   owner_col = manager.relation.owner_column
   related_col = manager.relation.related_column
@@ -132,7 +139,7 @@ function add(manager::ManyToManyManager, targets...)
   settings, connection, conn_key = _m2m_settings(manager)
   !settings.change_data && throw(_write_not_allowed("many-to-many add", conn_key))
 
-  table_name = safe_table_identifier(manager.relation.through_model, connection)
+  table_name = safe_table_identifier(manager.relation.through_table, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
   related_column = quote_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
@@ -184,7 +191,7 @@ function remove(manager::ManyToManyManager, targets...)
   settings, connection, conn_key = _m2m_settings(manager)
   !settings.change_data && throw(_write_not_allowed("many-to-many remove", conn_key))
 
-  table_name = safe_table_identifier(manager.relation.through_model, connection)
+  table_name = safe_table_identifier(manager.relation.through_table, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
   related_column = quote_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
@@ -212,7 +219,7 @@ function clear(manager::ManyToManyManager)
   parameters = get_parameter(connection)
   set_context!(parameters, :where)
   owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
-  table_name = safe_table_identifier(manager.relation.through_model, connection)
+  table_name = safe_table_identifier(manager.relation.through_table, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
   fetch(settings, "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder;", parameters)
   return nothing
@@ -223,7 +230,7 @@ function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
   parameters = get_parameter(connection)
   set_context!(parameters, :where)
   owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
-  table_name = safe_table_identifier(manager.relation.through_model, connection)
+  table_name = safe_table_identifier(manager.relation.through_table, connection)
   owner_column = quote_identifier(manager.relation.owner_column, connection)
   related_column = quote_identifier(manager.relation.related_column, connection)
   sql = "SELECT $related_column FROM $table_name WHERE $owner_column = $owner_placeholder;"

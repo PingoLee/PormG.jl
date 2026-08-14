@@ -40,6 +40,12 @@ const _M2M_SCRATCH_TABLES = (
     "m2m_link_plain_scratch",
     "m2m_brand_scratch",
     "m2m_driver_default_reverse_scratch",
+    # #363. The through model is listed by its PHYSICAL name (`db_table`), which is what
+    # `table_exists` asks the database for — its logical name `m2m_enrolment_dbtable_scratch` is not
+    # a table at all, and listing that spelling would make this check miss forever.
+    "m2m_squad_dbtable_scratch",
+    "m2m_tester_dbtable_scratch",
+    "m2m_enrolment_join_tbl",
 )
 
 function _m2m_scratch_table_exists(pool, table_name::String)::Bool
@@ -383,6 +389,66 @@ end
     M.M2m_link_plain_scratch.objects.delete(allow_delete_all=true)
     M.M2m_driver_plain_scratch.objects.delete(allow_delete_all=true)
     M.M2m_team_plain_scratch.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #363: an explicit `through=` model that declares a `db_table`.
+#
+# The relation used to record the through model's LOGICAL name and render it as a table, so every
+# join and every mutator addressed `m2m_enrolment_dbtable_scratch` while the real table is
+# `m2m_enrolment_join_tbl`. Both engines answer that with "no such table" — this is the layer that
+# proves the SQL reaches something real, which no amount of rendered-string assertion can.
+#
+# Exercised here and nowhere else: the raw-SQL write path. `add`/`remove`/`clear`/`set` interpolate
+# the table name straight into INSERT/DELETE (they do not go through the join builder), so they are a
+# second, independent consumer of the same slot.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Many-to-Many: explicit through model with its own db_table (#363)" begin
+    M.M2m_enrolment_dbtable_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_tester_dbtable_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_squad_dbtable_scratch.objects.delete(allow_delete_all=true)
+
+    # Precondition. Without it every assertion below would pass vacuously against a fixture whose
+    # logical and physical spellings agree — the condition under which #363 is invisible.
+    @test M.M2m_enrolment_dbtable_scratch.name == "m2m_enrolment_dbtable_scratch"
+    @test PormG.model_table_name(M.M2m_enrolment_dbtable_scratch) == "m2m_enrolment_join_tbl"
+    @test table_exists(PormG.config[PORMG_DB_FOLDER].connections, "m2m_enrolment_join_tbl")
+
+    tester = M.M2m_tester_dbtable_scratch.objects.create("driverref" => "piquet")
+    squad_a = M.M2m_squad_dbtable_scratch.objects.create("name" => "Brabham")
+    squad_b = M.M2m_squad_dbtable_scratch.objects.create("name" => "Williams")
+
+    manager = M.M2m_tester_dbtable_scratch.squads(tester)
+
+    # WRITE path — INSERT straight into the physical through table.
+    @test manager.add(squad_a, squad_b) === nothing
+    @test Set([row[:name] for row in manager.all().list()]) == Set(["Brabham", "Williams"])
+
+    # The rows really landed in the db_table-named table, queried as a model in its own right.
+    @test M.M2m_enrolment_dbtable_scratch.objects.filter("tester" => tester[:id]).count() == 2
+
+    # WRITE path — DELETE. `set` runs remove+add inside one transaction, so it covers both.
+    diff = manager.set(squad_b)
+    @test diff.added == 0
+    @test diff.removed == 1
+    @test Set([row[:name] for row in manager.all().list()]) == Set(["Williams"])
+
+    # READ path — forward and reverse traversal both join through the physical table.
+    fwd = M.M2m_tester_dbtable_scratch.objects.filter("squads__name" => "Williams").values("driverref").list()
+    @test length(fwd) == 1
+    @test fwd[1][:driverref] == "piquet"
+
+    rev = M.M2m_squad_dbtable_scratch.objects.filter("testers__driverref" => "piquet").values("name").list()
+    @test length(rev) == 1
+    @test rev[1][:name] == "Williams"
+
+    @test manager.clear() === nothing
+    @test isempty(manager.all().list())
+    @test M.M2m_enrolment_dbtable_scratch.objects.filter("tester" => tester[:id]).count() == 0
+
+    M.M2m_enrolment_dbtable_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_tester_dbtable_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_squad_dbtable_scratch.objects.delete(allow_delete_all=true)
 end
 
 @testset "Many-to-Many: query and API surface" begin

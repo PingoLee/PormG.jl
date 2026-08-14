@@ -175,9 +175,22 @@ function _insert_many_to_many_joins(
   join_type = previus_how == "LEFT" ? "LEFT" : "INNER"
 
   # #64: the PARENT-side join keys (owner_pk / related_pk) are field NAMES; resolve each to
-  # its physical column via the owning model's db_column. The through-table columns
-  # (owner_column / related_column) are the through table's own (auto-generated) columns and
-  # stay as-is. `model_column` is a strict no-op when the PK has no db_column.
+  # its physical column via the owning model's db_column. `model_column` is a strict no-op when the
+  # PK has no db_column.
+  #
+  # The through-table columns (owner_column / related_column) go in as-is, and that is a narrower
+  # claim than it used to be. On the AUTO path they are names PormG generated for a table PormG
+  # created, so there is nothing to resolve. On an explicit `through=` they come from
+  # `Models._infer_through_field`, which returns the FIELD NAME on a user's model — equal to the
+  # physical column exactly when that field declares no `db_column`.
+  #
+  # Django's default convention satisfies that (`driver` imports as the field `driver_id`, which is
+  # also Django's column), which is why an ordinary import joins correctly. A `db_column=` written in
+  # the Django source does NOT: the importer splats it onto the field it builds
+  # (`process_class_fields!`), so the field is `driver_id` while the column is whatever was pinned.
+  # The shape is origin-independent — hand-written models reach it the same way. That column axis is
+  # the unfixed sibling of #363, which settled the TABLE axis only; `source_field` / `target_field`
+  # on the ManyToManyField bypass `_infer_through_field` and are the escape hatch today.
   _module = instruct.object.model._module::Module
   owner_model = _resolve_m2m_side_model(_module, relation.owner_binding, relation.owner_model, relation.field_name)
   related_model = _resolve_m2m_side_model(_module, relation.related_binding, relation.related_model, relation.field_name)
@@ -186,7 +199,10 @@ function _insert_many_to_many_joins(
   through_row["a"] = parent_table
   through_row["alias_a"] = parent_alias
   through_row["key_a"] = Models.model_column(owner_model, relation.owner_pk)
-  through_row["b"] = relation.through_model
+  # #363: the through side's PHYSICAL table. This slot carried the through model's LOGICAL name
+  # whenever the relation came from an explicit `through=`, so a through model with a `db_table`
+  # joined against a table that does not exist. `through_table` is resolved once, at registration.
+  through_row["b"] = relation.through_table
   through_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
   through_row["key_b"] = relation.owner_column
   through_row["how"] = join_type
@@ -194,11 +210,12 @@ function _insert_many_to_many_joins(
   through_alias = _insert_join(instruct.row_join, through_row, instruct.row_path, "$(join_path)__through")
 
   related_row = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
-  related_row["a"] = relation.through_model
+  related_row["a"] = relation.through_table
   related_row["alias_a"] = through_alias
   related_row["key_a"] = relation.related_column
-  # The related side's PHYSICAL table (db_table when set, #59). `relation.related_model` carries the
-  # LOGICAL name, which is what identifies the model — but this slot is rendered as a table.
+  # The related side's PHYSICAL table (db_table when set, #59). Unlike `through_table` above,
+  # `relation.related_model` carries the LOGICAL name — that is what identifies the model — so this
+  # slot, which is rendered as a table, has to go through `model_table_name`.
   related_row["b"] = Models.model_table_name(related_model)
   related_row["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
   related_row["key_b"] = Models.model_column(related_model, relation.related_pk)

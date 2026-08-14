@@ -233,6 +233,15 @@ const DOCERR_CASES = [
         ModelDefinitionError,
         () -> add_field!(Model("docerr_addfield_probe", id = IDField()), :_end, CharField()),
     ),
+    (
+        "write/bulk.md — conflicting columns= target mappings raise QueryBuildError (#380)",
+        QueryBuildError,
+        () -> begin
+            df = DataFrames.DataFrame(c1 = ["active"], c2 = ["disabled"])
+            bulk_insert(DOCERR_STATUS_PG.objects, df,
+                columns = ["c1" => "status", "c2" => "status"], show_query = :dict)
+        end,
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

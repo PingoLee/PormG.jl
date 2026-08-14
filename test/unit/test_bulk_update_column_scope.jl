@@ -775,4 +775,159 @@ end
         @test occursin("primary key", lowercase(sprint(showerror, err)))
     end
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Issue #380: columns= duplicate target field collision contract
+    #
+    # A model field may not be claimed from two different source columns.
+    # When two entries target the same model field from different sources (whether
+    # via Pair => Pair or bare-string => Pair), PormG must reject the ambiguity
+    # with QueryBuildError rather than silently letting the last entry win.
+    # Unambiguous repeats (same source) and absent bare strings (no source claimed)
+    # must NOT raise.
+    # ─────────────────────────────────────────────────────────────────────────────
+    @testset "explicit columns= duplicate target field collision (#380)" begin
+        # 1. Pair + Pair from different source columns: MUST raise QueryBuildError
+        @testset "Pair + Pair mapping different source columns to same field raises" begin
+            df_conflict = DataFrames.DataFrame(id = [4606], c1 = [10], c2 = [20])
+            for (op_name, bulk_op) in [("bulk_update", (obj, df; kw...) -> bulk_update(obj, df; match_on = ["id"], kw...)),
+                                       ("bulk_insert", (obj, df; kw...) -> bulk_insert(obj, df; kw...)),
+                                       ("bulk_copy",   (obj, df; kw...) -> bulk_copy(obj, df; kw...))]
+                # Named sub-testset so a failure reports WHICH of the three operations broke —
+                # the guard lives in the shared _prepare_bulk_df!, so a regression could hit
+                # one path only if a caller ever stopped routing through it.
+                @testset "$op_name" begin
+                    err = try
+                        bulk_op(
+                            Metric.objects, df_conflict,
+                            columns    = ["c1" => "weight", "c2" => "weight"],
+                            show_query = :dict
+                        )
+                        nothing
+                    catch e
+                        e
+                    end
+                    @test err isa PormG.QueryBuildError
+                    msg = sprint(showerror, err)
+                    @test occursin("weight", msg)
+                    @test occursin("c1", msg)
+                    @test occursin("c2", msg)
+                    @test occursin("mapped from two different columns", msg)
+                    # The message must name the operation it came from, and must render clean
+                    # off-TTY — QueryBuildError's constructor runs _emsg, so no raw ANSI leaks.
+                    @test occursin("Error in $(op_name),", msg)
+                    @test !occursin("\e[", msg)
+                end
+            end
+        end
+
+        # 2. Pair + Pair from same source column: unambiguous repeat MUST succeed
+        @testset "Pair + Pair mapping same source column to same field is allowed" begin
+            df_repeat = DataFrames.DataFrame(id = [4606], c1 = [10])
+            res = bulk_update(
+                Metric.objects, df_repeat,
+                columns    = ["c1" => "weight", "c1" => "weight"],
+                match_on   = ["id"],
+                show_query = :dict
+            )
+            @test occursin("\"weight\"", res[:sql_text])
+            # The repeat pushes "weight" into fields_df TWICE. Only the final `|> unique` keeps
+            # that from emitting `SET "weight" = ..., "weight" = ...`, which PostgreSQL rejects
+            # with "multiple assignments to same column". Pin the exact SET clause and the bound
+            # values (10 from c1, then the match key) — an occursin alone passes either way.
+            @test occursin("SET \"weight\" = source.\"weight\"::integer\n", res[:sql_text])
+            @test res[:parameters] == Any[10, 4606]
+        end
+
+        # 3. Bare string + Pair from different source column when field ∈ names(df): MUST raise
+        @testset "bare string + Pair targeting same field when field is in df raises" begin
+            df_str_conflict = DataFrames.DataFrame(id = [4606], weight = [10], c2 = [20])
+
+            # Order: [bare_string, Pair]
+            err1 = try
+                bulk_update(
+                    Metric.objects, df_str_conflict,
+                    columns    = ["weight", "c2" => "weight"],
+                    match_on   = ["id"],
+                    show_query = :dict
+                )
+                nothing
+            catch e
+                e
+            end
+            @test err1 isa PormG.QueryBuildError
+            msg1 = sprint(showerror, err1)
+            @test occursin("weight", msg1)
+            @test occursin("c2", msg1)
+            @test occursin("mapped from two different columns", msg1)
+
+            # Reverse order: [Pair, bare_string]
+            err2 = try
+                bulk_update(
+                    Metric.objects, df_str_conflict,
+                    columns    = ["c2" => "weight", "weight"],
+                    match_on   = ["id"],
+                    show_query = :dict
+                )
+                nothing
+            catch e
+                e
+            end
+            @test err2 isa PormG.QueryBuildError
+            msg2 = sprint(showerror, err2)
+            @test occursin("weight", msg2)
+            @test occursin("c2", msg2)
+            @test occursin("mapped from two different columns", msg2)
+        end
+
+        # 4. Bare string + Bare string when field ∈ names(df): unambiguous repeat MUST succeed
+        @testset "bare string repeat when field is in df is allowed" begin
+            df_str_repeat = DataFrames.DataFrame(id = [4606], weight = [10])
+            res = bulk_update(
+                Metric.objects, df_str_repeat,
+                columns    = ["weight", "weight"],
+                match_on   = ["id"],
+                show_query = :dict
+            )
+            @test occursin("\"weight\"", res[:sql_text])
+            # Same de-duplication contract as the Pair repeat above, via the bare-string branch.
+            @test occursin("SET \"weight\" = source.\"weight\"::integer\n", res[:sql_text])
+            @test res[:parameters] == Any[10, 4606]
+        end
+
+        # 5. Bare string + Pair when bare string ∉ names(df): MUST succeed
+        # When a bare string names a field the frame has no column for, the string branch does NOT
+        # write to mapping (it is the auto-populated field branch). The Pair is the sole claim on df data.
+        @testset "bare string absent from df + Pair mapping is allowed (both orders)" begin
+            # Model with a defaulted field `laps` that is absent from DataFrame
+            StintModel = PormG.Models.Model_Type(
+                name = "stint_col_collision_model",
+                fields = Dict(
+                    "id"   => IDField(),
+                    "laps" => IntegerField(default = 0),
+                ),
+                field_names = ["id", "laps"],
+                connect_key = "default",
+            )
+            df_stint = DataFrames.DataFrame(id = [1], c2 = [45])
+
+            # Order 1: ["laps", "c2" => "laps"]
+            res1 = bulk_insert(
+                StintModel.objects, df_stint,
+                columns    = ["laps", "c2" => "laps"],
+                show_query = :dict
+            )
+            @test occursin("\"laps\"", res1[:sql_text])
+            @test res1[:parameters] == Any[45]
+
+            # Order 2: ["c2" => "laps", "laps"]
+            res2 = bulk_insert(
+                StintModel.objects, df_stint,
+                columns    = ["c2" => "laps", "laps"],
+                show_query = :dict
+            )
+            @test occursin("\"laps\"", res2[:sql_text])
+            @test res2[:parameters] == Any[45]
+        end
+    end
+
 end

@@ -979,5 +979,65 @@ end
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #335: a `columns=` Pair's source column survives a same-named field's default
+#
+# `test_result_set_default` is declared `default = 1` and is NOT named in `columns=`, so
+# PormG supplies its default. The DataFrame column carrying the real FK ids is *named after
+# that field* and mapped onto `test_result` — the exact collision #335 is about. Pre-#335 the
+# injected `1` was written over that column before the row loop read it, so both FK columns
+# landed on `resultid = 1` and the caller's ids were silently gone.
+#
+# Unit coverage (`test/unit/test_bulk_fill_column_collision.jl`) proves the bound parameters,
+# but `bulk_copy` returns before its row loop, so `show_query` cannot reach its values at all:
+# the CSV wire is only observable against a real PostgreSQL. That is what this testset is for —
+# do not collapse it into the unit file.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#335: a columns= Pair's source column is not clobbered by another field's default" begin
+    cleanup_names = ["copy-collide-a", "copy-collide-b"]
+
+    purge = () -> begin
+        cleanup = M.Just_a_test_deletion.objects
+        cleanup.filter("name__@in" => cleanup_names)
+        cleanup.exists() && cleanup.delete()
+    end
+    purge()
+
+    try
+        # Two distinct ids, neither of which can be 1: `_bulk_copy_fk_ids` is ordered ascending
+        # from the smallest existing `resultid` (>= 1), so the 2nd and 3rd entries are >= 2. That
+        # is what makes the assertion discriminating — pre-#335 both rows bound the default 1.
+        mapped_ids = [_bulk_copy_fk_ids[2], _bulk_copy_fk_ids[3]]
+        @test all(!=(1), mapped_ids)
+
+        df = DataFrames.DataFrame(
+            name = cleanup_names,
+            test_result_set_default = mapped_ids,   # named after a DIFFERENT, defaulted field
+        )
+
+        bulk_copy(M.Just_a_test_deletion.objects, df,
+                  columns = ["name", "test_result_set_default" => "test_result"])
+
+        stored = M.Just_a_test_deletion.objects.filter(
+            "name__@in" => cleanup_names
+        ).order_by(
+            "name"
+        ).values(
+            "name", "test_result", "test_result_set_default"
+        ).list()
+
+        @test length(stored) == 2
+        # The caller's ids reached the column they were mapped to...
+        @test [row[:test_result] for row in stored] == mapped_ids
+        # ...and the field that merely shares the NAME still got its own default, so redirecting
+        # the fill did not cost the fill.
+        @test all(row -> row[:test_result_set_default] == 1, stored)
+        # The caller's DataFrame was never written through (#132), collision or not.
+        @test df.test_result_set_default == mapped_ids
+    finally
+        purge()
+    end
+end
+
 end # End of if adapter_name != "SQLite"
 

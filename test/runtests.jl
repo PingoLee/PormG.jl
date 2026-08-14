@@ -71,6 +71,7 @@ end
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")
     @testset "Bulk Default-Fill Scope (#331)" include("unit/test_bulk_default_fill_scope.jl")
+    @testset "Bulk Fill-Column Collision (#335)" include("unit/test_bulk_fill_column_collision.jl")
     @testset "Bulk No-Mutation Contract (#132)" include("unit/test_bulk_no_mutation.jl")
     @testset "Bulk Parameter-Limit Chunking (#84)" include("unit/test_bulk_param_limit.jl")
     @testset "bulk_insert ON CONFLICT (#123)" include("unit/test_bulk_on_conflict.jl")

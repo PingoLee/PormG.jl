@@ -39,6 +39,34 @@ end
 # whole-column replacement/addition is safe here.
 _bulk_working_frame(df_o::DataFrames.DataFrame) = DataFrames.select(df_o, :; copycols = false)
 
+# #335: the name space PormG's own injected fill columns live in, kept disjoint from the caller's.
+# `_prepare_bulk_df!` fills a whole column for every field the frame has no column for; before
+# #335 it wrote to `df[!, field]` — the FIELD's name — which destroyed caller data whenever an
+# explicit `columns=` Pair mapped some OTHER field to a source column of that name. The rule now
+# is unconditional and needs no reachability argument: **a fill never takes a caller-supplied
+# column name.** See `inject_fill_column!` inside `_prepare_bulk_df!`.
+#
+# The `:` is a TRIPWIRE, not decoration. It fails `SAFE_IDENTIFIER_PATTERN` (`sanitization.jl`),
+# so if a future refactor ever pipes a `mapping` VALUE into `quote_identifier` the build throws
+# instead of silently emitting a wrong column name into SQL. Today nothing does: every SQL column
+# list is built from `fields_df`/`joined_columns` through `Models.model_column`, never from
+# `names(df)`.
+const _BULK_FILL_PREFIX = "__pormg:fill:"
+
+# True for a working-frame column PormG injected rather than the caller supplying it. Used by the
+# three places that would otherwise treat an internal name as the caller's own column:
+# `_resolve_match_column!`'s ignored-column warning and its not-found message, and
+# `_depuration_values_bulk_insert`'s error.
+#
+# Deliberately a bare prefix test, and deliberately asymmetric with the WRITE side: the injection
+# uniquifies against `names(df)` so a caller column named like the prefix is never overwritten,
+# while these readers would misread it — a swallowed warning, a column omitted from an error list,
+# or a caller's own column reported as a "PormG-supplied default/auto value".
+# Accepted — the consequence is cosmetic text, the name is one no caller writes by accident, and a
+# reader-side escape would have to thread the real injected-name set through three call sites to
+# buy nothing else.
+_is_injected_fill_column(name::AbstractString) = startswith(name, _BULK_FILL_PREFIX)
+
 # #107 "one border crossing": `columns=` is the ONLY place a DataFrame column is mapped
 # to a model field. `match_on=` selects merge keys by bare model-field name; its old
 # `"df_col" => "model_field"` pair form is rejected with a migration error below.
@@ -509,13 +537,13 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   # parameters that shadowed the enclosing ones with the same values, which read as if a caller
   # could vary them; they come from the enclosing scope now.
   #
-  # KNOWN HOLE (#335), pre-existing and NOT closed by #331: the injection sites write to
-  # `df[!, field]`, using the field's own name as the frame column. If an explicit `columns=` Pair
-  # maps some OTHER field to a source column that happens to be named `field`, that write lands on
-  # the column the other field reads from and destroys the caller's values. E.g.
-  # `columns = ["laps" => "pit_stops"]` on a model that also declares a defaulted `laps`:
-  # `pit_stops` binds `laps`'s default instead of the frame's numbers. Narrow (it needs the name
-  # collision) but silent. The guard belongs at the injection sites, not here.
+  # #335 (fixed): the injection sites used to write to `df[!, field]`, using the field's own name
+  # as the frame column. If an explicit `columns=` Pair mapped some OTHER field to a source column
+  # that happened to be named `field`, that write landed on the column the other field reads from
+  # and destroyed the caller's values — e.g. `columns = ["laps" => "pit_stops"]` on a model that
+  # also declares a defaulted `laps` made `pit_stops` bind `laps`'s default instead of the frame's
+  # numbers, silently. Both sites now route through `inject_fill_column!` below, which never writes
+  # to a caller-supplied name at all.
   #
   # #334 (fixed): the UUID branch below used to call `uuid4()` ONCE per field, and the two
   # injection sites broadcast that single value across the whole frame — every row of an
@@ -561,7 +589,69 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
 
     return false, nothing, false
   end
-  
+
+  # Inject one whole column of `fill_value` for a field the frame has no column for, and point
+  # `mapping` at it. Returns `true` when a column was injected, `false` when the explicit-scope
+  # UPDATE guard suppressed it. Captures `df`/`mapping`/`operation`/`normalized_columns` from the
+  # enclosing scope, like `resolve_absent_column_fill` above.
+  #
+  # #335: the destination is ALWAYS a private `_BULK_FILL_PREFIX` column, never the field's own
+  # name and never any name the caller supplied. That is the whole fix, and it is deliberately
+  # UNCONDITIONAL: a redirect that fired only on a detected collision would carry a reachability
+  # proof ("no other field reads this name") that a later edit to the `columns=` handling above
+  # could silently invalidate. One rule, one code path, nothing to re-derive.
+  #
+  # No VALUE read of the working frame is affected: `_drop_blank_auto_primary_keys!`, the three
+  # per-row loops in `bulk_insert`/`bulk_copy`/`bulk_update`, `_ensure_unique_bulk_update_keys!`
+  # and `_depuration_values_bulk_insert` all index through `mapping[field]`, and every SQL column
+  # list comes from `fields_df`/`joined_columns` → `Models.model_column`. A same-named column the
+  # caller supplied but `columns=` excluded therefore keeps its values in the working frame
+  # instead of being overwritten, with no change to what is bound — see the scope note in the
+  # second arm below.
+  #
+  # What the redirect DOES change is the frame's NAME SET, and one predicate reads it:
+  # `_is_legacy_dynamic_filter` tests `f.first in names(df)`. An injected field no longer puts its
+  # own name there, so `filters = ["<auto-populated-field>" => "<model-field>"]` — pre-#335 caught
+  # by the `filters=` deprecation error, because the injection had just put that name in the frame
+  # — is now classified as the constant predicate the caller literally wrote.
+  #
+  # Be precise about the cost, because it is NOT error-for-error: on a field whose formatter
+  # accepts the right-hand string the call now RUNS, adding a `WHERE <field> = '<model-field>'`
+  # predicate that matches nothing, where before it raised "move this to match_on=". Accepted for
+  # one reason only — `_is_legacy_dynamic_filter` is half of a shim already marked for deletion
+  # (see the DEPRECATION SHIM block below), so #335 narrows the reach of a helper that is on its
+  # way out rather than degrading permanent behavior. No `UPGRADING.md` entry is owed: the bar
+  # there is a change that FORCES a consuming-app source edit, and a call that was raising a
+  # migration error was already being told to change.
+  #
+  # Whole-column ADDITION only, never a write into an existing slot — the #132 zero-copy invariant
+  # (see `_bulk_working_frame`). The uniquifying loop is what keeps it an addition: a caller column
+  # already named like the prefix would otherwise be clobbered, which is #335 over again.
+  function inject_fill_column!(field::String, f_meta, fill_value, per_row::Bool)
+    # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
+    # synthesized: that would overwrite live rows merely because the DataFrame lacks the column.
+    # Temporal auto_now/auto_now_add injections are always allowed — an intentional ORM
+    # side-effect. Unchanged by #331; #335 folded it in from both call sites so the two arms are
+    # provably identical rather than only visually identical.
+    operation == :update && !isempty(normalized_columns) && f_meta.default !== nothing &&
+      return false
+
+    target = "$(_BULK_FILL_PREFIX)$(field)"
+    suffix = 1
+    while target in names(df)
+      suffix += 1
+      target = "$(_BULK_FILL_PREFIX)$(field):$(suffix)"
+    end
+
+    # #334: `per_row` means fill_value is already a Vector, one distinct value per row (currently
+    # only the UUID auto_add case) — otherwise broadcast the one value. `nrow` replaced a `ref_col`
+    # pick that grabbed an arbitrary `mapping` key purely for its length and indexed `df[!, 1]`
+    # when `mapping` was empty (a latent `BoundsError` on a column-less frame).
+    df[!, target] = per_row ? fill_value : fill(fill_value, DataFrames.nrow(df))
+    mapping[field] = target
+    return true
+  end
+
   # 1. Identify mappings and check required columns
   if !isempty(normalized_columns)
     for column in normalized_columns
@@ -662,24 +752,16 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       if !haskey(mapping, field)
         # ABSENT column: the field was requested via `columns=` but the DataFrame has no column
         # for it. The fill rule applies — inject one whole column of the fill value.
+        #
+        # Reachable only through the bare-string branch of `columns=` whose column is NOT in
+        # `names(df)` (the `push!(fields_df, column)` above), so `field ∉ names(df)` holds here
+        # unconditionally: this site never had a name to collide with, and its `inject_fill_column!`
+        # call is for symmetry with the other arm, not because #335 could bite here. Stated
+        # explicitly so a later edit to that branch does not read this as a guarantee it provides.
         should_auto_populate, fill_value, per_row = resolve_absent_column_fill(f_meta)
 
         if should_auto_populate
-          # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
-          # synthesized: that would overwrite live rows merely because the DataFrame lacks the
-          # column. Temporal auto_now/auto_now_add injections are always allowed — an intentional
-          # ORM side-effect. Same guard as the never-requested branch below. Unchanged by #331.
-          is_static_default = f_meta.default !== nothing
-          is_explicit_update = operation == :update && !isempty(normalized_columns)
-          if !(is_explicit_update && is_static_default)
-            # Add new column to DF and update mapping
-            # Use first mapped column as a length reference
-            ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-            # #334: per_row means fill_value is already a Vector, one distinct value per row
-            # (currently only the UUID auto_add case) — otherwise broadcast the one value.
-            df[!, field] = per_row ? fill_value : map(x -> fill_value, df[!, ref_col])
-            mapping[field] = field
-          end
+          inject_fill_column!(field, f_meta, fill_value, per_row)
         elseif f_meta.primary_key
           # It's a PK, we'll collect it later
         elseif !f_meta.null && operation in [:insert, :copy]
@@ -706,25 +788,21 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       #
       # Deferring to the frame here instead — reading the excluded column's values — was
       # considered and rejected: it would make `columns=` stop deciding what gets written, which
-      # is a worse contract than the one above. (A *narrow* deferral, only when `field in
-      # names(df)`, would keep genuinely-absent columns injected and so would not break
-      # auto_now_add stamping — the objection is the contract, not a NOT NULL failure.)
+      # is a worse contract than the one above.
+      #
+      # #335 changed WHERE the injection lands, not WHAT gets bound: the excluded field still
+      # binds its default, but the fill goes to a private column, so the caller's same-named
+      # column now keeps its values in the working frame instead of being overwritten. Nothing
+      # reads it — every consumer goes through `mapping` — so the SQL and the parameters are
+      # identical either way. (This is also why the "narrow deferral" once sketched here is moot:
+      # it proposed reading `df[!, field]` when `field in names(df)`, which is exactly the
+      # aliasing #335 removed.)
       should_auto_populate, fill_value, per_row = resolve_absent_column_fill(f_meta)
 
       if should_auto_populate
-        # For an explicit-scope UPDATE (columns= was provided), a static `default`
-        # must NOT leak into fields_df.  Temporal auto_now/auto_now_add injections
-        # are always allowed because they are an intentional ORM side-effect.
-        # For INSERT/COPY, or UPDATE with columns=nothing, behavior is unchanged.
-        is_static_default = f_meta.default !== nothing
-        is_explicit_update = operation == :update && !isempty(normalized_columns)
-        if !(is_explicit_update && is_static_default)
-          ref_col = isempty(mapping) ? 1 : mapping[collect(keys(mapping))[1]]
-          # #334: see the sibling injection site above.
-          df[!, field] = per_row ? fill_value : map(x -> fill_value, df[!, ref_col])
-          mapping[field] = field
-          push!(fields_df, field)
-        end
+        # A suppressed static default returns false, so the field stays out of fields_df — the
+        # explicit-scope UPDATE rule, now enforced inside the helper for both arms at once.
+        inject_fill_column!(field, f_meta, fill_value, per_row) && push!(fields_df, field)
       elseif f_meta.primary_key
         push!(pk_field, field)
       end
@@ -780,7 +858,13 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   resolved = if haskey(mapping, field)
     # `columns=` mapping wins. If the df ALSO carries a column named exactly like the
     # field, it is ignored in favor of the declared mapping — surface that loudly.
-    if mapping[field] != field && field in names(df)
+    #
+    # #335: an INJECTED fill column is not a `columns=` mapping, so it must not trip this. Since
+    # #335 every injection points `mapping[field]` at a private name, which makes the first
+    # conjunct true for every auto-populated field — without the prefix test this would fire on
+    # e.g. `match_on = ["updated_at"]` for an auto_now `updated_at` and report a `mapped_source`
+    # the caller never wrote. Pre-#335 the identity mapping made it silently false instead.
+    if !_is_injected_fill_column(mapping[field]) && mapping[field] != field && field in names(df)
       @warn "bulk_update: $(kind) resolved through the columns= mapping; the same-named DataFrame column is ignored" field=field mapped_source=mapping[field] ignored_column=field
     end
     mapping[field]
@@ -789,11 +873,25 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   else
     # No mapping and no exact same-named column. A column differing only in case is a
     # loud error, not a silent fold (see the case-sensitive matching contract above).
-    candidates = _case_fold_candidates(field, names(df))
+    #
+    # #335: this runs AFTER `_prepare_bulk_df!`, so the working frame also carries PormG's own
+    # fill columns. Report — and offer as "did you mean" candidates — only what the caller
+    # actually supplied; a `columns:` list containing `__pormg:fill:updated_at` reads as a bug in
+    # PormG, not as help. Filtering the CANDIDATE source matters more than the message: a
+    # candidate is interpolated into a paste-ready `columns = [..., "X" => "field"]` suggestion,
+    # so a leaked internal name there would be actively wrong advice rather than noise.
+    #
+    # The rule for post-injection `names(df)` readers is LISTINGS, not membership: any reader that
+    # SHOWS the frame's columns owes this filter, while the two membership tests above
+    # (`field in names(df)` at the warn condition and at the identity fallback) are provably
+    # exempt and deliberately left lazy — `field` comes from `model.field_names`, and #317 forbids
+    # a model field name from starting with `_`, so it can never equal an injected name.
+    caller_columns = filter(!_is_injected_fill_column, names(df))
+    candidates = _case_fold_candidates(field, caller_columns)
     isempty(candidates) ||
       throw(UnknownFieldError(_bulk_case_mismatch_msg(:update, field, candidates,
         "columns = [..., \"$(candidates[1])\" => \"$(field)\"]")))
-    throw(UnknownFieldError("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: $(names(df))) and no columns= mapping targets that field"))
+    throw(UnknownFieldError("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: \e[4m\e[32m$(caller_columns)\e[0m) and no columns= mapping targets that field"))
   end
 
   mapping[field] = resolved
@@ -1287,7 +1385,12 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     try
       model.fields[field].formatter(row[col_name])
     catch e
-      throw(InvalidValueError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m (col: $(col_name)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
+      # #335: `col_name` is PormG's own private fill column whenever the value was auto-populated,
+      # and printing that name would point the caller at a DataFrame column they never wrote. Name
+      # the source of the value instead.
+      source = _is_injected_fill_column(col_name) ?
+        "PormG-supplied default/auto value" : "col: $(col_name)"
+      throw(InvalidValueError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m ($(source)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m"))
     end
   end  
 end

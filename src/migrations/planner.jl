@@ -233,12 +233,11 @@ end
 # sibling), so the index is materialized when its table is first created and never re-emitted —
 # no false "pending" churn. Adding/removing a constraint on an already-migrated table (which
 # needs composite-unique introspection PormG does not have yet) is out of scope for this pass.
-function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel)::Nothing
+function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel; seen::Set{String} = Set{String}())::Nothing
   haskey(model.cache, "unique_constraints") || return nothing
   constraints = get(model.cache["unique_constraints"], "constraints", nothing)
   constraints === nothing && return nothing
   table = model_table_name(model)
-  seen = Set{String}()
   for c in constraints
     # Resolve declared field names to physical columns (honors db_column #50; PormG adds no
     # `_id` suffix for FKs — the field name IS the column).
@@ -246,15 +245,50 @@ function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migrat
     index_name = c.name === nothing ? "$(table)_$(join(cols, "_"))_uniq" : c.name
     # The step label (and thus the plan slot) keys on index_name; a collision — same explicit
     # name, or two constraints deriving the same name — would silently overwrite. Fail loudly.
+    # `seen` is OWNED BY `_add_new_table` and shared with `_add_indexes` (#347): an Index and a
+    # UniqueConstraint landing on the same name are two `CREATE … INDEX` statements the database
+    # rejects, and their step labels differ, so the plan would not catch it on its own.
     index_name in seen && throw(InvalidMigrationError(
-      "Duplicate unique-constraint index name '$(index_name)' on table '$(table)'; " *
-      "give each UniqueConstraint a distinct name"))
+      "Duplicate index name '$(index_name)' on table '$(table)'; " *
+      "give each UniqueConstraint and Index a distinct name"))
     push!(seen, index_name)
     _configure_order_dict_migration_plan(
       migration_plan,
       model_name,
       "Create unique constraint: $(index_name)",
-      Dialect.create_unique_index(conn, "\"$index_name\"", "\"$table\"", ["\"$col\"" for col in cols])
+      Dialect.create_unique_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$col\"" for col in cols])
+    )
+  end
+  return nothing
+end
+
+# User-declared composite indexes (#347). The plain sibling of `_add_unique_constraints` above: one
+# `CREATE INDEX` per `Index` in `model.cache["composite_indexes"]`, over the same
+# `Dialect.create_index` primitive the per-field `db_index` path uses — that one just never passes
+# more than one column. Called ONLY from `_add_new_table`, so like its unique sibling the index is
+# materialized when its table is first created and never re-emitted; adding or removing one on an
+# already-migrated table is out of scope for this pass (introspection reads composite indexes back,
+# but nothing diffs them yet).
+#
+# The step label starts with "Create index", which puts it in `runner._order_statements`' deferred
+# index bucket — correct, since a CREATE INDEX only needs its table to exist.
+function _add_indexes(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, model::PormGModel; seen::Set{String} = Set{String}())::Nothing
+  haskey(model.cache, "composite_indexes") || return nothing
+  indexes = get(model.cache["composite_indexes"], "indexes", nothing)
+  indexes === nothing && return nothing
+  table = model_table_name(model)
+  for ix in indexes
+    cols = String[Models.model_column(model, f) for f in ix.fields]
+    index_name = ix.name === nothing ? "$(table)_$(join(cols, "_"))_idx" : ix.name
+    index_name in seen && throw(InvalidMigrationError(
+      "Duplicate index name '$(index_name)' on table '$(table)'; " *
+      "give each UniqueConstraint and Index a distinct name"))
+    push!(seen, index_name)
+    _configure_order_dict_migration_plan(
+      migration_plan,
+      model_name,
+      "Create index: $(index_name)",
+      Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$col\"" for col in cols])
     )
   end
   return nothing
@@ -267,7 +301,10 @@ function _add_new_table(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     _add_constrains(conn, migration_plan, model_name, model, field_name, field, name)
   end
   _add_many_to_many_auto_constraints(conn, migration_plan, model_name, model)
-  _add_unique_constraints(conn, migration_plan, model_name, model)
+  # ONE name registry across both model-level index emitters (#347) — see `_add_unique_constraints`.
+  declared_index_names = Set{String}()
+  _add_unique_constraints(conn, migration_plan, model_name, model; seen = declared_index_names)
+  _add_indexes(conn, migration_plan, model_name, model; seen = declared_index_names)
   return nothing
 end
 

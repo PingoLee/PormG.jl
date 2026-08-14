@@ -411,7 +411,9 @@ Django parameters are automatically converted to PormG equivalents:
 | `constraints = [CheckConstraint(…)]` | **rejected**, reported | No PormG equivalent. |
 | `abstract = True` | **no table** | The class becomes a base: its fields merge into every child. See [Model inheritance](#Model-inheritance). |
 | `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. |
-| `indexes`, `index_together` | **dropped**, reported | PormG has no composite-index primitive — only per-field `db_index`. |
+| `indexes = [Index(fields=['a','b'])]` | **imported** as `indexes = [Models.Index(fields = ("a", "b"))]` | See the acceptance rule below — narrower than Django's. |
+| `indexes = [Index(fields=['a'])]` | **imported** as `a = …(db_index=true)` | A one-column index *is* `db_index`, and is the only spelling that round-trips, so nothing is reported. Two exceptions: on the **primary key** it is redundant (already indexed) and skipped, and on a field type with no `db_index` option (`PasswordField`) it is dropped **and** reported. |
+| `index_together = (('a','b'), …)` | **imported** as one `Models.Index` per group | The legacy spelling; the non-unique twin of `unique_together`. |
 | `ordering`, `get_latest_by` | **dropped**, reported | PormG orders per query, not per model. |
 | `managed`, `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
 | anything unrecognised | **dropped**, reported | A typo or a Django option this importer has not met. Neither is safe to pass over quietly. |
@@ -432,9 +434,35 @@ there when someone reads the file six months later.
     silently rejecting rows the live database accepts. Refusing an option is recoverable;
     reinterpreting one is not.
 
+!!! warning "`Meta.indexes` acceptance is a whitelist too"
+    An entry is imported only when it is a `models.Index` whose arguments are within `fields` and
+    `name`. Everything else causes **that one index** to be dropped and reported, leaving its
+    siblings alone:
+
+    - `condition=`, `include=`, `opclasses=`, `expressions=`, `db_tablespace=` — each changes *what*
+      is indexed or where it lives;
+    - a positional expression, `models.Index(Lower("name"), …)` — a functional index; PormG would
+      index the column itself, which is a different index;
+    - a **descending** column, `fields=["-year"]` — PormG indexes carry no per-column order, so
+      importing it ascending would build a different index under the developer's name;
+    - a PostgreSQL-specific class such as `GinIndex` / `BrinIndex` — PormG emits only a default
+      b-tree.
+
+    Advanced index shapes (GIN/GiST/BRIN, functional, partial, ordered) are tracked separately.
+
+!!! note "An index name reused across models loses the name, not the index"
+    An index name is unique per database, and PormG emits `CREATE INDEX IF NOT EXISTS` — so two
+    models declaring the same name would leave the *second* table quietly without its index. An
+    abstract base makes that easy to write without noticing: Django installs the base's whole `Meta`
+    on every child that declares none of its own, so one
+    `indexes = [Index(fields=…, name="base_x")]` reaches every child. Django rejects it at
+    system-check time (`models.E030`); this importer keeps the index on every child and drops the
+    duplicated **name**, deriving `<table>_<cols>_idx` per table instead, and reports which name was
+    surrendered. The same rule applies to a reused `UniqueConstraint` name.
+
 Because foreign-key fields are imported with an `_id` suffix (`item` → `item_id`), the importer
-resolves each declared member — in both `unique_together` and `constraints` — to its imported field
-name automatically:
+resolves each declared member — in `unique_together`, `constraints`, `indexes` and `index_together`
+alike — to its imported field name automatically:
 
 ```python
 class Dim_item_fabricante(models.Model):
@@ -616,9 +644,9 @@ field and its source line; it is never dropped silently.
 
 | | |
 |---|---|
-| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints` (see the whitelist above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
+| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
 | **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them |
-| **Reported and skipped** | `Meta.indexes` and every other option with no PormG equivalent; a `UniqueConstraint` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
+| **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
 | **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
 
 Nothing in the middle two rows is dropped in silence: each one produces a `@warn` at import time and

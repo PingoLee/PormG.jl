@@ -25,7 +25,7 @@ using Logging
 
 import PormG: @pormg_debug
 import PormG: _emsg  # shared TTY-aware error/log-message strip helper (Kernel)
-import PormG: PormGError, MigrationError, InvalidMigrationError  # semantic error taxonomy (#239); defined in Kernel
+import PormG: PormGError, MigrationError, InvalidMigrationError, ModelDefinitionError  # semantic error taxonomy (#239); defined in Kernel
 # importers.jl reports a wrong-backend connection with the precise type rather than folding it
 # into MigrationError — an unknown key already fails earlier as InvalidConfigurationError.
 import PormG: BackendCapabilityError

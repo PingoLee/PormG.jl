@@ -361,6 +361,9 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
   # #325: the same gap for `db_index` — PRAGMA table_info has no index column either. Column ⇒ index
   # name, so the model can also carry `cache["index"]` for the planner's DROP INDEX path.
   indexed_cols = _sqlite_single_column_indexed_columns(db, table_name)
+  # #347: and the multi-column half of the same set, which the reader above excludes by arity. These
+  # become model-level `Models.Index` declarations rather than a per-field attribute.
+  composite_idxs = _sqlite_composite_indexes(db, table_name)
 
   fields_dict = Dict{Symbol, Any}()
   fk_map = Dict{String, Any}()
@@ -470,9 +473,14 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
   # The planner reads `cache["index"]` to name the index it must DROP when a model stops declaring
   # `db_index`. PostgreSQL's reader has always populated it; SQLite's never did, which was harmless
   # only while `db_index` could not be true on this side (#325).
+  #
+  # #347: writes the one KEY rather than assigning the whole `cache` field. `_attach_composite_indexes!`
+  # below writes a second key, and while the current order happens to be safe, a whole-field assign
+  # makes the two writers order-dependent for no reason. Defensive, not a bug fix.
   if !isempty(indexed_cols)
-    model_resp.cache = Dict("index" => indexed_cols)
+    model_resp.cache["index"] = indexed_cols
   end
+  _attach_composite_indexes!(model_resp, composite_idxs)
   return model_resp
 end
 
@@ -524,6 +532,144 @@ end
 # ---
 
 """
+    _pg_composite_indexes(db::PormGPostgres; schema = "public") -> Dict{String, Vector{Pair{String, Vector{String}}}}
+
+Every MULTI-column non-unique index in `schema`, as `table_name => [index_name => ordered columns]` —
+the PostgreSQL half of #347 and the exact mirror of [`_sqlite_composite_indexes`](@ref).
+
+The predicates are the `indexes` CTE's in `get_database_schema`, with the arity inverted
+(`indnkeyatts > 1` instead of `= 1`), so the two readers partition the same index set: nothing feeds
+both a per-field `db_index` and a model-level `Index`. `NOT indisunique` keeps a composite
+`UniqueConstraint` (a `CREATE UNIQUE INDEX`) out; `indpred IS NULL` keeps a partial index out.
+
+Run **once for the whole schema**, not per table, and joined to the models by name in
+`convert_schema_to_models`. It is a separate query rather than another CTE on the schema dump because
+that query returns one row per table and would need a second aggregation level — and any delimiter
+chosen to serialize `(index, columns)` pairs into one string is a legal character in a PostgreSQL
+identifier.
+
+Everything PormG cannot re-emit is excluded, never read partially or approximately. Reading it
+"close enough" would regenerate a **different** index under the developer's name, which is the one
+failure a schema dump must not have — the same reject-rather-than-reinterpret rule the Django
+importer applies to `Meta.indexes`. Beyond the shared predicates:
+
+  * `am.amname = 'btree'` — `Dialect.create_index` emits a default b-tree and nothing else. A GIN,
+    GiST, BRIN or hash index read back as an `Index` would regenerate as a b-tree (#29).
+  * `NOT i.indisexclusion` — an `EXCLUDE USING gist (…)` constraint's backing index is non-unique,
+    non-primary and unfiltered, so it passes every other predicate. Regenerating it as a plain index
+    would drop a constraint the database was enforcing.
+  * `indoption`, `indclass` and `indcollation`, selected per column and filtered in Julia alongside
+    the NULL check: a **non-default sort** (`indoption != 0` — descending *or* `NULLS FIRST`), a
+    non-default **operator class** (`varchar_pattern_ops`), or an explicit **collation**
+    (`COLLATE "C"`) each makes a different index. PormG can express none of them, and the importer
+    already refuses Django's `Index(fields=["-year"])` and `opclasses=` on the same grounds.
+
+    The collation test answers the same *question* as the SQLite reader's non-BINARY `coll` filter
+    but is not the same *test*, and the difference is deliberate rather than drift — do not "fix"
+    one to match the other. This one is RELATIVE (did the index override the column's collation?);
+    SQLite's is ABSOLUTE (is the effective collation `BINARY`?), because `pragma_index_xinfo` cannot
+    distinguish an index-level `COLLATE` from one declared on the column. They agree on the case
+    both exist for — an explicit `COLLATE` in the index — and diverge only on a column *declared*
+    with a non-default collation, which PostgreSQL keeps (re-emitting the index reproduces it
+    exactly) and SQLite drops for want of the information to do better.
+
+    Both are subscripted `[k.ord - 1]`, and the `- 1` is load-bearing. `indkey`/`indoption`/`indclass`
+    are `int2vector`/`oidvector`, which PostgreSQL builds with **lower bound 0**; the `::int2[]` cast
+    is binary-coercible (`pg_cast.castmethod = 'b'`, no function runs), so the 0-based bound survives
+    it. `WITH ORDINALITY` numbers rows from 1 regardless. Without the offset every row reads the
+    *next* column's option — so a `DESC` or non-default opclass on the **first** key column, the
+    canonical case, went undetected while the last row read out of range and came back NULL.
+    Measured on a live server: `array_lower(indoption::int2[], 1)` is `0`, and
+    `CREATE INDEX … (a DESC, b)` read back as a plain ascending index. There are no false positives,
+    which is why nothing failed.
+
+Two details the naive query gets wrong:
+
+  * `unnest(indkey) WITH ORDINALITY` rather than `attnum = ANY(indkey)`: an index's column ORDER is
+    part of its identity, and `ANY` returns them in table order. `ord <= indnkeyatts` then drops an
+    `INCLUDE` clause's non-key columns, which are payload, not index keys.
+  * the `LEFT JOIN` to `pg_attribute` is deliberate: an expression member has `attnum = 0` and matches
+    no row. It surfaces as a NULL column name, and the caller drops that index whole rather than
+    declaring the remaining columns as if they were the index (functional indexes are #29).
+
+`indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
+no floor of its own.
+
+The partition with the `db_index` reader is per INDEX (`indnkeyatts = 1` there, `> 1` here), not per
+column: the older CTE still selects its column with `attnum = ANY(indkey)`, so a covering
+`CREATE INDEX ON t (a) INCLUDE (b, c)` marks `b`/`c` as `db_index` too. That is pre-existing and
+untouched here — no index reaches both readers.
+"""
+function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{Pair{String, Vector{String}}}}
+  # Parameterized rather than interpolated: `schema` is a keyword argument, so it is caller-supplied
+  # by contract even though every call site today passes the default.
+  schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
+  params = schema === nothing ? String[] : String[schema]
+  query = """
+    SELECT c.relname AS table_name,
+           ic.relname AS index_name,
+           a.attname AS column_name,
+           (i.indoption::int2[])[k.ord - 1] AS opt,
+           (i.indcollation::oid[])[k.ord - 1] AS idx_coll,
+           a.attcollation AS col_coll,
+           oc.opcdefault AS opc_default
+    FROM pg_index i
+    JOIN pg_class ic ON ic.oid = i.indexrelid
+    JOIN pg_am am ON am.oid = ic.relam
+    JOIN pg_class c ON c.oid = i.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+      ON k.ord <= i.indnkeyatts
+    LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+    LEFT JOIN pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]
+    WHERE c.relkind = 'r'
+      AND am.amname = 'btree'
+      AND NOT i.indisprimary
+      AND NOT i.indisunique
+      AND NOT i.indisexclusion
+      AND i.indpred IS NULL
+      AND i.indnkeyatts > 1
+      $(schema_clause)
+    ORDER BY c.relname, ic.relname, k.ord;
+    """
+  rows = DataFrame(fetch(db, query, params))
+  out = Dict{String, Vector{Pair{String, Vector{String}}}}()
+  nrow(rows) == 0 && return out
+  # index name ⇒ its column list, per table; `ORDER BY … k.ord` above means push order IS index order.
+  # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
+  grouped = OrderedDict{Tuple{String, String}, Vector{Union{String, Nothing}}}()
+  for r in eachrow(rows)
+    (r.table_name === missing || r.index_name === missing) && continue
+    key = (string(r.table_name), string(r.index_name))
+    # Every test defaults to UNUSABLE on a NULL, which is the safe direction: after the `k.ord - 1`
+    # fix the subscripts are always in range, so a NULL here means something unexpected, and this
+    # reader's whole contract is that it never reads an index approximately.
+    #
+    #   * `indoption != 0`, not `& 1`. Bit 0 is DESC and bit 1 is NULLS FIRST (`access/skey.h`), and
+    #     `DESC` implies `NULLS FIRST` — a live `(a DESC, b)` measures 3, not 1. Masking bit 0 alone
+    #     therefore lets `(a NULLS FIRST, b)` (value 2) through, and PormG would re-emit it as
+    #     NULLS LAST. `Dialect.create_index` only ever emits the all-default 0.
+    #   * `opcdefault = false` is an explicit operator class (`varchar_pattern_ops`).
+    #   * `indcollation` differing from the COLUMN's own collation is an explicit `COLLATE` in the
+    #     index — a different comparison, so a different index. 0 means no collation applies (an
+    #     integer column). Deliberately RELATIVE, unlike SQLite's absolute non-BINARY test — see the
+    #     docstring; a PormG-created index can never trip this, since PormG emits no `COLLATE` at all.
+    unusable = r.column_name === missing ||
+               r.opt === missing || Int(r.opt) != 0 ||
+               r.opc_default === missing || r.opc_default == false ||
+               r.idx_coll === missing ||
+               (r.idx_coll != 0 && (r.col_coll === missing || r.idx_coll != r.col_coll))
+    push!(get!(grouped, key, Union{String, Nothing}[]), unusable ? nothing : string(r.column_name))
+  end
+  for ((tbl, idx), cols) in grouped
+    length(cols) > 1 || continue                 # arity 1 is `db_index`, read by the schema dump
+    any(c -> c === nothing, cols) && continue    # a member PormG cannot re-emit ⇒ drop it whole
+    push!(get!(out, tbl, Pair{String, Vector{String}}[]), idx => String[String(c) for c in cols])
+  end
+  return out
+end
+
+"""
   convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table)
 
 Convert the database schema to models.
@@ -543,6 +689,9 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
   # Get all schema
   schemas = get_database_schema(db)
+  # #347: composite indexes come from their own schema-wide query — see `_pg_composite_indexes` for
+  # why they cannot ride along on the dump above. Keyed by physical table name.
+  composite_idx_by_table = _pg_composite_indexes(db)
   # Colect all create instructions
 
   # println("-----------------------------------------")
@@ -557,10 +706,14 @@ function convert_schema_to_models(db::PormGPostgres; ignore_table::Vector{String
     end
     _is_ignored_table(schema.table_name, ignore_table) && continue
     # println(typeof(schema), " ", convertSQLToModel(schema) |> println)
-    
-    push!(models_array, convertSQLToModel(schema))
+
+    model = convertSQLToModel(schema)
+    # #347: attach this table's composite indexes. `model.name` IS the live table name on this path,
+    # which is the key `_pg_composite_indexes` groups by.
+    _attach_composite_indexes!(model, get(composite_idx_by_table, String(model.name), Pair{String, Vector{String}}[]))
+    push!(models_array, model)
     # index > 4 && break
-  end  
+  end
   # println(models_array)
   # @pormg_debug 
   return models_array
@@ -949,6 +1102,112 @@ function _sqlite_single_column_indexed_columns(conn::PormGSQLite, table_name)::D
     # First index wins if two single-column indexes cover the same column — the duplicate is
     # redundant, and `db_index` is a boolean either way.
     get!(out, string(r.col), string(r.idx))
+  end
+  return out
+end
+
+"""
+    _attach_composite_indexes!(model, idxs) -> model
+
+Stash introspected composite indexes (#347) on `model` under the same cache key
+`Models._apply_indexes!` writes, so `Model_to_str` re-emits them as `indexes = [Models.Index(…)]` and
+an `inspectdb` of a live database no longer drops every multi-column index it finds.
+
+Shared by both backend readers, which is the whole point: the SQLite and PostgreSQL sides produce the
+same `index_name => ordered physical columns` shape and hand it here.
+
+Deliberately NOT routed through `Models._apply_indexes!`. That function is the *declaration* guard and
+raises `ModelDefinitionError` on anything it cannot accept — which on this path would abort the
+introspection of an entire table over one odd index. Introspection is best-effort by convention
+(`convertSQLToModel` degrades a field it cannot read rather than throwing), so an index this model
+cannot express is skipped with a `@debug` and the rest of the table still comes back. Two ways that
+happens, both real:
+
+  * a column the field reader did not produce (it degraded, or the index covers a dropped column);
+  * a column name `format_fild_name` rejects — `a__b` (the lookup separator) or one containing `@`.
+    A live PostgreSQL schema can legally have either.
+
+The cache is written only when at least one index survives, so a table with none is byte-identical to
+before this existed.
+"""
+function _attach_composite_indexes!(model, idxs::Vector{Pair{String, Vector{String}}})
+  isempty(idxs) && return model
+  kept = Models.Index[]
+  for (idx_name, cols) in idxs
+    if !all(c -> haskey(model.fields, c), cols)
+      @debug "introspection: composite index skipped — column not on the introspected model" table=model.name index=idx_name columns=cols
+      continue
+    end
+    ix = try
+      Models.Index(fields = cols, name = idx_name)
+    catch e
+      e isa ModelDefinitionError || rethrow()
+      @debug "introspection: composite index skipped — PormG cannot name it" table=model.name index=idx_name columns=cols exception=e
+      continue
+    end
+    push!(kept, ix)
+  end
+  isempty(kept) || (model.cache["composite_indexes"] = Dict{String, Any}("indexes" => kept))
+  return model
+end
+
+"""
+    _sqlite_composite_indexes(conn::PormGSQLite, table_name) -> Vector{Pair{String, Vector{String}}}
+
+Every MULTI-column non-unique secondary index on `table_name`, as `index_name => ordered columns` —
+exactly what a model-level `Models.Index` (#347) materializes, and the mirror image of
+[`_sqlite_single_column_indexed_columns`](@ref) above.
+
+The three `WHERE` filters are that function's, unchanged and load-bearing for the same reasons
+(`il."unique" = 0` keeps `field.unique` and a composite `UniqueConstraint` out; `il.origin = 'c'`
+keeps a `UNIQUE` clause's auto-index and the primary key out; `il.partial = 0` keeps a
+`CREATE INDEX … WHERE` out, which PormG cannot declare). Only the arity flips: `> 1` column here,
+`= 1` there — so the two readers partition the same index set and no index feeds both `db_index` and
+an `Index`.
+
+Three things this reader needs that the single-column one does not:
+
+  * **Column ORDER is part of the index.** An index over `(raceid, lap)` is not the index over
+    `(lap, raceid)`, so the columns come back ordered by `seqno` rather than aggregated.
+    `MIN(ii.name)` was fine for arity 1; here it would silently reorder the declaration.
+  * **`pragma_index_xinfo`, not `index_info`.** `xinfo` carries three columns `info` does not, and
+    each gates an index PormG cannot reproduce. `key = 1` drops the rowid/PK columns SQLite appends
+    to every index — they are not part of the declaration.
+  * **Anything PormG cannot re-emit is dropped WHOLE, never partially.** Emitting a subset, or the
+    same columns under different semantics, would declare a *different* index under the developer's
+    name — the same reject-rather-than-reinterpret rule the Django importer applies to
+    `Meta.indexes`. Three shapes qualify:
+      - an **expression** member (`lower(name)`) has a NULL `ii.name` — functional indexes are #29;
+      - a **descending** member (`"desc" = 1`) — PormG indexes carry no per-column order, and the
+        importer already *refuses* Django's `Index(fields=["-year"])` for exactly this reason;
+      - a non-**BINARY** collation (`COLLATE NOCASE`) — a different comparison, so a different index.
+
+ONE query per table; an unknown table yields an empty vector rather than throwing.
+"""
+function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{Pair{String, Vector{String}}}
+  rows = fetch(conn, """
+    SELECT il.name AS idx, ii.name AS col, ii."desc" AS is_desc, ii.coll AS coll
+    FROM pragma_index_list(?) AS il
+    JOIN pragma_index_xinfo(il.name) AS ii
+    WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0 AND ii."key" = 1
+    ORDER BY il.name, ii.seqno
+    """, [string(table_name)]) |> DataFrame
+  # An empty frame's columns are eltype Missing, so guard before touching them.
+  nrow(rows) == 0 && return Pair{String, Vector{String}}[]
+  # `nothing` marks a member PormG cannot express; the whole index is then skipped below.
+  grouped = OrderedDict{String, Vector{Union{String, Nothing}}}()
+  for r in eachrow(rows)
+    r.idx === missing && continue
+    unusable = r.col === missing ||                                    # expression member
+               (r.is_desc !== missing && r.is_desc != 0) ||            # DESC member
+               (r.coll !== missing && uppercase(string(r.coll)) != "BINARY")   # non-default collation
+    push!(get!(grouped, string(r.idx), Union{String, Nothing}[]), unusable ? nothing : string(r.col))
+  end
+  out = Pair{String, Vector{String}}[]
+  for (idx, cols) in grouped
+    length(cols) > 1 || continue                 # arity 1 is `db_index`, read by the sibling above
+    any(c -> c === nothing, cols) && continue    # a member PormG cannot re-emit ⇒ drop it whole
+    push!(out, idx => String[String(c) for c in cols])
   end
   return out
 end
@@ -1391,8 +1650,11 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   # Construct and return the model
   # check if index_map is empty
   model_resp = Models.Model(table_name, fields_dict)
-  if !isempty(index_map)   
-    model_resp.cache = Dict("index" => index_map)
+  # #347: writes the one KEY rather than assigning the whole `cache` field — `convert_schema_to_models`
+  # attaches composite indexes onto the same dict afterwards, so a whole-field assign here would make
+  # the two writers order-dependent. Same change as the SQLite reader above; defensive, not a fix.
+  if !isempty(index_map)
+    model_resp.cache["index"] = index_map
   end
   @pormg_debug false
   return model_resp

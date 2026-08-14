@@ -171,6 +171,59 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uniq_constructor_year"
     composite-index introspection that is tracked as a follow-up. Declare composite uniqueness
     when you create the model, or add the index by hand on an existing table.
 
+## Composite Indexes (`Meta.indexes`)
+
+A single-column index is a field option (`db_index=true`). To index a combination of **two or more**
+columns — Django's `Meta.indexes` — declare a model-level `indexes=[...]` list of `Models.Index`
+objects:
+
+```julia
+Lap_times = Models.Model("lap_times",
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field="driverid", on_delete="RESTRICT"),
+  lap      = Models.IntegerField(),
+  position = Models.IntegerField(),
+  indexes = [
+    Models.Index(fields=("raceid", "lap"), name="lap_times_race_lap_idx"),
+  ],
+)
+```
+
+Each `Index` takes:
+
+- `fields` — a tuple (or vector) of **two or more field names** on this model. Foreign-key fields
+  are referenced by the field name; PormG resolves each to its physical column (honoring
+  `db_column`). **The order matters**: an index over `("raceid", "lap")` serves a lookup by
+  `raceid`, or by `raceid` *and* `lap` together, but not one by `lap` alone.
+- `name` — the index name (optional). When omitted, PormG derives `<table>_<cols>_idx`, the plain
+  sibling of the composite-unique convention. On long table/column names the derived name can
+  exceed PostgreSQL's 63-byte identifier limit (which Postgres truncates, with only a `NOTICE`) — pass an
+  explicit `name` in that case.
+
+An `Index` speeds up reads and constrains nothing. For a composite *uniqueness guarantee*, use
+[Composite Uniqueness](#Composite-Uniqueness-(unique_together)) instead — that is a
+`CREATE UNIQUE INDEX` and rejects duplicate rows. Each `Index` becomes a plain `CREATE INDEX`,
+identical on PostgreSQL and SQLite:
+
+```sql
+CREATE INDEX IF NOT EXISTS "lap_times_race_lap_idx"
+  ON "lap_times" ("raceid", "lap");
+```
+
+!!! warning "One column is `db_index`, not a one-field `Index`"
+    `Models.Index(fields=("lap",))` raises `ModelDefinitionError`. A one-column `CREATE INDEX` is
+    byte-identical whether `db_index=true` or an `Index` emitted it, and introspection has no way to
+    tell them apart — so a one-field `Index` would read back as `db_index`, never match its own
+    declaration, and make `makemigrations` propose **dropping** the index on every run. Declare
+    `db_index=true` on the field instead.
+
+!!! note "Created with the table; read back, but not yet diffed"
+    An `Index` is emitted when its table is **first created**, the same lifecycle as
+    `UniqueConstraint`. Introspection *does* read composite indexes back on both backends, so
+    `inspectdb` on an existing database reproduces them and a re-run of `makemigrations` proposes
+    nothing. What is not yet detected is **adding or removing** an `Index` on a table that already
+    exists — declare it with the model, or add the index by hand.
+
 ## Naming Conventions and Considerations
 
 ### Model Naming Rules

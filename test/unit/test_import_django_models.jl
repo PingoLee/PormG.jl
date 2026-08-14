@@ -1632,23 +1632,35 @@ end
         dropped = [get(Dict(r.kwargs), :option, nothing) for r in logs
                    if r.level == Logging.Warn && occursin("Meta option", string(r.message))]
 
-        @test "indexes" in dropped
         @test "ordering" in dropped
         # An UNRECOGNISED key is reported too: it is a typo or a Django option this importer has
         # not met, and passing over either quietly is how a real option gets lost.
         @test "nao_existe_essa_opcao" in dropped
 
         # Options the importer consumes itself are never reported as dropped. Asserted one by one
-        # because a blanket "report everything" regression passes the three assertions above.
+        # because a blanket "report everything" regression passes the two assertions above.
         @test !("db_table" in dropped)
         @test !("abstract" in dropped)
         @test !("constraints" in dropped)
         @test !("unique_together" in dropped)
         @test !("proxy" in dropped)
+        # #347 moved these two from "no PormG equivalent" to consumed. The whole-option report is
+        # what a regression would restore, and it would be a REGRESSION now: reporting the option
+        # as dropped while also importing it is worse than either alone.
+        @test !("indexes" in dropped)
+        @test !("index_together" in dropped)
 
         generated = read(joinpath(config_key, output_file), String)
-        @test occursin("# PormG: Meta.indexes on 'Servidor' — dropped: PormG has no composite-index", generated)
         @test occursin("# PormG: Meta.nao_existe_essa_opcao on 'Legado' is not recognised", generated)
+        # The whole-option marker is gone; per-ENTRY markers took its place, one per index the
+        # importer refuses (descending, functional, GinIndex, partial — see the fixture).
+        @test !occursin("Meta.indexes on 'Servidor' — dropped", generated)
+        @test count("an index on 'Servidor' was dropped", generated) == 4
+        # And what it CAN express reached the model: the composite index, plus the single-column
+        # entry translated to `db_index` on the field rather than a one-field Index.
+        @test occursin("Models.Index(fields = (\"cpf\", \"lotacao_id\",), name = \"idx_servidor_cpf_lotacao\")", generated)
+        @test occursin("Models.Index(fields = (\"apelido\", \"ativo\",))", generated)   # index_together
+        @test occursin("apelido = Models.CharField(max_length=30, db_index=true)", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

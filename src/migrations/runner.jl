@@ -533,8 +533,10 @@ function _order_statements(migration_plan)
         # re-creates indexes snapshotted from the LIVE schema at planning time — which excludes an index
         # queued in the SAME migration, so a fresh index would be dropped and never re-created. Deferring
         # every field CREATE INDEX to the end lands it on the rebuilt table. Safe: a CREATE INDEX only
-        # needs its table to exist. Matches only "Create index on <field>"; "Remove index …" (different
-        # prefix) and the m2m "Create many-to-many unique index" (separate join table) are excluded.
+        # needs its table to exist. Matches "Create index on <field>" and, since #347, the model-level
+        # "Create index: <name>" composite step — both for the same reason. "Remove index …" (different
+        # prefix), "Create unique constraint: …" and the m2m "Create many-to-many unique index"
+        # (separate join table) are excluded.
         push!(index_execution, value)
       else
         push!(last_execution, value)

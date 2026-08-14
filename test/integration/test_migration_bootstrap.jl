@@ -2010,6 +2010,94 @@ end
     @test !isfile(pending)
   end
 
+  # ── Phase 20: composite index round-trips + no churn (#347) ─────────
+  # `Models.Index` is the multi-column non-unique primitive PormG had no way to express: a composite
+  # index was declarable only if it was also UNIQUE, which is a different guarantee.
+  #
+  # Three things have to hold together, and only a live database can show it:
+  #   (a) the declaration reaches the schema as a real CREATE INDEX, with the declared column ORDER
+  #       and WITHOUT uniqueness — an index that quietly enforced uniqueness would start rejecting
+  #       rows the model never said were unique;
+  #   (b) introspection reads it back — the half that did not exist before, and the half that makes
+  #       `inspectdb` on a legacy schema stop dropping every composite index it finds;
+  #   (c) NO CHURN. (b) is what makes (c) possible and also what could break it: a reader that
+  #       marked a composite index's member columns `db_index` would make every subsequent
+  #       makemigrations propose the same alteration forever, which is the #318/#325 bug class.
+  @testset "Phase 20: Composite Index Round-trip + No Churn (#347)" begin
+    write_edge_models("""
+    Idx347 = Models.Model(
+        id = Models.IDField(),
+        raceid = Models.IntegerField(),
+        lap = Models.IntegerField(),
+        solo = Models.CharField(max_length=20, db_index=true),
+        plain = Models.CharField(max_length=20, null=true),
+        indexes = [Models.Index(fields=("raceid", "lap"), name="idx347_race_lap_idx")]
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    @test table_exists(pool, "idx347")
+    # (a) The index physically exists under the declared name, on both backends.
+    @test "idx347_race_lap_idx" in index_names(pool, "idx347")
+
+    # …and it is an INDEX, not a constraint. Two rows sharing (raceid, lap) must be accepted — this
+    # is the assertion that fails if `create_index` were ever swapped for `create_unique_index`.
+    PormG.ConnectionPool.fetch(pool, """INSERT INTO idx347 ("raceid","lap","solo") VALUES (1,1,'a');""")
+    dup_ok = try
+      PormG.ConnectionPool.fetch(pool, """INSERT INTO idx347 ("raceid","lap","solo") VALUES (1,1,'b');"""); true
+    catch; false end
+    @test dup_ok
+
+    # (b) INTROSPECTION reads it back — the unit of the fix, against a live database.
+    intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
+    live = intro["idx347"]
+    @test haskey(live.cache, "composite_indexes")
+    live_ix = live.cache["composite_indexes"]["indexes"]
+    @test length(live_ix) == 1
+    @test live_ix[1].fields == ["raceid", "lap"]   # declared ORDER, not table order
+    @test live_ix[1].name == "idx347_race_lap_idx" # the live name, so a re-migration reproduces it
+
+    # The two index readers PARTITION the same set. A composite index marks neither of its member
+    # columns `db_index` (that would churn one way), and the single-column index is still read as
+    # `db_index` and NOT as a composite Index (that would churn the other).
+    @test !live.fields["raceid"].db_index
+    @test !live.fields["lap"].db_index
+    @test live.fields["solo"].db_index
+    @test !live.fields["plain"].db_index
+
+    # (c) NO CHURN — a re-diff against the SAME models proposes nothing.
+    pending = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+
+    # (d) …and the diff is not merely inert on this table: a REAL change to it is still planned and
+    #     still converges. Without this, an introspection that returned the declared model verbatim
+    #     would pass every assertion above.
+    write_edge_models("""
+    Idx347 = Models.Model(
+        id = Models.IDField(),
+        raceid = Models.IntegerField(),
+        lap = Models.IntegerField(),
+        solo = Models.CharField(max_length=20, db_index=true),
+        plain = Models.CharField(max_length=60, null=true),
+        indexes = [Models.Index(fields=("raceid", "lap"), name="idx347_race_lap_idx")]
+    )
+    """)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test isfile(pending)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+
+    # The composite index must SURVIVE that alteration. On SQLite the change above is a full table
+    # rebuild (CREATE/INSERT-SELECT/DROP/RENAME), which drops every secondary index; the rebuild
+    # re-creates them from the live schema (#82), and a composite one has to come back with it.
+    @test "idx347_race_lap_idx" in index_names(pool, "idx347")
+    isfile(pending) && rm(pending)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    @test !isfile(pending)
+  end
+
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))

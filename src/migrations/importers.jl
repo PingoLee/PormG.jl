@@ -1375,6 +1375,11 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # kept because `Model_to_str` is also reached from `inspectdb`, where nothing pre-resolves.
   taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
   taken_names = Set{String}()
+  # #347: explicit UniqueConstraint / Index names claimed so far. An index name is unique per
+  # database, and `CREATE … IF NOT EXISTS` turns a reused one into a SILENT no-op rather than an
+  # error — see `_claim_index_name!`, which owns the rule and the reporting. One registry per
+  # generated file, exactly like `taken_bindings` above.
+  taken_index_names = Set{String}()
   pending_renders = Tuple{Int, PormGModel, Vector{String}}[]
 
   # Renames nobody asked for, at the top of the file: they have no declaration of their own to sit
@@ -1606,12 +1611,96 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         append!(constraints, _parse_meta_constraints(meta_options["constraints"], fields_dict, class_name, markers))
       end
       for c in constraints
+        # The same duplicate-declaration collapse the index loop below does, for the same reason:
+        # `unique_together = (('a','b'), ('a','b'))` — a copy-paste in a real models.py — derives ONE
+        # index name twice, and the planner then refuses the model with advice ("give each a distinct
+        # name") that cannot be followed. The generated file loads and is unmigratable.
+        if any(p -> p.fields == c.fields && p.name == c.name, _existing_unique_constraints(model))
+          @warn "import: duplicate unique constraint; keeping one" class=class_name fields=c.fields
+          push!(markers, "# PormG: a duplicate constraint over ($(join(c.fields, ", "))) on " *
+                         "'$(class_name)' was dropped — the same constraint is declared twice.")
+          continue
+        end
+        # An explicit name reused across models is a silent no-op at migration time; surrender it and
+        # let PormG derive one per table. See `_claim_index_name!`.
+        kept = _claim_index_name!(taken_index_names, c.name, markers, class_name, "constraint", c.fields)
+        kept === c.name || (c = Models.UniqueConstraint(fields = c.fields, name = kept))
         try
           Models._apply_unique_constraints!(model, vcat(_existing_unique_constraints(model), [c]))
         catch e
+          # A declaration that never lands must not burn its name for every later model.
+          kept === nothing || delete!(taken_index_names, kept)
           @warn "import: could not apply a unique constraint; skipping it" class=class_name fields=c.fields exception=e
           push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_name)' " *
                          "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
+        end
+      end
+
+      # Composite indexes from BOTH Django spellings (#347), the non-unique mirror of the block
+      # above. `single` carries the one-column entries, which are `db_index = true` on the field
+      # rather than a `Models.Index` — an exact translation, so nothing is reported for them.
+      indexes = Models.Index[]
+      single_column_indexes = String[]
+      if haskey(meta_options, "indexes")
+        ix, sc = _parse_meta_indexes(meta_options["indexes"], fields_dict, class_name, markers)
+        append!(indexes, ix); append!(single_column_indexes, sc)
+      end
+      if haskey(meta_options, "index_together")
+        ix, sc = _parse_meta_index_together(meta_options["index_together"], fields_dict, class_name, markers)
+        append!(indexes, ix); append!(single_column_indexes, sc)
+      end
+      for ix in indexes
+        # `Meta.indexes` and `Meta.index_together` can declare the SAME index — Django's own
+        # index_together → indexes deprecation migration produces exactly that intermediate state,
+        # and so does a `Meta.indexes` that simply repeats itself. Two identical unnamed declarations
+        # derive ONE index name, which the planner then rejects with advice ("give each a distinct
+        # name") that cannot be followed: there is no name to change, only a declaration to delete.
+        # The generated file would load and be unmigratable. Collapse it here, where the Django
+        # source is still in view to name in the report.
+        if any(p -> p.fields == ix.fields && p.name == ix.name, _existing_indexes(model))
+          @warn "import: duplicate index declaration; keeping one" class=class_name fields=ix.fields
+          push!(markers, "# PormG: a duplicate index over ($(join(ix.fields, ", "))) on " *
+                         "'$(class_name)' was dropped — the same index is declared twice " *
+                         "(Meta.indexes and Meta.index_together can overlap).")
+          continue
+        end
+        kept = _claim_index_name!(taken_index_names, ix.name, markers, class_name, "index", ix.fields)
+        kept === ix.name || (ix = Models.Index(fields = ix.fields, name = kept))
+        try
+          Models._apply_indexes!(model, vcat(_existing_indexes(model), [ix]))
+        catch e
+          # A declaration that never lands must not burn its name for every later model.
+          kept === nothing || delete!(taken_index_names, kept)
+          @warn "import: could not apply an index; skipping it" class=class_name fields=ix.fields exception=e
+          push!(markers, "# PormG: an index over ($(join(ix.fields, ", "))) on '$(class_name)' " *
+                         "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
+        end
+      end
+      for col in unique(single_column_indexes)
+        f = get(model.fields, col, nothing)
+        if f === nothing
+          # Unreachable in practice — `col` was resolved against the same dict the model was built
+          # from — but reporting "this field type has no db_index option" for a MISSING field would
+          # name the wrong cause.
+          @warn "import: single-column index names a field the model does not carry; dropped" class=class_name field=col
+          push!(markers, "# PormG: a single-column index on '$(class_name)'.$(col) was dropped — " *
+                         "that field is not on the imported model.")
+        elseif hasproperty(f, :primary_key) && getproperty(f, :primary_key) === true
+          # A primary key already carries an index on both backends, so Django's index on it is
+          # REDUNDANT, not lost — nothing to report. It also must not fall through: `sIDField` is
+          # the one IMMUTABLE field struct (src/models/fields.jl) and it does carry `db_index`, so
+          # the assignment below raises a raw `setfield!` ErrorException that nothing catches — one
+          # legal `Meta.indexes = [Index(fields=['id'])]` used to abort the entire import with no
+          # marker, no warning and no models file.
+          @debug "import: single-column index on a primary key is redundant; the key is already indexed" class=class_name field=col
+        elseif ismutable(f) && hasproperty(f, :db_index)
+          f.db_index = true
+        else
+          # `PasswordField` excludes `db_index` entirely (src/models/fields.jl), and any future
+          # immutable field type lands here too rather than raising.
+          @warn "import: single-column index maps to db_index, which this field cannot carry; dropped" class=class_name field=col
+          push!(markers, "# PormG: a single-column index on '$(class_name)'.$(col) was dropped — " *
+                         "that field type has no db_index option.")
         end
       end
 
@@ -1959,6 +2048,13 @@ end
 function _existing_unique_constraints(model)::Vector{Models.UniqueConstraint}
   haskey(model.cache, "unique_constraints") || return Models.UniqueConstraint[]
   return get(model.cache["unique_constraints"], "constraints", Models.UniqueConstraint[])
+end
+
+# The composite-index sibling of the above (#347). `_apply_indexes!` replaces its cache entry the
+# same way, so applying one index at a time has to carry the ones that already passed.
+function _existing_indexes(model)::Vector{Models.Index}
+  haskey(model.cache, "composite_indexes") || return Models.Index[]
+  return get(model.cache["composite_indexes"], "indexes", Models.Index[])
 end
 
 # ── Class classification and inheritance (#341) ─────────────────────────────────────────────────
@@ -2592,7 +2688,9 @@ resetting `abstract` as it does. Two keys are withheld:
   warns instead.
 
 Everything else carries through, including options with no PormG equivalent — otherwise an
-`indexes` declared on the base would be dropped without the report the child's own `indexes` gets.
+`ordering` declared on the base would be dropped without the report the child's own `ordering` gets.
+The same rule is what makes a base's `indexes` (#347) reach the child at all, rather than only the
+one the child spells out itself.
 """
 const _META_KEYS_NOT_INHERITED = ("abstract", "db_table")
 
@@ -3441,8 +3539,6 @@ end
 # Meta options with no PormG equivalent, each with the reason stated once so the warning and the
 # generated file's marker say the same thing.
 const _META_OPTION_REASONS = Dict{String, String}(
-  "indexes"               => "PormG has no composite-index primitive (only per-field db_index)",
-  "index_together"        => "PormG has no composite-index primitive (only per-field db_index)",
   "ordering"              => "PormG orders per query, not per model",
   "managed"               => "PormG migrations have no per-model opt-out",
   "verbose_name"          => "PormG models carry no display metadata",
@@ -3459,12 +3555,20 @@ const _META_OPTION_REASONS = Dict{String, String}(
 )
 
 # Options this importer consumes itself, so they are never reported as dropped.
-const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "constraints", "unique_together")
+const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "constraints", "unique_together",
+                                "indexes", "index_together")
 
 # Django's `UniqueConstraint` arguments that PormG can honour. `violation_error_message` /
 # `violation_error_code` only change Django's Python-side error text and have no effect on the
 # index, so accepting and ignoring them is faithful.
 const _UNIQUE_CONSTRAINT_KWARGS = ("fields", "name", "violation_error_message", "violation_error_code")
+
+# Django's `models.Index` arguments PormG can honour (#347). Deliberately shorter than the
+# UniqueConstraint whitelist: `Models.Index` is exactly `(fields, name)` and there is no Django
+# `Index` kwarg that is a pure no-op on the emitted index. `db_tablespace=`, `condition=`,
+# `include=`, `opclasses=` and `expressions=` all change WHAT gets indexed or where — the same
+# reject-rather-than-reinterpret rule `_parse_meta_constraints` documents.
+const _INDEX_KWARGS = ("fields", "name")
 
 const _CONSTRAINT_CTOR_RE = r"^(?:[A-Za-z_]\w*\s*\.\s*)*([A-Za-z_]\w*)\s*\("
 
@@ -3489,6 +3593,61 @@ function _drop_constraint!(markers::Vector{String}, class_name::AbstractString,
   @warn "import: Meta.constraints entry dropped" class=class_name reason=reason constraint=short
   push!(markers, "# PormG: a constraint on '$(class_name)' was dropped — $(reason): $(short)")
   return markers
+end
+
+# The `Meta.indexes` sibling of `_drop_constraint!` (#347). Separate wording, because "a constraint
+# was dropped" pointing at an index sends the reader to the wrong Meta option.
+function _drop_index_decl!(markers::Vector{String}, class_name::AbstractString,
+                           element::AbstractString, reason::AbstractString)
+  short = _one_line(element)
+  reason = _one_line(reason, 200)
+  @warn "import: Meta.indexes entry dropped" class=class_name reason=reason index=short
+  push!(markers, "# PormG: an index on '$(class_name)' was dropped — $(reason): $(short)")
+  return markers
+end
+
+"""
+    _claim_index_name!(taken, name, markers, class_name, kind, cols) -> Union{String, Nothing}
+
+Reserve an explicit index name for one generated file, returning it — or `nothing` when another
+model in the same import already claimed it, so PormG derives one per table instead (#347).
+
+An index name is **unique per database** on SQLite and per schema on PostgreSQL, and both DDL
+emitters render `CREATE [UNIQUE] INDEX IF NOT EXISTS`. So a name reused across two models does not
+fail: the second `CREATE` is a **silent no-op** and that table simply never gets its index. Since
+composite indexes are not diffed on an existing table, `makemigrations` never notices either.
+
+Django makes this easy to hit without writing it. An abstract base's *whole* `Meta` is installed on
+every child that declares none of its own (`_effective_meta`), so one
+`Meta.indexes = [Index(fields=…, name="base_x")]` on a base with three children emits that same name
+three times. Django rejects it at system-check time (`models.E030`); this importer has no check
+framework, so the guard lives here.
+
+Dropping the NAME rather than the declaration is the deliberate direction: every child keeps its
+index, PormG derives `<table>_<cols>_idx` / `_uniq`, which is unique per table by construction, and
+the report says which name was surrendered. It is what Django's own `%(app_label)s_%(class)s_…`
+name placeholders exist to achieve.
+
+Only EXPLICIT names are registered. A derived name already carries its table, so it cannot collide
+with another model's derived name.
+"""
+function _claim_index_name!(taken::Set{String}, name::Union{String, Nothing},
+                            markers::Vector{String}, class_name::AbstractString,
+                            kind::AbstractString, cols::Vector{String})::Union{String, Nothing}
+  name === nothing && return nothing
+  if name in taken
+    # Says "another declaration", not "another model": the registry is also consulted for two
+    # declarations on the SAME class that share a name, and blaming a different model there would
+    # send the reader to the wrong `models.py`.
+    @warn "import: index name is already claimed in this import; importing with a derived name" name=name class=class_name kind=kind
+    push!(markers, "# PormG: the $(kind) over ($(join(cols, ", "))) on '$(class_name)' kept its " *
+                   "columns but LOST its name '$(_one_line(name))' — another declaration in this " *
+                   "import already claims that name, and an index name is unique per database. " *
+                   "PormG derives one from the table and columns instead.")
+    return nothing
+  end
+  push!(taken, name)
+  return name
 end
 
 """
@@ -3604,6 +3763,208 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     end
   end
   return out
+end
+
+"""
+    _resolve_index_group(declared, fields_dict, class_name, markers, element)
+        -> Union{Vector{String}, Nothing}
+
+Resolve one Django index's declared field names to imported PormG field names, or `nothing` when the
+index cannot be imported (the caller drops it and moves on). Shared by `Meta.indexes` and
+`Meta.index_together`, which differ only in how the names are spelled out.
+
+Two rejections beyond "the field does not exist":
+
+  * **A `-` prefix is descending order.** `Index(fields=["-year"])` is not the index over `year`;
+    importing it as one would silently give the database a differently-ordered index and quietly
+    fail to serve the query the developer wrote it for. Ordered index columns are #29.
+  * **`Models.Index` needs two columns.** Django's one-field `Meta.indexes` entry is exactly
+    `db_index = True`, so the caller translates it rather than dropping it — this function reports
+    the arity back by returning the resolved vector and letting the caller branch on its length.
+"""
+function _resolve_index_group(declared::Vector{String}, fields_dict::Dict{Symbol, Any},
+                              class_name::AbstractString, markers::Vector{String},
+                              element::AbstractString)::Union{Vector{String}, Nothing}
+  if isempty(declared)
+    _drop_index_decl!(markers, class_name, element, "it names no fields")
+    return nothing
+  end
+  resolved = String[]
+  for name in declared
+    if startswith(name, "-")
+      _drop_index_decl!(markers, class_name, element,
+        "'$(_one_line(name))' is a DESCENDING column and PormG indexes have no column order")
+      return nothing
+    end
+    r = _resolve_django_constraint_field(name, fields_dict)
+    if r === nothing
+      _drop_index_decl!(markers, class_name, element,
+        "field '$(_one_line(name))' matches no imported field")
+      return nothing
+    end
+    push!(resolved, r)
+  end
+  return resolved
+end
+
+"""
+    _parse_meta_indexes(raw, fields_dict, class_name, markers) -> (Vector{Index}, Vector{String})
+
+Django `Meta.indexes = [...]` → PormG composite indexes (#347).
+
+Returns **two** collections, because Django's one option covers two PormG spellings:
+
+ 1. the multi-column entries, as `Models.Index` objects;
+ 2. the field names of the *single*-column entries, which the caller marks `db_index = true` — an
+    exact translation, not a degradation. `Models.Index` rejects one field on purpose (a one-column
+    `CREATE INDEX` reads back as `db_index`, so declaring it as an `Index` would churn), and Django's
+    `Index(fields=["x"])` and `x = models.CharField(db_index=True)` emit the same DDL anyway.
+
+Argument acceptance is a **whitelist** (`_INDEX_KWARGS`), for the reason spelled out in
+`_parse_meta_constraints`: an unrecognised Django kwarg is refused rather than reinterpreted. The
+constructor is checked too — `GinIndex`, `BrinIndex` and friends (`django.contrib.postgres.indexes`)
+are reported and skipped, since PormG emits only a default b-tree (#29).
+
+Each entry is judged on its own: one rejected index never takes its siblings with it.
+"""
+function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any},
+                             class_name::AbstractString, markers::Vector{String})
+  out = Models.Index[]
+  single = String[]
+  inner = _balanced_group(raw)
+  if inner === nothing
+    @warn "import: Meta.indexes is not a list or tuple literal; dropped" class=class_name value=_one_line(raw)
+    push!(markers, "# PormG: Meta.indexes on '$(class_name)' could not be read — dropped.")
+    return out, single
+  end
+
+  for element in split_field_options(inner)
+    el = String(strip(element))
+    isempty(el) && continue
+
+    m = match(_CONSTRAINT_CTOR_RE, el)
+    ctor = m === nothing ? "" : String(m.captures[1])
+    if ctor != "Index"
+      _drop_index_decl!(markers, class_name, el,
+        isempty(ctor) ? "it is not an index constructor" : "$(ctor) has no PormG equivalent")
+      continue
+    end
+
+    args = _balanced_group(el)
+    if args === nothing
+      _drop_index_decl!(markers, class_name, el, "its argument list could not be read")
+      continue
+    end
+
+    kwargs = Dict{String, String}()
+    reason::Union{String, Nothing} = nothing
+    for tok in split_field_options(args)
+      t = String(strip(tok))
+      isempty(t) && continue
+      kv = _split_top_level_assign(t)
+      if kv === nothing
+        # `Index(Lower("name"), name="x")` — a FUNCTIONAL index. PormG would index the column
+        # itself, which is a different index.
+        reason = "it takes a positional expression (`$(t)`)"
+        break
+      end
+      k, v = kv
+      if !(k in _INDEX_KWARGS)
+        reason = "`$(k)=` changes what the index means and PormG cannot express it"
+        break
+      end
+      kwargs[k] = v
+    end
+    if reason !== nothing
+      _drop_index_decl!(markers, class_name, el, reason)
+      continue
+    end
+
+    if !haskey(kwargs, "fields")
+      _drop_index_decl!(markers, class_name, el, "it declares no `fields=`")
+      continue
+    end
+    fields_inner = _balanced_group(kwargs["fields"])
+    if fields_inner === nothing
+      _drop_index_decl!(markers, class_name, el, "its `fields=` is not a list or tuple literal")
+      continue
+    end
+
+    resolved = _resolve_index_group(
+      _clean_constraint_field_names(split_field_options(fields_inner)),
+      fields_dict, class_name, markers, el)
+    resolved === nothing && continue
+
+    if length(resolved) == 1
+      # Django's single-field index IS `db_index=True`; translate rather than drop (see the
+      # docstring). No marker: nothing was lost.
+      push!(single, resolved[1])
+      continue
+    end
+
+    # Django auto-derives a name when `name=` is absent, and a computed one is not a literal we can
+    # carry — either way PormG derives `<table>_<cols>_idx`, so this is not a reason to drop.
+    iname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
+    if haskey(kwargs, "name") && iname === nothing
+      @warn "import: Index name is not a string literal; importing with a derived name" class=class_name value=kwargs["name"]
+    end
+    try
+      push!(out, Models.Index(fields = resolved, name = iname))
+    catch e
+      # A duplicate-field or empty-name rejection from the constructor: report THIS index and keep
+      # the rest, rather than losing every index on the model to one bad entry.
+      _drop_index_decl!(markers, class_name, el, replace(sprint(showerror, e), "\n" => " "))
+    end
+  end
+  return out, single
+end
+
+"""
+    _parse_meta_index_together(raw, fields_dict, class_name, markers) -> (Vector{Index}, Vector{String})
+
+Django's legacy `Meta.index_together = (('a','b'), …)` → the same two collections
+[`_parse_meta_indexes`](@ref) returns.
+
+`index_together` is `unique_together`'s non-unique twin — identical literal shape, no names, no
+options — so it reuses `_parse_unique_together_groups` outright rather than re-deriving the
+flat-vs-grouped distinction a second time.
+"""
+function _parse_meta_index_together(raw::AbstractString, fields_dict::Dict{Symbol, Any},
+                                    class_name::AbstractString, markers::Vector{String})
+  out = Models.Index[]
+  single = String[]
+  inner = _balanced_group(raw)
+  if inner === nothing
+    @warn "import: Meta.index_together is not a tuple or list literal; dropped" class=class_name value=_one_line(raw)
+    push!(markers, "# PormG: Meta.index_together on '$(class_name)' is not a tuple or list " *
+                   "literal — dropped.")
+    return out, single
+  end
+  skipped = String[]
+  for group in _parse_unique_together_groups(inner, skipped)
+    el = "index_together ($(join(group, ", ")))"
+    resolved = _resolve_index_group(group, fields_dict, class_name, markers, el)
+    resolved === nothing && continue
+    if length(resolved) == 1
+      push!(single, resolved[1])
+      continue
+    end
+    try
+      push!(out, Models.Index(fields = resolved))
+    catch e
+      # The same per-entry guard `_parse_meta_indexes` carries: report THIS group and keep the rest.
+      # `('lap','lap')` is the obvious case, but the realistic one is a group naming BOTH spellings of
+      # one foreign key — `('race', 'race_id')` — which `_resolve_django_constraint_field` collapses
+      # to the same imported column. Unwrapped, either takes the whole import down.
+      _drop_index_decl!(markers, class_name, el, replace(sprint(showerror, e), "\n" => " "))
+    end
+  end
+  for s in skipped
+    @warn "import: index_together entry is not a field group; dropped" class=class_name entry=s
+    push!(markers, "# PormG: an index_together entry on '$(class_name)' is not a field group — " *
+                   "dropped: $(_one_line(s))")
+  end
+  return out, single
 end
 
 # Return the text inside the FIRST balanced (...) or [...] group in `s` (Django allows tuples

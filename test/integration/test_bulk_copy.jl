@@ -474,6 +474,64 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #334: bulk_insert / bulk_copy mint a DISTINCT UUID auto_add value per row
+# Before the fix, `resolve_absent_column_fill` minted `uuid4()` ONCE per field and the
+# injection site broadcast that single value across the whole DataFrame — every row of an
+# absent `auto_add` UUID column got the SAME value. On a plain column that only wastes an
+# opportunity; on a PRIMARY KEY (or any unique) column it makes every multi-row bulk write
+# fail outright. `Bulk_uuid_pk_scratch` is built specifically to prove this:
+# `UUIDField(primary_key = true, auto_add = true)`, no ForeignKey, no seeding needed. This
+# also extends the blank-auto-pk rescue above (`_drop_blank_auto_primary_keys!`) to UUID
+# `auto_add` primary keys, which it did not recognize before #334.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#334: absent/blank UUID auto_add primary key mints a distinct value per row" begin
+    purge = () -> begin
+        q = M.Bulk_uuid_pk_scratch.objects
+        q.filter("label__@startswith" => "i334-")
+        q.exists() && q.delete()
+    end
+    purge()
+
+    try
+        @testset "bulk_insert: absent column" begin
+            bulk_insert(M.Bulk_uuid_pk_scratch.objects,
+                DataFrames.DataFrame(label = ["i334-bi-a", "i334-bi-b", "i334-bi-c"]))
+            rows = M.Bulk_uuid_pk_scratch.objects.filter(
+                "label__@in" => ["i334-bi-a", "i334-bi-b", "i334-bi-c"]).list()
+            @test length(rows) == 3
+            tokens = [row[:token] for row in rows]
+            @test all(!isnothing, tokens) && all(!ismissing, tokens)
+            @test length(unique(tokens)) == 3   # pre-#334: PK collision/crash
+        end
+
+        @testset "bulk_copy: absent column" begin
+            bulk_copy(M.Bulk_uuid_pk_scratch.objects,
+                DataFrames.DataFrame(label = ["i334-bc-a", "i334-bc-b", "i334-bc-c"]))
+            rows = M.Bulk_uuid_pk_scratch.objects.filter(
+                "label__@in" => ["i334-bc-a", "i334-bc-b", "i334-bc-c"]).list()
+            @test length(rows) == 3
+            tokens = [row[:token] for row in rows]
+            @test all(!isnothing, tokens) && all(!ismissing, tokens)
+            @test length(unique(tokens)) == 3
+        end
+
+        @testset "bulk_insert: present, all-blank column is rescued" begin
+            bulk_insert(M.Bulk_uuid_pk_scratch.objects,
+                DataFrames.DataFrame(token = Union{Missing, String}[missing, missing],
+                                      label = ["i334-rescue-a", "i334-rescue-b"]))
+            rows = M.Bulk_uuid_pk_scratch.objects.filter(
+                "label__@in" => ["i334-rescue-a", "i334-rescue-b"]).list()
+            @test length(rows) == 2
+            tokens = [row[:token] for row in rows]
+            @test all(!isnothing, tokens) && all(!ismissing, tokens)
+            @test length(unique(tokens)) == 2
+        end
+    finally
+        purge()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # bulk_copy: binary payloads survive the CSV COPY stream byte-for-byte (#296)
 # bulk_copy does not bind parameters — it formats each cell and streams CSV into
 # `COPY … FROM STDIN`. A binary payload therefore takes a completely different route to

@@ -381,8 +381,28 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
     is_pk = col_row.pk > 0
     
     if is_pk
+      if base_type == "UUID"
+        # #334: a UUID primary key is the ONE non-integer pk type this reader can safely
+        # reconstruct as its real field type, mirroring the same narrow carve-out in the
+        # PostgreSQL reader just above in this file (see its comment for why this is NOT
+        # generalized to "any non-integer pk" — `UUIDField` uniquely carries neither the
+        # max_length/max_digits hazard nor a construction-time refusal that other non-integer
+        # field types can hit when forced into `primary_key = true`).
+        #
+        # UNREACHABLE today for a table PormG itself created: `sqlite_type_map_reverse` (below,
+        # DDL-generation direction) renders every `UUIDField` column — pk or not — as bare `TEXT`,
+        # same as CharField/TextField/JSONField/ImageField (the collapse the `else` branch of the
+        # non-pk arm already documents), never as a literal `UUID` column type. This branch exists
+        # for a hand-written or foreign SQLite schema that DOES declare a column type as `UUID`
+        # (SQLite accepts any type name), and costs nothing to keep. It does NOT close the gap for
+        # PormG-generated schemas — `test/integration/db_2/models.jl`'s comment on
+        # `Bulk_uuid_pk_scratch` explains why that fixture has no SQLite counterpart instead.
+        field = Models.UUIDField(null=false, primary_key=true,
+            default=_normalize_sqlite_default(default_val, :UUIDField))
+      else
         # In SQLite, INTEGER PRIMARY KEY often implies AUTOINCREMENT behavior
         field = Models.IDField(null=false, primary_key=true, auto_increment=(base_type == "INTEGER"))
+      end
     elseif haskey(fk_map, col_name)
         fk_info = fk_map[col_name]
         # Same #292 gap as the DDL-regex path above: `default_val` was in scope and used two
@@ -1294,9 +1314,36 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # @pormg_debug col == "qt_referencia bigint DEFAULT (0)::numeric"
 
       # println(col)
-      
-      # Create field instance      
-      field = if primary_key
+
+      # Create field instance
+      field = if primary_key && col_type == "uuid"
+          # #334: a UUID primary key is the ONE non-integer pk type this reader can safely
+          # reconstruct as its real field type. Force-converting EVERY primary key to IDField
+          # (the `elseif primary_key` branch below) silently discarded it, so `makemigrations`
+          # proposed re-typing it back to bigint on every single run against a model that never
+          # declared an IDField at all. No existing fixture exercised a UUID primary key before
+          # #334, which is why this went unnoticed. Deliberately NOT generalized to "any
+          # non-integer pk": `test_introspection_guards.jl` pins IDField as the correct fallback
+          # for a VARCHAR/NUMERIC primary key specifically BECAUSE those can crash otherwise — a
+          # `NUMERIC` pk parsed as `DecimalField(primary_key=true)` refuses construction outright
+          # (`models/fields.jl`, "DecimalField cannot be used as a Primary Key"), and a VARCHAR pk
+          # would try to assign `max_length` onto whatever field resulted. `UUIDField` carries
+          # neither hazard: no `max_length`/`max_digits`, and `primary_key=true` is always legal.
+          # `db_index` is the literal `true`, not the `db_index` variable, matching the IDField
+          # branch: the `indexes` CTE above explicitly excludes primary-key indexes
+          # (`NOT i.indisprimary`), so `db_index` would read back `false` for any primary key.
+          #
+          # `unique` is the COMPUTED local variable here, deliberately NOT the literal `true` the
+          # IDField branch hardcodes. IDField's own constructor defaults `unique=true`, so hardcoding
+          # it there always agrees with a plain `IDField()` declaration; UUIDField's constructor
+          # defaults `unique=false` (uniqueness on a pk column comes from the PRIMARY KEY constraint
+          # itself, not a separate `UNIQUE` one), so a declared `UUIDField(primary_key=true, ...)`
+          # with no explicit `unique=true` would otherwise permanently disagree with a hardcoded
+          # `true` here — the primary-key branch of `_NON_SCHEMA_FIELD_ATTRS`'s comparison (above in
+          # `planner.jl`) has no exception for `:unique`, so that mismatch alone would keep
+          # `makemigrations` proposing an alteration regardless of the `:auto_add` exemption below.
+          Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=true, default=default_value)
+      elseif primary_key
           Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       elseif haskey(fk_map, col_name)
         fk_info = fk_map[col_name]

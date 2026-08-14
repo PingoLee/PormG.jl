@@ -247,6 +247,21 @@ Bulk_update_payload_scratch = Models.Model("bulk_update_payload_scratch",
   photo = Models.ImageField(null = true)
 )
 
+# Scratch fixture for #334 — UUIDField(primary_key = true, auto_add = true), to prove
+# bulk_insert/bulk_copy mint a DISTINCT uuid4() per row, and that an all-blank present column is
+# rescued (dropped, treated absent) rather than raising. No existing fixture combines
+# primary_key + auto_add on a UUIDField.
+#
+# PostgreSQL-only, deliberately: this model has NO SQLite counterpart in `db_sl/models.jl` — see
+# the comment there for why (SQLite cannot introspect a UUID primary key distinctly from any other
+# TEXT-collapsed primary key type; a pre-existing SQLite migration-engine limitation, not a #334
+# regression). `bulk_copy` itself is PostgreSQL-only anyway, so nothing goes untested by omitting
+# the SQLite side.
+Bulk_uuid_pk_scratch = Models.Model("bulk_uuid_pk_scratch",
+  token = Models.UUIDField(primary_key = true, auto_add = true),
+  label = Models.CharField(),
+)
+
 # Fixture for the bulk_copy data-fidelity regression (#86): bulk_copy must store the SAME
 # values as bulk_insert/create() (the field formatter is applied — e.g. a naive DateTime is
 # labelled UTC) and must distinguish an empty string from NULL. Nullable char/float/bool/datetime

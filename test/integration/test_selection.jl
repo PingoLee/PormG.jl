@@ -416,6 +416,77 @@ end
     @test size(df, 1) == 1
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Date Operations: sargable comparison rewrite (#352)
+# `date__@yyyy_mm`/`date__@year`/`date__@date` comparisons (`=`/`@gte`/`@gt`/`@lte`/`@lt`) against
+# `Race.date` (a plain DateField) rewrite to a range/comparison directly on the column — no
+# to_char/EXTRACT — instead of the previous non-sargable rendering. Each bucket comparison is
+# pinned against an INDEPENDENT baseline — the same window written as a plain date comparison,
+# which never goes through the bucket-transform path — so the asymmetric boundary mapping
+# (`@lte`/`@gt` bind the FOLLOWING period's start; `@lt`/`@gte` bind the bucket's OWN start) is
+# verified absolutely, not just for internal self-consistency, against live data on both backends.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Date Operations — sargable comparison rewrite (#352)" begin
+    # The 1991 season's sole October race is the Japanese GP, 1991-10-20 (pinned above: 1 row).
+    # No to_char (PostgreSQL) / strftime (SQLite) should appear — the comparison runs on the raw
+    # column now, dialect-agnostic.
+    sql_lte = M.Race.objects.filter("date__@yyyy_mm__@lte" => "1991-10").list(show_query=:sql)
+    @test !occursin("to_char", lowercase(sql_lte)) && !occursin("strftime", lowercase(sql_lte))
+
+    query = M.Race.objects.filter("date__@yyyy_mm__@lte" => "1991-10")
+    count_lte = query.count()
+    query = M.Race.objects.filter("date__@yyyy_mm__@lt" => "1991-10")
+    count_lt = query.count()
+    query = M.Race.objects.filter("date__@yyyy_mm__@gte" => "1991-10")
+    count_gte = query.count()
+    query = M.Race.objects.filter("date__@yyyy_mm__@gt" => "1991-10")
+    count_gt = query.count()
+    query = M.Race.objects.filter("date__@yyyy_mm" => "1991-10")
+    count_eq = query.count()
+
+    @test count_eq == 1                # only the Japanese GP falls in October 1991
+    @test count_lte == count_lt + 1    # @lte INCLUDES the October race that @lt EXCLUDES
+    @test count_gte == count_gt + 1    # @gte INCLUDES the October race that @gt EXCLUDES
+
+    # Independent baseline: the same windows expressed as plain date comparisons, which never
+    # went through the bucket-transform path at all. The delta assertions above are only
+    # self-consistent (both sides could be wrong by the same amount and still pass); these pin
+    # the ABSOLUTE boundary, so a strict/non-strict slip on the upper bound fails here.
+    @test count_lte == M.Race.objects.filter("date__@lt" => "1991-11-01").count()
+    @test count_lt  == M.Race.objects.filter("date__@lt" => "1991-10-01").count()
+    @test count_gte == M.Race.objects.filter("date__@gte" => "1991-10-01").count()
+    @test count_gt  == M.Race.objects.filter("date__@gte" => "1991-11-01").count()
+
+    # The 1991 season has 16 races (pinned above). Same asymmetry check, at year granularity.
+    sql_year = M.Race.objects.filter("date__@year__@gte" => 1991).list(show_query=:sql)
+    @test !occursin("extract", lowercase(sql_year)) && !occursin("strftime", lowercase(sql_year))
+
+    query = M.Race.objects.filter("date__@year__@lte" => 1991)
+    y_lte = query.count()
+    query = M.Race.objects.filter("date__@year__@lt" => 1991)
+    y_lt = query.count()
+    query = M.Race.objects.filter("date__@year__@gte" => 1991)
+    y_gte = query.count()
+    query = M.Race.objects.filter("date__@year__@gt" => 1991)
+    y_gt = query.count()
+
+    @test y_lte == y_lt + 16
+    @test y_gte == y_gt + 16
+    # Absolute boundary, same reasoning as the yyyy_mm case above.
+    @test y_lte == M.Race.objects.filter("date__@lt" => "1992-01-01").count()
+    @test y_lt  == M.Race.objects.filter("date__@lt" => "1991-01-01").count()
+    @test y_gte == M.Race.objects.filter("date__@gte" => "1991-01-01").count()
+    @test y_gt  == M.Race.objects.filter("date__@gte" => "1992-01-01").count()
+
+    # `@date` is already at column granularity: no range needed, the operator passes straight
+    # through against the parsed literal.
+    query = M.Race.objects.filter("date__@date__@lte" => "1991-10-20")
+    d_lte = query.count()
+    query = M.Race.objects.filter("date__@date__@lt" => "1991-10-20")
+    d_lt = query.count()
+    @test d_lte == d_lt + 1            # exactly the Japanese GP itself
+end
+
 @testset "Comparison and In Operations" begin
   query = M.Result.objects;
   query.filter("positionorder__@lt" => 3);

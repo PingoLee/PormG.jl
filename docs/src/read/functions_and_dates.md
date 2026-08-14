@@ -116,6 +116,41 @@ query = M.Race.objects.filter("date__@date" => "1991-10-20")
 query = M.Race.objects.filter("date__@date" => Date(1991, 10, 20))
 ```
 
+### Index-friendly ranges on a `DateField`
+
+Comparison suffixes work on these buckets too, and on a plain `DateField` column PormG rewrites
+them into a range **directly on the column** rather than comparing a formatted string:
+
+```julia
+# Every race from October 1991 onwards
+query = M.Race.objects.filter("date__@yyyy_mm__@gte" => "1991-10")
+# renders:  "Tb"."date" >= $1        with $1 = "1991-10-01"
+
+# Every race up to and including December 1991
+query = M.Race.objects.filter("date__@yyyy_mm__@lte" => "1991-12")
+# renders:  "Tb"."date" < $1         with $1 = "1992-01-01"
+```
+
+Because the column is not wrapped in a function call, an index on it applies and the query
+planner can estimate how many rows the filter selects — on a large table this is the difference
+between an index range scan and a full scan with a poisoned join plan.
+
+Note that `@lte` includes the *whole* final bucket (it becomes `<` the following period's first
+day), while `@lt` excludes the named bucket entirely. The same holds for `@year`.
+
+`@year` requires a whole year in the range 1–9999 — an `Integer`, a whole-valued number, or a
+numeric string. A value no single date can express (a fraction, a year outside that range, or a
+`Bool`) raises a `FilterError` rather than silently comparing against an unusable bound.
+
+!!! note "Scope of the rewrite"
+    The rewrite applies to `@yyyy_mm`, `@date` and `@year` on a **plain `DateField`** referenced
+    directly on the queried model. A `DateTimeField` keeps the formatted-string comparison, since
+    `to_char` on a timestamp renders in the session time zone and the range boundaries would shift
+    around midnight. Fields reached through a join, and the `@month`/`@day`/`@quarter`/
+    `@quadrimester` buckets (which repeat every year rather than covering one contiguous range),
+    also keep the original rendering. For the cases it covers the rewrite selects the same rows as
+    before — only the query plan changes.
+
 ---
 
 ## String Functions

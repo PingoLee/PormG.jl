@@ -45,9 +45,9 @@ import DataFrames, OrderedCollections, Dates, Logging, YAML
 # definition of the public surface.
 include("Kernel.jl")
 using .Kernel
-# Underscore-private members are not exported by Kernel; import the two that are reached as
-# `PormG._emsg` / `PormG._EXTRA_IGNORE_TABLES` (both pinned by tests).
-import .Kernel: _emsg, _EXTRA_IGNORE_TABLES
+# Underscore-private members are not exported by Kernel; import those reached across
+# submodules or pinned by tests (e.g. `PormG._emsg`, `PormG._EXTRA_IGNORE_TABLES`, `PormG._suggest_name`).
+import .Kernel: _emsg, _EXTRA_IGNORE_TABLES, _levenshtein, _suggest_name
 # Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
 # `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
 # layer-2 `Configuration` needs it and is included before `Models`.

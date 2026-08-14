@@ -6,6 +6,7 @@ import PormG: model_table_name  # physical table name (db_table when set, #59) â
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
 import PormG: TransactionError  # cross-connection transaction misuse (#268); the config is valid, the call pattern is not
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
+import PormG: _suggest_name  # typo suggestion helper (Kernel)
 import PormG: Generator
 import PormG: @pormg_debug
 # Backend generics â€” driver bodies live in the weakdep extensions (no direct LibPQ/SQLite here).
@@ -579,6 +580,24 @@ function _install_immutable_unaccent!(settings::PormGSettings)::Nothing
   return nothing
 end
 
+"""
+    VALID_CONFIG_KEYS
+
+Allowed user-facing keys in a `connection.yml` `config:` block (#365).
+Internal `Settings` fields (`app_env`, `db_def_folder`, `db_config_settings`, `connections`)
+are intentionally excluded to prevent tampering from YAML.
+"""
+const VALID_CONFIG_KEYS = (
+  "change_db",
+  "change_data",
+  "django_prefix",
+  "time_zone",
+  "log_queries",
+  "log_level",
+  "log_to_file",
+  "model_file",
+)
+
 function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME) 
 
@@ -598,14 +617,21 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
   if  haskey(db_conn_data, settings.app_env)
       if haskey(db_conn_data[settings.app_env], "config") && isa(db_conn_data[settings.app_env]["config"], Dict)
         for (k, v) in db_conn_data[settings.app_env]["config"]
-          # Safely apply settings that exist in the Settings struct
-          if hasfield(Settings, Symbol(k))
-            if k == "log_level"
+          k_str = string(k)
+          if k_str in VALID_CONFIG_KEYS
+            if k_str == "log_level"
               for dl in Dict("debug" => Logging.Debug, "error" => Logging.Error, "info" => Logging.Info, "warn" => Logging.Warn)
-                occursin(dl[1], lowercase(string(v))) && setfield!(settings, Symbol(k), dl[2])
+                occursin(dl[1], lowercase(string(v))) && setfield!(settings, Symbol(k_str), dl[2])
               end
             else
-              setfield!(settings, Symbol(k), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
+              setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
+            end
+          else
+            did_you_mean = _suggest_name(k_str, VALID_CONFIG_KEYS)
+            if did_you_mean !== nothing
+              @warn "connection.yml: unrecognised config key; ignored" key=k_str env=settings.app_env did_you_mean=did_you_mean
+            else
+              @warn "connection.yml: unrecognised config key; ignored" key=k_str env=settings.app_env
             end
           end
         end

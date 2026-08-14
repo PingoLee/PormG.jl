@@ -124,43 +124,11 @@ end
 # "did you mean" suggestion for typos.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Iterative Levenshtein edit distance (two-row, O(min(m,n)) memory). Runs only when
-# building a typo suggestion, never on the happy path.
-function _levenshtein(a::AbstractString, b::AbstractString)::Int
-  av, bv = collect(a), collect(b)
-  m, n = length(av), length(bv)
-  m == 0 && return n
-  n == 0 && return m
-  prev = collect(0:n)
-  curr = Vector{Int}(undef, n + 1)
-  for i in 1:m
-    curr[1] = i
-    @inbounds for j in 1:n
-      cost = av[i] == bv[j] ? 0 : 1
-      curr[j + 1] = min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
-    end
-    prev, curr = curr, prev
-  end
-  return prev[n + 1]
-end
-
 # Nearest valid operator suffix to `suffix`, or nothing when nothing is close enough
 # to be a plausible typo (so garbage input does not get a nonsense suggestion).
-function _suggest_operator(suffix::AbstractString)::Union{Nothing,String}
-  best = nothing
-  best_d = typemax(Int)
-  for k in keys(PormGsuffix)
-    d = _levenshtein(suffix, k)
-    if d < best_d
-      best_d = d
-      best = k
-    end
-  end
-  # Suggest only when the edit is small relative to the typed length: keeps real
-  # near-misses (@notin→@nin, @containx→@contains) but rejects short garbage
-  # (@xy is 2 edits from @in — the whole word — so no suggestion).
-  return 2 * best_d <= length(suffix) ? best : nothing
-end
+# Uses the shared Kernel `_suggest_name` helper with the same threshold (#365).
+_suggest_operator(suffix::AbstractString)::Union{Nothing,String} =
+  _suggest_name(suffix, keys(PormGsuffix))
 
 # Consistent, actionable error for a filter operator that is not valid for the given
 # value shape. `field_path` is the split lookup (…, suffix); `shape` is a human word

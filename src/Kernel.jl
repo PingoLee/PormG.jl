@@ -272,6 +272,58 @@ even when the process itself is attached to a color terminal.
 _emsg(io::IO, msg::AbstractString) = _emsg(msg; color = get(io, :color, false))
 
 #═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Typo suggestion helpers (#365)
+#
+# Shared string-distance / nearest-match candidate resolution used across layers
+# (operator typos in QueryBuilder, configuration typos in Configuration).
+#═══════════════════════════════════════════════════════════════════════════════
+
+"""
+    _levenshtein(a::AbstractString, b::AbstractString) -> Int
+
+Iterative Levenshtein edit distance (two-row, O(min(m,n)) memory). Runs only when
+building a typo suggestion, never on the happy path.
+"""
+function _levenshtein(a::AbstractString, b::AbstractString)::Int
+  av, bv = collect(a), collect(b)
+  m, n = length(av), length(bv)
+  m == 0 && return n
+  n == 0 && return m
+  prev = collect(0:n)
+  curr = Vector{Int}(undef, n + 1)
+  for i in 1:m
+    curr[1] = i
+    @inbounds for j in 1:n
+      cost = av[i] == bv[j] ? 0 : 1
+      curr[j + 1] = min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
+    end
+    prev, curr = curr, prev
+  end
+  return prev[n + 1]
+end
+
+"""
+    _suggest_name(input::AbstractString, candidates) -> Union{Nothing, String}
+
+Nearest candidate in `candidates` to `input`, or `nothing` when nothing is close enough
+to be a plausible typo (`2 * best_d <= length(input)`).
+"""
+function _suggest_name(input::AbstractString, candidates)::Union{Nothing,String}
+  isempty(input) && return nothing
+  best = nothing
+  best_d = typemax(Int)
+  for c in candidates
+    cstr = string(c)
+    d = _levenshtein(input, cstr)
+    if d < best_d
+      best_d = d
+      best = cstr
+    end
+  end
+  return (best !== nothing && 2 * best_d <= length(input)) ? best : nothing
+end
+
+#═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Error taxonomy
 #
 # Must follow `_emsg` above — every subtype's inner constructor calls it.

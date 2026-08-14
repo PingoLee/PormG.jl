@@ -70,11 +70,13 @@ dev:
     time_zone: 'UTC'
 ```
 
-## Security and Write Permissions (`change_data` & `change_db`)
+## Configuration Settings (`config:`)
 
-At the core of `connection.yml` is the `config` sub-dictionary. This section decides whether the application acts internally as a read-only client or a full administrative client:
+At the core of `connection.yml` is the `config` sub-dictionary. This section governs runtime permissions, logging, timezones, and naming conventions for the loaded environment:
 
-!!! warning "Both default to `false`, and a misplaced key is silent"
+!!! warning "Unrecognised keys are warned with suggestions"
+    Only valid user-facing keys (`change_db`, `change_data`, `django_prefix`, `time_zone`, `log_queries`, `log_level`, `log_to_file`, `model_file`) are accepted under `config:`. Any unrecognised key emits a `@warn` on load naming the key and the environment, along with a "did you mean" suggestion if the key is a near-miss typo (e.g. `djago_prefix` → `django_prefix`).
+
     Omit the `config:` block and you get `change_data: false` **and** `change_db: false` — writes
     raise `WritesDisabledError` and migrations are rejected. Both keys are only read from the
     `config:` sub-dictionary of the environment you actually loaded; the same key at the top level,
@@ -113,6 +115,20 @@ sequence synchronisation, not Django-style short-form join paths. See
 `django_prefix: ''` means the same as omitting the key — an empty app label is the absence of one,
 not a prefix that happens to be empty. Earlier versions composed `"$(prefix)_"` regardless and
 derived table names beginning with `_`.
+
+### `time_zone`
+
+Optional (default: `"UTC"`). Sets the default timezone string (e.g. `'UTC'`, `'America/Sao_Paulo'`) used by `auto_now` and `auto_now_add` date/datetime fields.
+
+### Logging Settings
+
+- **`log_queries`** (default: `true`): `Bool` flag controlling whether queries are logged.
+- **`log_level`** (default: `debug`): Minimum log level for query logging (`"debug"`, `"info"`, `"warn"`, `"error"`).
+- **`log_to_file`** (default: `true`): `Bool` flag controlling whether logs are written to file.
+
+### `model_file`
+
+Optional (default: `"models.jl"`). Relative file name within the database definition folder where models are saved and loaded by the migration runner.
 
 !!! note "DDL only"
     `change_db` governs schema changes and nothing else. Earlier versions also secretly switched

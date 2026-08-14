@@ -9,10 +9,11 @@ functions.jl: `Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)`
 `__@yyyy_mm` bucket is rewritten to a sargable range directly on the column — `happened >= \$1 AND
 happened < \$2` — instead of `to_char(happened,'YYYY-MM') = \$1`, so an index on `happened` applies
 and the planner can estimate selectivity. See `_render_sargable_date_range` in
-`build_helpers.jl` and the cross-cutting contract (asymmetry, TIMESTAMPTZ/joined-field exclusion)
-in `test_sargable_date_range.jl`. The rendering here only changes for the *filter* path — a bare
-`to_char(...)` still appears when the column is projected via `.values("field__@yyyy_mm")`, or
-when the filter target is a `DateTimeField`/joined column (out of scope for the rewrite).
+`build_helpers.jl` and the cross-cutting contract (asymmetry, the TIMESTAMPTZ exclusion, and the
+joined-path coverage added by #373) in `test_sargable_date_range.jl`. The rendering here only
+changes for the *filter* path — a bare `to_char(...)` still appears when the column is projected via
+`.values("field__@yyyy_mm")`, or when the filter target is a `DateTimeField` (out of scope for the
+rewrite in either direction, since `to_char` on a timestamp renders in the session TimeZone).
 
 Why a dedicated file?
   - `test_operators.jl` covers the comparison / string / null suffixes but not the

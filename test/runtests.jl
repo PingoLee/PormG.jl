@@ -102,6 +102,7 @@ end
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
+    @testset "Django Multi-App Project Importer (#346)" include("unit/test_import_django_project.jl")
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")

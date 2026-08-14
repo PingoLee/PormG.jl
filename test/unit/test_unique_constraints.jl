@@ -194,7 +194,7 @@ end
     round  = Models.IntegerField(),
     constraints = [Models.UniqueConstraint(fields = ("season", "round"), name = "standings_uniq")],
   )
-  str = Models.Model_to_str(m, rt_settings)
+  str = Models.Model_to_str(m)
   @test occursin("constraints = [Models.UniqueConstraint(fields = (\"season\", \"round\",)", str)
   @test occursin("name = \"standings_uniq\"", str)
 

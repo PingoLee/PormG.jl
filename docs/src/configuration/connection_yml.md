@@ -114,6 +114,12 @@ sequence synchronisation, not Django-style short-form join paths. See
 not a prefix that happens to be empty. Earlier versions composed `"$(prefix)_"` regardless and
 derived table names beginning with `_`.
 
+**Leave it unset for a multi-app Django project.** One connection-level value cannot name three app
+labels, and `import_models_from_django` takes `"<app_label>" => "<models.py>"` pairs for that case —
+it *refuses* to run when this key is set, because accessor derivation strips one prefix from every
+logical name regardless of which app the model came from. See
+[Importing a multi-app project](../import_django.md#Importing-a-multi-app-project).
+
 !!! note "DDL only"
     `change_db` governs schema changes and nothing else. Earlier versions also secretly switched
     PostgreSQL sequence synchronisation on, so the `change_db: false` production posture shown above

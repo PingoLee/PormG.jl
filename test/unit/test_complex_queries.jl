@@ -739,23 +739,19 @@ PormG.config["empty_prefix_q"] = EMPTY_PREFIX_SETTINGS
 
 @testset "An empty django_prefix is treated as unset (#345)" begin
   empty_prefix = EMPTY_PREFIX_SETTINGS
-  unset_prefix = PormG.Configuration.Settings(
-    connections = MockPostgres(), change_data = true, db_def_folder = "empty_prefix_q")
 
-  m = PormG.Models.Model("Dim_uf", Dict{String, PormG.PormGField}("id" => PormG.Models.IDField()))
+  # `_django_app_label` is the single normalizer every consumer of the setting goes through, so it
+  # is the assertion that covers all of them at once.
+  @test PormG.Models._django_app_label(empty_prefix) === nothing
 
-  # No db_table pinned, and no leading underscore anywhere.
-  gen = PormG.Models.Model_to_str(m, empty_prefix)
-  @test !contains(gen, "db_table")
-  @test contains(gen, "Models.Model(\"dim_uf\"")
-  @test !contains(gen, "_dim_uf")
-
-  # Byte-identical to the genuinely-unset case — that is the whole contract.
-  @test gen == PormG.Models.Model_to_str(m, unset_prefix)
-
-  # `get_model_name` must not strip a bare "_" from every logical name either.
+  # `get_model_name` must not strip a bare "_" from every logical name.
   named = PormG.Models.Model("dim_uf", Dict{String, PormG.PormGField}("id" => PormG.Models.IDField()))
   @test PormG.Models.get_model_name(named, empty_prefix, false) == "dim_uf"
+
+  # The RENDER half of this contract moved out of `Model_to_str` in #346 — it no longer takes a
+  # `Settings` at all — and is now asserted at the importer, which is where the app label turns into
+  # a `db_table`: `test_import_django_models.jl` → "Django importer pins the ManyToMany join table
+  # under a prefix (#345)" checks that `django_prefix = ""` output is byte-identical to unset.
 end
 
 # The QUERY side must agree with the render side. `build_query.jl` stashes the prefix on

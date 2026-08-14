@@ -77,7 +77,7 @@ function import_models_from_sqlite(db::String = "db";
   taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-    push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
+    push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
   end
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
@@ -150,7 +150,7 @@ function import_models_from_postgres(db::String;
   taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
+      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
   end
   
   # Generate the models file
@@ -191,7 +191,7 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model, settings; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
+      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
   end
   
   # Generate the models file
@@ -550,16 +550,1174 @@ function _lift_meta!(cls::PyClass)
 end
 
 
+#═══════════════════════════════════════════════════════════════════════════════
+# SECTION: The Django import engine — one or many apps (#346)
+#═══════════════════════════════════════════════════════════════════════════════
+# A Django project splits its models across apps, and PormG is structurally one models file per
+# DATABASE, not per app: `planner.jl` resolves ONE `joinpath(db, settings.model_file)`, and
+# `_load_current_models` includes that ONE file into ONE temp module. So every app in a project is
+# emitted into a single module — which is also what makes a cross-app `ForeignKey("core.Pessoa")`
+# resolvable at all, since `_resolve_target_model` is a BINDING lookup in one module and nothing else.
+#
+# Definition order inside that module is irrelevant: `ForeignKey` stores `.to` as a String and only
+# resolves in `set_models`, after the whole module body has run.
+#
+# Both arities of `import_models_from_django` are this one engine. The single-app method is the
+# one-app case, so the target resolution below fixes three spellings that were broken there too:
+# `"self"`, `"myapp.Thing"` naming the file's own app, and `settings.AUTH_USER_MODEL`. All three used
+# to reach the generated file verbatim and throw at `set_models` — there is no `"self"` handling
+# anywhere in `src/`.
+
 """
-  import_models_from_django(model_py_string::String; db::String = DB_PATH, force_replace::Bool = false, ignore_table::Vector{String} = postgres_ignore_table, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, django_prefix::Union{Nothing, String, Missing} = missing, autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
+    _DjangoApp
+
+One app in an import run: its Django **app label** and the parsed class graph of its `models.py`.
+
+`label === nothing` is the unlabelled single-app import (no `django_prefix`), where PormG derives the
+physical table from the logical name and nothing is pinned as `db_table`. A label is never `""` —
+`_django_app_label` normalizes an empty prefix to `nothing` before it reaches here, and the multi-app
+method rejects an empty label outright.
+"""
+struct _DjangoApp
+  label::Union{Nothing, String}
+  graph::NamedTuple
+end
+
+"""
+    _DjangoClass
+
+One imported Python class and the identity the generated file gives it.
+
+- `class` is the Python class name, verbatim — the name Django derives its own table and join columns
+  from, so it stays available even when the emitted name diverges from it.
+- `name` is what becomes `model.name`: the basis for BOTH the positional slot (`lowercase(name)`) and
+  the binding (`uppercasefirst(name)`). Equal to `class` unless a cross-app collision forced an
+  app-qualified name or `binding_overrides` renamed it.
+- `binding` is the Julia binding, precomputed in pass 1 because a cross-app FK has to be rewritten to
+  its target's binding before the target has been rendered.
+- `overridden` records that `name` came from `binding_overrides`, which changes one thing: a residual
+  collision is an ERROR rather than a silent digit suffix. You asked for that exact name.
+"""
+mutable struct _DjangoClass
+  app_index::Int
+  app::Union{Nothing, String}
+  class::String
+  name::String
+  binding::String
+  overridden::Bool
+  # Whether this class will carry a `db_table`, which decides WHICH string `Model_to_str` dedups its
+  # positional name on: `lstrip(lowercase(name), '_')` when a table is pinned, plain `lowercase(name)`
+  # when it is not (`src/Models.jl`). The collision passes have to compare on the same relation, so
+  # they read this rather than guess — guessing "always stripped" invented an order-dependent rename
+  # for an unlabelled `_Internal`/`Internal` pair that collides on neither relation.
+  #
+  # Decidable here, and only here: an app label pins unconditionally, and the one other source is
+  # `Meta.db_table`, which is readable from the graph at construction. It cannot be derived later
+  # from `name` alone, because by then a rename may have moved it.
+  pins_table::Bool
+  # The built model, filled during emission. `nothing` until then. It exists so the ManyToMany
+  # join-COLUMN pass can consult BOTH ends of a relation: a column's spelling depends on the
+  # target's primary key, and the target is often built after its owner.
+  model::Union{Nothing, PormGModel}
+end
+
+# How a class is spelled in an error message and in a `Meta`-style reference: `core.Pessoa` when the
+# app is known, the bare class name otherwise.
+_django_ref_label(e::_DjangoClass)::String = e.app === nothing ? e.class : string(e.app, ".", e.class)
+
+# Lookup key for an app label. `nothing` (unlabelled single-app import) and a label are one namespace
+# — an unlabelled import has exactly one app, so there is nothing to collide with.
+_django_app_key(app::Union{Nothing, String})::String = app === nothing ? "" : lowercase(app)
+
+# The string `Model_to_str` will dedup this handle on — EXACTLY, not approximately. Under a pinned
+# table it strips leading underscores, otherwise it does not (`src/Models.jl`, `_stripped_name`). The
+# importer's collision passes must compare on the same relation in both directions:
+#
+#   - too FINE (plain `lowercase` everywhere) lets `_Foo`/`Foo` in one labelled app through, and
+#     `Model_to_str` then renames one `foo`/`foo2` by declaration order, silently and unmarked;
+#   - too COARSE (stripping everywhere) manufactures a conflict for an unlabelled `_Internal`/
+#     `Internal` pair that collides on nothing, and — since step 1 skips unlabelled entries — routes
+#     it to the digit backstop, whose outcome depends on which class was declared second.
+#
+# Both directions are order-dependent renames, which is the one property these passes exist to
+# remove, so neither approximation is the safe one. `pins_table` is carried on the entry precisely so
+# this can be exact.
+_django_positional_key(name::AbstractString, pins_table::Bool)::String =
+  pins_table ? String(lstrip(lowercase(String(name)), '_')) : lowercase(String(name))
+_django_positional_key(e::_DjangoClass)::String = _django_positional_key(e.name, e.pins_table)
+
+"""
+    _DjangoClassIndex
+
+Every class the run will emit, resolvable three ways: in emission order (`entries`), by
+`(app, class)` for a Django `"app.Class"` reference, and by bare class name for an unqualified one.
+
+`auth_candidates` are the classes that inherit `AbstractUser`; `settings.AUTH_USER_MODEL` resolves to
+the single one, or errors naming all of them.
+"""
+struct _DjangoClassIndex
+  entries::Vector{_DjangoClass}
+  by_ref::Dict{Tuple{String, String}, _DjangoClass}
+  by_class::Dict{String, Vector{_DjangoClass}}
+  # A Django PROXY has no table of its own — it reads and writes its concrete parent's. So a
+  # `ForeignKey("BaseProxy")` is perfectly expressible: it addresses the parent's table, and Django
+  # builds it that way. Proxies are not in `by_ref` (they emit no model), so without this they were
+  # reported as "not in the imported app set" — which was simply false, and degraded a relation that
+  # did not need to be.
+  by_proxy::Dict{Tuple{String, String}, _DjangoClass}
+  auth_candidates::Vector{_DjangoClass}
+  auth_user::Union{_DjangoClass, Nothing}
+  # The `auth_user_model` the caller passed, verbatim, or `nothing`. Separates "you told me, and it
+  # lives outside this import" (degrade, like any external target — a stock-Django `"auth.User"`)
+  # from "I cannot tell which model it is" (hard error). Kept as the STRING so the degrade marker can
+  # name the model the user actually meant instead of the `settings.AUTH_USER_MODEL` alias.
+  auth_model_ref::Union{Nothing, String}
+  # `# PormG:` lines for renames the USER did not ask for — the digit backstop firing on a residual
+  # collision. They belong in the artifact, not only in a console warning, and they have no model
+  # declaration of their own to sit above, so they are emitted as standalone comments at the top of
+  # the generated module (the #70 convention, same as a skipped proxy).
+  rename_notes::Vector{String}
+end
+
+"""
+    _build_class_index(apps, binding_overrides, auth_user_model) -> _DjangoClassIndex
+
+Pass 1 of the import: decide every class's emitted name and Julia binding **before** the first model
+is rendered, because a cross-app `ForeignKey` has to name a binding that may not exist yet.
+
+Collision policy, in order:
+
+1. Start from the Python class name. Two classes that derive the same binding — `core.Pessoa` and
+   `access.Pessoa` — are BOTH re-derived as `<app>_<lowercase class>`, never just the second one.
+   Renaming only the loser hides which is which, makes the output depend on the order the apps were
+   listed, and — because `set_models` keys a reverse accessor on `lowercase(model.name)` — would give
+   one of them the accessor `pessoa` and the other `pessoa2`. `core_pessoa` / `access_pessoa` says
+   what it is.
+2. `binding_overrides` replaces the name outright, for a collision or not ("spell this one
+   differently" is a legitimate ask).
+3. Anything still colliding — two classes in ONE app differing only in case, an app label that
+   reproduces another app's qualified name, or a name that lands on a reserved binding — gets a digit
+   suffix on the NAME rather than on the binding alone, so `Model_to_str` re-derives exactly the
+   binding recorded here and its own `taken_bindings` dedup (#338) is a no-op backstop.
+
+   Honest about what that buys: with today's code the two agree either way, because pass 2 walks the
+   same classes in the same order through the same `_dedupe_taken` against an identically-seeded set,
+   so suffixing only the binding lands on the same string. Mutating it to do that is an EQUIVALENT
+   mutation — no test can tell. The reason to adjust the name is that agreement then holds by
+   construction instead of by two independent dedup runs happening to stay in step, and "these two
+   sequences must not drift" is the failure mode this file has paid for more than once.
+"""
+function _build_class_index(apps::Vector{_DjangoApp},
+                            binding_overrides::Dict{String, String},
+                            auth_user_model::Union{Nothing, String})::_DjangoClassIndex
+  entries = _DjangoClass[]
+  for (i, app) in enumerate(apps)
+    # Mirrors pass 2's duplicate handling, INCLUDING that the guard runs before the kind test: a
+    # `class Foo(QuerySet)` followed by a `class Foo(models.Model)` leaves the model unimported
+    # (Python binds the last, `graph.index` keeps the first), and pass 2 is where that is reported.
+    seen = Set{String}()
+    for cls in app.graph.classes
+      cls.name in seen && continue
+      push!(seen, cls.name)
+      # `_is_emitted` is THE predicate for "this class becomes a `Models.Model(...)`", and pass 2's
+      # skip block below is the same test spelled out with its reporting. Pass 1 assigns a binding to
+      # exactly this set and pass 2 emits exactly this set, so a cross-app FK can never name a
+      # binding the generated file does not define — and pass 2 hard-errors if the two ever disagree.
+      _is_emitted(app.graph.info[cls.name]) || continue
+      # An app label pins a table for every model it covers; without one the only other source is an
+      # explicit `Meta.db_table`. `_effective_meta` rather than the raw `info[...].meta` so an
+      # inherited `db_table` counts exactly as pass 2 will count it.
+      pins_table = app.label !== nothing || haskey(_effective_meta(app.graph, cls), "db_table")
+      push!(entries, _DjangoClass(i, app.label, cls.name, cls.name, "", false, pins_table, nothing))
+    end
+  end
+
+  by_ref = Dict{Tuple{String, String}, _DjangoClass}()
+  by_class = Dict{String, Vector{_DjangoClass}}()
+  for e in entries
+    key = (_django_app_key(e.app), lowercase(e.class))
+    # `seen` above is case-SENSITIVE (it guards against the same name declared twice) while this key
+    # is lowercased, because Django's own model lookup is. So `class Pessoa` and `class pessoa` in
+    # one app reach here as two entries competing for one key: the second used to overwrite the
+    # first, orphaning a binding that was still computed and emitted, and leaving two models pointing
+    # at the one table `<app>_pessoa`. Django rejects such a project outright ("Conflicting 'pessoa'
+    # models in application"), so there is nothing to disambiguate toward and erroring costs nothing
+    # real.
+    if haskey(by_ref, key)
+      prior = by_ref[key]
+      throw(InvalidMigrationError(
+        "import: '$(_django_ref_label(prior))' and '$(_django_ref_label(e))' differ only in case, " *
+        "so both name the model '$(lowercase(e.class))' and both derive the table " *
+        "'$(e.app === nothing ? lowercase(e.class) : string(e.app, "_", lowercase(e.class)))'. " *
+        "Django refuses this too — rename one of the classes."))
+    end
+    by_ref[key] = e
+    push!(get!(by_class, lowercase(e.class), _DjangoClass[]), e)
+  end
+
+  # 1. App-qualify EVERY member of a colliding group.
+  #
+  # TWO equivalences, not one. The Julia binding is `uppercasefirst(name)` and the POSITIONAL name is
+  # the coarser one `set_models` keys a reverse accessor on. So `core.Pessoa` and `legacy.PESSOA`
+  # derive DIFFERENT bindings (`Pessoa` / `PESSOA`) and pass this step untouched, then collide on the
+  # positional name downstream, where `Model_to_str`'s `taken_names` dedup renames one to `pessoa2`
+  # with no warning and no marker — order-dependent, and exactly the outcome app-qualification exists
+  # to prevent. Counting both closes it.
+  #
+  # The positional equivalence is `_django_positional_key`, NOT a plain `lowercase`. Every entry that
+  # reaches the qualification below has a label, hence a pinned table, and under a pinned table
+  # `Model_to_str` dedups on `lstrip(lowercase(name), '_')` (`src/Models.jl:1789`). Comparing on
+  # `lowercase` alone made `_Foo` and `Foo` in one app look distinct here and identical there, so they
+  # slipped past qualification and were renamed `foo`/`foo2` by declaration order — silently, which is
+  # the defect this pass exists to remove (#346).
+  #
+  # The two counts CANNOT share one dictionary. Sharing one, a class whose binding and positional key
+  # are the SAME string bumped that single key twice and then read its own contribution back as a
+  # 2-way collision — `class _thing` alone in a project app-qualified itself to `Racing__thing` for
+  # nothing. Separate tables make an entry structurally unable to collide with itself, whatever the
+  # two keys happen to spell.
+  binding_counts = Dict{String, Int}()
+  name_counts = Dict{String, Int}()
+  bump!(d, k) = (d[k] = get(d, k, 0) + 1)
+  collides(e) = binding_counts[Models._model_binding_name(e.name)] > 1 ||
+                name_counts[_django_positional_key(e)] > 1
+  for e in entries
+    bump!(binding_counts, Models._model_binding_name(e.name))
+    bump!(name_counts, _django_positional_key(e))
+  end
+  for e in entries
+    e.app === nothing && continue     # an unlabelled import has no label to qualify with
+    collides(e) || continue
+    e.name = string(e.app, "_", lowercase(e.class))
+  end
+
+  # 2. Explicit overrides.
+  _apply_binding_overrides!(entries, by_ref, by_class, binding_overrides)
+
+  rename_notes = String[]
+
+  # 3. Final bindings, with the digit backstop applied to the NAME.
+  #
+  # OVERRIDES CLAIM FIRST, in a pass of their own. Doing it in one pass made the outcome depend on
+  # the order the apps were listed: an override colliding with a class LATER in `entries` won and
+  # silently digit-suffixed that class, while the same override against an EARLIER class raised. So
+  # `binding_overrides = Dict("imports.Batch" => "Pessoa")` on a project that also has `core.Pessoa`
+  # errored with the apps listed one way and quietly renamed `core.Pessoa` to `Pessoa2` the other —
+  # renaming a model the user never mentioned, which is the order-dependence step 1 exists to avoid.
+  # An explicit name is a claim on that name, so it is staked before anything can be derived onto it.
+  # `taken` holds BOTH equivalences — the binding and `_django_positional_key` — because
+  # `Model_to_str` dedups both and only one of them is the Julia identifier. Keeping them in one set
+  # is safe: a binding is `uppercasefirst`, a positional key is lowercase with leading underscores
+  # stripped, so the only string that could be mistaken for the other is an
+  # all-lowercase-and-also-uppercasefirst name, which does not exist for any non-empty string.
+  #
+  # The positional half uses the SAME key as step 1 — `_django_positional_key`, per entry, which
+  # reads `pins_table` rather than assuming. Assuming "always stripped" here was itself a defect: step
+  # 1 skips unlabelled entries, so an unlabelled `_Internal`/`Internal` pair that collides on neither
+  # relation fell through to the digit backstop below, and the backstop renames whichever class was
+  # declared SECOND. That trades a silent order-dependent rename for a loud one; it does not remove
+  # it.
+  #
+  # Honest about the rest: with step 1 counting the positional equivalence too, the positional check
+  # HERE is unreachable for LABELLED entries. Two labelled names that collide on it are qualified to
+  # `<app>_<class>` up there, which makes them distinct across apps; within one app they are refused
+  # outright by the `by_ref` guard. It stays because the two checks encode one rule — "these two
+  # strings must both stay unique" — and splitting the rule so that step 1 enforces it and step 3
+  # assumes it is how the original defect got in: step 3 assumed step 1 had covered a case it never
+  # checked.
+  taken = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  # Keyed on BOTH equivalences, because `conflicts` tests both. Keyed on the binding alone, every
+  # POSITIONAL conflict reported `nothing` for its claimant, and the two consumers below read that as
+  # "a reserved binding": the marker and the `@warn` blamed the generated module's own imports for a
+  # name a `binding_overrides` entry had taken, and — worse — the hard error guarding an override
+  # collision never fired, so the caller got exactly the silent rename of an unmentioned model that
+  # `docs/src/import_django.md` promises raises instead.
+  claimed_by = Dict{String, _DjangoClass}()
+  claim!(e, b) = (push!(taken, b); push!(taken, _django_positional_key(e));
+                  claimed_by[b] = e; claimed_by[_django_positional_key(e)] = e; e.binding = b)
+  conflicts(nm, pins) = Models._model_binding_name(nm) in taken ||
+                        _django_positional_key(nm, pins) in taken
+  # Whichever entry holds the key this one collided on — the binding if that is what clashed, else
+  # the positional name. `nothing` now genuinely means "reserved by the module", not "keyed wrong".
+  claimant(e, b) = get(claimed_by, b, get(claimed_by, _django_positional_key(e), nothing))
+  for e in entries
+    e.overridden || continue
+    b = Models._model_binding_name(e.name)
+    if conflicts(e.name, e.pins_table)
+      other = claimant(e, b)
+      owner = other === nothing ? "a binding the generated module reserves for PormG itself" :
+                                  "another binding_overrides entry, for '$(_django_ref_label(other))'"
+      throw(InvalidMigrationError(
+        "import: binding_overrides asks for the Julia binding '$(b)' for " *
+        "'$(_django_ref_label(e))', but it is already taken by $(owner). Two models cannot share " *
+        "one binding in the generated module — choose another name."))
+    end
+    claim!(e, b)
+  end
+  for e in entries
+    e.overridden && continue
+    b = Models._model_binding_name(e.name)
+    if conflicts(e.name, e.pins_table)
+      # Colliding with an OVERRIDE is a user error with a user fix, so it is reported rather than
+      # absorbed. The digit backstop exists for collisions nobody can avoid — two class names that
+      # genuinely derive the same binding — not to quietly rename a model the caller never mentioned
+      # because a keyword took its name. Order-independent either way now: overrides claim first, so
+      # this fires whichever order the apps were listed in.
+      other = claimant(e, b)
+      if other !== nothing && other.overridden
+        # Name the equivalence that actually clashed. An override can collide two ways and only one
+        # of them is a binding: `"Circuit" => "Pessoa"` takes the BINDING `Pessoa`, while
+        # `"Circuit" => "PESSOA"` takes the MODEL NAME `pessoa` that `PESSOA` lowers to. Reporting
+        # both as "the Julia binding 'Pessoa'" sends the reader looking for a name nobody typed.
+        took = b in taken ?
+          "the Julia binding '$(b)', which is already the derived binding of" :
+          "the model name '$(_django_positional_key(e))' — what '$(other.binding)' lowers to — " *
+          "which is already derived by"
+        throw(InvalidMigrationError(
+          "import: binding_overrides gives '$(_django_ref_label(other))' $(took) " *
+          "'$(_django_ref_label(e))'. Honouring it would rename '$(_django_ref_label(e))' to " *
+          "something you did not choose — pick another name, or override both."))
+      end
+      base = e.name
+      suffix = 2
+      while conflicts(string(base, suffix), e.pins_table)
+        suffix += 1
+      end
+      # A rename nobody asked for is reported (#70): the artifact carries a marker naming the class
+      # it collided with, and the console gets a @warn. Before, `class CASCADE` quietly became
+      # `CASCADE2` and nothing anywhere said why the binding you expected is not the binding you got.
+      other = claimant(e, b)
+      @warn "import: binding is already claimed; this model was renamed to keep the generated file loadable" class=_django_ref_label(e) wanted=b renamed_to=Models._model_binding_name(string(base, suffix)) taken_by=(other === nothing ? "a reserved binding" : _django_ref_label(other))
+      push!(rename_notes, "# PormG: '$(_django_ref_label(e))' would be the Julia binding " *
+                          "'$(b)', which is already " *
+                          (other === nothing ? "reserved by the generated module's own imports" :
+                                               "used by '$(_django_ref_label(other))'") *
+                          " — emitted as '$(Models._model_binding_name(string(base, suffix)))' " *
+                          "instead. Its db_table below still names the real table. Use " *
+                          "binding_overrides to choose a different name.")
+      e.name = string(base, suffix)
+      b = Models._model_binding_name(e.name)
+    end
+    claim!(e, b)
+  end
+
+  # Proxy → the concrete model whose table it shares. Resolved AFTER `by_ref`/`by_class` are
+  # complete, because the parent may live in another app. Iterated to a fixpoint so a proxy of a
+  # proxy (legal Django) lands on the concrete model at the bottom rather than on an intermediate
+  # that emits nothing either; the loop is bounded by the number of proxies, so a malformed cycle
+  # stops instead of spinning.
+  by_proxy = Dict{Tuple{String, String}, _DjangoClass}()
+  pending = Tuple{String, String, Union{Nothing, String}, String}[]   # (app_key, class_lower, parent, app)
+  for app in apps
+    for cls in app.graph.classes
+      ci = app.graph.info[cls.name]
+      ci.proxy || continue
+      push!(pending, (_django_app_key(app.label), lowercase(cls.name), ci.mti_parent,
+                      app.label === nothing ? "" : app.label))
+    end
+  end
+  for _ in 1:(length(pending) + 1)
+    progressed = false
+    for (app_key, class_lower, parent, app_label) in pending
+      haskey(by_proxy, (app_key, class_lower)) && continue
+      parent === nothing && continue
+      home = isempty(app_label) ? nothing : app_label
+      # `role` for the same reason `auth_user_model` and `binding_overrides` pass one: an ambiguous
+      # proxy/MTI parent is named in a `class Meta`/base list, not in a relation, and telling the
+      # reader to qualify a "relation target" sends them looking at fields that have nothing to do
+      # with it.
+      target = _lookup_class_ref(parent, home, by_ref, by_class; role = "proxy or inherited parent")
+      if target === nothing
+        # The parent is itself a proxy: take whatever it already resolved to. Searched in the
+        # PARENT's app as well as this one — keying only on the child's app meant a proxy whose
+        # parent proxy lives in another app never resolved, which also made the outer loop dead code
+        # (within one app, Python's define-before-use ordering already resolves any chain in a single
+        # inner pass). Same app first, then anywhere, matching `_lookup_class_ref`'s own precedence.
+        target = get(by_proxy, (app_key, lowercase(parent)), nothing)
+        if target === nothing
+          for ((_, cls), resolved) in by_proxy
+            cls == lowercase(parent) && (target = resolved; break)
+          end
+        end
+      end
+      target === nothing && continue
+      by_proxy[(app_key, class_lower)] = target
+      progressed = true
+    end
+    progressed || break
+  end
+
+  # Django's `AbstractUser` columns reach a class through abstract bases too, which is what
+  # `_inherits_auth_user` walks. Collected here so `settings.AUTH_USER_MODEL` can resolve, and so the
+  # error for an ambiguous project can NAME the candidates rather than just count them.
+  auth_candidates = [e for e in entries
+                     if _inherits_auth_user(apps[e.app_index].graph,
+                                            apps[e.app_index].graph.index[e.class])]
+  # An EXPLICIT `auth_user_model` that names nothing in this import is not an error — it is the
+  # answer for a stock-Django project (#346). `AUTH_USER_MODEL = "auth.User"` is Django's default,
+  # and `django.contrib.auth` is not a models.py anyone hands this importer, so there is no candidate
+  # to find and no way to import one. Erroring left such a project — the most common shape there is —
+  # with no way in at all: the auth branch threw before the degrade path could run, and the message
+  # told the user to pass a keyword that then produced a different error.
+  #
+  # Saying "the user model is auth.User" is information, not a mistake: the importer now knows the
+  # target is deliberately outside the set, so those relations degrade like any other external
+  # target, with a marker each. The hard error is reserved for the case where the importer genuinely
+  # CANNOT TELL — no keyword and not exactly one `AbstractUser` subclass.
+  auth_user = if auth_user_model !== nothing
+    found = _lookup_class_ref(auth_user_model, nothing, by_ref, by_class; role = "auth_user_model")
+    # Deliberately external (`"auth.User"`) and a typo (`"access.Usuario"`) are indistinguishable
+    # here — both name a model this import does not have. So it is not an error, and it is not
+    # silent either: the console says it once, up front, and every relation it governs carries its
+    # own `# PormG:` marker naming the model that was not found.
+    found === nothing && @warn(
+      "import: auth_user_model names no imported model, so every settings.AUTH_USER_MODEL relation " *
+      "will be imported as a plain column. Expected for a stock-Django project (auth.User); a typo " *
+      "otherwise.",
+      auth_user_model = auth_user_model,
+      imported = sort([_django_ref_label(e) for e in entries]))
+    found
+  elseif length(auth_candidates) == 1
+    auth_candidates[1]
+  else
+    nothing            # 0 or >1 — an error only if something actually references AUTH_USER_MODEL
+  end
+
+  return _DjangoClassIndex(entries, by_ref, by_class, by_proxy, auth_candidates, auth_user,
+                           auth_user_model, rename_notes)
+end
+
+# Resolve a `"app.Class"` / bare `"Class"` reference against the index, WITHOUT the `"self"` and
+# `AUTH_USER_MODEL` special cases (which need a declaring class and the auth user respectively).
+# `current_app` biases a bare name to the app that wrote it, exactly as Django does; `nothing` means
+# "no home app", which is the case for `auth_user_model` and for `binding_overrides` keys.
+#
+# Django's own rule for the two-part form: the app label matches as written and the MODEL name is
+# case-insensitive (`apps.get_model` lowercases it), so `"core.Pessoa"` and `"core.pessoa"` are the
+# same reference. Matched case-insensitively on both halves here — app labels are lowercase by
+# Django convention, so the extra tolerance can only help.
+function _lookup_class_ref(ref::AbstractString, current_app::Union{Nothing, String},
+                           by_ref::Dict{Tuple{String, String}, _DjangoClass},
+                           by_class::Dict{String, Vector{_DjangoClass}};
+                           role::String = "relation target")::Union{_DjangoClass, Nothing}
+  text = strip(String(ref))
+  isempty(text) && return nothing
+  if occursin('.', text)
+    parts = split(text, '.')
+    length(parts) == 2 || return nothing
+    return get(by_ref, (lowercase(strip(parts[1])), lowercase(strip(parts[2]))), nothing)
+  end
+  # Same app wins, then a globally unique class name.
+  if current_app !== nothing
+    same = get(by_ref, (_django_app_key(current_app), lowercase(text)), nothing)
+    same === nothing || return same
+  end
+  candidates = get(by_class, lowercase(text), _DjangoClass[])
+  length(candidates) == 1 && return candidates[1]
+  if length(candidates) > 1
+    # `role` because this function also resolves `auth_user_model` and `binding_overrides` keys, and
+    # a message calling one of those a "relation target" sends the reader looking at their models
+    # instead of at the keyword they typed.
+    throw(InvalidMigrationError(
+      "import: the $(role) '$(text)' is ambiguous — " *
+      join(("'$(_django_ref_label(c))'" for c in candidates), " and ") *
+      " both define it. Qualify it the way Django does, as \"<app_label>.$(text)\"."))
+  end
+  return nothing
+end
+
+# Validate and apply `binding_overrides`. Every rejection is a hard error on purpose: an override is
+# an explicit instruction, and one that silently does nothing (a typo'd key, a value that cannot be
+# the emitted binding) is the failure mode this importer exists to avoid.
+function _apply_binding_overrides!(entries::Vector{_DjangoClass},
+                                   by_ref::Dict{Tuple{String, String}, _DjangoClass},
+                                   by_class::Dict{String, Vector{_DjangoClass}},
+                                   binding_overrides::Dict{String, String})
+  isempty(binding_overrides) && return nothing
+  # Two keys can name ONE class — `"core.Pessoa"` and a bare `"Pessoa"` — and the second silently
+  # won, discarding the first with no diagnostic. That is the exact failure this function's own
+  # contract says it exists to prevent.
+  claimed = Dict{_DjangoClass, String}()
+  for key in sort(collect(keys(binding_overrides)))     # sorted: one bad key reports the same first
+    value = binding_overrides[key]
+    target = _lookup_class_ref(key, nothing, by_ref, by_class; role = "binding_overrides key")
+    if target !== nothing && haskey(claimed, target)
+      throw(InvalidMigrationError(
+        "import: binding_overrides names '$(_django_ref_label(target))' twice — as \"$(claimed[target])\" " *
+        "and as \"$(key)\" — asking for two different bindings for one model. Keep one key."))
+    end
+    target === nothing || (claimed[target] = key)
+    target === nothing && throw(InvalidMigrationError(
+      "import: binding_overrides key \"$(key)\" names no imported model. Spell it as Django does — " *
+      "\"<app_label>.<ClassName>\", or the bare class name when it is unambiguous. Imported: " *
+      "$(join(sort([_django_ref_label(e) for e in entries]), ", "))."))
+    Base.isidentifier(value) || throw(InvalidMigrationError(
+      "import: binding_overrides asks for '$(value)' as the Julia binding of " *
+      "'$(_django_ref_label(target))', which is not a legal Julia identifier — the generated file " *
+      "would not parse."))
+    isempty(lstrip(value, '_')) && throw(InvalidMigrationError(
+      "import: binding_overrides asks for '$(value)' as the Julia binding of " *
+      "'$(_django_ref_label(target))'. An all-underscore identifier is write-only in Julia: the " *
+      "file would load and the model would be invisible to every binding lookup, with no error."))
+    # The binding is `uppercasefirst(model.name)` and the override BECOMES `model.name`, so a
+    # value that is not already uppercase-first would be emitted as something else — silently not
+    # the name that was asked for.
+    uppercasefirst(value) == value || throw(InvalidMigrationError(
+      "import: binding_overrides asks for '$(value)' as the Julia binding of " *
+      "'$(_django_ref_label(target))', but a model binding is `uppercasefirst(name)` — so that " *
+      "would be emitted as '$(uppercasefirst(value))'. Write it capitalized: " *
+      "'$(uppercasefirst(value))'."))
+    target.name = value
+    target.overridden = true
+  end
+  return nothing
+end
+
+"""
+    _resolve_relation_targets!(fields_dict, owner, index, strict_relations, markers) -> Nothing
+
+Rewrite every FK/O2O/M2M target in `fields_dict` to the Julia BINDING of the model it names, and
+degrade the ones that name nothing in this import.
+
+Runs on the field `Dict` rather than on a built `Model_Type` so that degrading a field is a plain
+replace-or-`delete!`, and so `model.field_names` is computed once from the final set.
+
+Resolution order is Django's: `"self"` → `settings.AUTH_USER_MODEL` → `"<app>.<Class>"` → a bare
+class name, same app first and then a globally unique one.
+
+**Degrade, never drop.** A `ForeignKey("contenttypes.ContentType")` in a project that did not import
+`django.contrib` keeps its column as a plain integer and says so in the artifact — the column is
+real, only the relation metadata is gone, and PormG's import path is explicitly ETL. Hard-erroring
+would make the importer unusable on any project that touches `django.contrib`; `strict_relations =
+true` is there for when that is what you want. A ManyToManyField has no column of its own, so an
+unresolvable one is dropped rather than degraded.
+"""
+function _resolve_relation_targets!(fields_dict::Dict{Symbol, Any},
+                                    owner::_DjangoClass,
+                                    index::_DjangoClassIndex,
+                                    strict_relations::Bool,
+                                    markers::Vector{String})
+  for key in sort(collect(keys(fields_dict)))       # sorted: deterministic markers
+    field = fields_dict[key]
+    hasproperty(field, :to) || continue
+    is_m2m = Models.is_many_to_many_field(field)
+    raw = field.to
+    raw isa AbstractString || continue              # already a model object; nothing to rewrite
+
+    # `through` is a model reference too, and an unresolvable one is fatal at `set_models`
+    # (`_resolve_model_reference` throws). Resolve it first so the M2M drops as a unit.
+    if is_m2m && field.through isa AbstractString
+      through, _ = _resolve_one_target(field.through, owner, index, strict_relations, markers,
+                                       String(key), "through model")
+      through === nothing && (delete!(fields_dict, key); continue)
+      field.through = through.binding
+    end
+
+    target, via_proxy = _resolve_one_target(raw, owner, index, strict_relations, markers,
+                                            String(key),
+                                            is_m2m ? "ManyToManyField target" : "ForeignKey target")
+    if target === nothing
+      if is_m2m
+        delete!(fields_dict, key)
+      else
+        fields_dict[key] = _degraded_relation_column(field, owner, String(key))
+      end
+      continue
+    end
+    field.to = target.binding
+    # The join COLUMNS are not decided here: they depend on the TARGET model's primary key, and the
+    # target may not be built yet. See `_pin_m2m_join_columns!`, which runs once every model exists.
+    #
+    # ONE exception, settled here because the information dies with `ref`: a ManyToManyField pointing
+    # at a PROXY. `.to` becomes the concrete parent's binding — that is the table the relation reads
+    # — but Django names the join column from the model the field NAMES
+    # (`create_many_to_many_intermediary_model` uses `to_model._meta.model_name`), so it is
+    # `baseproxy_id`, not `base_id`. Deriving it downstream from `target.class` would emit a column
+    # Django never created, and quietly: before proxies resolved at all this M2M was DROPPED with a
+    # marker, so getting it wrong here trades a loud failure for a silent one.
+    if is_m2m && field.through === nothing && via_proxy !== nothing && field.target_field === nothing
+      field.target_field = string(lowercase(String(via_proxy)), "_id")
+    end
+  end
+  return nothing
+end
+
+"""
+    _pin_m2m_join_columns!(index) -> Nothing
+
+Pin `source_field` / `target_field` on every auto-derived `ManyToManyField` whose columns PormG would
+otherwise spell differently from Django.
+
+Django's join-table columns are **always** `<lowercased class name>_id` — the primary key's own name
+never enters it. PormG's `_many_to_many_column_name` derives `<lowercased model.name>_<pk field>`, so
+the two agree only while BOTH of these hold:
+
+- the emitted `model.name` is still the class name — a cross-app collision rename or a
+  `binding_overrides` entry breaks it;
+- the model's primary key is called `id` — a legacy schema with `codigo = CharField(primary_key=True)`
+  breaks it, and then PormG addresses `driver_codigo` where Django created `driver_id`.
+
+Pinned exactly when one of those fails, never speculatively, so the common case stays clean. This
+runs as a separate pass because the target's primary key is only knowable once the target model is
+built, and models are built in app order.
+
+A self-referential M2M is the one case where Django does not use `<class>_id` at all: one table
+cannot carry the same column twice, so it names the ends `from_<class>_id` / `to_<class>_id`. That
+case was unreachable before #346 — `ManyToManyField("self")` died at `set_models` — so resolving
+`"self"` without this would have traded a loud failure for a join table with one column doing two
+jobs. (The same defect for hand-written models is #364.)
+"""
+function _pin_m2m_join_columns!(index::_DjangoClassIndex)
+  by_binding = Dict{String, _DjangoClass}()
+  for e in index.entries
+    e.model === nothing || (by_binding[e.binding] = e)
+  end
+  # `get_model_pk_field` THROWS when a model carries more than one primary key, and a model can:
+  # `process_class_fields!` injects an `id` for every `AbstractUser` subclass, so a legacy user table
+  # that also declares `matricula = CharField(primary_key=True)` has two (#369). Calling it eagerly for every
+  # entry turned that into a raw `ModelDefinitionError` that aborted the WHOLE import — no file, no
+  # marker, every other model lost — for a project that has no ManyToManyField anywhere, on both
+  # arities. So it is called lazily, only for models that actually own an auto-derived M2M, and a
+  # throw skips the pin rather than the import: the field keeps PormG's own derivation, exactly as
+  # before this pass existed. The two-primary-key model is broken either way (it is refused at
+  # `set_models`); that is not this pass's to fix or to escalate.
+  pk_cache = Dict{_DjangoClass, Union{Nothing, String}}()
+  function pk_name(e)
+    get!(pk_cache, e) do
+      try
+        s = Models.get_model_pk_field(e.model)
+        s === nothing ? nothing : String(s)
+      catch err
+        err isa PormGError || rethrow()
+        @warn "import: cannot read the primary key, so ManyToMany join columns are left derived" class=_django_ref_label(e) exception=err
+        nothing
+      end
+    end
+  end
+  for owner in index.entries
+    owner.model === nothing && continue
+    for (field_name, field) in owner.model.fields
+      Models.is_many_to_many_field(field) || continue
+      field.through === nothing || continue
+      target = field.to isa AbstractString ? get(by_binding, field.to, nothing) : nothing
+      (target === nothing || target.model === nothing) && continue
+      owner_pk = pk_name(owner)
+      target_pk = pk_name(target)
+      # An unreadable primary key means "do not know", not "not `id`" — pinning on a guess would
+      # write a column name into the artifact with nothing behind it.
+      if field.source_field === nothing && owner_pk !== nothing &&
+         (lowercase(owner.name) != lowercase(owner.class) || owner_pk != "id")
+        field.source_field = string(lowercase(owner.class), "_id")
+      end
+      if field.target_field === nothing && target_pk !== nothing &&
+         (lowercase(target.name) != lowercase(target.class) || target_pk != "id")
+        field.target_field = string(lowercase(target.class), "_id")
+      end
+      if target === owner
+        field.source_field = string("from_", lowercase(owner.class), "_id")
+        field.target_field = string("to_", lowercase(owner.class), "_id")
+      end
+    end
+  end
+  return nothing
+end
+
+# One target reference → its class entry, or `nothing` after reporting the degrade.
+function _resolve_one_target(raw::AbstractString, owner::_DjangoClass, index::_DjangoClassIndex,
+                             strict_relations::Bool, markers::Vector{String},
+                             field_key::String, role::String)
+  # `parse_field_args` strips the quotes off a plain `"core.Pessoa"`, but a value that reached here
+  # through another path may still carry them.
+  ref = strip(_strip_py_quotes(strip(String(raw))))
+
+  # Django's own literal for a self-referential relation. Matched exactly, as Django does
+  # (`RECURSIVE_RELATIONSHIP_CONSTANT`), so a class actually named `Self` is not shadowed.
+  ref == "self" && return (owner, nothing)
+
+  if ref == "settings.AUTH_USER_MODEL" || ref == "AUTH_USER_MODEL"
+    index.auth_user === nothing && index.auth_model_ref === nothing && throw(InvalidMigrationError(
+      "import: field '$(field_key)' on '$(_django_ref_label(owner))' points at " *
+      "settings.AUTH_USER_MODEL, but this import cannot tell which model that is — " *
+      (isempty(index.auth_candidates) ?
+        "no imported class inherits AbstractUser" :
+        "$(length(index.auth_candidates)) do: " *
+        join(("'$(_django_ref_label(c))'" for c in index.auth_candidates), ", ")) *
+      ". Pass auth_user_model = \"<app_label>.<ClassName>\" — including for a stock-Django project " *
+      "that never subclassed AbstractUser, where it is auth_user_model = \"auth.User\" and those " *
+      "relations then degrade to plain columns like any other target outside the import. This is a " *
+      "hard error on purpose: one omitted keyword would otherwise quietly turn every user relation " *
+      "in the project into a plain integer column."))
+    # Told, and the answer is a model outside the import (`"auth.User"`): fall through to the
+    # ordinary degrade path so the column survives and the artifact says the relation did not.
+    index.auth_user === nothing || return (index.auth_user, nothing)
+    ref = String(index.auth_model_ref)
+  end
+
+  resolved = _lookup_class_ref(ref, owner.app, index.by_ref, index.by_class)
+  resolved === nothing || return (resolved, nothing)
+
+  # A PROXY names a real, imported table — its concrete parent's. Django's own FK to a proxy
+  # addresses that table, so this is a resolution, not a degrade. The PROXY'S OWN name is handed
+  # back too: a ManyToManyField's join column is named from the model referenced, so a relation
+  # written against `BaseProxy` gets `baseproxy_id` even though the table is the parent's.
+  if !isempty(index.by_proxy)
+    key = occursin('.', ref) ?
+      (let parts = split(ref, '.'); length(parts) == 2 ?
+         (lowercase(strip(parts[1])), lowercase(strip(parts[2]))) : ("\0", "\0") end) :
+      (_django_app_key(owner.app), lowercase(ref))
+    viaproxy = get(index.by_proxy, key, nothing)
+    viaproxy === nothing || return (viaproxy, last(split(ref, '.')))
+  end
+
+  message = "field '$(field_key)' on '$(_django_ref_label(owner))' — $(role) '$(ref)' is not in " *
+            "the imported app set"
+  # A single-app import with NO app label cannot match an app-qualified reference at all — it does
+  # not know its own label, so `"racing.Circuit"` looks exactly as foreign as `"auth.Permission"`,
+  # even when `Circuit` is right there in the file. That is a one-keyword fix and the marker has to
+  # say which keyword, or the reader is left staring at a class the file clearly defines.
+  hint = (owner.app === nothing && occursin('.', ref)) ?
+    " This connection sets no Django app label, so the importer cannot tell whether " *
+    "'$(first(split(ref, '.')))' is this file's own app — pass django_prefix = " *
+    "\"$(first(split(ref, '.')))\" if it is." : ""
+  strict_relations && throw(InvalidMigrationError(
+    "import: $(message), and strict_relations = true.$(hint) Import the app that defines it " *
+    "alongside this one, or set strict_relations = false to import the column without its relation."))
+  @warn "import: relation target is not in the imported app set; the relation is lost" field=field_key class=_django_ref_label(owner) target=ref role=role
+  push!(markers, "# PormG: $(message); " *
+                 (role == "ManyToManyField target" || role == "through model" ?
+                   "the relation is DROPPED — a ManyToManyField has no column of its own." :
+                   "imported as a plain column, the relation is lost.") * hint)
+  return (nothing, nothing)
+end
+
+# An FK/O2O whose target this import cannot name, reduced to the column Django actually created.
+# `BigIntegerField` because Django's default primary key has been `BigAutoField` since 3.2, and a
+# too-wide integer column reads the same values a narrower one would.
+#
+# Every column-shaping option is carried over, not just `null`/`blank`. `unique` is the one that
+# actually bites: a `OneToOneField` IS a unique column, so dropping the flag would emit a plain
+# nullable bigint where the database has a UNIQUE constraint — and the next `makemigrations` would
+# propose DROPPING it. `db_index` is the same story one severity down.
+function _degraded_relation_column(field, owner::_DjangoClass, field_key::String)
+  # A relation that is also the PRIMARY KEY has nowhere to degrade to: `BigIntegerField` cannot be
+  # one (it hardcodes `primary_key = false`), and `has_primary_key` was decided before this pass, so
+  # no `id` is synthesized to replace it. Degrading would emit a model with NO primary key — which
+  # breaks `save()`, every ManyToManyField touching it, and the migration planner, none of them where
+  # a reader would look. Erroring is the honest outcome even under `strict_relations = false`.
+  if field.primary_key
+    throw(InvalidMigrationError(
+      "import: field '$(field_key)' on '$(_django_ref_label(owner))' is BOTH a relation to a model " *
+      "outside this import AND the model's primary key (Django's shared-primary-key pattern). It " *
+      "cannot be degraded to a plain column: the column type PormG would fall back to cannot be a " *
+      "primary key, so the model would come out with none at all. Import the app that defines the " *
+      "target alongside this one, or declare the column by hand."))
+  end
+  kwargs = Dict{Symbol, Any}(:null => field.null, :blank => field.blank,
+                             :unique => field.unique, :db_index => field.db_index,
+                             :editable => field.editable)
+  field.db_column === nothing || (kwargs[:db_column] = field.db_column)
+  field.verbose_name === nothing || (kwargs[:verbose_name] = field.verbose_name)
+  field.default === nothing || (kwargs[:default] = field.default)
+  return Models.BigIntegerField(; kwargs...)
+end
+
+# The physical table for one imported class, by Django's rules. The ONE place that composes an app
+# label with a class name (#346) — `Model_to_str` used to do it too, from `settings.django_prefix`,
+# and the importer had to mirror its precedence to pin M2M join tables correctly.
+#
+# `Meta.db_table` is ABSOLUTE in Django and overrides the app label. Without a label the app is
+# unknown, so nothing is pinned and PormG's own derivation stands — the status quo for an unprefixed
+# single-app import.
+#
+# That status quo holds only while the handle still IS the class name. `Model_to_str` renders the
+# positional slot as `lowercase(model.name)`, and `model.name` is `entry.name` — which pass 1 rewrites
+# for a `binding_overrides` entry or for the digit backstop. Once it differs from the class, the
+# derivation reproduces the RENAME rather than Django's table: `class Circuit` overridden to `Pista`
+# emitted `Models.Model("pista")` and silently moved the model to a table Django never created, and
+# `class CASCADE` emitted `Models.Model("cascade2")` where the pre-#346 importer correctly emitted
+# `Models.Model("cascade")`.
+#
+# `Model_to_str` has defended against exactly this since #338 — "when dedup actually changes the
+# string AND nothing already pinned the table, pin the PRE-dedup name explicitly"
+# (`src/Models.jl:1818-1821`), because a rename with nothing pinned leaves the model loading cleanly
+# while querying a table that does not exist. Moving the dedup into pass 1 bypassed that guard: the
+# name `Model_to_str` now receives is already unique, so its own dedup never fires. Same rule, applied
+# where the rename now happens.
+function _django_physical_table(model, app_label::Union{Nothing, String},
+                                class_name::AbstractString,
+                                handle::AbstractString)::Union{Nothing, String}
+  Models.model_has_db_table(model) && return Models.model_table_name(model)
+  app_label !== nothing && return string(app_label, "_", lowercase(class_name))
+  return lowercase(handle) == lowercase(class_name) ? nothing : lowercase(class_name)
+end
+
+"""
+    _import_django_apps(apps, render_settings; kwargs...) -> Nothing
+
+The shared body of both `import_models_from_django` methods: index every class, render every model
+into one module, write the file.
+"""
+function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSettings;
+                             file::String,
+                             model_path::String,
+                             auth_user_model::Union{Nothing, String},
+                             strict_relations::Bool,
+                             binding_overrides::Dict{String, String},
+                             autofields_ignore::Vector{String},
+                             parameters_ignore::Vector{String})
+
+  index = _build_class_index(apps, binding_overrides, auth_user_model)
+
+  Instructions = Vector{Any}()
+  # #338: two DIFFERENT class names can still sanitize/uppercasefirst to the same Julia binding. One
+  # registry per generated file, shared across every class of every app rendered into it. Pass 1
+  # already resolved every collision by adjusting `model.name`, so these are no-op backstops now —
+  # kept because `Model_to_str` is also reached from `inspectdb`, where nothing pre-resolves.
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
+  pending_renders = Tuple{Int, PormGModel, Vector{String}}[]
+
+  # Renames nobody asked for, at the top of the file: they have no declaration of their own to sit
+  # above, and a reader who typed `M.Cascade` and got `Cascade2` needs to find out here rather than
+  # by grepping the module.
+  append!(Instructions, index.rename_notes)
+
+  for app in apps
+    graph = app.graph
+    # An app that contributes no table gets a line in the ARTIFACT, not just a console warning
+    # (#70): whoever opens this file in six months and wonders where `access`' models went needs to
+    # see it here. Only when the app was named — a single-app import has nothing to say this about.
+    if app.label !== nothing && !any(c -> _is_emitted(graph.info[c.name]), graph.classes)
+      push!(Instructions, "# PormG: app '$(app.label)' contributed no model to this file — its " *
+                          "models.py declares none the importer recognises. Any relation pointing " *
+                          "into it is degraded below.")
+    end
+    # A class name defined twice at module level is pathological Python, but it used to emit TWO
+    # `X = Models.Model(...)` assignments into one module: the file loads, the second silently wins,
+    # and the first model is gone. `graph.index` already keeps the first definition for base
+    # resolution; this keeps emission agreeing with it. Per app, not per run — two apps declaring the
+    # same class name is a collision, handled by pass 1, not a duplicate definition.
+    seen_names = Set{String}()
+
+    for class in graph.classes
+      class_name = class.name
+      ci = graph.info[class_name]
+
+      # A class name declared twice at module level used to emit TWO `X = Models.Model(...)`
+      # assignments into one module: the file loads, the second silently wins, and the first model is
+      # gone. `graph.info` is memoized by NAME from the first definition, so the duplicate is never
+      # classified on its own — which is why the test below is on the DUPLICATE'S OWN shape.
+      #
+      # Reporting is conditional on purpose. Two `class Foo(models.QuerySet)` blocks lose nothing that
+      # reaches the schema, and a comment about a QuerySet in a module that never mentions it is
+      # noise. But helper-first / model-second — a `QuerySet` and then the real model under one name —
+      # loses a table, and the memoized kind says `:not_a_model`, so only the duplicate's own field
+      # declarations reveal it.
+      if class_name in seen_names
+        if _is_emitted(ci) || _declares_fields(class)
+          @warn "import: class name is declared more than once at module level; only the first declaration is used" class=class_name
+          push!(Instructions, "# PormG: '$(class_name)' is declared more than once in this " *
+                              "models.py — only the FIRST declaration is used here. Python binds the " *
+                              "last one, so this may not be the class you expect.")
+        end
+        continue
+      end
+      push!(seen_names, class_name)
+
+      # ── Classes that produce no table ──────────────────────────────────────────────────────────
+      # A skipped model has no declaration for a marker to sit above, so the marker becomes a
+      # standalone comment in the generated module. That is the #70 convention applied one level up:
+      # the artifact itself shows what is missing, instead of the gap living only in a console warning
+      # the reader of the file will never see.
+      if ci.kind === :not_a_model || ci.kind === :abstract
+        continue                       # a QuerySet/Manager/Form/enum/helper, or a base — silent
+      end
+
+      if ci.proxy
+        @warn "import: proxy model shares its parent's table; not imported" class=class_name
+        push!(Instructions, "# PormG: model '$(class_name)' is a Django proxy (Meta.proxy = True) — " *
+                            "not imported, because it has no table of its own.")
+        continue
+      elseif ci.kind === :mti
+        @warn "import: Django multi-table inheritance has no PormG equivalent; model not imported" class=class_name parent=ci.mti_parent
+        push!(Instructions, "# PormG: model '$(class_name)' inherits the concrete model " *
+                            "'$(ci.mti_parent)' (Django multi-table inheritance) — not imported. " *
+                            "Django keys the child table on a '$(lowercase(String(ci.mti_parent)))_ptr_id' " *
+                            "one-to-one to the parent, which PormG cannot express.")
+        continue
+      end
+
+      # Pass 1 walked the same classes through the same predicate, so this lookup cannot miss. If it
+      # ever does, the generated file would carry FKs naming a binding it does not define — fail here,
+      # where the cause is one function away, rather than at the user's `set_models`.
+      entry = get(index.by_ref, (_django_app_key(app.label), lowercase(class_name)), nothing)
+      entry === nothing && throw(InvalidMigrationError(
+        "import: internal — class '$(class_name)' is being emitted but was not indexed. This is a " *
+        "PormG bug; please report it with the models.py that triggered it."))
+
+      # `# PormG:` lines to emit directly above this model's declaration.
+      markers = String[]
+
+      # An abstract base declared elsewhere (`from core.models import TimeStampedModel`) cannot be
+      # merged, so the model is imported WITHOUT its columns. Skipping instead would re-create the
+      # vanishing-model bug this issue exists to close; importing with a loud marker keeps the table
+      # and names exactly what is absent. Importing the defining app alongside this one resolves it —
+      # which is what the multi-app arity is for.
+      # Walked over the ABSTRACT ANCESTORS too, not just this class's own base list: an abstract base
+      # with an unresolvable base of its own loses columns identically, and it emits nothing to hang a
+      # marker on, so its gap would otherwise reach the file unannounced.
+      unresolved_bases = _inherited_unresolved(graph, class)
+      if !isempty(unresolved_bases)
+        for b in unresolved_bases
+          @warn "import: base class is not defined in this file; any fields it declares are missing from the imported model" class=class_name base=b
+        end
+        push!(markers, "# PormG: model '$(class_name)' inherits " *
+                       join(("'$(b)'" for b in unresolved_bases), ", ") *
+                       ", not defined in " *
+                       (app.label === nothing ? "this file" : "any app of this import") *
+                       " — any fields declared there are MISSING below. Add them by hand, or " *
+                       (app.label === nothing ?
+                         "pass every app of the project as \"<app_label>\" => \"<models.py>\" pairs " *
+                         "so a base in another app is merged." :
+                         "add the app that defines them to the pair list."))
+      end
+
+      # Django would hand this model its abstract base's `db_table`, giving every child of that base
+      # the same physical table. Refused deliberately (see `_effective_meta`) — and reported, because
+      # a silently different table name is the defect this issue is about.
+      db_table_base = _abstract_db_table_base(graph, class)
+      if db_table_base !== nothing
+        @warn "import: db_table on an abstract base is not inherited; the child keeps its own derived table name" class=class_name base=db_table_base
+        push!(markers, "# PormG: abstract base '$(db_table_base)' declares Meta.db_table — NOT " *
+                       "inherited by '$(class_name)', because that would point every child of " *
+                       "'$(db_table_base)' at one table. Declare db_table on this model if it really " *
+                       "shares that table.")
+      end
+
+      # Abstract bases merge by CONCATENATION, ancestors first: process_class_fields! writes into a
+      # Dict, so the last write wins and the child overrides its parents for free.
+      class_content = vcat(_inherited_statements(graph, class), class.body)
+
+      # Initialize fields_dict
+      fields_dict = Dict{Symbol, Any}()
+      has_primary_key = Ref(false)  # Flag to check if a primary key exists
+
+      # Process fields separately
+      process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), has_primary_key, autofields_ignore, parameters_ignore, markers, graph.enums, _enum_scopes(graph, class))
+
+      # Insert IDField if no primary key is defined
+      if !has_primary_key[]
+          fields_dict[:id] = Models.IDField()
+      end
+
+      # Rewrite every relation target to the BINDING of the model it names, before the model is
+      # built — degrading a field is a plain replace/`delete!` on this Dict, and `field_names` is
+      # then computed once from the final set.
+      _resolve_relation_targets!(fields_dict, entry, index, strict_relations, markers)
+
+      # Collect all create instructions
+      # THE symmetric half of the index guard above, and the more dangerous direction (#346). Pass 1
+      # handed this class a binding, so every ForeignKey to it was rewritten to that binding; if pass
+      # 2 then emits nothing, the generated file references a binding it does not define and
+      # `set_models` throws in the consuming app, pointing at the wrong model.
+      #
+      # A TRIPWIRE, not a live guard: the one path that reached it — `autofields_ignore` claiming a
+      # `primary_key=True` field and then dropping the column, leaving `fields_dict` empty — is fixed
+      # at its root in the field loop, so mutation testing confirms this line is now unreachable and
+      # deleting it fails nothing. It stays because the failure it catches is silent in the artifact
+      # and only surfaces in the consuming app, and because `fields_dict` gains contributors over
+      # time (inherited statements, synthetic keys, degraded relations) — any of which could empty it
+      # again. A hard error rather than a marker: there is no such thing as a table with no columns,
+      # so reaching this means the two passes disagree, and that has to be loud.
+      isempty(fields_dict) && throw(InvalidMigrationError(
+        "import: internal — '$(_django_ref_label(entry))' was indexed but has no field to emit, so " *
+        "any relation pointing at it would name a binding this file does not define. This is a " *
+        "PormG bug; please report it with the models.py that triggered it."))
+      # `entry.name`, not `class_name`: a cross-app collision or a `binding_overrides` entry may
+      # have renamed this model. `class_name` stays the source of every DJANGO-derived name below
+      # (the table, the join columns), because those follow the Python class, not our handle.
+      model = Models.Model(entry.name, fields_dict)
+      meta_options = _effective_meta(graph, class)
+
+      # `Meta.db_table` is ABSOLUTE in Django — it overrides the derived name, and it overrides a
+      # configured app label too. Applied first so `_django_physical_table` below sees it.
+      if haskey(meta_options, "db_table")
+        dt = _meta_string_literal(meta_options["db_table"])
+        if dt === nothing || isempty(dt)
+          @warn "import: Meta.db_table is not a non-empty string literal; ignored" class=class_name value=meta_options["db_table"]
+          push!(markers, "# PormG: Meta.db_table on '$(class_name)' is not a string literal — " *
+                         "ignored; the table name below is derived from the class name.")
+        else
+          Models._apply_db_table!(model, dt)
+        end
+      end
+
+      # The physical table, resolved HERE and nowhere else (#346). `Model_to_str` renders whatever
+      # `db_table` the model carries and derives nothing of its own, so this is the single place
+      # an app label becomes a table name — and the M2M pin below reads the result rather than
+      # re-deriving it.
+      physical_table = _django_physical_table(model, app.label, class_name, entry.name)
+      physical_table === nothing || Models._apply_db_table!(model, physical_table)
+
+      # Pin the join table of every AUTO-DERIVED ManyToManyField (#345). Django names it
+      # `<owning model's db_table>_<field>` (`ManyToManyField._get_m2m_db_table`, which reads
+      # `opts.db_table`); PormG's `_many_to_many_table_name` derives `<logical model>_<field>`
+      # with the app label stripped, so on a prefixed app the two have never agreed and PormG
+      # addressed a table Django did not create.
+      #
+      # Only when a table is pinned: without an app label the app is unknown, `model_table_name`
+      # falls back to the logical name, and pinning that would freeze PormG's own derivation as if
+      # it were Django's. A `db_table=` written on the field in the Django source is authoritative
+      # and left alone — same precedence as `Meta.db_table` above.
+      #
+      # `through` fields are skipped because Django ignores `db_table` entirely when a through
+      # model is given: the join table IS the through model's table. Emitting one anyway is inert
+      # today (`_relation_from_many_to_many` overwrites it) but writes a false claim into the
+      # artifact.
+      if Models.model_has_db_table(model)
+        owner_table = Models.model_table_name(model)
+        for (field_name, field) in model.fields
+          Models.is_many_to_many_field(field) || continue
+          field.db_table === nothing || continue
+          field.through === nothing || continue
+          field.db_table = string(owner_table, "_", field_name)
+        end
+      end
+
+      # The built model is stashed on its index entry so the join-COLUMN pass below can consult
+      # both ends of every ManyToManyField. A column depends on the TARGET's primary key, and the
+      # target may not be built yet when its owner is — which is the whole reason that pass is
+      # deferred until every model exists.
+      entry.model = model
+
+      # Composite uniqueness from BOTH Django spellings (#19, #341). Each constraint is validated
+      # on its own so one bad entry cannot take the others with it — which is what the coarse
+      # try/catch around the whole apply used to do.
+      constraints = Models.UniqueConstraint[]
+      if haskey(meta_options, "unique_together")
+        try
+          append!(constraints, parse_meta_unique_together(meta_options["unique_together"], fields_dict, class_name, markers))
+        catch e
+          @warn "import: could not parse unique_together; skipping" class=class_name exception=e
+          push!(markers, "# PormG: Meta.unique_together on '$(class_name)' could not be read — dropped.")
+        end
+      end
+      if haskey(meta_options, "constraints")
+        append!(constraints, _parse_meta_constraints(meta_options["constraints"], fields_dict, class_name, markers))
+      end
+      for c in constraints
+        try
+          Models._apply_unique_constraints!(model, vcat(_existing_unique_constraints(model), [c]))
+        catch e
+          @warn "import: could not apply a unique constraint; skipping it" class=class_name fields=c.fields exception=e
+          push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_name)' " *
+                         "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
+        end
+      end
+
+      # Every remaining Meta option is REPORTED. An unrecognised key is a typo or a Django option
+      # this importer has not met, and neither is safe to pass over quietly. Sorted so the
+      # generated file is byte-stable across runs.
+      for k in sort(collect(keys(meta_options)))
+        k in _META_OPTIONS_CONSUMED && continue
+        reason = get(_META_OPTION_REASONS, k, nothing)
+        if reason === nothing
+          @warn "import: unrecognised Meta option; dropped" option=k class=class_name
+          push!(markers, "# PormG: Meta.$(k) on '$(class_name)' is not recognised — dropped.")
+        else
+          @warn "import: Meta option has no PormG equivalent; dropped" option=k class=class_name reason=reason
+          push!(markers, "# PormG: Meta.$(k) on '$(class_name)' — dropped: $(reason).")
+        end
+      end
+
+      # Rendering is DEFERRED, but its slot in the file is claimed now, so models and the
+      # standalone `# PormG:` comments around them keep source order. `_pin_m2m_join_columns!`
+      # below still has models to mutate, and it needs every one of them to exist first.
+      push!(Instructions, "")
+      push!(pending_renders, (length(Instructions), model, copy(markers)))
+
+    end
+  end
+
+  # Every model exists now, so both ends of every ManyToManyField are readable.
+  _pin_m2m_join_columns!(index)
+
+  # Rendered in the order the slots were claimed, which is the order the models were built — so the
+  # shared `taken_bindings` / `taken_names` sets see the same sequence they would have seen inline.
+  #
+  # The FILE's order comes from the slots, not from this loop, so reversing it is an equivalent
+  # mutation today: pass 1 already made every binding unique, which makes `Model_to_str`'s own dedup
+  # a no-op and leaves nothing for sequence to change. It stops being equivalent the moment two
+  # emitted names differ only in case — distinct bindings, one positional name — where `taken_names`
+  # does fire and the winner depends on who is rendered first. Keeping build order costs nothing and
+  # keeps that outcome matching the file the reader sees.
+  for (slot, model, markers) in pending_renders
+    rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names)
+    Instructions[slot] = isempty(markers) ? rendered : join(markers, "\n") * "\n" * rendered
+  end
+
+  generate_models_from_db(file, Instructions, render_settings, path=model_path)
+end
+
+# Resolve the config, then the render-only Settings that `output_path`/`django_prefix` override
+# without mutating it, then the output path — the preamble both arities share. Returns `nothing` when
+# the config key does not exist (both methods then return early, as before).
+function _django_render_settings(db::String, output_path::Union{Nothing, String},
+                                 django_prefix::Union{Nothing, String, Missing})
+  settings::Union{Nothing, PormGSettings} = nothing
+  try
+    settings = Configuration.get_settings(db)
+  catch e
+    @error("The database $(db) does not exists in the config")
+    return nothing
+  end
+  # `db` is the config key used to resolve Settings; by default the output directory and app label
+  # come from that config (matching import_models_from_postgres). When importing a *foreign* Django
+  # app staged elsewhere, `output_path`/`django_prefix` override those without mutating the shared
+  # config — a throwaway render-only Settings (no DB connection) carries the overrides.
+  # `django_prefix === missing` inherits the config's prefix; `nothing` emits unprefixed tables; a
+  # String forces that prefix.
+  return output_path === nothing && django_prefix === missing ? settings :
+    Configuration.Settings(
+      db_def_folder = output_path === nothing ? settings.db_def_folder : output_path,
+      django_prefix = django_prefix === missing ? settings.django_prefix : django_prefix,
+    )
+end
+
+# The existing-file / mkpath guard, shared by both arities. `true` means "go ahead".
+function _django_output_ready(model_output_path::String, model_path::String, force_replace::Bool)::Bool
+  if isfile(model_output_path) && !force_replace
+      @warn(
+          "The file '$(model_output_path)' already exists, use force_replace=true to replace it"
+      )
+      return false
+  elseif !ispath(model_path)
+      mkpath(model_path)
+  end
+  return true
+end
+
+# A `models.py` given as a PATH is read; given as source text it is used as is. The newline test is
+# what tells them apart — a path never contains one.
+function _django_source_text(model_py_string::String)::String
+  if !occursin('\n', model_py_string) && isfile(model_py_string)
+    return django_to_string(model_py_string)
+  end
+  return model_py_string
+end
+
+"""
+  import_models_from_django(model_py_string::String; db::String = DB_PATH, force_replace::Bool = false, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, django_prefix::Union{Nothing, String, Missing} = missing, auth_user_model::Union{Nothing, String} = nothing, strict_relations::Bool = false, binding_overrides::AbstractDict = Dict{String, String}(), autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
 
 Imports Django models from a given `model.py` file content string and generates corresponding Julia models.
+
+For a project whose models are split across several Django apps, pass `"<app_label>" => "<path>"`
+pairs instead — see the [`Vector{Pair}` method](@ref import_models_from_django(::AbstractVector{<:Pair})).
 
 # Arguments
 - `model_py_string::String`: The content of the `model.py` file as a string; user django_to_string(path) to read the file; or insert the file path.
 - `db::String`: The configuration key used to resolve settings (usually the db folder path). The generated file is written to that configuration's `db_def_folder` unless `output_path` overrides it, and the table-name prefix comes from that configuration's `django_prefix` unless `django_prefix` overrides it. Defaults to `DB_PATH`.
 - `force_replace::Bool`: If `true`, forces replacement of the existing models file. Defaults to `false`.
-- `ignore_table::Vector{String}`: Tables to ignore during the import process. Defaults to `postgres_ignore_table`.
 - `file::String`: The name of the file to save the generated models. Defaults to `"automatic_models.jl"`.
 - `output_path::Union{Nothing, String}`: Directory to write the generated file into, overriding the resolved config's `db_def_folder`. Use this to stage a *foreign* Django app's models next to their copied `model.py` (e.g. `"db_gal"`) while still resolving `db` for its Settings. Defaults to `nothing` (use `db_def_folder`).
 - `django_prefix::Union{Nothing, String, Missing}`: The Django **app label** whose tables are being imported — in practice, the prefix Django puts on them. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"estoque"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
@@ -574,11 +1732,18 @@ Imports Django models from a given `model.py` file content string and generates 
   `<Meta.db_table>_<field>` when the class declares one. PormG's own derivation
   (`<logical model>_<field>`) reproduces neither. A field carrying its own `db_table`, or a
   `through=`, is left alone.
+- `auth_user_model::Union{Nothing, String}`: which model `settings.AUTH_USER_MODEL` refers to, spelled as Django spells it (`"access.User"`, or a bare `"User"` when unambiguous). Defaults to `nothing`, which auto-detects the single class inheriting `AbstractUser`. If a relation names `settings.AUTH_USER_MODEL` and there is not exactly one candidate, the import raises `InvalidMigrationError` naming them — deliberately hard, since one omitted keyword would otherwise turn every user relation in the project into a plain integer column.
+- `strict_relations::Bool`: when `false` (the default), a relation whose target is not in this import keeps its column and loses only the relation metadata, with a `# PormG:` marker saying so. `true` raises `InvalidMigrationError` instead. The lenient default is what makes the importer usable on a project that touches `django.contrib`.
+- `binding_overrides::AbstractDict`: `"<app_label>.<ClassName>" => "<JuliaBinding>"` (or a bare class name when unambiguous), to spell a generated binding differently from the derived one. The value must be a legal, capitalized Julia identifier that no other model claims; every violation is an error rather than a silent fallback.
 - `autofields_ignore::Vector{String}`: Fields to ignore automatically. Defaults to `["Manager"]`.
 - `parameters_ignore::Vector{String}`: Parameters to ignore during field processing. Defaults to `["help_text"]`.
 
 # Description
 This function checks if the specified models file already exists and creates it if necessary. It parses the provided `model.py` content string to extract Django model classes and their fields. For each class, it processes the fields, adds a primary key if none exists, and generates the corresponding Julia model code. The generated models are then saved to the specified file.
+
+Relation targets are resolved to the Julia binding of the model they name (#346): `"self"`,
+`"<app_label>.<ClassName>"` naming this file's own app, and `settings.AUTH_USER_MODEL` all work — all
+three used to reach the generated file verbatim and throw at `set_models`.
 
 `output_path` and `django_prefix` never mutate the shared `db` config: when either is set, a
 throwaway render-only `Settings` (no database connection) drives the output directory and prefix.
@@ -594,59 +1759,26 @@ function import_models_from_django(
     model_py_string::String;
     db::String = DB_PATH,
     force_replace::Bool = false,
-    ignore_table::Vector{String} = postgres_ignore_table,
     file::String = "automatic_models.jl",
     output_path::Union{Nothing, String} = nothing,
     django_prefix::Union{Nothing, String, Missing} = missing,
+    auth_user_model::Union{Nothing, String} = nothing,
+    strict_relations::Bool = false,
+    binding_overrides::AbstractDict = Dict{String, String}(),
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
   )
 
-  settings::Union{Nothing, PormGSettings} = nothing
-  try
-    settings = Configuration.get_settings(db)
-  catch e
-    @error("The database $(db) does not exists in the config")
-    return
-  end
-
-  # `db` is the config key used to resolve Settings; by default the output directory
-  # and table-name prefix come from that config (matching import_models_from_postgres).
-  # When importing a *foreign* Django app staged elsewhere, `output_path`/`django_prefix`
-  # override those without mutating the shared config — a throwaway render-only Settings
-  # (no DB connection) carries the overrides. `django_prefix === missing` inherits the
-  # config's prefix; `nothing` emits unprefixed tables; a String forces that prefix.
-  render_settings = if output_path === nothing && django_prefix === missing
-    settings
-  else
-    Configuration.Settings(
-      db_def_folder = output_path === nothing ? settings.db_def_folder : output_path,
-      django_prefix = django_prefix === missing ? settings.django_prefix : django_prefix,
-    )
-  end
+  render_settings = _django_render_settings(db, output_path, django_prefix)
+  render_settings === nothing && return
   model_path = render_settings.db_def_folder
-  model_output_path = joinpath(model_path, file)
-
-  # Check if the generated models file already exists.
-  if isfile(model_output_path) && !force_replace
-      @warn(
-          "The file '$(model_output_path)' already exists, use force_replace=true to replace it"
-      )
-      return
-  elseif !ispath(model_path)
-      mkpath(model_path)
-  end
-
-  # check if model_py_string is a path to file and if yes, call django_to_string
-  if !occursin('\n', model_py_string) && isfile(model_py_string)
-    model_py_string = django_to_string(model_py_string)
-  end
+  _django_output_ready(joinpath(model_path, file), model_path, force_replace) || return
 
   # Recover and classify every module-level class (#340 parses them, #341 resolves their bases).
   # The parser itself is the validity test: the regex that used to guard this required the class
   # header to sit on ONE physical line, so once the parser learned to read a wrapped header it was
   # rejecting files it could handle.
-  graph = _django_class_graph(model_py_string)
+  graph = _django_class_graph(_django_source_text(model_py_string))
 
   # check if model_py_string is a model.py file content and not a path
   if !any(c -> _is_emitted(graph.info[c.name]), graph.classes)
@@ -654,221 +1786,171 @@ function import_models_from_django(
     return
   end
 
-  Instructions = Vector{Any}()
-  # A class name defined twice at module level is pathological Python, but it used to emit TWO
-  # `X = Models.Model(...)` assignments into one module: the file loads, the second silently wins,
-  # and the first model is gone. `graph.index` already keeps the first definition for base
-  # resolution; this keeps emission agreeing with it.
-  seen_names = Set{String}()
-  # #338: the GENERAL case of the same defect `seen_names` above guards one instance of — two
-  # DIFFERENT class names can still sanitize/uppercasefirst to the same Julia binding. One registry
-  # per generated file, shared across every class rendered into it.
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
+  # One app, whose label is the configured/overridden `django_prefix`. `_django_app_label` rather
+  # than the raw field: an EMPTY prefix is the absence of one, spelled badly (#345), and treating it
+  # as a label derives `_dim_uf` for a table called `dim_uf`.
+  apps = [_DjangoApp(Models._django_app_label(render_settings), graph)]
 
-  for class in graph.classes
-    class_name = class.name
-    ci = graph.info[class_name]
+  _import_django_apps(apps, render_settings;
+                      file = file, model_path = model_path,
+                      auth_user_model = auth_user_model,
+                      strict_relations = strict_relations,
+                      binding_overrides = Dict{String, String}(String(k) => String(v) for (k, v) in binding_overrides),
+                      autofields_ignore = autofields_ignore,
+                      parameters_ignore = parameters_ignore)
+end
 
-    # A class name declared twice at module level used to emit TWO `X = Models.Model(...)`
-    # assignments into one module: the file loads, the second silently wins, and the first model is
-    # gone. `graph.info` is memoized by NAME from the first definition, so the duplicate is never
-    # classified on its own — which is why the test below is on the DUPLICATE'S OWN shape.
-    #
-    # Reporting is conditional on purpose. Two `class Foo(models.QuerySet)` blocks lose nothing that
-    # reaches the schema, and a comment about a QuerySet in a module that never mentions it is
-    # noise. But helper-first / model-second — a `QuerySet` and then the real model under one name —
-    # loses a table, and the memoized kind says `:not_a_model`, so only the duplicate's own field
-    # declarations reveal it.
-    if class_name in seen_names
-      if _is_emitted(ci) || _declares_fields(class)
-        @warn "import: class name is declared more than once at module level; only the first declaration is used" class=class_name
-        push!(Instructions, "# PormG: '$(class_name)' is declared more than once in this " *
-                            "models.py — only the FIRST declaration is used here. Python binds the " *
-                            "last one, so this may not be the class you expect.")
-      end
-      continue
+"""
+  import_models_from_django(apps::AbstractVector{<:Pair}; db::String = DB_PATH, force_replace::Bool = false, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, auth_user_model::Union{Nothing, String} = nothing, strict_relations::Bool = false, binding_overrides::AbstractDict = Dict{String, String}(), autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
+
+Import a **multi-app** Django project — `"<app_label>" => "<models.py path or source>"` pairs — into
+one generated module.
+
+```julia
+import_models_from_django(
+  ["core"    => "server/core/models.py",
+   "access"  => "server/access/models.py",
+   "imports" => "server/imports/models.py"];
+  db = "sgrh", file = "models.jl", force_replace = true)
+```
+
+# Why one module and not one per app
+
+A Django project with N apps is ONE database, and PormG is structurally one models file per
+connection: `makemigrations`/`migrate` resolve a single `joinpath(db, settings.model_file)` and load
+it into a single module. One module per app would not merely be unsupported — it would be invisible
+to the migration engine. Emitting every app into one module also makes every cross-app foreign key a
+same-module binding, which is the only thing `_resolve_target_model` can resolve.
+
+Each model's physical table is `<app_label>_<lowercased class name>` (Django's own derivation), pinned
+as `db_table`, so one file carries every app's tables. A `Meta.db_table` still overrides it.
+
+# Class-name collisions
+
+When two apps declare the same class name, **both** are renamed to `<app>_<class>` — binding
+`Core_pessoa` and `Access_pessoa`, never `Pessoa` and `Pessoa2`. Renaming only the second would make
+the output depend on the order the apps were listed, and `set_models` keys reverse accessors on the
+logical name, so one model would answer to `pessoa` and the other to `pessoa2`. The rename is
+lossless because `db_table` carries the real table either way. Use `binding_overrides` to choose a
+different spelling.
+
+# Arguments
+
+Every keyword of the single-app method applies, except `django_prefix`: the app label now comes from
+each pair. A `django_prefix` on the resolved config is **rejected**, not ignored — `get_model_name`
+would strip that one prefix from *every* logical name, so `core_pessoa` would become `pessoa` while
+`access_pessoa` survived intact, and the reverse lookup would then want `Pessoa` while the binding is
+`Core_pessoa`. Cheap to detect here; near-impossible to diagnose at query time.
+
+# Relation targets
+
+`"self"`, `"<app_label>.<ClassName>"`, a bare `"<ClassName>"` (same app first, then a globally unique
+one), and `settings.AUTH_USER_MODEL` all resolve. A target outside the imported app set keeps its
+column and loses the relation, with a `# PormG:` marker — see `strict_relations`.
+
+See also [`import_models_from_django(::String)`](@ref), [`django_to_string`](@ref).
+"""
+function import_models_from_django(
+    apps::AbstractVector{<:Pair};
+    db::String = DB_PATH,
+    force_replace::Bool = false,
+    file::String = "automatic_models.jl",
+    output_path::Union{Nothing, String} = nothing,
+    auth_user_model::Union{Nothing, String} = nothing,
+    strict_relations::Bool = false,
+    binding_overrides::AbstractDict = Dict{String, String}(),
+    autofields_ignore::Vector{String} = ["Manager"],
+    parameters_ignore::Vector{String} = ["help_text"]
+  )
+
+  isempty(apps) && throw(InvalidMigrationError(
+    "import: the app list is empty. Pass at least one \"<app_label>\" => \"<models.py>\" pair."))
+
+  # `django_prefix = nothing` on the render Settings: the app label is per pair now, and a
+  # connection-level prefix is refused below rather than silently combined with it.
+  render_settings = _django_render_settings(db, output_path, nothing)
+  render_settings === nothing && return
+
+  configured = Models._django_app_label(Configuration.get_settings(db))
+  configured === nothing || throw(InvalidMigrationError(
+    "import: connection '$(db)' sets django_prefix = \"$(configured)\", which a multi-app import " *
+    "cannot honor — the app label is per model here, and one connection-level prefix would be " *
+    "stripped from EVERY logical name by get_model_name, leaving half the project's reverse " *
+    "lookups pointing at names that do not exist. Remove django_prefix from that connection's " *
+    "config; a single-app import that still needs it can pass django_prefix = \"$(configured)\" to " *
+    "that call instead."))
+
+  labels = Set{String}()
+  staged = Tuple{String, Vector{PyClass}}[]
+  for pair in apps
+    label = strip(String(first(pair)))
+    isempty(label) && throw(InvalidMigrationError(
+      "import: an app label is empty. Every pair needs the Django app_label its tables are prefixed " *
+      "with, e.g. \"core\" => \"server/core/models.py\"."))
+    # The label is composed straight into a table name, so its shape is not cosmetic: `"My.app"`
+    # yields `db_table = "My.app_pessoa"`, and `_lookup_class_ref` splits `"<app>.<Class>"` on the
+    # dot, so every qualified reference into such an app silently fails to resolve and degrades.
+    # Django's own rule is that an app_label is a Python identifier.
+    Base.isidentifier(label) || throw(InvalidMigrationError(
+      "import: app label \"$(label)\" is not a valid Django app_label. A label is a Python " *
+      "identifier — letters, digits and underscores, not starting with a digit — because Django " *
+      "composes it into every table name and PormG splits \"<app_label>.<ClassName>\" on the dot."))
+    lowercase(label) in labels && throw(InvalidMigrationError(
+      "import: app label \"$(label)\" is listed more than once. Django app labels are unique within " *
+      "a project, and two apps sharing one would collapse their tables onto the same names."))
+    push!(labels, lowercase(label))
+    source = String(last(pair))
+    # A MISTYPED PATH is the silent-loss shape this arity invents, and it has to die here.
+    # `_django_source_text` treats "no newline and not a file" as source text, so one wrong path out
+    # of three parses to zero classes, contributes zero models, and turns every relation into that
+    # app into a degraded column — three markers about missing models and not one line saying the
+    # file does not exist. Source text always contains a newline, so the test has no false positive
+    # worth the silence it would buy.
+    if !occursin('\n', source) && !isfile(source)
+      throw(InvalidMigrationError(
+        "import: app \"$(label)\" points at \"$(source)\", which is not a file. A pair's value is " *
+        "the path to that app's models.py, or its source text — and source text contains newlines, " *
+        "so this is a path that does not exist."))
     end
-    push!(seen_names, class_name)
-
-    # ── Classes that produce no table ──────────────────────────────────────────────────────────
-    # A skipped model has no declaration for a marker to sit above, so the marker becomes a
-    # standalone comment in the generated module. That is the #70 convention applied one level up:
-    # the artifact itself shows what is missing, instead of the gap living only in a console warning
-    # the reader of the file will never see.
-    if ci.kind === :not_a_model || ci.kind === :abstract
-      continue                       # a QuerySet/Manager/Form/enum/helper, or a base — silent
-    end
-
-    if ci.proxy
-      @warn "import: proxy model shares its parent's table; not imported" class=class_name
-      push!(Instructions, "# PormG: model '$(class_name)' is a Django proxy (Meta.proxy = True) — " *
-                          "not imported, because it has no table of its own.")
-      continue
-    elseif ci.kind === :mti
-      @warn "import: Django multi-table inheritance has no PormG equivalent; model not imported" class=class_name parent=ci.mti_parent
-      push!(Instructions, "# PormG: model '$(class_name)' inherits the concrete model " *
-                          "'$(ci.mti_parent)' (Django multi-table inheritance) — not imported. " *
-                          "Django keys the child table on a '$(lowercase(String(ci.mti_parent)))_ptr_id' " *
-                          "one-to-one to the parent, which PormG cannot express.")
-      continue
-    end
-
-    # `# PormG:` lines to emit directly above this model's declaration.
-    markers = String[]
-
-    # An abstract base declared elsewhere (`from core.models import TimeStampedModel`) cannot be
-    # merged, so the model is imported WITHOUT its columns. Skipping instead would re-create the
-    # vanishing-model bug this issue exists to close; importing with a loud marker keeps the table
-    # and names exactly what is absent. Importing the defining app alongside this one (#346)
-    # resolves it.
-    # Walked over the ABSTRACT ANCESTORS too, not just this class's own base list: an abstract base
-    # with an unresolvable base of its own loses columns identically, and it emits nothing to hang a
-    # marker on, so its gap would otherwise reach the file unannounced.
-    unresolved_bases = _inherited_unresolved(graph, class)
-    if !isempty(unresolved_bases)
-      for b in unresolved_bases
-        @warn "import: base class is not defined in this file; any fields it declares are missing from the imported model" class=class_name base=b
-      end
-      push!(markers, "# PormG: model '$(class_name)' inherits " *
-                     join(("'$(b)'" for b in unresolved_bases), ", ") *
-                     ", not defined in this file — any fields declared there are MISSING below. " *
-                     "Add them by hand, or import the app that defines them together with this one.")
-    end
-
-    # Django would hand this model its abstract base's `db_table`, giving every child of that base
-    # the same physical table. Refused deliberately (see `_effective_meta`) — and reported, because
-    # a silently different table name is the defect this issue is about.
-    db_table_base = _abstract_db_table_base(graph, class)
-    if db_table_base !== nothing
-      @warn "import: db_table on an abstract base is not inherited; the child keeps its own derived table name" class=class_name base=db_table_base
-      push!(markers, "# PormG: abstract base '$(db_table_base)' declares Meta.db_table — NOT " *
-                     "inherited by '$(class_name)', because that would point every child of " *
-                     "'$(db_table_base)' at one table. Declare db_table on this model if it really " *
-                     "shares that table.")
-    end
-
-    # Abstract bases merge by CONCATENATION, ancestors first: process_class_fields! writes into a
-    # Dict, so the last write wins and the child overrides its parents for free.
-    class_content = vcat(_inherited_statements(graph, class), class.body)
-
-    # Initialize fields_dict
-    fields_dict = Dict{Symbol, Any}()
-    has_primary_key = Ref(false)  # Flag to check if a primary key exists
-
-    # Process fields separately
-    process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), has_primary_key, autofields_ignore, parameters_ignore, markers, graph.enums, _enum_scopes(graph, class))
-
-    # Insert IDField if no primary key is defined
-    if !has_primary_key[]
-        # println("No primary key found in class '$class_name'. Adding an IDField named 'id'.")
-        fields_dict[:id] = Models.IDField()
-    end
-
-    # Collect all create instructions
-    if !isempty(fields_dict)
-        model = Models.Model(class_name, fields_dict)
-        meta_options = _effective_meta(graph, class)
-
-        # `Meta.db_table` is ABSOLUTE in Django — it overrides the derived name, and it overrides a
-        # configured `django_prefix` too. `Model_to_str` renders both: the positional slot stays the
-        # logical handle, `db_table=` carries the physical table (#59).
-        if haskey(meta_options, "db_table")
-          dt = _meta_string_literal(meta_options["db_table"])
-          if dt === nothing || isempty(dt)
-            @warn "import: Meta.db_table is not a non-empty string literal; ignored" class=class_name value=meta_options["db_table"]
-            push!(markers, "# PormG: Meta.db_table on '$(class_name)' is not a string literal — " *
-                           "ignored; the table name below is derived from the class name.")
-          else
-            Models._apply_db_table!(model, dt)
-          end
-        end
-
-        # Pin the join table of every AUTO-DERIVED ManyToManyField (#345). Django names it
-        # `<owning model's db_table>_<field>` (`ManyToManyField._get_m2m_db_table`, which reads
-        # `opts.db_table`); PormG's `_many_to_many_table_name` derives `<logical model>_<field>` with
-        # the app label stripped, so on a prefixed app the two have never agreed and PormG addressed
-        # a table Django did not create.
-        #
-        # `model_table_name(model)` is what makes this Django's rule rather than an approximation of
-        # it: `_apply_db_table!` ran just above, so a `Meta.db_table` is already in place and the join
-        # table must be derived from THAT, not from the app prefix. `Meta.db_table =
-        # "rh_matricula_legado"` under prefix `dash` gives Django `rh_matricula_legado_setores` —
-        # composing the prefix with the class name instead would name a table that does not exist.
-        #
-        # Only when a prefix is configured: without one the app label is unknown, `model_table_name`
-        # falls back to the class name, and pinning that would freeze PormG's own derivation as if it
-        # were Django's. A `db_table=` written on the field in the Django source is authoritative and
-        # left alone — same precedence as `Meta.db_table` above.
-        #
-        # `through` fields are skipped because Django ignores `db_table` entirely when a through model
-        # is given: the join table IS the through model's table. Emitting one anyway is inert today
-        # (`_relation_from_many_to_many` overwrites it) but writes a false claim into the artifact.
-        m2m_app_label = Models._django_app_label(render_settings)
-        if m2m_app_label !== nothing
-          # Mirrors `Model_to_str`'s own `db_table_abs` precedence, and must keep mirroring it: the
-          # prefix is applied at RENDER time, so the model object here still carries the bare class
-          # name and `model_table_name` alone would yield `Matricula_setores`. `_django_app_label`
-          # rather than a bare `!== nothing` for the same reason `Model_to_str` uses it — an empty
-          # prefix is the absence of one, and the two must agree or they derive different tables.
-          owner_table = Models.model_has_db_table(model) ?
-            Models.model_table_name(model) :
-            string(m2m_app_label, "_", lowercase(class_name))
-          for (field_name, field) in model.fields
-            Models.is_many_to_many_field(field) || continue
-            field.db_table === nothing || continue
-            field.through === nothing || continue
-            field.db_table = string(owner_table, "_", field_name)
-          end
-        end
-
-        # Composite uniqueness from BOTH Django spellings (#19, #341). Each constraint is validated
-        # on its own so one bad entry cannot take the others with it — which is what the coarse
-        # try/catch around the whole apply used to do.
-        constraints = Models.UniqueConstraint[]
-        if haskey(meta_options, "unique_together")
-          try
-            append!(constraints, parse_meta_unique_together(meta_options["unique_together"], fields_dict, class_name, markers))
-          catch e
-            @warn "import: could not parse unique_together; skipping" class=class_name exception=e
-            push!(markers, "# PormG: Meta.unique_together on '$(class_name)' could not be read — dropped.")
-          end
-        end
-        if haskey(meta_options, "constraints")
-          append!(constraints, _parse_meta_constraints(meta_options["constraints"], fields_dict, class_name, markers))
-        end
-        for c in constraints
-          try
-            Models._apply_unique_constraints!(model, vcat(_existing_unique_constraints(model), [c]))
-          catch e
-            @warn "import: could not apply a unique constraint; skipping it" class=class_name fields=c.fields exception=e
-            push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_name)' " *
-                           "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
-          end
-        end
-
-        # Every remaining Meta option is REPORTED. An unrecognised key is a typo or a Django option
-        # this importer has not met, and neither is safe to pass over quietly. Sorted so the
-        # generated file is byte-stable across runs.
-        for k in sort(collect(keys(meta_options)))
-          k in _META_OPTIONS_CONSUMED && continue
-          reason = get(_META_OPTION_REASONS, k, nothing)
-          if reason === nothing
-            @warn "import: unrecognised Meta option; dropped" option=k class=class_name
-            push!(markers, "# PormG: Meta.$(k) on '$(class_name)' is not recognised — dropped.")
-          else
-            @warn "import: Meta option has no PormG equivalent; dropped" option=k class=class_name reason=reason
-            push!(markers, "# PormG: Meta.$(k) on '$(class_name)' — dropped: $(reason).")
-          end
-        end
-
-        rendered = Models.Model_to_str(model, render_settings; taken_bindings=taken_bindings, taken_names=taken_names)
-        push!(Instructions, isempty(markers) ? rendered : join(markers, "\n") * "\n" * rendered)
-    end
-
+    push!(staged, (label, _py_classes(_py_logical_lines(_django_source_text(source)))))
   end
 
-  generate_models_from_db(file, Instructions, render_settings, path=model_path)
+  # Classification is deferred until every app is parsed, so each app's bases and enum references
+  # resolve against the WHOLE project — its own classes first, then the rest in the order given.
+  # A shared abstract base in a `core` app is the shape that needs it; see
+  # `_django_graph_from_classes`.
+  parsed = _DjangoApp[_DjangoApp(label,
+                        _django_graph_from_classes(classes,
+                          # Own app first, then every other app in the order they were listed. Kept
+                          # as GROUPS so both the class index and the enum scopes resolve first-wins
+                          # with the same precedence.
+                          vcat([classes], [g for (l, g) in staged if l != label])))
+                      for (label, classes) in staged]
+
+  # An app that contributes no table is legal (a Django app can declare no models) but it is never
+  # what you meant when the other apps reference it, so it is reported per app rather than only in
+  # the all-empty case below.
+  empty_apps = [app.label for app in parsed
+                if !any(c -> _is_emitted(app.graph.info[c.name]), app.graph.classes)]
+  for label in empty_apps
+    @warn "import: this app declares no importable model" app=label
+  end
+
+  if length(empty_apps) == length(parsed)
+    @warn("None of the given files contains valid model.py content")
+    return
+  end
+
+  model_path = render_settings.db_def_folder
+  _django_output_ready(joinpath(model_path, file), model_path, force_replace) || return
+
+  _import_django_apps(parsed, render_settings;
+                      file = file, model_path = model_path,
+                      auth_user_model = auth_user_model,
+                      strict_relations = strict_relations,
+                      binding_overrides = Dict{String, String}(String(k) => String(v) for (k, v) in binding_overrides),
+                      autofields_ignore = autofields_ignore,
+                      parameters_ignore = parameters_ignore)
 end
 
 # The UniqueConstraints already stashed on a model by `_apply_unique_constraints!`. Applying
@@ -1134,9 +2216,48 @@ without side effects. The importer reads `info` and does the reporting.
 """
 function _django_class_graph(model_py_string::AbstractString)
   classes = _py_classes(_py_logical_lines(model_py_string))
+  return _django_graph_from_classes(classes, [classes])
+end
+
+"""
+    _django_graph_from_classes(classes, scope_classes) -> NamedTuple
+
+Classify `classes`, resolving their bases and enum references against `scope_classes`.
+
+The two arguments differ only for a multi-app project (#346), where `scope_classes` is EVERY app's
+classes (this app's first) while `classes` stays this app's own. That is what lets
+
+```python
+# core/models.py                       # imports/models.py
+class TimeStampedModel(models.Model):  class ImportBatch(TimeStampedModel):
+    class Meta: abstract = True            note = models.CharField(max_length=40)
+```
+
+merge — a shared abstract base in a `core` app is one of the commonest shapes in a real Django
+project, and importing the apps separately is exactly what `_inherited_unresolved`'s marker has been
+telling people to stop doing since #341 ("import the app that defines them together with this one").
+Before this, importing them together changed nothing: the graph was built per file, so the base was
+still "not defined in this file" and the child silently lost its columns.
+
+This app's own definitions come first, so a class name that two apps both declare resolves to the
+LOCAL one — Django's rule for an unqualified reference, and the same precedence
+`_lookup_class_ref` applies to relation targets.
+
+Cross-app inheritance keeps Django's semantics rather than gaining new ones: an abstract base merges
+its fields, and a CONCRETE base in another app is still multi-table inheritance and still refused.
+
+The lookup is by NAME, and this file reads `models.py` rather than its `import` statements — so a base
+one app inherits from a library resolves against an unrelated app's class of the same name, and is
+then refused as MTI. Reported with a marker, never silent, and tracked as #370, which is where the
+decision belongs: parse the imports, restrict the cross-app scope to abstract bases, or accept it.
+`info` stays per app because it is keyed by class name, and two apps may legitimately declare the
+same one.
+"""
+function _django_graph_from_classes(classes::Vector{PyClass}, scope_groups::Vector{Vector{PyClass}})
   index = Dict{String, PyClass}()
-  for c in classes
-    # First definition wins; a name redefined at module level is pathological Python.
+  for group in scope_groups, c in group
+    # First definition wins; within one file a name redefined at module level is pathological
+    # Python, and across files this is what makes the local app outrank the rest of the project.
     haskey(index, c.name) || (index[c.name] = c)
   end
   info = Dict{String, _ClassInfo}()
@@ -1144,7 +2265,34 @@ function _django_class_graph(model_py_string::AbstractString)
   for c in classes
     _classify_class!(info, index, visiting, c)
   end
-  return (classes = classes, index = index, info = info, enums = _collect_enums(classes))
+  # Enums follow the same scope as bases — and the same PRECEDENCE, which is why the groups arrive
+  # separately instead of pre-flattened. `_collect_enums` is last-wins within a file (`out[c.name] =`
+  # overwrites), so merging a flat "own classes, then every app" vector let the LAST-listed app's
+  # `Status` overwrite everyone's, including the app that declares its own — silently handing a model
+  # another app's enumeration, and then reporting its own member as "not a member of Status".
+  # Collected per group and merged first-wins, so precedence matches `index` exactly.
+  enums = Dict{String, Dict{String, _PyEnum}}()
+  for group in scope_groups
+    _merge_enum_scopes!(enums, _collect_enums(group))
+  end
+  return (classes = classes, index = index, info = info, enums = enums)
+end
+
+# Merge `from` into `into` keeping whatever `into` already has, at BOTH levels: the scope key (a
+# class name, or `""` for module scope) and the enum name inside it. Two apps can each declare an
+# enum of the same name in the same scope, and the earlier group — the local app — must win.
+#
+# Parameters are untyped on purpose: `_PyEnum` is declared further down this file, and a signature
+# is evaluated at DEFINITION time, so naming it here is an `UndefVarError` at load. Same forward
+# reference that keeps `_is_emitted` untyped at its call sites.
+function _merge_enum_scopes!(into, from)
+  for (scope, members) in from
+    dest = get!(into, scope, valtype(into)())
+    for (name, e) in members
+      haskey(dest, name) || (dest[name] = e)
+    end
+  end
+  return into
 end
 
 # ── Django `TextChoices` / `IntegerChoices` (#342) ───────────────────────────────────────────────
@@ -1674,6 +2822,14 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
                                               enum_scopes = enum_scopes,
                                               field_name = field_name, markers = markers)
 
+    # An IGNORED field type contributes no column, so it cannot be the primary key either. Tested
+    # BEFORE `has_primary_key` for that reason (#346): the other order let
+    # `autofields_ignore = [… "CharField"]` claim the PK from a `CharField(primary_key=True)` and
+    # then drop it, so the synthetic `id` was suppressed and the model came out with NO fields at
+    # all. `_import_django_apps` then skipped it silently — while the class index had already handed
+    # it a binding, so every ForeignKey to it named a binding the generated file never defined.
+    field_type in autofields_ignore && continue
+
     # Check for primary key
     if haskey(options, :primary_key) && options[:primary_key] == true
         has_primary_key[] = true
@@ -1682,9 +2838,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     # Instantiate the field
     try
       # println(field_type)
-      if field_type in autofields_ignore
-        continue
-      elseif field_type in ["ForeignKey", "OneToOneField"]
+      if field_type in ["ForeignKey", "OneToOneField"]
         # Add "_id" suffix for foreign keys
         field_key = Symbol("$(field_name)_id")
         # println(related_model, " ", related_model |> typeof)
@@ -2176,6 +3330,23 @@ Split a call's argument text on its top-level commas, preserving quotes for `par
 Rebased on the shared scanner (#340). The hand-rolled version it replaces tracked `(`/`)` only —
 not `[` or `{` — and had no backslash-escape handling, so `choices=[("A","a"), ("B","b")]` split at
 the comma *between* the two tuples and produced two unparseable fragments.
+
+A **trailing comma** yields no token (#346). Python allows one on every call, and PEP 8 encourages it
+on a wrapped argument list — which is exactly the shape this hit:
+
+```python
+actor = models.ForeignKey(
+    CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name='auditoria_acoes', db_constraint=False,
+)
+```
+
+The whitespace between that last comma and the `)` left the buffer non-empty, so an all-blank token
+was pushed. `parse_field_args` reads a token with no `=` as the POSITIONAL argument, so that blank
+overwrote the relation target and emitted `Models.ForeignKey("", …)` — a declaration that throws at
+`set_models`. Found in a real 434-model project, on two fields, silently. An empty argument does not
+exist in Python, so dropping blank tokens is a correction with no legitimate case behind it; every
+caller (`_class_bases`, the constraint parsers) was mis-reading them the same way.
 """
 function split_field_options(field_options::AbstractString)
   tokens = String[]
@@ -2188,7 +3359,14 @@ function split_field_options(field_options::AbstractString)
     c = field_options[i]
     j = _py_step!(st, field_options, i)
     if c == ',' && st.depth == 0 && !_in_string(st)
-      push!(tokens, String(strip(String(take!(buffer)))))
+      tok = String(strip(String(take!(buffer))))
+      # This half is about the function's CONTRACT, not about a case anyone has hit: `f(a,,b)` is a
+      # Python syntax error, so a blank token between two commas has no reachable source. Mutation-
+      # tested and confirmed equivalent — deleting it fails nothing. It stays because "never emits a
+      # blank token" is a rule every caller can rely on without asking where the blank came from,
+      # whereas "drops a blank tail but keeps a blank middle" is a thing they would have to remember.
+      # The TAIL guard below is the one with a real, tested case behind it.
+      isempty(tok) || push!(tokens, tok)
     else
       # Copy the consumed span verbatim: a token may be several characters wide (`\"\"\"`), and the
       # quote characters themselves must survive for `parse_value` to strip them.
@@ -2198,7 +3376,11 @@ function split_field_options(field_options::AbstractString)
   end
 
   if position(buffer) > 0
-      push!(tokens, String(take!(buffer)) |> strip)
+      # `position(buffer) > 0` is not the same question as "is there a token": the tail after a
+      # trailing comma is the newline and indentation before the closing paren, which is bytes in
+      # the buffer and nothing at all as an argument.
+      tail = String(take!(buffer)) |> strip
+      isempty(tail) || push!(tokens, String(tail))
   end
 
   return tokens

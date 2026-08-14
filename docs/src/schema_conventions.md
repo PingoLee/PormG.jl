@@ -203,6 +203,15 @@ The physical-table rule is unchanged: the table is `db_table` when set, else `na
     Files generated before this keep working untouched: `Models.Model("dash_dim_uf", …)` still means
     the table `dash_dim_uf`. The new spelling only appears when you regenerate.
 
+!!! note "A project with more than one app does not use `django_prefix` at all"
+    `django_prefix` is the **single-app** spelling of an app label. Pass
+    `"<app_label>" => "<models.py>"` pairs to `import_models_from_django` instead and the label comes
+    from each pair, per model — see
+    [Importing a multi-app project](import_django.md#Importing-a-multi-app-project). That arity
+    *rejects* a configured `django_prefix` rather than ignoring it: accessor derivation strips one
+    connection-wide prefix from every logical name, which would leave one app's names stripped and
+    every other app's intact.
+
 !!! note "What `django_prefix` does and does not switch on"
     The list above is exhaustive for *naming*. Two carve-outs worth knowing:
 

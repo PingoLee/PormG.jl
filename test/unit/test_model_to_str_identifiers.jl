@@ -102,7 +102,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       "posição"   => CharField(),
       "say \"hi\"" => CharField(),
     ))
-    generated = Model_to_str(hostile, MTS_SETTINGS)
+    generated = Model_to_str(hostile)
     reloaded  = _reload(generated)
 
     @test _columns(reloaded) == _columns(hostile)
@@ -124,7 +124,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "an `id` column emits `id`, not `_id`" begin
     m = Model("mts_id_scratch", Dict{String, PormGField}("id" => IDField(), "surname" => CharField()))
-    generated = Model_to_str(m, MTS_SETTINGS)
+    generated = Model_to_str(m)
     @test occursin("\n  id = Models.IDField(", generated)
     @test !occursin("_id = Models.", generated)
     @test !occursin("db_column", generated)   # nothing was renamed, so nothing is pinned
@@ -143,7 +143,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       "_foo" => CharField(db_column="bar"),
       "end"  => CharField(db_column=""),      # empty == unset to field_db_column, but != the default
     ))
-    generated = Model_to_str(m, MTS_SETTINGS)
+    generated = Model_to_str(m)
     @test occursin("foo = Models.CharField(db_column=\"bar\")", generated)
     @test !occursin("db_column=\"_foo\"", generated)
     # At most one db_column per rendered field — a repeated keyword argument is a parse error.
@@ -164,7 +164,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     m = Model("mts_option_scratch", Dict{String, PormGField}(
       "id" => IDField(), "db_table" => CharField(), "constraints" => CharField(),
     ))
-    generated = Model_to_str(m, MTS_SETTINGS)
+    generated = Model_to_str(m)
     @test occursin("db_table_ = Models.CharField(db_column=\"db_table\")", generated)
     @test occursin("constraints_ = Models.CharField(db_column=\"constraints\")", generated)
     reloaded = _reload(generated)
@@ -180,7 +180,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     m = Model("mts_escape_scratch", Dict{String, PormGField}(
       "id" => IDField(), "say \"hi\"" => CharField(), "cost\$usd" => CharField(),
     ))
-    generated = Model_to_str(m, MTS_SETTINGS)
+    generated = Model_to_str(m)
     reloaded  = _reload(generated)
     @test _columns(reloaded) == Set(["id", "say \"hi\"", "cost\$usd"])
   end
@@ -199,7 +199,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       UniqueConstraint(fields = ("end", "year")),
       UniqueConstraint(fields = ("_x",), name = "uq_mts_x"),
     ])
-    generated = Model_to_str(m, MTS_SETTINGS)
+    generated = Model_to_str(m)
     @test occursin("fields = (\"end_\", \"year\",)", generated)
     @test occursin("fields = (\"x\",), name = \"uq_mts_x\"", generated)
     reloaded = _reload(generated)      # threw before the rename map existed
@@ -214,7 +214,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
   # ─────────────────────────────────────────────────────────────────────────────
   @testset for name in ["we\"ird", "2fast", "driver profile", "cost\$usd", "_", "___", "end", "db_table"]
     m = Model(name, Dict{String, PormGField}("id" => IDField()))
-    generated = Model_to_str(m, MTS_SETTINGS; name_is_physical_table = true)
+    generated = Model_to_str(m; name_is_physical_table = true)
     reloaded  = _reload(generated)
     # The physical table is preserved verbatim, pinned as db_table where the positional slot
     # could not carry it. (`_`/`___` used to emit a positional `_`, which the #306 guard rejects.)
@@ -230,7 +230,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
   @testset "the generated binding matches a child's ForeignKey target" begin
     for parent in ["driver", "_order", "end", "db_table", "constraints", "Driver_Profile"]
       m = Model(parent, Dict{String, PormGField}("id" => IDField()))
-      binding = first(split(Model_to_str(m, MTS_SETTINGS; name_is_physical_table = true), " = "))
+      binding = first(split(Model_to_str(m; name_is_physical_table = true), " = "))
       # What `inspectdb` writes into a child's `.to` for this parent table.
       @test binding == uppercasefirst(parent)
     end
@@ -244,7 +244,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     # (Julia 1.12), which would make the check pass for the wrong reason.
     for parent in ["2fast", "driver profile", "we\"ird", "_", "__", "___"]
       m = Model(parent, Dict{String, PormGField}("id" => IDField()))
-      binding = first(split(Model_to_str(m, MTS_SETTINGS; name_is_physical_table = true), " = "))
+      binding = first(split(Model_to_str(m; name_is_physical_table = true), " = "))
       @test Base.isidentifier(binding)
       @test !isempty(lstrip(binding, '_'))
     end
@@ -267,7 +267,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     child = Model("mts_fk_child_scratch", Dict{String, PormGField}(
       "id" => IDField(), "parent_id" => ForeignKey("We\"ird", pk_field = "id"),
     ))
-    generated = Model_to_str(child, MTS_SETTINGS)
+    generated = Model_to_str(child)
     reloaded  = _reload(generated)           # ParseError before the .to site was escaped
     @test reloaded.fields["parent_id"].to == "We\"ird"
   end
@@ -287,7 +287,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       UniqueConstraint(fields = ("_teams", "year")),
       UniqueConstraint(fields = ("year",), name = "uq_mts_year"),
     ])
-    generated = @test_logs (:warn,) (:warn,) match_mode=:any Model_to_str(m, MTS_SETTINGS)
+    generated = @test_logs (:warn,) (:warn,) match_mode=:any Model_to_str(m)
     @test occursin("# PormG: UniqueConstraint over (_teams, year) could not be rendered", generated)
     @test !occursin("fields = (\"_teams\"", generated)
     @test occursin("name = \"uq_mts_year\"", generated)   # the healthy one still ships
@@ -306,14 +306,14 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     m = Model("mts_m2m_scratch", Dict{String, PormGField}(
       "id" => IDField(), "_teams" => ManyToManyField("Team"),
     ))
-    generated = @test_logs (:warn,) match_mode=:any Model_to_str(m, MTS_SETTINGS)
+    generated = @test_logs (:warn,) match_mode=:any Model_to_str(m)
     @test occursin("# PormG: field '_teams' (ManyToManyField) could not be rendered", generated)
     @test !occursin("teams = Models.ManyToManyField", generated)
     # A legal M2M name still renders normally.
     ok = Model("mts_m2m_ok_scratch", Dict{String, PormGField}(
       "id" => IDField(), "teams" => ManyToManyField("Team"),
     ))
-    @test occursin("teams = Models.ManyToManyField(\"Team\")", Model_to_str(ok, MTS_SETTINGS))
+    @test occursin("teams = Models.ManyToManyField(\"Team\")", Model_to_str(ok))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -332,8 +332,8 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       taken_names = Set{String}()
       m1 = Model("driver profile", Dict{String, PormGField}("id" => IDField()))
       m2 = Model("driver_profile", Dict{String, PormGField}("id" => IDField()))
-      g1 = Model_to_str(m1, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
-      g2 = Model_to_str(m2, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      g1 = Model_to_str(m1; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      g2 = Model_to_str(m2; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
       b1 = first(split(g1, " = "))
       b2 = first(split(g2, " = "))
       @test b1 == "Driver_profile"
@@ -353,7 +353,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       taken_bindings = Set{String}(PormG.GENERATED_MODULE_RESERVED_BINDINGS)
       taken_names = Set{String}()
       m = Model("models", Dict{String, PormGField}("id" => IDField()))
-      generated = Model_to_str(m, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      generated = Model_to_str(m; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
       binding = first(split(generated, " = "))
       @test binding == "Models2"          # not "Models" — would shadow `import PormG.Models`
       @test PormG.model_table_name(_reload(generated)) == "models"
@@ -367,7 +367,7 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       positions = String[]
       for tbl in ["_", "__", "___"]
         m = Model(tbl, Dict{String, PormGField}("id" => IDField()))
-        generated = Model_to_str(m, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+        generated = Model_to_str(m; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
         @test PormG.model_table_name(_reload(generated)) == tbl   # db_table is always pinned on this branch
         push!(positions, something(match(r"Models\.Model\(\"([^\"]*)\"", generated)).captures[1])
       end
@@ -386,8 +386,8 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       taken_names = Set{String}()
       m1 = Model("Driver", Dict{String, PormGField}("id" => IDField()))
       m2 = Model("driver", Dict{String, PormGField}("id" => IDField()))
-      g1 = Model_to_str(m1, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
-      g2 = Model_to_str(m2, MTS_SETTINGS; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      g1 = Model_to_str(m1; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
+      g2 = Model_to_str(m2; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names)
       @test occursin("Driver = Models.Model(\"driver\"", g1)
       @test occursin("db_table = \"Driver\"", g1)
       @test occursin("Driver2 = Models.Model(\"driver2\"", g2)    # binding ALSO collided — suffixed too

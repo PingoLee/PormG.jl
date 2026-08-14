@@ -290,7 +290,7 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     # Django importer (name_is_physical_table = false, the default): the physical table genuinely IS
     # the lowercased class name. Pinning `db_table = "CustomUser"` here would invent a table that
     # does not exist and break every query against it.
-    generated = Models.Model_to_str(django_like, settings)
+    generated = Models.Model_to_str(django_like)
     @test occursin("Models.Model(\"customuser\"", generated)
     @test !occursin("Models.Model(\"CustomUser\"", generated)
     @test !occursin("db_table", generated)
@@ -298,12 +298,12 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     # inspectdb (name_is_physical_table = true): the name came off a live database, so the original
     # spelling MUST be pinned — otherwise the generated declaration addresses `driver_profile`, a
     # different table from the `Driver_Profile` it was read from (the #300 split, from the other end).
-    introspected_gen = Models.Model_to_str(introspected, settings; name_is_physical_table = true)
+    introspected_gen = Models.Model_to_str(introspected; name_is_physical_table = true)
     @test occursin("Models.Model(\"driver_profile\"", introspected_gen)
     @test occursin("db_table = \"Driver_Profile\"", introspected_gen)
 
     # An already-lowercase live table needs no override, and must not grow a redundant one.
     plain = Model("plain_scratch", Dict{String, PormG.PormGField}("id" => IDField()))
-    @test !occursin("db_table", Models.Model_to_str(plain, settings; name_is_physical_table = true))
+    @test !occursin("db_table", Models.Model_to_str(plain; name_is_physical_table = true))
   end
 end

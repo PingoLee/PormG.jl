@@ -193,7 +193,7 @@
     # SET_DEFAULT but has no default"), with no way out but editing the generated source by hand —
     # the remedy #291 had to document. Goes through `Model_to_str`, so it also proves the default
     # and the action survive the model → source → module round trip a user actually performs.
-    instructions = [PormG.Models.Model_to_str(fk_by_name[t], settings)
+    instructions = [PormG.Models.Model_to_str(fk_by_name[t])
                     for t in ("pormg_it_fk_parent", "pormg_it_fk_child")]
     src = join(instructions, "\n\n")
     @test occursin("SET_DEFAULT", src)          # the action reached the generated source…

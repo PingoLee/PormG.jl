@@ -60,7 +60,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
     # The warn must fire with the render-failure message — pinning the message ensures a
     # degraded contentless @warn can't satisfy the test (match_mode=:any tolerates the @info
     # that prints the final string). @test_logs returns the expression value.
-    s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m, RENDER_SETTINGS)
+    s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m)
 
     # The gap is visible in the artifact itself: marker names the field and its type.
     @test occursin("# PormG: field 'validade' (ThrowingRenderField) could not be rendered", s)
@@ -83,7 +83,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
     ))
 
     # min_level=Warn asserts NOTHING at warn-or-above is logged (the @info passes underneath).
-    s_ok = @test_logs min_level=Logging.Warn PormG.Models.Model_to_str(m_ok, RENDER_SETTINGS)
+    s_ok = @test_logs min_level=Logging.Warn PormG.Models.Model_to_str(m_ok)
 
     @test !occursin("# PormG:", s_ok)
     @test occursin("surname = Models.CharField", s_ok)
@@ -119,7 +119,7 @@ end
 
     # Both fields fail, so both must still warn + surface their own marker (match_mode=:any tolerates
     # the trailing @info that prints the final string).
-    s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m, RENDER_SETTINGS)
+    s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m)
 
     # Every failed field is still surfaced individually (the #70 per-field markers).
     @test occursin("# PormG: field 'alpha' (ThrowingRenderField) could not be rendered", s)

@@ -995,6 +995,42 @@ function _dedupe_taken(ident::String, taken::Set{String})::String
   return ident
 end
 
+"""
+    _model_binding_name(name, contants_julia) -> String
+
+The Julia BINDING `Model_to_str` will emit for a model called `name` — derivation only, with no
+dedup and no registration. Extracted (#346) because the Django importer has to know the binding of
+every class **before** it renders the first one: a cross-app `ForeignKey("core.Pessoa")` is rewritten
+to the target's binding, and the target may be rendered later in the same file. Two expressions
+computing this would be exactly the drift the `isidentifier` guard below exists to prevent, so there
+is one, and both callers use it.
+
+The binding must be a legal Julia identifier. `uppercasefirst` alone is not enough once the name can
+come from a live table: `inspectdb` on `2fast` or `driver profile` produced source that does not
+parse. Fall back to the field sanitizer only when it is not already legal.
+
+The `isidentifier` guard is load-bearing, not an optimization. A child's `ForeignKey` `.to` is
+`uppercasefirst(<live parent table>)` (`src/migrations/introspection.jl`), and `_resolve_target_model`
+resolves it by BINDING LOOKUP alone — no name or table fallback. So the binding and `.to` must stay
+the same expression. Sanitizing unconditionally silently broke that for every name `uppercasefirst`
+already made legal: `end` -> `End_` vs `.to = "End"`, `db_table` -> `Db_table_` vs `Db_table`,
+`_order` -> `Order` vs `_order`.
+
+A binding is a variable name, so neither the keyword list nor the model options apply to it —
+`uppercasefirst` alone escapes every Julia keyword, since they are all lowercase.
+
+`isidentifier` is necessary but NOT sufficient: `Base.isidentifier("_")` is `true`, yet an
+ALL-underscore identifier is write-only in Julia — `_ = Model(…)` assigns and then `getfield(mod, :_)`
+raises `UndefVarError`. A table named `_` would generate a file that loads and leaves the model
+permanently invisible to every binding-based lookup, with no error anywhere. `_order` is fine; only a
+name with nothing left after `lstrip` is not.
+"""
+function _model_binding_name(name::AbstractString, contants_julia::Vector{String}=reserved_words)::String
+  plain = uppercasefirst(String(name))
+  return (Base.isidentifier(plain) && !isempty(lstrip(plain, '_'))) ? plain :
+    uppercasefirst(_julia_field_identifier(String(name), contants_julia, Set{String}(), Set{String}()))
+end
+
 # Physical SQL column for a field given its declared identity `name` (#50). Returns
 # `db_column` when the field carries a non-empty one, else the field name. The
 # default (column == field name) keeps every existing schema unchanged; only fields
@@ -1532,13 +1568,16 @@ end
 """
 Converts a model object to a string representation to create the model.
 
+This function is a pure renderer: everything it emits is derived from `model` alone. It takes **no**
+connection `Settings` (#346). It used to, for one reason — a `django_prefix` was composed into
+`db_table` here (#345) — and that could not survive multi-app import, where the app label is per
+model and one `Settings` field cannot hold three of them. The Django importer now applies the
+physical table with `_apply_db_table!` before calling this, so there is exactly one place that
+derives `<app label>_<class>` instead of two that had to agree.
+
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
+    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
-- `settings::PormGSettings`: Connection settings; supplies `django_prefix` and the target output folder.
-  A non-empty `django_prefix` is emitted as `db_table = "<prefix>_<lowercased name>"` rather than
-  folded into the positional slot (#345) — see the `db_table` block below. `nothing` and `""` both
-  mean "no app label" (`_django_app_label`).
 - `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
   the words that cannot be a Julia keyword-argument name. A column named after one of them (or after a
   model option, or otherwise not a legal identifier) is emitted under a sanitized name with the real
@@ -1581,12 +1620,9 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSettings; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
+function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
   fields::String = ""
   render_failures::Vector{String} = String[]
-  # `_django_app_label` rather than a bare `!== nothing`: an empty prefix is the absence of one (#345).
-  app_label::Union{Nothing, String} = _django_app_label(settings)
-  django_prefix::Bool = app_label !== nothing
   # Iterate fields by name for deterministic output. Use `sort(collect(...))` rather than
   # `sort(::Dict)` (via `pairs(...) |> sort`), which is deprecated and emits a Warn-level
   # depwarn — that surfaces under CI's depwarn-enabled `Pkg.test` run and trips the #70
@@ -1683,39 +1719,23 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
         (fields *= ",\n  constraints = [$(join(rendered_constraints, ", "))]")
     end
   end
-  # The generated BINDING must be a legal Julia identifier. `uppercasefirst` alone is not enough once
-  # the name can come from a live table: `inspectdb` on `2fast` or `driver profile` produced source
-  # that does not parse. Fall back to the field sanitizer only when it is not already legal.
-  #
-  # The `isidentifier` guard is load-bearing, not an optimization. A child's `ForeignKey` `.to` is
-  # `uppercasefirst(<live parent table>)` (`src/migrations/introspection.jl`), and
-  # `_resolve_target_model` resolves it by BINDING LOOKUP alone — no name or table fallback. So the
-  # binding and `.to` must stay the same expression. Sanitizing unconditionally silently broke that
-  # for every name `uppercasefirst` already made legal: `end` -> `End_` vs `.to = "End"`,
-  # `db_table` -> `Db_table_` vs `Db_table`, `_order` -> `Order` vs `_order`.
-  #
-  # A binding is a variable name, so neither the keyword list nor the model options apply to it —
-  # `uppercasefirst` alone escapes every Julia keyword, since they are all lowercase.
-  #
-  # `isidentifier` is necessary but NOT sufficient: `Base.isidentifier("_")` is `true`, yet an
-  # ALL-underscore identifier is write-only in Julia — `_ = Model(…)` assigns and then
-  # `getfield(mod, :_)` raises `UndefVarError`. A table named `_` would generate a file that loads
-  # and leaves the model permanently invisible to every binding-based lookup, with no error anywhere.
-  # `_order` is fine; only a name with nothing left after `lstrip` is not.
-  _plain_var = uppercasefirst(String(model.name))
-  model_var_name = (Base.isidentifier(_plain_var) && !isempty(lstrip(_plain_var, '_'))) ? _plain_var :
-    uppercasefirst(_julia_field_identifier(String(model.name), contants_julia,
-                                           Set{String}(), Set{String}()))
-  # #338: two tables can independently arrive at the same binding above — via either branch, since
-  # the fast path deliberately bypasses the sanitizer's own dedup. Applied uniformly, AFTER either
-  # path, against the caller's shared `taken_bindings`: the second model in a batch gets a digit
-  # suffix instead of silently overwriting the first model's Julia global when the generated file is
-  # `include`d.
+  model_var_name = _model_binding_name(String(model.name), contants_julia)
+  # #338: two tables can independently arrive at the same binding above — via either branch of
+  # `_model_binding_name`, since its fast path deliberately bypasses the sanitizer's own dedup.
+  # Applied uniformly, AFTER either path, against the caller's shared `taken_bindings`: the second
+  # model in a batch gets a digit suffix instead of silently overwriting the first model's Julia
+  # global when the generated file is `include`d.
   model_var_name = _dedupe_taken(model_var_name, taken_bindings)
   push!(taken_bindings, model_var_name)
   # Round-trip the physical table name as `db_table=` (#59). Two sources, one kwarg:
   #
-  #  1. An explicit `db_table` on the model — emitted verbatim so a reload reproduces it.
+  #  1. An explicit `db_table` on the model — emitted verbatim so a reload reproduces it. This is
+  #     also how a **Django app label** reaches the output (#345/#346): the importer resolves
+  #     `Meta.db_table` or `<app label>_<lowercased class>` and calls `_apply_db_table!` before
+  #     rendering. It used to be derived HERE from `settings.django_prefix`, which could not survive
+  #     multi-app import — one `Settings` field cannot hold `core`, `access` and `imports` at once —
+  #     and meanwhile the importer had to mirror this function's precedence to pin M2M join tables.
+  #     One derivation, in the only place that knows the label per model.
   #  2. An INTROSPECTED name (`name_is_physical_table`) that the positional slot would not reproduce:
   #     not already lowercase, or leading-underscore. On that path `model.name` IS the live table
   #     name, so before `db_table` existed `inspectdb` on `Driver_Profile` generated
@@ -1731,24 +1751,9 @@ function Model_to_str(model::Union{Model_Type, PormGModel}, settings::PormGSetti
   # `PormGModel`, and only `Model_Type` is guaranteed to carry the field.
   pin_introspected = name_is_physical_table &&
                      (model.name != lowercase(model.name) || startswith(model.name, "_"))
-  #  3. A Django app prefix (#345). `django_prefix` used to be prepended to the POSITIONAL slot, which
-  #     made the app label a property of the connection: `Settings.django_prefix` is one
-  #     `Union{Nothing, String}`, so a project splitting models across `core_`, `access_` and
-  #     `imports_` had no value that expresses all three. The prefix now lands in `db_table`, where it
-  #     is per model — which is what unblocks the multi-app importer (#346).
-  #
-  #     `!name_is_physical_table` is the whole guard, and it is not a nicety. On that path `model.name`
-  #     IS the live table name, ALREADY prefixed, so prepending again produced `dash_dash_dim_uf` —
-  #     a real defect in `inspectdb` under a prefix, latent only because no fixture sets one. The old
-  #     `!django_prefix` clause on `pin_introspected` above existed to paper over the same confusion
-  #     ("under a prefix the prefixed lowercase name IS the physical one"); with the prefix out of the
-  #     positional slot that premise is gone, and so is the clause.
-  pin_django_prefix = django_prefix && !name_is_physical_table
-  # Order is Django's: `Meta.db_table` is ABSOLUTE and overrides the app prefix, so it stays first.
+  # An explicit `db_table` is ABSOLUTE, exactly as in Django, so it stays first.
   db_table_abs = if model_has_db_table(model)
     model_table_name(model)
-  elseif pin_django_prefix
-    string(app_label, "_", lowercase(model.name))
   elseif pin_introspected
     String(model.name)
   else

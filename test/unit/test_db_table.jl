@@ -339,7 +339,7 @@ DbtPlain.connect_key = "db_table_mock"
   @testset "Model_to_str round-trips db_table" begin
     settings = PormG.Configuration.Settings(connections = MockPostgresDbTable(), change_data = true)
 
-    generated = Model_to_str(DbtDriver, settings)
+    generated = Model_to_str(DbtDriver)
     @test occursin("db_table = \"Dbt_Driver_Scratch\"", generated)
     @test occursin("Models.Model(\"dbt_driver_scratch\"", generated)   # logical name stays positional
 
@@ -355,71 +355,84 @@ DbtPlain.connect_key = "db_table_mock"
 
     # No db_table declared → no db_table emitted. A redundant override would be noise in every
     # generated file and would freeze a name the user never pinned.
-    @test !occursin("db_table", Model_to_str(DbtPlain, settings))
+    @test !occursin("db_table", Model_to_str(DbtPlain))
 
     # An introspected LEADING-UNDERSCORE table (#306 rejects that spelling positionally): the name is
     # stripped for the positional slot and pinned as db_table, so the file both LOADS and addresses
     # the right table. Before, it generated `Model("_order", …)` — which threw on reload.
     underscore_tbl = Model("_dbt_order_scratch", Dict{String, PormG.PormGField}("id" => IDField()))
-    ugen = Model_to_str(underscore_tbl, settings; name_is_physical_table = true)
+    ugen = Model_to_str(underscore_tbl; name_is_physical_table = true)
     @test occursin("db_table = \"_dbt_order_scratch\"", ugen)
     ureloaded = Base.eval(rmod, Meta.parse(ugen))
     @test model_table_name(ureloaded) == "_dbt_order_scratch"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # #345: `Model_to_str` under a `django_prefix`, at the level below the importer.
+  # #346: `Model_to_str` renders from the MODEL alone — it takes no connection `Settings`.
   #
-  # Two callers, two meanings of `model.name`, and they must not be confused:
-  #   * the Django importer (`name_is_physical_table = false`) — `model.name` is a Python CLASS name,
-  #     so the physical table is `<prefix>_<lowercased name>` and that belongs in `db_table`;
-  #   * `inspectdb` (`name_is_physical_table = true`) — `model.name` IS the live table, already
-  #     carrying the prefix, so prepending it again produced `dash_dash_…`. Live defect before #345,
-  #     unnoticed only because no fixture in the repo configures a prefix.
+  # #345 had it compose `<django_prefix>_<lowercased name>` into `db_table` itself. That could not
+  # survive multi-app import, where the app label is per model and one `Settings` field cannot hold
+  # `core`, `access` and `imports` at once — and while it lasted, the importer had to MIRROR this
+  # function's `db_table` precedence to pin M2M join tables correctly (a mirror that shipped with a
+  # bug, caught in #345's own review). The Django importer now resolves the physical table and calls
+  # `_apply_db_table!` before rendering, so there is one derivation instead of two that had to agree.
+  #
+  # The prefix behaviour did not disappear — it moved, and is asserted where it is now produced:
+  # `test_import_django_models.jl` → "Django importer carries the app prefix in db_table (#345)" and
+  # its siblings.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "Model_to_str puts a django_prefix in db_table, never in the positional name (#345)" begin
-    prefixed = PormG.Configuration.Settings(connections = MockPostgresDbTable(), change_data = true,
-                                            django_prefix = "dash")
+  @testset "Model_to_str derives db_table from the model alone (#346)" begin
     rmod = Module(:DbtPrefixRoundTripScratch)
     Base.eval(rmod, :(using PormG))
     Base.eval(rmod, :(const Models = PormG.Models))
 
-    # --- importer path: model.name is a class name ---
+    # The STRUCTURAL guard, and the reason this testset still exists: no `Settings`-taking method.
+    # Re-adding one is how a second `<app label>_<class>` derivation gets back in, and every string
+    # assertion below would keep passing while it did — a method-table assertion is the only shape
+    # that catches it.
+    @test !hasmethod(Model_to_str, Tuple{PormG.PormGModel, PormG.PormGSettings})
+    @test hasmethod(Model_to_str, Tuple{PormG.PormGModel})
+
+    # A class-shaped name with the table pinned the way the importer pins it. The positional slot is
+    # the LOGICAL handle (`lowercase(class)` — Django's own `model.__name__.lower()`), the binding is
+    # the class name untouched, and `db_table` carries the app-prefixed physical table.
     klass = Model("Dim_uf", Dict{String, PormG.PormGField}("id" => IDField()))
-    gen = Model_to_str(klass, prefixed)
+    PormG.Models._apply_db_table!(klass, "dash_dim_uf")
+    gen = Model_to_str(klass)
     @test occursin("Models.Model(\"dim_uf\", db_table = \"dash_dim_uf\"", gen)
-    @test !occursin("Models.Model(\"dash_dim_uf\"", gen)     # prefix out of the positional slot
+    @test !occursin("Models.Model(\"dash_dim_uf\"", gen)     # prefix never in the positional slot
     @test occursin("Dim_uf = Models.Model(", gen)            # binding is the class name, untouched
     reloaded = Base.eval(rmod, Meta.parse(gen))
     @test model_table_name(reloaded) == "dash_dim_uf"
     @test reloaded.name == "dim_uf"
 
-    # --- inspectdb path: model.name IS the physical table, already prefixed ---
+    # --- inspectdb path: model.name IS the physical table, already carrying the app prefix ---
+    # The `dash_dash_…` double-prefix defect #345 fixed is now structurally unreachable: nothing in
+    # this function can see an app label. Asserted anyway — "unreachable" is a claim about today's
+    # code, and this is the output that would change if it stopped being true.
     live = Model("dash_dim_uf", Dict{String, PormG.PormGField}("id" => IDField()))
-    igen = Model_to_str(live, prefixed; name_is_physical_table = true)
+    igen = Model_to_str(live; name_is_physical_table = true)
     @test occursin("Models.Model(\"dash_dim_uf\"", igen)
-    @test !occursin("dash_dash_dim_uf", igen)                # the double-prefix regression
+    @test !occursin("dash_dash_dim_uf", igen)
     ireloaded = Base.eval(rmod, Meta.parse(igen))
     @test model_table_name(ireloaded) == "dash_dim_uf"
 
-    # A mixed-case live table still pins its own spelling under a prefix. Before #345 the
-    # `!django_prefix` clause on `pin_introspected` suppressed the pin outright, so `inspectdb`
-    # generated a declaration addressing a table that does not exist.
+    # A mixed-case live table pins its own spelling, so the declaration addresses the table it was
+    # read from rather than a lowercased one that does not exist.
     mixed = Model("Dash_Dim_Uf", Dict{String, PormG.PormGField}("id" => IDField()))
-    mgen = Model_to_str(mixed, prefixed; name_is_physical_table = true)
+    mgen = Model_to_str(mixed; name_is_physical_table = true)
     @test occursin("db_table = \"Dash_Dim_Uf\"", mgen)
     mreloaded = Base.eval(rmod, Meta.parse(mgen))
     @test model_table_name(mreloaded) == "Dash_Dim_Uf"
 
-    # `Meta.db_table` is absolute in Django and stays absolute here — the prefix never composes
-    # with it, in either direction. Built through the Dict constructor + `_apply_db_table!`, which is
-    # the importer's own path: the kwargs constructor would reject the CLASS-shaped positional name
-    # via the #300 lowercase guard, which the importer deliberately does not go through.
+    # An explicit table is ABSOLUTE, as in Django. Built through the Dict constructor +
+    # `_apply_db_table!`, which is the importer's own path: the kwargs constructor would reject the
+    # CLASS-shaped positional name via the #300 lowercase guard, which the importer deliberately does
+    # not go through.
     pinned = Model("Matricula", Dict{String, PormG.PormGField}("id" => IDField()))
     PormG.Models._apply_db_table!(pinned, "rh_matricula_legado")
-    pgen = Model_to_str(pinned, prefixed)
+    pgen = Model_to_str(pinned)
     @test occursin("Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"", pgen)
-    @test !occursin("dash_", pgen)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

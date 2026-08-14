@@ -14,19 +14,40 @@ The `import_models_from_django` function allows you to seamlessly convert Django
 
 ## Function Signature
 
+Two arities: one `models.py`, or a whole multi-app project.
+
 ```julia
+# one app
 import_models_from_django(
     model_py_string::String;
     db::String = DB_PATH,
     force_replace::Bool = false,
-    ignore_table::Vector{String} = postgres_ignore_table,
     file::String = "automatic_models.jl",
     output_path::Union{Nothing, String} = nothing,
     django_prefix::Union{Nothing, String, Missing} = missing,
+    auth_user_model::Union{Nothing, String} = nothing,
+    strict_relations::Bool = false,
+    binding_overrides::AbstractDict = Dict{String, String}(),
+    autofields_ignore::Vector{String} = ["Manager"],
+    parameters_ignore::Vector{String} = ["help_text"]
+)
+
+# a project — "<app_label>" => "<models.py path or source>" pairs
+import_models_from_django(
+    apps::AbstractVector{<:Pair};
+    db::String = DB_PATH,
+    force_replace::Bool = false,
+    file::String = "automatic_models.jl",
+    output_path::Union{Nothing, String} = nothing,
+    auth_user_model::Union{Nothing, String} = nothing,
+    strict_relations::Bool = false,
+    binding_overrides::AbstractDict = Dict{String, String}(),
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
 )
 ```
+
+See [Importing a multi-app project](@ref) for the second form.
 
 ## Basic Usage
 
@@ -86,11 +107,6 @@ import_models_from_django("/path/to/your/models.py")
   import_models_from_django(content, force_replace=true)
   ```
 
-- **`ignore_table::Vector{String}`**: Tables to skip during import
-  ```julia
-  import_models_from_django(content, ignore_table=["auth_user", "django_migrations"])
-  ```
-
 - **`file::String`**: Output filename (default: `"automatic_models.jl"`)
   ```julia
   import_models_from_django(content, file="my_models.jl")
@@ -120,8 +136,169 @@ import_models_from_django("/path/to/your/models.py")
                             output_path="db_gal", django_prefix="estoque", force_replace=true)
   ```
 
-Neither override mutates the shared `db` config: when either is set, a throwaway render-only
-`Settings` (no database connection) carries them.
+- **`auth_user_model::Union{Nothing, String}`**: which model `settings.AUTH_USER_MODEL` refers to,
+  spelled the way Django spells it in `settings.py` (default: `nothing`, which auto-detects the single
+  class inheriting `AbstractUser`).
+  ```julia
+  import_models_from_django(pairs; auth_user_model="access.User")
+  ```
+
+- **`strict_relations::Bool`**: `false` (the default) imports a relation whose target is not in this
+  import as a plain column, with a `# PormG:` marker. `true` raises `InvalidMigrationError` instead.
+  See [Relation targets](@ref).
+
+- **`binding_overrides::AbstractDict`**: spell a generated Julia binding differently from the derived
+  one. See [Choosing your own binding](@ref).
+
+Neither `output_path` nor `django_prefix` mutates the shared `db` config: when either is set, a
+throwaway render-only `Settings` (no database connection) carries them.
+
+## Relation targets
+
+Every `ForeignKey` / `OneToOneField` / `ManyToManyField` target is resolved to the **Julia binding** of
+the model it names, because that is the only thing PormG can resolve at load time — `set_models` looks
+a target up as a binding in the generated module and nothing else. Four spellings work:
+
+| Django source | resolves to |
+|---|---|
+| `ForeignKey(Circuit, …)` or `ForeignKey("Circuit", …)` | the class named, in this app first, then a project-unique one |
+| `ForeignKey("self", …)` | the declaring class |
+| `ForeignKey("racing.Circuit", …)` | that app's class. Both halves match case-insensitively — Django lowercases the model name and app labels are lowercase by convention, so the extra tolerance on the label can only help |
+| `ForeignKey(settings.AUTH_USER_MODEL, …)` | the project's user model — see `auth_user_model` |
+
+An unqualified name that **two apps** declare is an error naming both; qualify it as Django does.
+
+### Targets outside the import
+
+A project that touches `django.contrib` references models it did not hand you. Those **degrade rather
+than fail**: the column is real — Django created it — so it is imported as a plain
+`BigIntegerField` and the artifact says what was lost.
+
+```julia
+# PormG: field 'created_by_id' on 'imports.ImportBatch' — ForeignKey target
+#   'contenttypes.ContentType' is not in the imported app set; imported as a plain column,
+#   the relation is lost.
+created_by_id = Models.BigIntegerField(blank=true, null=true)
+```
+
+A `ManyToManyField` has no column of its own, so an unresolvable one — target or `through=` model — is
+dropped and marked instead.
+
+Pass `strict_relations = true` to raise `InvalidMigrationError` on the first such target instead. That
+is the right setting once you believe every app is in the import; it is not the default, because it
+would make the importer unusable on any project that references `django.contrib`.
+
+The one target that is **always** a hard error is `settings.AUTH_USER_MODEL` when the importer cannot
+tell which model it is (no `AbstractUser` subclass, or more than one, and no `auth_user_model`). Nearly
+every model in a real project points at the user model, so one omitted keyword would quietly turn the
+whole user graph into integer columns.
+
+## Importing a multi-app project
+
+A real Django project splits its models across apps. Pass one `"<app_label>" => "<models.py>"` pair per
+app:
+
+```julia
+import_models_from_django(
+  ["racing"  => "server/racing/models.py",
+   "access"  => "server/access/models.py",
+   "imports" => "server/imports/models.py"];
+  db = "f1", file = "models.jl", force_replace = true)
+```
+
+Everything lands in **one** generated module, and each model's table carries its own app label:
+
+```julia
+Circuit     = Models.Model("circuit",     db_table = "racing_circuit",     …)
+User        = Models.Model("user",        db_table = "access_user",        …)
+ImportBatch = Models.Model("importbatch", db_table = "imports_importbatch",
+  circuit_id = Models.ForeignKey("Circuit", pk_field="id", on_delete=CASCADE),
+  steward_id = Models.ForeignKey("User", pk_field="id", on_delete=PROTECT))
+```
+
+!!! note "One module per *database*, not per app"
+    PormG is structurally one models file per connection: `makemigrations` and `migrate` resolve a
+    single `<db>/<model_file>` and load it into a single module. A module per app would not merely be
+    unsupported — the migration engine would never see it. Emitting the whole project into one module
+    is also what makes a cross-app `ForeignKey("racing.Circuit")` resolvable at all, since resolution
+    is a binding lookup in that one module.
+
+    Definition order inside the file does not matter: a `ForeignKey` holds its target as a `String` and
+    only resolves after the whole module body has run.
+
+Importing the apps together also merges an **abstract base declared in another app** — the shared
+`core.models.TimeStampedModel` shape — and resolves a `TextChoices` enumeration the same way. Each
+app's own classes win, so a name two apps both declare resolves locally, as it does in Django.
+
+!!! warning "A base name is matched across apps, whether or not that app imported it ([#370](https://github.com/PingoLee/PormG.jl/issues/370))"
+    The importer reads `models.py` files, not their `import` statements, so a base is matched by
+    **name** across the whole project. If one app inherits `BaseReport` from a third-party library and
+    an unrelated app happens to declare a concrete `BaseReport` of its own, the first is read as
+    multi-table inheritance and **not imported** — so adding an app to the list can remove a table
+    belonging to another app. It is always reported with a `# PormG:` marker, never silent. Importing
+    that app on its own is the workaround until
+    [#370](https://github.com/PingoLee/PormG.jl/issues/370) settles how narrow the lookup should be.
+
+A `django_prefix` on the connection is **rejected** here rather than ignored. It is one value for the
+whole connection, and relationship accessor names strip it — so `racing_circuit` would become
+`circuit` while `access_user` survived intact, and half the project's reverse lookups would point at
+names that do not exist. Remove it from the connection's config; a single-app import that still wants
+it can pass `django_prefix=` to that call.
+
+!!! warning "Known limitation: an explicit `through=` model addresses the logical name ([#363](https://github.com/PingoLee/PormG.jl/issues/363))"
+    A `ManyToManyField` with an explicit `through=` builds its join from the through model's
+    **logical name**, not its `db_table`. Once a model carries a `db_table` that differs — which is
+    every model in an app-labelled import — that join addresses `vinculo` where the real table is
+    `racing_vinculo`.
+
+    This is not new to multi-app import: it bites any model with an explicit `db_table` (so, any
+    single-app import under a `django_prefix` too). Until [#363](https://github.com/PingoLee/PormG.jl/issues/363)
+    is fixed, give such a relation an explicit `db_table` on the through *model* that matches its
+    logical name, or query the through model directly. Auto-derived `ManyToManyField`s — the common
+    case — are unaffected: the importer pins their join table to Django's real spelling.
+
+### When two apps use the same class name
+
+Both sides are app-qualified — never just the second one:
+
+```python
+# server/racing/models.py          # server/access/models.py
+class Driver(models.Model): ...    class Driver(models.Model): ...
+```
+
+```julia
+Racing_driver = Models.Model("racing_driver", db_table = "racing_driver", …)
+Access_driver = Models.Model("access_driver", db_table = "access_driver", …)
+```
+
+Renaming only the loser would make the output depend on the order you listed the apps, and PormG keys
+a model's reverse accessor on its logical name — so one `Driver` would answer to `driver` and the other
+to `driver2`, decided by list order. The rename is lossless because `db_table` still names the real
+table. A class name only one app declares is left alone.
+
+Names that differ only in **case** collide too — `Pessoa` and `PESSOA` derive different Julia bindings
+but the same logical name — so both are qualified on the same rule.
+
+One residue is left, and it is reported rather than hidden: when two app-qualified names *still*
+collide (an app literally called `racing_pit` alongside `racing`'s `Pit`), the second gets a digit
+suffix, and which one is second depends on the order you listed the apps. The generated file carries a
+`# PormG:` line naming what it collided with; `binding_overrides` picks the spelling if you care which
+is which.
+
+### Choosing your own binding
+
+`binding_overrides` replaces the derived name for any model, collision or not:
+
+```julia
+import_models_from_django(pairs; binding_overrides = Dict("access.Driver" => "DriverLicence"))
+# DriverLicence = Models.Model("driverlicence", db_table = "access_driver", …)
+```
+
+The value becomes the model's name, so the binding, the logical name and the reverse accessor all
+follow it, while `db_table` keeps naming the real table. It must be a legal, capitalized Julia
+identifier that no other model claims — every violation raises `InvalidMigrationError` rather than
+falling back to something else, because an override is an explicit instruction and one that silently
+does something different is worse than none.
 
 ## The app prefix
 
@@ -172,7 +349,9 @@ and no `db_table` is emitted.
     `django_prefix` is one value per *connection*, so it can only ever express one app label. A real
     Django project splits models across `core_`, `access_` and `imports_` at once — and PormG is
     structurally one models file per **database**, not per app. Carrying the prefix per model is what
-    lets a single generated file hold every app in the project.
+    lets a single generated file hold every app in the project, which is what
+    [Importing a multi-app project](@ref) does. `django_prefix` is the single-app spelling of the same
+    thing; the multi-app arity takes the label from each pair instead and rejects a configured prefix.
 
 !!! note "Keep `django_prefix` set even though the names no longer need it"
     Two things still read it: relationship accessor names strip it, and it is the fallback that spells
@@ -343,6 +522,9 @@ Relatorio = Models.Model("relatorio",
   titulo = Models.CharField(max_length=80))
 ```
 
+Importing the defining app alongside this one resolves it — see
+[Importing a multi-app project](@ref).
+
 Dropping the model instead would be the worse trade: a table that silently disappears is harder to
 notice than one that is present and annotated.
 
@@ -446,8 +628,8 @@ field and its source line; it is never dropped silently.
 
 | | |
 |---|---|
-| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField`, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints` (see the whitelist above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them |
+| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints` (see the whitelist above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
+| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them |
 | **Reported and skipped** | `Meta.indexes` and every other option with no PormG equivalent; a `UniqueConstraint` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
 | **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
 

@@ -58,7 +58,7 @@ public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, DateFie
 # `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, set_models
+public Model, UniqueConstraint, Index, set_models
 
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -82,14 +82,14 @@ registration has `connect_key === nothing` and no reverse relations.
 | `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
 | `related_objects` | `set_models` | Reverse accessors installed by relations pointing *at* this model: accessor name → a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation` (a many-to-many, reversed). Each carries the resolved child model, so a reverse join never re-derives a Julia binding from a name (#343) |
 | `_module` / `connect_key` | `set_models` | The defining module and the connection key it registered under |
-| `cache` | `set_models`, `Model(constraints = …)` | Derived metadata: many-to-many relations, declared unique constraints |
+| `cache` | `set_models`, `Model(constraints = …, indexes = …)` | Derived metadata: many-to-many relations, declared unique constraints, declared composite indexes |
 
 `deepcopy` **shares** rather than clones (`deepcopy(model) === model`): a model is resolved schema
 state treated as an immutable shared reference, and recursion would otherwise descend into
 `_module::Module` and throw. The query builder relies on this — copying a query copies its state but
 keeps the same model.
 
-See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref).
+See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref).
 """
 @kwdef mutable struct Model_Type <: PormGModel
   name::AbstractString
@@ -1252,12 +1252,16 @@ end
 # `format_fild_name` so declared names match the model's field-dict keys (#57 is
 # case-sensitive). A lone String must NOT be iterated char-by-char — the scalar method
 # below is more specific and wins dispatch for Symbol/AbstractString.
-_normalize_constraint_fields(f::Union{Symbol, AbstractString})::Vector{String} = String[format_fild_name(String(f))]
-function _normalize_constraint_fields(f)::Vector{String}
+#
+# `label` names the declaring type in the error message; `Index` (#347) shares this helper with
+# `UniqueConstraint`, and a message that named the wrong one would send the reader to the wrong
+# declaration.
+_normalize_constraint_fields(f::Union{Symbol, AbstractString}, label::AbstractString = "UniqueConstraint")::Vector{String} = String[format_fild_name(String(f))]
+function _normalize_constraint_fields(f, label::AbstractString = "UniqueConstraint")::Vector{String}
   out = String[]
   for x in f
     (x isa Symbol || x isa AbstractString) ||
-      throw(ModelDefinitionError("UniqueConstraint fields must be Symbol or String, got $(typeof(x))"))
+      throw(ModelDefinitionError("$(label) fields must be Symbol or String, got $(typeof(x))"))
     push!(out, format_fild_name(String(x)))
   end
   return out
@@ -1269,6 +1273,13 @@ _as_constraint_vector(::Nothing)::Vector{UniqueConstraint} = UniqueConstraint[]
 _as_constraint_vector(c::UniqueConstraint)::Vector{UniqueConstraint} = UniqueConstraint[c]
 function _as_constraint_vector(cs)::Vector{UniqueConstraint}
   out = UniqueConstraint[]
+  # A non-iterable value is `constraints = Models.CharField()` — a column named `constraints`, eaten
+  # by the option peel. Name the option and the fix instead of raising a bare `MethodError:
+  # no method matching iterate(::sCharField)` (#347; the `indexes` sibling below carries the same).
+  applicable(iterate, cs) || throw(ModelDefinitionError(
+    "`constraints` must be a UniqueConstraint or a collection of them, got $(typeof(cs)). " *
+    "`constraints` is a model-level option, so a COLUMN of that name must be pinned with " *
+    "db_column: other_name = Models.CharField(db_column = \"constraints\")"))
   for c in cs
     c isa UniqueConstraint ||
       throw(ModelDefinitionError("`constraints` must contain UniqueConstraint objects, got $(typeof(c))"))
@@ -1308,6 +1319,160 @@ function _apply_unique_constraints!(model::Model_Type, constraints)::Model_Type
   return model
 end
 
+#═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Model-level indexes (composite, non-unique · #347)
+#═══════════════════════════════════════════════════════════════════════════════
+# A plain INDEX spanning one or more columns — Django's `Meta.indexes`. Declared via the
+# `indexes=` kwarg on `Model(...)`; materialized by the migration planner as a `CREATE INDEX`
+# (identical on PostgreSQL and SQLite), reusing the very `Dialect.create_index` primitive the
+# per-field `db_index=true` path already calls — that one simply never passes more than one
+# column. `name === nothing` ⇒ the planner derives `<table>_<cols>_idx`, the plain sibling of
+# `UniqueConstraint`'s `<table>_<cols>_uniq`. Like `UniqueConstraint` this is NOT a `PormGField`:
+# it carries no column of its own, it references existing fields by name.
+"""
+    Index(; fields, name = nothing)
+
+Index a combination of columns — Django's `Meta.indexes`. Pass it to [`Model`](@ref) through
+`indexes =`.
+
+An `Index` is a read-performance declaration, not a rule: it constrains nothing. For a composite
+uniqueness *guarantee* use [`UniqueConstraint`](@ref), which is a `CREATE UNIQUE INDEX` and rejects
+duplicate rows.
+
+`fields` names **two or more** fields on this model. **The order is significant**: an index over
+`("raceid", "lap")` serves a lookup by `raceid`, or by `raceid` *and* `lap` together, but not one by
+`lap` alone. Foreign keys are referenced by their field name and resolved to the physical column
+(honoring `db_column`), and the declared case is preserved, so name each field exactly as it was
+declared.
+
+!!! warning "One column is `db_index = true`, not a one-field `Index`"
+    A single-column `Index` is rejected. It is not a missing feature — it is unrepresentable *in
+    both directions*: a one-column `CREATE INDEX` is byte-identical whether `db_index = true` or an
+    `Index` emitted it, so introspection reads it back as `db_index` (there is no marker to
+    distinguish them, unlike `UniqueConstraint`, which SQLite tags `origin = 'u'` vs `'c'`). A model
+    declaring a one-field `Index` would therefore compare unequal to its own live table forever, and
+    `makemigrations` would propose **dropping** the index on every run. Declare
+    `db_index = true` on the field instead.
+
+`name` is the index name. Omitted, the migration planner derives `<table>_<cols>_idx`, the plain
+sibling of the composite-unique convention. Pass an explicit one when the derived name would exceed
+PostgreSQL's 63-byte identifier limit, which Postgres truncates with only a `NOTICE` — truncation can
+collide two indexes into one.
+
+Invalid declarations raise `ModelDefinitionError` as early as they can be detected: fewer than two
+fields, a repeated field, or a blank `name` fails here in the constructor; a field that does not
+exist on the model, a `ManyToManyField` (it owns no column), or two indexes sharing a name fail when
+the model is built. An index whose name collides with a `UniqueConstraint`'s on the same table fails
+at migration planning, where both names are known.
+
+!!! note "Materialized when the table is created"
+    Each index becomes a `CREATE INDEX` — identical on PostgreSQL and SQLite — emitted when its
+    table is **first created**. Adding or removing one on a table that already exists is not yet
+    detected by `makemigrations`, the same limitation [`UniqueConstraint`](@ref) carries. Introspection
+    *does* read composite indexes back, so `inspectdb` on an existing database reproduces them.
+    Declare an index with the model, or add it by hand on an existing table.
+
+# Examples
+```julia
+Lap_times = Models.Model("lap_times",
+  raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
+  lap      = Models.IntegerField(),
+  position = Models.IntegerField(),
+  indexes = [
+    Models.Index(fields = ("raceid", "lap"), name = "lap_times_race_lap_idx"),
+  ],
+)
+```
+
+which migrates to:
+
+```sql
+CREATE INDEX IF NOT EXISTS "lap_times_race_lap_idx"
+  ON "lap_times" ("raceid", "lap");
+```
+
+See also [`Model`](@ref), [`UniqueConstraint`](@ref).
+"""
+struct Index
+  fields::Vector{String}
+  name::Union{String, Nothing}
+end
+function Index(; fields, name::Union{AbstractString, Nothing} = nothing)
+  cols = _normalize_constraint_fields(fields, "Index")
+  # ≥2 is a hard rule, not a stylistic one — see the docstring's warning. A one-column CREATE INDEX
+  # is indistinguishable from `db_index = true` on read-back, so a single-field Index would make
+  # `makemigrations` propose dropping its own index on every run.
+  length(cols) < 2 && throw(ModelDefinitionError(
+    "Index requires at least two fields, got $(isempty(cols) ? "none" : repr(cols)); " *
+    "a single-column index is the field option db_index = true"))
+  length(unique(cols)) == length(cols) ||
+    throw(ModelDefinitionError("Index has duplicate fields: $(cols)"))
+  # A blank name would render as an empty (invalid) index identifier; require nothing (auto-derive)
+  # or a real name.
+  name !== nothing && isempty(strip(name)) &&
+    throw(ModelDefinitionError("Index name must be non-empty (pass name=nothing to auto-derive)"))
+  return Index(cols, name === nothing ? nothing : String(name))
+end
+
+# Coerce the `indexes=` argument (a single Index, an iterable of them, or nothing) into a
+# concrete Vector. Anything that is not an Index is an error — which is also what a consuming app
+# that declared a COLUMN named `indexes` now hits, loudly, instead of having its field silently
+# swallowed by the option peel (see MODEL_OPTION_KWARGS in src/constants.jl).
+_as_index_vector(::Nothing)::Vector{Index} = Index[]
+_as_index_vector(i::Index)::Vector{Index} = Index[i]
+function _as_index_vector(is)::Vector{Index}
+  out = Index[]
+  # A non-iterable value is the `indexes = Models.CharField()` case — a column named `indexes`,
+  # which the option peel swallowed. Without this the loop below raises a bare
+  # `MethodError: no method matching iterate(::sCharField)`, which names neither the option nor the
+  # fix. Same shape as `_as_constraint_vector`'s guard.
+  applicable(iterate, is) || throw(ModelDefinitionError(
+    "`indexes` must be an Index or a collection of them, got $(typeof(is)). " *
+    "`indexes` is a model-level option, so a COLUMN of that name must be pinned with " *
+    "db_column: other_name = Models.CharField(db_column = \"indexes\")"))
+  for i in is
+    i isa Index ||
+      throw(ModelDefinitionError("`indexes` must contain Index objects, got $(typeof(i))"))
+    push!(out, i)
+  end
+  return out
+end
+
+# Validate declared Indexes against the built model and stash them in `cache`, exactly as
+# `_apply_unique_constraints!` does one section up — so `deepcopy`/`strip_many_to_many_fields`
+# carry them for free.
+#
+# The cache key is "composite_indexes", NOT "indexes": `cache["index"]` is already taken by
+# introspection's physical-column ⇒ index-name map for per-field `db_index` (#325), and two keys
+# one letter apart, holding unrelated shapes, is a trap. The INNER key is "indexes", mirroring
+# `unique_constraints`'s inner "constraints".
+function _apply_indexes!(model::Model_Type, indexes)::Model_Type
+  list = _as_index_vector(indexes)
+  isempty(list) && return model
+  seen_names = Set{String}()
+  for ix in list
+    for fname in ix.fields
+      haskey(model.fields, fname) || throw(ModelDefinitionError(
+        "Index references unknown field '$(fname)' on model '$(model.name)'. " *
+        "Declared fields: $(sort(collect(keys(model.fields))))"))
+      is_many_to_many_field(model.fields[fname]) && throw(ModelDefinitionError(
+        "Index field '$(fname)' on model '$(model.name)' is a ManyToManyField; " *
+        "an index must reference concrete columns"))
+    end
+    # Two indexes sharing an explicit name collide into one index (the plan keys on the name);
+    # reject it here for a clear, early error instead of a silent drop at planning time.
+    if ix.name !== nothing
+      ix.name in seen_names && throw(ModelDefinitionError(
+        "Duplicate Index name '$(ix.name)' on model '$(model.name)'; " *
+        "index names must be unique within a model"))
+      push!(seen_names, ix.name)
+    end
+  end
+  model.cache["composite_indexes"] = Dict{String, Any}("indexes" => list)
+  return model
+end
+
 # Store an explicit physical table name override (#59). Mirrors db_column's precedent
 # (field_db_column, below): type-check + empty-string-as-unset only, no identifier-shape
 # validation, no forced case fold — the whole point is to carry an arbitrary legacy spelling
@@ -1326,13 +1491,13 @@ end
 # SECTION: Model Constructors
 #═══════════════════════════════════════════════════════════════════════════════
 """
-    Model(; constraints = nothing, fields...)
-    Model(name; constraints = nothing, fields...)
+    Model(; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+    Model(name; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
 
 Define a model — one database table, described by its fields. Returns a `Model_Type`: the object the
 query builder starts from, as in `M.Driver.objects`.
 
-Every keyword other than `constraints`/`db_table` declares a field: `field_name = FieldType(...)`,
+Every keyword other than `constraints`/`db_table`/`indexes` declares a field: `field_name = FieldType(...)`,
 where the field types are the constructors in this module ([`IDField`](@ref), [`CharField`](@ref),
 [`ForeignKey`](@ref), …). Declaring a keyword whose value is not a field raises
 `ModelDefinitionError` — see the note below, which is the usual reason that happens.
@@ -1404,12 +1569,16 @@ DriverRaces = Models.Model("driver_races", db_table = "Driver_Races_Legacy",
 )
 ```
 
-`constraints` and `db_table` are the **only** model-level options.
+`indexes` (#347) takes [`Index`](@ref) objects — one, or a collection — for a read-performance index
+spanning more than one column, Django's `Meta.indexes`. A single-column index stays the field option
+`db_index = true`.
 
-!!! warning "`constraints` and `db_table` are not field names"
-    Both are peeled off before the field keywords, so `db_table = CharField()` declares the *option*
-    (and raises, since a field is not a String) rather than a column called `db_table`. To declare a
-    column with one of those names, pin it with `db_column`:
+`constraints`, `db_table` and `indexes` are the **only** model-level options.
+
+!!! warning "`constraints`, `db_table` and `indexes` are not field names"
+    All three are peeled off before the field keywords, so `db_table = CharField()` declares the
+    *option* (and raises, since a field is not a String) rather than a column called `db_table`. To
+    declare a column with one of those names, pin it with `db_column`:
 
     ```julia
     table_kind = Models.CharField(db_column = "db_table")
@@ -1452,6 +1621,16 @@ Race = Models.Model(
   ],
 )
 
+Lap_times = Models.Model(
+  raceid   = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
+  driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
+  lap      = Models.IntegerField(),
+  position = Models.IntegerField(),
+  indexes = [                                 # many rows per (race, lap) — an index, not a rule
+    Models.Index(fields = ("raceid", "lap"), name = "lap_times_race_lap_idx"),
+  ],
+)
+
 # Porting a legacy schema PormG doesn't control: the live table is `Constructor_Standings`.
 ConstructorStandings = Models.Model("constructor_standings",
   db_table = "Constructor_Standings",
@@ -1459,16 +1638,18 @@ ConstructorStandings = Models.Model("constructor_standings",
 )
 ```
 
-See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`ForeignKey`](@ref).
+See also [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref), [`ForeignKey`](@ref).
 """
-function Model(name::AbstractString; constraints = nothing, db_table = nothing, fields...)
-  # Peel `constraints`/`db_table` off BEFORE the `fields...` slurp — otherwise either would flow
-  # into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19).
+function Model(name::AbstractString; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
+  # Peel `constraints`/`db_table`/`indexes` off BEFORE the `fields...` slurp — otherwise any of them
+  # would flow into the `NTuple{Pair{Symbol}}` method below and trip its `isa PormGField` check (#19,
+  # #347).
   # Generated model files (Model_to_str) reload through this kwargs form, so this is the
   # round-trip seam.
   model = Model(name, Tuple(pairs(fields)))
   model = _apply_db_table!(model, db_table)
-  return _apply_unique_constraints!(model, constraints)
+  model = _apply_unique_constraints!(model, constraints)
+  return _apply_indexes!(model, indexes)
 end
 
 # Constructor a function that adds a field to the model the number of fields is not limited to the number of fields, the fields are added to the fields dictionary but the name of the field is the key
@@ -1535,13 +1716,14 @@ function Model(name::String)
   example_usage = "\e[32musers = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())\e[0m"
   throw(ModelDefinitionError("You need to add fields to the model, example: $example_usage"))
 end
-function Model(; constraints = nothing, db_table = nothing, fields...)
+function Model(; constraints = nothing, db_table = nothing, indexes = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
-  # via set_models). `constraints=`/`db_table=` must work here too, so peel them before the
-  # `fields...` slurp exactly like the named form above.
+  # via set_models). `constraints=`/`db_table=`/`indexes=` must work here too, so peel them before
+  # the `fields...` slurp exactly like the named form above.
   model = Model("", Tuple(pairs(fields)))
   model = _apply_db_table!(model, db_table)
-  return _apply_unique_constraints!(model, constraints)
+  model = _apply_unique_constraints!(model, constraints)
+  return _apply_indexes!(model, indexes)
 end
 
 """
@@ -1744,6 +1926,33 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
       end
       isempty(rendered_constraints) ||
         (fields *= ",\n  constraints = [$(join(rendered_constraints, ", "))]")
+    end
+  end
+  # Composite indexes (#347): the exact sibling of the block above, for the `indexes=` kwarg. Emitted
+  # AFTER `constraints` so the generated kwarg order is deterministic, and gated the same way — an
+  # all-failed model stays commented-out below, indexes included. Reuses `rendered` (a field that
+  # never reached the output) and `renamed` (a field the loop above re-spelled to a legal Julia
+  # identifier) for the same two reasons the constraints block does: either one would otherwise emit
+  # a declaration `_apply_indexes!` rejects on reload, so the generated file would not load.
+  if fields != "" && haskey(model.cache, "composite_indexes")
+    ixs = get(model.cache["composite_indexes"], "indexes", Index[])
+    if !isempty(ixs)
+      rendered_indexes = String[]
+      for ix in ixs
+        ifields = String[String(f) for f in ix.fields]
+        missing_fields = filter(f -> !(f in rendered), ifields)
+        if !isempty(missing_fields)
+          @warn "Model_to_str: Index references a field that did not render — emitting marker comment" model=model.name fields=ifields missing=missing_fields
+          push!(render_failures, "# PormG: Index over ($(join(ifields, ", "))) could not be rendered: field(s) $(join(missing_fields, ", ")) did not render — index omitted.")
+          continue
+        end
+        cols = join((format_string(get(renamed, f, f)) for f in ifields), ", ")
+        namepart = ix.name === nothing ? "" : ", name = $(format_string(String(ix.name)))"
+        # Trailing comma keeps a single-field tuple valid Julia: ("a",)
+        push!(rendered_indexes, "Models.Index(fields = ($(cols),)$(namepart))")
+      end
+      isempty(rendered_indexes) ||
+        (fields *= ",\n  indexes = [$(join(rendered_indexes, ", "))]")
     end
   end
   model_var_name = _model_binding_name(String(model.name), contants_julia)

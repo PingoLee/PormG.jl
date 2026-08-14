@@ -992,7 +992,7 @@ All field types support these common parameters:
 - `default`: Set default value for new records. PormG applies it only where the write supplies no value for the field; a field passed explicitly — including as `nothing`/`missing` — is honored as written. See [Defaults and Auto Values](write/bulk.md#Defaults-and-Auto-Values) for the `DataFrame` form of the same rule.
 
 ### Database Options
-- `db_index::Bool = false`: Create database index for faster queries
+- `db_index::Bool = false`: Create a database index on this single column, for faster queries. To index **two or more** columns together, use a model-level `Index` — see [Composite Indexes](models.md#Composite-Indexes-(Meta.indexes)).
 - `db_column::Union{String, Nothing} = nothing`: Maps this field to a differently-named physical column; **authoritative** across DDL, queries, and migrations (#50). Defaults to the field name (see [Schema Conventions](schema_conventions.md))
 - `db_constraint::Bool = true`: Create database constraints (for relationships)
 

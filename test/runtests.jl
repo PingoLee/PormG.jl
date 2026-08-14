@@ -35,6 +35,7 @@ end
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
     @testset "Composite Uniqueness (unique_together #19)" include("unit/test_unique_constraints.jl")
+    @testset "Composite Indexes (Meta.indexes #347)" include("unit/test_indexes.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")
     @testset "custom_join Copy Isolation (#112)" include("unit/test_custom_join_copy.jl")
     @testset "Model_Type deepcopy Shares (#157)" include("unit/test_model_deepcopy.jl")

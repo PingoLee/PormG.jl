@@ -725,7 +725,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | :--- | :--- |
 | `DefinitionError` *(abstract)* | Umbrella for definition-time failures — `catch` it to get both cases below. One `include("models.jl")` can raise either, so a handler naming only one silently misses the other. |
 | `FieldValidationError` | A field constructor got an invalid argument — a kwarg of the wrong type, an out-of-range `max_length`, a `default` that violates the field's own contract, or a field type that cannot be a primary key. |
-| `ModelDefinitionError` | A model/schema definition is invalid — more than one primary key, a duplicate `related_name`, an illegal field name, a `UniqueConstraint` naming an unknown field, or an unresolvable `ForeignKey` target. |
+| `ModelDefinitionError` | A model/schema definition is invalid — more than one primary key, a duplicate `related_name`, an illegal field name, a `UniqueConstraint` or `Index` naming an unknown field, or an unresolvable `ForeignKey` target. |
 
 `FieldValidationError` fires while *defining* a model; `InvalidValueError` fires while coercing a
 *value* on the insert/update path. That is the distinction between the two.

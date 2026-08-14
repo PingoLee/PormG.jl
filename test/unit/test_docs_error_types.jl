@@ -27,7 +27,7 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField, UniqueConstraint,
-                    add_field!
+                    Index, add_field!
 using PormG.QueryBuilder: bulk_insert
 import DataFrames
 
@@ -196,6 +196,22 @@ const DOCERR_CASES = [
         "src/Models.jl — UniqueConstraint docstring: no fields is rejected in the constructor",
         ModelDefinitionError,
         () -> UniqueConstraint(fields = ()),
+    ),
+    # models.md and the Index docstring both promise this REJECTION in a warning admonition, and it
+    # is the promise that keeps composite indexes from churning: a one-column CREATE INDEX reads
+    # back as `db_index`, so accepting a one-field Index would make makemigrations propose dropping
+    # its own index forever (#347).
+    (
+        "models.md + src/Models.jl — Index docstring: a single-column Index is rejected (#347)",
+        ModelDefinitionError,
+        () -> Index(fields = ("lap",)),
+    ),
+    # The other half of the same #347 warning: `indexes` is a model-level option, so a COLUMN of
+    # that name is unreachable and must say so rather than raising a bare MethodError.
+    (
+        "models.md + src/Models.jl — Model docstring: a field named `indexes` is refused (#347)",
+        ModelDefinitionError,
+        () -> Model("docerr_indexes_probe", raceid = IDField(), indexes = CharField(max_length = 10)),
     ),
     (
         "schema_conventions.md + src/Models.jl — Model docstring: a positional name must be lowercase (#300)",

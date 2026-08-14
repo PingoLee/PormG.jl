@@ -99,6 +99,34 @@
   ddl(fk_parent_ddl)
   ddl(fk_child_ddl)
   ddl(uniq_ddl)
+  # #347: a composite NON-unique index on the same table, deliberately in the REVERSE column order
+  # of the composite UNIQUE declared above. Both backends excluded every multi-column index from
+  # introspection, so `inspectdb` on a legacy schema silently dropped them; reading them back is
+  # what makes `Models.Index` a round trip rather than a one-way declaration. The reversed order is
+  # the mutation gate — a reader aggregating by attribute number returns (a, b) here.
+  ddl("""CREATE INDEX "pormg_it_uniq_ba_idx" ON "pormg_it_uniq" (b, a)""")
+  # …and one composite index PormG must REFUSE to read: a DESC key. PormG indexes carry no per-column
+  # order, so reading this back would regenerate an ascending index under the developer's name — the
+  # same reinterpretation the Django importer refuses on `Index(fields=["-year"])`.
+  #
+  # The LEADING column is descending on purpose. That is the case the PostgreSQL reader got wrong:
+  # `indoption` is an `int2vector` with lower bound 0 while `WITH ORDINALITY` counts from 1, so an
+  # off-by-one subscript examined the NEXT column's flags and missed a descending first column
+  # entirely — with no false positives, so every other test stayed green.
+  ddl("""CREATE INDEX "pormg_it_uniq_desc_idx" ON "pormg_it_uniq" (b DESC, a)""")
+  # PostgreSQL only: three more shapes that must not regenerate as a plain b-tree, each reached by a
+  # different per-column catalog vector.
+  #   opc  — a non-default operator class (`indclass`), the other half of the same subscript bug.
+  #   nf   — ASCENDING but `NULLS FIRST` (`indoption` = 2). Bit 0 alone is not enough: DESC implies
+  #          NULLS FIRST, so a descending key measures 3 and a `& 1` mask lets this one through,
+  #          re-emitting it as NULLS LAST.
+  #   coll — an explicit `COLLATE` (`indcollation`), the PostgreSQL twin of SQLite's non-BINARY
+  #          `coll` filter. Without it the two backends disagree on the same schema.
+  if is_pg
+    ddl("""CREATE INDEX "pormg_it_uniq_opc_idx"  ON "pormg_it_uniq" (plain text_pattern_ops, slug)""")
+    ddl("""CREATE INDEX "pormg_it_uniq_nf_idx"   ON "pormg_it_uniq" (b NULLS FIRST, a)""")
+    ddl("""CREATE INDEX "pormg_it_uniq_coll_idx" ON "pormg_it_uniq" (plain COLLATE "C", slug)""")
+  end
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -187,6 +215,39 @@
     # by `array_length(conkey,1) = 1`, SQLite by `HAVING COUNT(*) = 1`.
     @test !uniq.fields["a"].unique
     @test !uniq.fields["b"].unique
+
+    # ── 3c. Composite NON-unique indexes round-trip as Models.Index (#347) ──
+    # The multi-column half of the same index set, which both readers used to discard by arity.
+    # This is the only coverage that executes PostgreSQL's `_pg_composite_indexes` query at all.
+    @test haskey(uniq.cache, "composite_indexes")
+    live_ix = uniq.cache["composite_indexes"]["indexes"]
+    live_ix_names = [i.name for i in live_ix]
+    # EXACTLY one: the composite UNIQUE above must not also arrive here. On PostgreSQL it is a
+    # `pg_constraint` row whose backing index is `indisunique`; on SQLite `il."unique" = 1`. Either
+    # filter failing would re-declare a uniqueness guarantee as a plain index.
+    @test length(live_ix) == 1
+    # Named individually as well, so a failure says WHICH shape leaked rather than only that the
+    # count moved. The DESC one is the discriminating case for the `indoption` subscript.
+    @test !("pormg_it_uniq_desc_idx" in live_ix_names)
+    if is_pg
+      @test !("pormg_it_uniq_opc_idx" in live_ix_names)
+      @test !("pormg_it_uniq_nf_idx" in live_ix_names)     # ASC + NULLS FIRST: indoption == 2
+      @test !("pormg_it_uniq_coll_idx" in live_ix_names)   # explicit COLLATE: indcollation differs
+    end
+    @test live_ix[1].name == "pormg_it_uniq_ba_idx"
+    @test live_ix[1].fields == ["b", "a"]        # declared order, not attribute order
+    # Members are not marked `db_index` either — the single-column reader must stay disjoint.
+    @test !uniq.fields["a"].db_index
+    @test !uniq.fields["b"].db_index
+
+    # …and it survives the model → source → module round trip a user actually performs, which is
+    # the whole point of reading it back: `inspectdb` writes through `Model_to_str`.
+    uniq_src = PormG.Models.Model_to_str(uniq)
+    @test occursin("indexes = [Models.Index(fields = (\"b\", \"a\",), name = \"pormg_it_uniq_ba_idx\")]", uniq_src)
+    uniq_mod = Module()
+    Core.eval(uniq_mod, :(import PormG.Models))
+    uniq_reloaded = Core.eval(uniq_mod, Meta.parse(uniq_src))
+    @test uniq_reloaded.cache["composite_indexes"]["indexes"][1].fields == ["b", "a"]
 
     # ── 4. The regenerated module registers via set_models (#287/#291) ───────
     # THE regression assertion. Before #292 this threw ModelDefinitionError ("declares on_delete

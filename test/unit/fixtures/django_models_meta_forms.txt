@@ -87,7 +87,24 @@ class Servidor(models.Model):
             # REJECTED — no PormG equivalent at all.
             models.CheckConstraint(check=Q(cpf__regex=r"^\d{11}$"), name="chk_cpf_digitos"),
         ]
-        indexes = [models.Index(fields=["apelido"])]
+        indexes = [
+            # TRANSLATED to `db_index = true` on the field. A one-column CREATE INDEX is exactly
+            # what `db_index` emits, and PormG's Index is the COMPOSITE primitive.
+            models.Index(fields=["apelido"]),
+            # IMPORTED as Models.Index. `lotacao` resolves to `lotacao_id`, as on constraints.
+            models.Index(fields=["cpf", "lotacao"], name="idx_servidor_cpf_lotacao"),
+            # REJECTED — a DESCENDING column. PormG indexes have no per-column order, so importing
+            # this as ascending would build a different index under the developer's name.
+            models.Index(fields=["-cpf", "apelido"], name="idx_servidor_cpf_desc"),
+            # REJECTED — a functional index. Django indexes lower(apelido); PormG would index the
+            # column, which is not the same index.
+            models.Index(Lower("apelido"), name="idx_apelido_lower"),
+            # REJECTED — a PostgreSQL-specific index type; PormG emits only a default b-tree (#29).
+            GinIndex(fields=["cpf", "apelido"], name="gin_servidor"),
+            # REJECTED — `condition=` makes it a partial index over a subset of rows.
+            models.Index(fields=["cpf", "ativo"], condition=Q(ativo=True), name="idx_ativos"),
+        ]
+        index_together = (("apelido", "ativo"),)
 
 
 class Venda(models.Model):

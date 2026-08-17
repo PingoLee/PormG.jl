@@ -652,6 +652,38 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
     return true
   end
 
+  # Record one `columns=` entry's claim: model field `field` reads from DataFrame column `source`.
+  # Captures `mapping`/`fields_df`/`operation` from the enclosing scope, like the two closures
+  # above. Both `columns=` branches route through here so the rule and its message exist once.
+  #
+  # #380: the SAME model field claimed from DIFFERENT source columns used to be last-wins and
+  # silent — one of the two columns the caller named was dropped without a word, and WHICH one
+  # survived depended on list position, so an innocuous reorder changed what got written. That is
+  # never a meaningful instruction; it is a typo, a copy-paste slip, or a programmatically built
+  # `columns=` carrying a duplicate. It is also the only `columns=` mistake this loop used to
+  # swallow: an absent source column is a hard error, and a case-only near-miss is a hard error
+  # with a paste-ready hint.
+  #
+  # An EXACT repeat stays legal — nothing is being chosen between and nothing is lost — which keeps
+  # one uniform rule across both branches instead of a separate policy per entry shape. The
+  # duplicate `push!` it leaves in `fields_df` is absorbed by the `|> unique` that builds
+  # `final_fields` at the end of this function; without that, a repeat would emit the same column
+  # twice in the SET list and PostgreSQL would reject it ("multiple assignments to same column").
+  #
+  # THE KEY IS `mapping`, NOT `fields_df`, and that is load-bearing. The bare-string branch below
+  # pushes to `fields_df` WITHOUT writing `mapping` when the frame has no column of that name (the
+  # "may be auto-populated later" path). A guard written as `field in fields_df` would therefore
+  # fire on `columns = ["laps", "c2" => "laps"]` over a frame with no `laps` column and reject a
+  # legal call: the string claimed no source at all, so the Pair is the only claim on frame data.
+  function claim_field!(field::AbstractString, source::AbstractString)
+    if haskey(mapping, field) && mapping[field] != source
+      throw(QueryBuildError("Error in bulk_$(operation), the field \e[4m\e[31m$(field)\e[0m is mapped from two different columns in columns=: \e[4m\e[31m$(mapping[field])\e[0m and \e[4m\e[31m$(source)\e[0m. Keep only the mapping you want."))
+    end
+    mapping[field] = source
+    push!(fields_df, field)
+    return nothing
+  end
+
   # 1. Identify mappings and check required columns
   if !isempty(normalized_columns)
     for column in normalized_columns
@@ -661,8 +693,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
         # mismatch is a hard error, not a silent log (the old @error left a bad mapping
         # in place and crashed cryptically downstream).
         if column.first in names(df)
-          mapping[column.second] = column.first
-          push!(fields_df, column.second)
+          claim_field!(column.second, column.first)
         else
           # Offer the case hint when the only near-miss differs solely in case,
           # consistent with the string/auto-detect/match_on paths above.
@@ -675,8 +706,9 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       else
         # String column: match the DataFrame column name EXACTLY (case-sensitive).
         if column in names(df)
-          mapping[column] = column
-          push!(fields_df, column)
+          # Identity claim: the frame column and the model field share the name. A conflict here
+          # therefore always comes from an EARLIER Pair that pointed the same field elsewhere.
+          claim_field!(column, column)
         else
           # No exact match. If a column differs only in case, fail loudly instead of
           # silently case-folding (see the case-sensitive matching contract above).

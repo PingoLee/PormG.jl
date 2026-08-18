@@ -67,14 +67,17 @@ The subsystem map below is also the review **architecture checkpoint**: when a n
 |------|------|
 | `src/PormG.jl` | Package root — include chain and the public `export` surface |
 | `src/Kernel.jl`, `src/constants.jl` | Layer 1: shared vocabulary — abstract types, constants, `PormGError` root, `_emsg`, `config`. Imports nothing from `PormG` |
+| `src/Backend.jl`, `ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl` | Layer 2: backend interface: `backend_*` generics + friendly fallbacks; driver bodies live in the weakdep extensions (`LibPQ`/`SQLite`). Core never names a concrete driver type |
+| `src/Generator.jl` | Model file generation (`generate_models_from_db`): module envelope, `import` lines, and sentinel imports for every generated model file |
 | `src/Configuration.jl` | Config, `DB_PATH`, `PORMG_ENV`, transactions |
 | `src/ConnectionPool.jl` | `fetch`, pool lock, transaction context (driver-agnostic; untyped connection storage) |
-| `src/Backend.jl`, `ext/PormGLibPQExt.jl`, `ext/PormGSQLiteExt.jl` | Backend interface: `backend_*` generics + friendly fallbacks; driver bodies live in the weakdep extensions (`LibPQ`/`SQLite`). Core never names a concrete driver type |
 | `src/Models.jl`, `src/models/` | Models and fields |
-| `src/QueryBuilder.jl`, `src/querybuilder/` | Query builder (incl. `many_to_many.jl`) |
+| `src/Utils.jl` | Model loader macros (`@import_models`, `@models_module`) and the world-age loading machinery the 1.12 floor exists for (#211) |
 | `src/Dialect.jl` | Backend SQL rendering |
 | `src/AdvisoryLock.jl` | `with_advisory_lock` — cross-process advisory locking (migrations serialize on it) |
+| `src/QueryBuilder.jl`, `src/querybuilder/` | Query builder (incl. `many_to_many.jl`) |
 | `src/Migrations.jl`, `src/migrations/` | State-based schema reconciliation |
+| `src/tools.jl` | Layer 4: user-facing lifecycle helpers (`setup`, `install_ai_skills`, `upgrade_guide`) |
 | `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite via `PORMG_DB`) |
 | `docs/src/` | User documentation |
 

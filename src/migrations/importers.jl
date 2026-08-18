@@ -9,6 +9,74 @@
 # ---
 
 """
+    _plan_inspectdb_bindings!(models_array) -> Dict{String, String}
+
+Pass 1 of an `inspectdb`-style import (#360): resolve every model's FINAL Julia binding **before** the
+first model is rendered, then rewrite each `ForeignKey`/`OneToOneField` `.to` to the binding of the
+model that owns its physical target table. Returns the physical table → binding map, which the caller
+hands back to `Model_to_str` so the binding is derived exactly once.
+
+This is the same move `_resolve_relation_targets!` already makes for the Django importer
+(`field.to = target.binding`), which is why that path never had this bug.
+
+Why a rewrite rather than a smarter resolver: a `.to` string is dereferenced by **binding lookup** in
+seven places — `Models._resolve_target_model` plus six hand-rolled `getfield(mod, Symbol(field.to))`
+sites (`querybuilder/build_joins.jl` 436/511/552, `querybuilder/ctes.jl` 185/349,
+`querybuilder/execution.jl` 2056). Teaching one of them about physical tables leaves the other six
+wrong; making `.to` correct at the source fixes all seven.
+
+Why `to_table` has to exist at all: introspection knows the physical parent table, but `.to` is a
+*binding*, and that derivation is lossy — `driver` and `Driver` both produce `Driver`, so the table
+cannot be recovered from `.to` afterwards. The breadcrumb carries it across the gap.
+
+The binding walk MUST match `Model_to_str`'s own: same seed
+(`GENERATED_MODULE_RESERVED_BINDINGS`, what the generated file's boilerplate already imports), same
+order (`models_array`, which the caller renders in sequence), same `_dedupe_taken` digit-suffix rule.
+"""
+function _plan_inspectdb_bindings!(models_array)::Dict{String, String}
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  binding_by_table = Dict{String, String}()
+  for model in models_array
+    binding = Models._dedupe_taken(Models._model_binding_name(String(model.name)), taken_bindings)
+    push!(taken_bindings, binding)
+    # Keyed on the PHYSICAL table, which is what `to_table` records. Table names are unique within a
+    # schema, so this cannot overwrite — the collision this whole function exists for is two tables
+    # arriving at one BINDING, which `_dedupe_taken` has already separated by the time we get here.
+    binding_by_table[model_table_name(model)] = binding
+  end
+
+  for model in models_array
+    for (field_name, field) in pairs(model.fields)
+      (field isa Models.sForeignKey || field isa Models.sOneToOneField) || continue
+      target_table = field.to_table
+      # A hand-built model reaching an importer, or a relation introspection could not attribute to a
+      # physical table. Nothing to improve on — leave the derived `.to` exactly as it was.
+      target_table === nothing && continue
+      binding = get(binding_by_table, target_table, nothing)
+      if binding === nothing
+        # The parent is not in this generated file — filtered out by `ignore_table`/`include_table`,
+        # in another schema, or (on SQLite, whose identifiers are case-insensitive) spelled in the
+        # `REFERENCES` clause with a case the `CREATE TABLE` did not use. `.to` keeps its derived
+        # spelling, which is the pre-#360 behaviour: it will not resolve, and `set_models` says so
+        # loudly.
+        #
+        # Deliberately NOT a case-insensitive fallback. "Exactly one case-insensitive candidate
+        # among the IMPORTED models" is not the same question as "exactly one in the schema" — a
+        # filter can hide the real target and leave a same-name-different-case sibling as the only
+        # candidate, at which point this would silently bind the key to the WRONG table. Trading a
+        # loud `ModelDefinitionError` for a silent wrong target is the exact defect class #360 is
+        # about, so a miss stays a miss.
+        @debug "inspectdb: foreign key target table is not among the imported models; leaving `.to` as derived" model=model.name field=field_name target_table=target_table
+        continue
+      end
+      field.to = binding
+    end
+  end
+
+  return binding_by_table
+end
+
+"""
     import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema::Vector{String}=sqlite_ignore_schema, include_table=nothing, file::String="automatic_models.jl")
 
 Import models from a SQLite database and generate a Julia file with model definitions.
@@ -73,11 +141,14 @@ function import_models_from_sqlite(db::String = "db";
   # #338: one binding/name registry PER GENERATED FILE, shared across every model rendered into it —
   # seeded with what the file's own boilerplate already imports, so a table literally named "models"
   # collides too. Without this, two tables that render the same binding silently shadow one another.
+  # #360: pass 1 first — resolve every binding and rewrite each FK's `.to` to its target's FINAL
+  # binding, then render with the bindings pass 1 already decided (one derivation, no drift).
+  binding_by_table = _plan_inspectdb_bindings!(models_array)
   taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
   taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-    push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
+    push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
   end
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
@@ -146,11 +217,13 @@ function import_models_from_postgres(db::String;
 
   # Convert each model to string representation
   # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
+  # #360: pass 1 first — see import_models_from_sqlite.
+  binding_by_table = _plan_inspectdb_bindings!(models_array)
   taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
   taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
+      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
   end
   
   # Generate the models file
@@ -187,11 +260,13 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
 
   # Convert each model to string representation
   # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
+  # #360: pass 1 first — see import_models_from_sqlite.
+  binding_by_table = _plan_inspectdb_bindings!(models_array)
   taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
   taken_names = Set{String}()
   Instructions::Vector{Any} = []
   for model in models_array
-      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names))
+      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
   end
   
   # Generate the models file

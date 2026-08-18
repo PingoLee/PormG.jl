@@ -166,13 +166,35 @@ loaded — no error, no warning, one model just gone.
     disambiguating the positional name changes it and nothing already pins `db_table`, PormG pins
     the original name to `db_table` for you — the same escape valve described above.
 
-!!! note "Residual limitation: `ForeignKey` target resolution"
-    A `ForeignKey`'s `.to` is derived independently, from the live parent table name, and resolved by
-    binding-name lookup alone. If disambiguation suffixes the binding a `.to` was counting on, the
-    reference still resolves — just to whichever sibling kept the un-suffixed binding, not necessarily
-    the table the key originally pointed at. This is not new: before disambiguation existed, every such
-    reference was already ambiguous, since both tables shared one binding. Review a generated file's
-    foreign keys by hand when your schema has tables whose names collide after sanitizing.
+Foreign keys follow the rename. A `ForeignKey`'s target is written as the **Julia binding** of the
+model it points at, and PormG resolves every binding for a generated file *before* it writes the
+first model — so a key aimed at the table whose binding got suffixed names the suffixed one:
+
+```julia
+# live tables: "driver profile", "driver_profile", and a "pit_stop" holding one key into each
+Driver_profile = Models.Model("driver profile",
+  id = Models.IDField())
+
+Driver_profile2 = Models.Model("driver_profile",
+  id = Models.IDField())
+
+Pit_stop = Models.Model("pit_stop",
+  id = Models.IDField(),
+  plain_id = Models.ForeignKey("Driver_profile2", null=true, pk_field="id"),
+  spaced_id = Models.ForeignKey("Driver_profile", null=true, pk_field="id"))
+```
+
+`plain_id` references `driver_profile`, whose binding was suffixed, and it names the suffixed
+binding — so each key reaches the table it was declared against in the database. The same applies to
+a parent whose name needs sanitizing at all: a key into a table called `2fast` targets `Col_2fast`,
+the binding that table actually gets, not the unusable `"2fast"`.
+
+!!! note "Model files generated before this behavior existed"
+    Earlier versions derived a foreign key's target independently of the binding computation, so a
+    key aimed at a suffixed sibling resolved to whichever model kept the un-suffixed binding, and a
+    key into a name needing sanitizing did not resolve at all. If you generated a model file with an
+    older version and your schema has colliding or non-identifier table names, re-run the import
+    rather than hand-patching the targets.
 
 ### `django_prefix` interop
 

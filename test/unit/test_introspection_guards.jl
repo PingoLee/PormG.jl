@@ -459,3 +459,96 @@ end
   @test model.cache["index"]["slug"] == "db_index_guard_slug_idx"
   @test model.cache["index"]["mixedCase"] == "db_index_guard_mixedcase_idx"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Introspected foreign keys carry the target BINDING and the physical table (#360)
+#
+# Two separate things a `.to` has to get right, and before #360 it got neither reliably:
+#
+#  1. `.to` must be the Julia BINDING `Model_to_str` will emit for the parent, because
+#     `_resolve_target_model` resolves it by binding lookup and nothing else. It was bare
+#     `uppercasefirst`, which agrees with the real derivation only when the table name is already a
+#     legal identifier — `driver profile` bound as `Driver_profile` but got `.to = "Driver profile"`,
+#     a string no binding can ever spell, so the key was permanently unresolvable.
+#  2. `to_table` records the parent's PHYSICAL name, which the binding cannot round-trip back to
+#     (`_model_binding_name` is lossy — `driver` and `Driver` both give `Driver`). It is what lets
+#     `_plan_inspectdb_bindings!` rewrite `.to` to the target's final, collision-deduped binding.
+#
+# These two readers are covered here rather than through an importer because neither is reachable
+# from `import_models_from_sqlite`: the DDL-regex reader is off the production path entirely, and
+# the PostgreSQL reader needs a live server — but it takes a `DataFrameRow` and nothing else, so a
+# synthetic row exercises it at full fidelity.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "introspected FKs carry the target binding and physical table (#360)" begin
+
+  # The parent name here is `2fast`, not the `driver profile` used elsewhere in this file: this
+  # reader finds foreign keys with a `REFERENCES "(\w+)"` regex, and `\w` never matches a space, so
+  # a spaced parent is not seen as a relation at all on this path. A leading DIGIT is inside `\w+`
+  # yet still illegal as an identifier, so it exercises the sanitizer branch just as well.
+  @testset "the SQLite DDL-regex path (convertSQLToModel(::String))" begin
+    sql = """
+    CREATE TABLE "pit_stop" (
+      "id" INTEGER NOT NULL,
+      "plain_id" INTEGER,
+      "fast_id" INTEGER,
+      PRIMARY KEY("id"),
+      FOREIGN KEY("plain_id") REFERENCES "driver_profile"("id"),
+      FOREIGN KEY("fast_id") REFERENCES "2fast"("id")
+    )"""
+    model = convertSQLToModel(sql)
+
+    # An already-legal table name: binding and physical table differ only by the leading capital,
+    # so this pair passed before #360 too. It is here to prove the swap did not move the common case.
+    @test model.fields["plain_id"].to       == "Driver_profile"
+    @test model.fields["plain_id"].to_table == "driver_profile"
+
+    # THE mutation gate for the `_model_binding_name` swap: bare `uppercasefirst("2fast")` is
+    # "2fast", which is not a legal Julia identifier — so the generated `.to` named a binding that
+    # could not exist and `_resolve_target_model` returned `nothing` forever.
+    @test model.fields["fast_id"].to       == "Col_2fast"
+    @test model.fields["fast_id"].to_table == "2fast"
+  end
+
+  # `foreign_tables` is spelled the way the PRODUCTION schema query emits it — the CTE aggregates
+  # `quote_ident(cf.relname)`, so a name needing quotes arrives WRAPPED IN `"` while `table_name`
+  # comes from a bare `c.relname`. Feeding the unquoted form here would be a dead test: it passes
+  # against a reader that never de-quotes, while the live path stores `"\"driver profile\""` as
+  # `to_table`, matches no imported model, and skips the binding rewrite entirely.
+  @testset "the PostgreSQL path (convertSQLToModel(::DataFrameRow))" begin
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "pit_stop",
+      columns                 = "id bigint NOT NULL, plain_id bigint, spaced_id bigint",
+      primary_keys            = "id",
+      foreign_keys            = "plain_id, spaced_id",
+      foreign_tables          = "driver_profile, \"driver profile\"",
+      referenced_primary_keys = "id, id",
+      delete_rules            = "a, a"))
+
+    # `quote_ident` leaves an already-legal lowercase name alone, so this half is unquoted input.
+    @test model.fields["plain_id"].to       == "Driver_profile"
+    @test model.fields["plain_id"].to_table == "driver_profile"
+
+    # THE mutation gate for the de-quoting: without it `to_table` keeps its `"` and no longer equals
+    # any `model.name`, so `_plan_inspectdb_bindings!` cannot find the target.
+    @test model.fields["spaced_id"].to       == "Driver_profile"
+    @test model.fields["spaced_id"].to_table == "driver profile"
+  end
+
+  # This reader is the ONLY one that emits a `OneToOneField` (when the FK column is also UNIQUE), so
+  # the slot has to exist on `sOneToOneField` too — a fix applied to `sForeignKey` alone would leave
+  # every one-to-one relation on PostgreSQL unrewritable, and `to_table` would be a MethodError.
+  @testset "a UNIQUE foreign key becomes a OneToOneField and still carries both" begin
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "driver_seat",
+      columns                 = "id bigint NOT NULL, profile_id bigint UNIQUE",
+      primary_keys            = "id",
+      foreign_keys            = "profile_id",
+      foreign_tables          = "\"driver profile\"",   # quote_ident form, as the live query emits
+      referenced_primary_keys = "id",
+      delete_rules            = "a"))
+
+    @test model.fields["profile_id"] isa PormG.Models.sOneToOneField
+    @test model.fields["profile_id"].to       == "Driver_profile"
+    @test model.fields["profile_id"].to_table == "driver profile"
+  end
+end

@@ -291,16 +291,19 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
       # throws `ModelDefinitionError` at `set_models`, and regenerating produced the identical
       # broken file. Routed through `_fk_default_or_warn` so an unrepresentable default warns
       # rather than throwing from inside introspection.
-      # #338: this `uppercasefirst` must match the BINDING `Model_to_str` derives for the target
-      # table — `_resolve_target_model` resolves `.to` by binding lookup alone. If that binding
-      # collides with a sibling table's and gets suffixed with a digit, `.to` still names this
-      # un-suffixed spelling and can resolve to the wrong model. Pre-existing ambiguity, not
-      # introduced by #338's dedup — see docs/src/schema_conventions.md → "Generated files:
-      # colliding bindings and names are disambiguated".
-      field_instance = Models.ForeignKey(uppercasefirst(fk_map[column_name]["fk_table"] |> string); pk_field=fk_map[column_name]["fk_column"] |> string,
+      # #360: `.to` must name the BINDING `Model_to_str` derives for the target table, because
+      # `_resolve_target_model` resolves it by binding lookup alone — hence `_model_binding_name`,
+      # the one expression that derivation lives in (bare `uppercasefirst` here produced a `.to` no
+      # binding could ever spell for a table like `driver profile`). That still is not enough on its
+      # own: the binding may be suffixed with a digit to dodge a sibling's (#338), and
+      # `_model_binding_name` is lossy, so `to_table` records the physical parent verbatim and
+      # `_plan_inspectdb_bindings!` rewrites `.to` to the FINAL binding before anything is rendered.
+      fk_parent_table = fk_map[column_name]["fk_table"] |> string
+      field_instance = Models.ForeignKey(Models._model_binding_name(fk_parent_table); pk_field=fk_map[column_name]["fk_column"] |> string,
       on_delete=_normalize_introspected_on_delete(fk_map[column_name]["on_delete"]),
       on_update=fk_map[column_name]["on_update"], deferrable=!(fk_map[column_name]["on_deferable"] === nothing), null=(nullable === nothing),
       default=_fk_default_or_warn(normalized_default, table_name, column_name))
+      field_instance.to_table = fk_parent_table
     else
       field_instance = getfield(Models, type_sym)(null=(nullable === nothing), default=normalized_default)
       # BLOB carries no length suffix, so a BinaryField's byte bound comes from its CHECK (#296).
@@ -422,11 +425,14 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
         # with the `unique` flag below, a live `INTEGER UNIQUE REFERENCES parent(id)` now regenerates
         # LOSSLESSLY as `INTEGER UNIQUE` + the foreign key, where an O2O would regenerate as `TEXT`
         # with no foreign key. The flag is what #318 is actually about; the field type is not.
-        # #338: same binding-collision caveat as the FK path above — `.to` resolves by binding
-        # lookup alone, so a suffixed sibling binding can leave this pointing at the wrong model.
-        field = Models.ForeignKey(uppercasefirst(fk_info.table); pk_field=fk_info.to,
+        # #360: `.to` is the target's BINDING and `to_table` the physical parent table — see the
+        # `convertSQLToModel(::String)` path above for why both are needed. `fk_info.to` on this line
+        # is the parent COLUMN from `PRAGMA foreign_key_list`, unrelated to a field's `.to`.
+        fk_parent_table = String(fk_info.table)
+        field = Models.ForeignKey(Models._model_binding_name(fk_parent_table); pk_field=fk_info.to,
             on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
             default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
+        field.to_table = fk_parent_table
     else
         type_sym = get(type_map, base_type, :TextField)
         # #325: a BARE textual column carries no length, but `CharField()` INVENTS `max_length = 250`
@@ -1448,7 +1454,13 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       split(row[:delete_rules], ", ") : fill("", length(fk_columns))
     for (i, (fk_col, fk_table, fk_pk)) in enumerate(zip(fk_columns, fk_tables, fk_pk_columns))
         rule = i <= length(delete_rules) ? delete_rules[i] : ""
-        fk_map[fk_col] = (table = String(fk_table), pk = String(fk_pk),
+        # The parent table is DE-QUOTED (#360). The schema query aggregates it as
+        # `quote_ident(cf.relname)`, so any name that needs quoting — a space, punctuation, mixed
+        # case — arrives wrapped in `"`, while `table_name` comes from a bare `c.relname`. Stored
+        # quoted, `to_table` matched no imported model, so the pass-1 binding rewrite silently
+        # no-opped for exactly the names it exists to handle, and only on PostgreSQL. Same treatment
+        # (and same reason) as `index_map` below, which has de-quoted since #325.
+        fk_map[fk_col] = (table = replace(String(fk_table), "\"" => ""), pk = String(fk_pk),
                           on_delete = _pg_confdeltype_to_on_delete(rule))
     end
   end
@@ -1606,8 +1618,11 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       elseif haskey(fk_map, col_name)
         fk_info = fk_map[col_name]
-        # #338: same binding-collision caveat as the other FK introspection paths in this file.
-        fk_table = uppercasefirst(fk_info.table)
+        # #360: `.to` is the target's BINDING (via `_model_binding_name`, the single derivation
+        # `_resolve_target_model` has to agree with) and `to_table` the physical parent table — see
+        # the `convertSQLToModel(::String)` path in this file for why both are needed.
+        fk_parent_table = String(fk_info.table)
+        fk_table = Models._model_binding_name(fk_parent_table)
         fk_column = fk_info.pk
         # #292: `on_delete` is now carried (it was never even queried), and `default_value` goes
         # through the shared failure policy — this branch passed it unguarded, so a column default
@@ -1615,11 +1630,14 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         # `OneToOneField` had the identical omission and is fixed with `ForeignKey`.
         fk_default = _fk_default_or_warn(default_value, table_name, col_name)
         fk_on_delete = _normalize_introspected_on_delete(fk_info.on_delete)
-        if unique
+        fk_field = if unique
           Models.OneToOneField(fk_table, pk_field=fk_column, null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         else
           Models.ForeignKey(fk_table, pk_field=fk_column, null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         end
+        # Set on BOTH branches — the PostgreSQL reader is the one path that emits `OneToOneField`.
+        fk_field.to_table = fk_parent_table
+        fk_field
       else
         field_type(unique=unique, null=!not_null, default=default_value, db_index=db_index)
       end

@@ -118,6 +118,7 @@ end
     @testset "FK Rename Rebuild Gate (#150)" include("unit/test_fk_rename_rebuild.jl")
     @testset "Migration Diff Fail-Safe (#69)" include("unit/test_migration_diff_failsafe.jl")
     @testset "Migration Diff: auto_add is not schema drift (#334)" include("unit/test_migration_planner_auto_add.jl")
+    @testset "Migration Diff: FK to_table is not schema drift (#360)" include("unit/test_fk_to_table_planner.jl")
     @testset "Model_to_str Render Failure (#70/#134)" include("unit/test_model_to_str_render_failure.jl")
     @testset "Migration Format Stability (v1)" include("unit/test_migration_format_v1.jl")
     @testset "Schema Conventions Freeze (#33)" include("unit/test_schema_conventions.jl")

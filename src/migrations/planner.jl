@@ -32,9 +32,15 @@
 #     this tuple until #334 — unnoticed only because no fixture had ever declared `auto_add=true`
 #     on a field introspection also had to reconstruct (a primary key, or any column round-tripped
 #     through `assert_no_schema_drift`).
+#   * `to_table` (FK/O2O) is a Julia-side introspection breadcrumb (#360) that is ASYMMETRIC BY
+#     CONSTRUCTION, which is exactly why it has to be listed here: introspection sets it to the live
+#     parent table, while the models-file side is always `nothing` because `Model_to_str` never emits
+#     it. Left out, EVERY foreign key would report a difference on EVERY `makemigrations` — an empty
+#     alteration forever, and a full table rebuild on SQLite. Same shape as `auto_now`/`auto_add`
+#     above: no DDL anywhere expresses it, so it can never be a real schema change.
 const _NON_SCHEMA_FIELD_ATTRS = (:blank, :on_delete, :related_name, :verbose_name, :editable,
                                  :how, :formatter, :db_column, :db_index,
-                                 :auto_now, :auto_now_add, :auto_add)
+                                 :auto_now, :auto_now_add, :auto_add, :to_table)
 
 function _hash_field_name(model_name::Symbol, field_name::Union{String, Symbol}; apend_number::Int64=5)::String
   _hash = randstring(8) 

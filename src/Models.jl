@@ -1036,12 +1036,15 @@ The binding must be a legal Julia identifier. `uppercasefirst` alone is not enou
 come from a live table: `inspectdb` on `2fast` or `driver profile` produced source that does not
 parse. Fall back to the field sanitizer only when it is not already legal.
 
-The `isidentifier` guard is load-bearing, not an optimization. A child's `ForeignKey` `.to` is
-`uppercasefirst(<live parent table>)` (`src/migrations/introspection.jl`), and `_resolve_target_model`
-resolves it by BINDING LOOKUP alone — no name or table fallback. So the binding and `.to` must stay
-the same expression. Sanitizing unconditionally silently broke that for every name `uppercasefirst`
-already made legal: `end` -> `End_` vs `.to = "End"`, `db_table` -> `Db_table_` vs `Db_table`,
-`_order` -> `Order` vs `_order`.
+The `isidentifier` guard is load-bearing, not an optimization. A child's `ForeignKey` `.to` names the
+parent's BINDING and `_resolve_target_model` resolves it by BINDING LOOKUP alone — no name or table
+fallback — so the binding and `.to` must be the same expression. Sanitizing unconditionally silently
+broke that for every name `uppercasefirst` already made legal: `end` -> `End_` vs `.to = "End"`,
+`db_table` -> `Db_table_` vs `Db_table`, `_order` -> `Order` vs `_order`.
+
+Since #360 the introspection sites (`src/migrations/introspection.jl`) call THIS function rather than
+bare `uppercasefirst`, so both sides agree for hostile names too, and the importers' pass 1
+(`_plan_inspectdb_bindings!`) then rewrites `.to` to the target's final, collision-deduped binding.
 
 A binding is a variable name, so neither the keyword list nor the model options apply to it —
 `uppercasefirst` alone escapes every Julia keyword, since they are all lowercase.
@@ -1785,7 +1788,7 @@ physical table with `_apply_db_table!` before calling this, so there is exactly 
 derives `<app label>_<class>` instead of two that had to agree.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
+    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing)::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
 - `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
   the words that cannot be a Julia keyword-argument name. A column named after one of them (or after a
@@ -1810,6 +1813,12 @@ derives `<app label>_<class>` instead of two that had to agree.
   argument to `Model(...)`) rather than the binding. When dedup changes the name AND nothing already
   pins `db_table`, the pre-dedup name is pinned as `db_table` so the model still addresses the right
   table — see the implementation comment at the positional-name computation below.
+- `binding::Union{String, Nothing}=nothing`: the Julia binding to emit, when the caller already knows
+  it (#360). `nothing` (the default) derives it from `model.name` as before. The inspectdb importers
+  pass one because they must resolve every model's FINAL binding *before* rendering the first model,
+  to rewrite each `ForeignKey`'s `.to` to it — `_resolve_target_model` resolves `.to` by binding
+  lookup alone, so a `.to` naming a pre-dedup spelling silently reaches the wrong sibling. Supplying
+  it keeps that a SINGLE derivation; `taken_bindings` still applies as a collision backstop.
 
 # Returns
 - `String`: The string representation of the model object. A field whose rendering fails is
@@ -1829,7 +1838,7 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}())::String
+function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing)::String
   fields::String = ""
   render_failures::Vector{String} = String[]
   # Iterate fields by name for deterministic output. Use `sort(collect(...))` rather than
@@ -1955,14 +1964,26 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
         (fields *= ",\n  indexes = [$(join(rendered_indexes, ", "))]")
     end
   end
-  model_var_name = _model_binding_name(String(model.name), contants_julia)
+  # #360: a caller that had to know this binding BEFORE rendering (the inspectdb importers, which
+  # rewrite every FK `.to` to its target's final binding in a pass 1) passes the string it already
+  # computed rather than letting this function re-derive it. ONE derivation, not two — the drift
+  # `_model_binding_name`'s docstring warns about would here mean an FK silently addressing a
+  # different model, which is the whole point of the issue.
+  model_var_name = binding === nothing ? _model_binding_name(String(model.name), contants_julia) : binding
   # #338: two tables can independently arrive at the same binding above — via either branch of
   # `_model_binding_name`, since its fast path deliberately bypasses the sanitizer's own dedup.
   # Applied uniformly, AFTER either path, against the caller's shared `taken_bindings`: the second
   # model in a batch gets a digit suffix instead of silently overwriting the first model's Julia
   # global when the generated file is `include`d.
+  _pre_dedupe_binding = model_var_name
   model_var_name = _dedupe_taken(model_var_name, taken_bindings)
   push!(taken_bindings, model_var_name)
+  # A caller-supplied binding was already deduped against the same seed in the same order, so this
+  # is unreachable by construction — but if it ever fires, the `.to` strings that pass 1 wrote are
+  # now stale and point at the wrong model. Warn rather than throw: the file is still loadable, and
+  # a throw here would abort an entire import over a defect in PormG, not in the user's schema.
+  binding === nothing || model_var_name == _pre_dedupe_binding ||
+    @warn "Model_to_str: caller-supplied binding collided and was renamed; foreign keys aimed at this model may now resolve elsewhere" model=model.name wanted=_pre_dedupe_binding renamed_to=model_var_name
   # Round-trip the physical table name as `db_table=` (#59). Two sources, one kwarg:
   #
   #  1. An explicit `db_table` on the model — emitted verbatim so a reload reproduces it. This is
@@ -2101,14 +2122,23 @@ function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   pinned = _db_column_already_pinned(sets)
   for sfield in fieldnames(typeof(field))
     pinned && sfield === :db_column && continue
+    # #360: `to_table` is an introspection-only breadcrumb — the physical parent table, recorded so
+    # the importers can rewrite `.to` to the target's final binding in a pass 1 BEFORE rendering. By
+    # the time we get here that rewrite has happened and `to` below is already correct, so the slot
+    # has nothing left to say. It is skipped rather than emitted because `ForeignKey`/`OneToOneField`
+    # accept no such kwarg — `_common_kwargs` would `@warn "Unexpected parameter"` and drop it on
+    # every reload of the generated file, which is noise describing a value nothing consumes.
+    sfield === :to_table && continue
     # #62: `.to` may now be a resolved PormGModel (set_models / migration prelude write
-    # back the model). Emit its generated variable name — `uppercasefirst(model.name)`, which is
-    # exactly what `Model_to_str` emits as the binding whenever that is already a legal identifier,
-    # and the two MUST agree: `_resolve_target_model` resolves a String `.to` by binding lookup
-    # alone. So a model-`.to` serializes identically to the string a user would have declared. (The
-    # only live caller, the import flow, always has a string `.to`; this branch is defensive,
-    # locked by a round-trip test.)
-    sfield == :to && (v = getfield(field, sfield); to = v isa PormGModel ? uppercasefirst(v.name) : v; continue)
+    # back the model). Emit its generated variable name via `_model_binding_name` — the SAME
+    # expression `Model_to_str` uses for the binding itself, and the two MUST agree because
+    # `_resolve_target_model` resolves a String `.to` by binding lookup alone. So a model-`.to`
+    # serializes identically to the string a user would have declared. (The only live caller, the
+    # import flow, always has a string `.to`; this branch is defensive, locked by a round-trip test.)
+    # It was bare `uppercasefirst` until #360 — which agrees for a name that is already a legal
+    # identifier, but emits an unresolvable `.to` for one that is not: a model named `driver profile`
+    # binds as `Driver_profile` and serialized as `"Driver profile"`.
+    sfield == :to && (v = getfield(field, sfield); to = v isa PormGModel ? _model_binding_name(v.name) : v; continue)
     if getfield(field, sfield) != getfield(ForeignKey(""), sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
     end
@@ -2569,6 +2599,14 @@ function _compare_model_field(new_field::PormGField, old_field::PormGField)::Boo
         continue
       elseif field_name == :on_delete
         continue  # Skip comparison for :on_delete attribute
+      elseif field_name == :to_table
+        # #360: an introspection-only breadcrumb, asymmetric by construction — introspection sets the
+        # live parent table, the models-file side is always `nothing` because `Model_to_str` never
+        # emits it. It expresses no schema, so comparing it would report EVERY foreign key as changed.
+        # This function is the fast-path early-out for `_alter_table_fields`; the detailed diff below
+        # it filters the same attribute via `planner._NON_SCHEMA_FIELD_ATTRS`. Both are needed —
+        # without this one the cheap "nothing changed" answer is never reachable for a model with FKs.
+        continue
       elseif getfield(new_field, field_name) != getfield(old_field, field_name)
         return false
       end
@@ -2593,7 +2631,56 @@ function _compare_model_field(new_field::Dict{String, PormGField}, old_field::Di
   return _compare_model_field(new_field |> _compare_model_fields_prepare_fields, old_field |> _compare_model_fields_prepare_fields)
 end
 
+# The PHYSICAL table an FK points at, when the field can actually state one (#360): `to_table` on an
+# introspected field, the resolved target's `model_table_name` on a declared one. `nothing` when it
+# cannot — a still-String `.to`, which names a binding and cannot be turned back into a table.
+#
+# This exists because the live-vs-declared FK comparison used to recover the table from `.to` by
+# LOWERCASING it, which only works while `.to` is exactly `uppercasefirst(<table>)`. That held only
+# by accident: it is false for any table name `uppercasefirst` does not already make a legal
+# identifier (`driver profile` binds as `Driver_profile`, which lowercases to `driver_profile` — a
+# different table), and false for a mixed-case table (`Driver_Profile` lowercases to
+# `driver_profile`) even before #360. Comparing the physical names directly removes the guesswork.
+#
+# `hasproperty`, not a type check: this is reached for any field carrying a `.to`, which includes
+# `sManyToManyField` (no `to_table` slot — it falls through to the resolved-model branch). That path
+# then behaves exactly as before, including the pre-existing `fk_target_column` `FieldError` an M2M
+# pair raises, which `_compare_model_field` catches and treats as "changed" (#69 fail-safe).
+function _fk_reference_table(field::PormGField)::Union{String, Nothing}
+  if hasproperty(field, :to_table)
+    tbl = getproperty(field, :to_table)
+    tbl isa AbstractString && !isempty(tbl) && return String(tbl)
+  end
+  to = field.to
+  to isa PormGModel && return model_table_name(to)
+  return nothing
+end
+
 function _compare_field_foreign_key(new_field::PormGField, old_field::PormGField)::Bool
+  # #360: when BOTH sides can name their physical TABLE, that is the comparison — no assumption
+  # about how `.to` was spelled. Only when one of them cannot (an unresolved String target) does this
+  # fall back to the logical-name comparison below.
+  #
+  # Still compared CASE-INSENSITIVELY, exactly as the logical-name path below always has been
+  # (`format_model_name` is a plain `lowercase`). SQLite identifiers are case-insensitive and
+  # `PRAGMA foreign_key_list` reports the parent AS SPELLED IN THE `REFERENCES` CLAUSE, so
+  # `REFERENCES DRIVER(id)` against a table declared `driver` is legal and lands here as "DRIVER"
+  # against "driver". Comparing exactly would propose an alteration for that key on every
+  # `makemigrations` — a full table rebuild on SQLite.
+  #
+  # The cost is that two tables differing only in case are conflated, which on PostgreSQL (where
+  # identifiers ARE case-sensitive) can be two real tables. Undecidable here: this function receives
+  # no connection. The planner does, so that is where a conditional fold would belong.
+  #
+  # Note this moved the comparison from the LOGICAL axis to the PHYSICAL one, which is a change in
+  # its own right, not just a change of normalization: two parents with different logical names whose
+  # tables differ only in case used to compare unequal on the names alone and now fold together.
+  new_table = _fk_reference_table(new_field)
+  old_table = _fk_reference_table(old_field)
+  if new_table !== nothing && old_table !== nothing
+    return lowercase(new_table) == lowercase(old_table) &&
+           fk_target_column(new_field) == fk_target_column(old_field)
+  end
   new_to = new_field.to isa PormGModel ? new_field.to.name : new_field.to
   old_to = old_field.to isa PormGModel ? old_field.to.name : old_field.to
   normalized_new_to = isnothing(new_to) ? nothing : format_model_name(string(new_to))

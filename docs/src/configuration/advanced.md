@@ -15,6 +15,8 @@ dev:
   # ...
   pool_size: 10   # base 10 → grows to 100 under burst
 ```
+
+  A misspelled pool key (`pool:`, `poolsize:`, `pool_timout:`) is reported on load with a suggestion instead of silently leaving the default in place — see [Unrecognised keys](connection_yml.md#Unrecognised-keys).
 - **Acquire timeout (`pool_timeout`):** How long `acquire_connection` waits for a free connection before raising `PoolTimeoutError` — default **30 s**. Set `pool_timeout:` in `connection.yml` (seconds; fractional allowed) to *fail fast* instead of blocking a request while the pool is saturated:
 
   ```yaml

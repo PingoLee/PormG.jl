@@ -70,20 +70,62 @@ dev:
     time_zone: 'UTC'
 ```
 
+## Environment-block Keys
+
+These are the keys PormG reads **directly under an environment block** — the peers of `config:`. Anything else in that block is not read by anything, and warns on load (see [Unrecognised keys](#Unrecognised-keys) below).
+
+| Key | Applies to | Meaning |
+|---|---|---|
+| `adapter` | both | **Required.** `PostgreSQL` or `SQLite`. A block without it raises `InvalidConfigurationError` on load. |
+| `database` | both | Database name (PostgreSQL) or file path (SQLite). A relative SQLite path resolves inside the config folder. |
+| `host` | both | Server host on PostgreSQL. **On SQLite it is the database file name and takes precedence over `database:`** — a historical quirk, not a typo. |
+| `url` | PostgreSQL | A complete connection string. When present, **every other PostgreSQL target key is ignored** — PormG passes it through verbatim. Setting it under `adapter: SQLite` does nothing and warns; use `database:` there. |
+| `username`, `password`, `port`, `hostaddr` | PostgreSQL | Standard credentials/target. Forwarded into the libpq DSN. |
+| `passfile`, `connect_timeout`, `client_encoding` | PostgreSQL | Forwarded into the libpq DSN verbatim. |
+| `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | PostgreSQL | TLS settings, forwarded into the libpq DSN verbatim. |
+| `extensions` | PostgreSQL | List of extensions to require — see [PostgreSQL Extensions](#PostgreSQL-Extensions). Ignored with a warning on SQLite. |
+| `sqlite_split_read_write` | SQLite | Split the pool into read and write connections. |
+| `pool_size`, `pool_timeout`, `idle_timeout`, `max_lifetime`, `leak_detection_threshold`, `fail_fast_on_connect` | both | Connection-pool tuning — documented in [Advanced Configuration](advanced.md). |
+| `options` | both | Legacy nesting for `sqlite_split_read_write` only. Prefer setting that key directly on the block. |
+| `config` | both | The settings sub-dictionary described in the next section. |
+
+The PostgreSQL-only keys are inert under `adapter: SQLite`, so a block may carry both sets without harm. `hostaddr`, `port`, `password`, `passfile`, `connect_timeout`, `client_encoding` and the four `ssl*` keys reach libpq under exactly the names written here; `username` and `database` are translated to libpq's `user=` and `dbname=` for you.
+
 ## Configuration Settings (`config:`)
 
 At the core of `connection.yml` is the `config` sub-dictionary. This section governs runtime permissions, logging, timezones, and naming conventions for the loaded environment:
 
-!!! warning "Unrecognised keys are warned with suggestions"
-    Only valid user-facing keys (`change_db`, `change_data`, `django_prefix`, `time_zone`, `log_queries`, `log_level`, `log_to_file`, `model_file`) are accepted under `config:`. Any unrecognised key emits a `@warn` on load naming the key and the environment, along with a "did you mean" suggestion if the key is a near-miss typo (e.g. `djago_prefix` → `django_prefix`).
+### Unrecognised keys
 
-!!! warning "Both default to `false`, and a misplaced key is silent"
+!!! warning "A key PormG does not read is reported, never silently dropped"
+    Every level of the file is checked on load, and anything unrecognised emits a `@warn` naming the
+    key — plus a *"did you mean"* when the name is close to a real one:
+
+    - **Under `config:`** — only `change_db`, `change_data`, `django_prefix`, `time_zone`,
+      `log_queries`, `log_level`, `log_to_file` and `model_file` are accepted
+      (e.g. `djago_prefix` → `django_prefix`).
+    - **Directly under an environment block** — only the keys in the table above
+      (e.g. `sslmod` → `sslmode`). Spellings borrowed from other tools are recognised too:
+      `user` → `username`, `pool` → `pool_size`, `dbname` → `database`, `ENGINE` → `adapter`.
+    - **At the top level of the file** — anything that is not `default_env:` and not an environment
+      block (e.g. `defaultenv:` → `default_env`).
+    - **Between the two levels** — a `config:` setting written on the environment block, or an
+      environment key written under `config:`, is reported as misplaced and tells you where it
+      belongs, rather than being reported as unknown.
+
+    A malformed `config:` (one that is not a block of settings) and an unrecognised `log_level:`
+    value are reported the same way. An environment block that is not a block of settings, and one
+    with no `adapter:`, raise `InvalidConfigurationError` instead — they leave nothing to connect
+    with.
+
+!!! warning "Both default to `false`, and a key under the wrong environment is silent"
     Omit the `config:` block and you get `change_data: false` **and** `change_db: false` — writes
     raise `WritesDisabledError` and migrations are rejected. Both keys are only read from the
-    `config:` sub-dictionary of the environment you actually loaded; the same key at the top level,
-    or under a different environment, is **ignored without any error**. A config scaffolded by
-    `PormG.setup()` already sets `change_data: true`; one written by hand or registered through
-    `register_connection` does not.
+    `config:` sub-dictionary of the environment you actually loaded. Writing one at the environment
+    level instead now warns and names `config:` as its home, but writing it **under a different
+    environment** stays silent — only the active block is read, so there is nothing to check it
+    against. A config scaffolded by `PormG.setup()` already sets `change_data: true`; one written by
+    hand or registered through `register_connection` does not.
 
 ### `change_data`
 - **`true`**: DML operations (Data Manipulation Language) are permitted. You can `save()`, `update()`, and `delete()` records through PormG models.
@@ -195,6 +237,8 @@ The recommended pattern for a server is to let the **host** resolve its own envi
 
 !!! note "The bare `env:` key is ignored"
     A top-level `env:` key (as opposed to `default_env:`) does **nothing** — it was renamed to `default_env:`. If a stale config still has `env:`, PormG warns once on load and keeps using the environment resolved above.
+
+Any other top-level value that is not an environment block is warned about on load, with a `default_env` suggestion for near-misses like `defaultenv:` — a common way to lose the setting silently. An environment block written with an empty body (`prod:` with nothing under it) is still a block and is never flagged.
 
 ## Pre-connect hooks
 

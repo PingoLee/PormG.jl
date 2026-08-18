@@ -65,7 +65,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | Call | Raises | When |
 |---|---|---|
 | `Configuration.load(...)` | `PormG.Configuration.MissingConfigurationError` | No `connection.yml` found; try `PormG.setup(path)` |
-| `Configuration.load(...)` | `InvalidConfigurationError` | Unknown adapter, unsupported extension, bad `extensions` shape |
+| `Configuration.load(...)` | `InvalidConfigurationError` | Unknown or missing adapter, unsupported extension, bad `extensions` shape, an environment block that is not a block of settings |
 | model definition | `FieldValidationError` / `ModelDefinitionError` | Bad field argument / bad model shape. Catch `DefinitionError` for both |
 | `makemigrations` / `migrate` | `InvalidMigrationError` | The migration or the schema it describes is not valid |
 | `migrate` on a destructive plan | `PormG.Migrations.DestructiveMigrationError` | Non-interactive run without `destructive = true`; carries `statements` |

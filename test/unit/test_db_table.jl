@@ -186,11 +186,51 @@ DbtPlain.connect_key = "db_table_mock"
     @test occursin("REFERENCES \"Dbt_Driver_Scratch\"(\"id\")", child_ddl)
     @test !occursin("REFERENCES \"dbt_driver_scratch\"", child_ddl)
 
-    # An UNRESOLVED (String) target keeps the pre-existing format_model_name fallback — that is the
-    # introspection/pre-set_models shape, where there is no model object to read a db_table off.
+    # An UNRESOLVED (String) target REFUSES rather than falling back (#388). This assertion used to
+    # read `== "some_model"`, the `format_model_name` lowercase — which is exactly the fabrication
+    # #388 removed: `.to` names a Julia BINDING, and the only reason lowercasing it ever produced a
+    # table was that it inverts the `uppercasefirst` introspection used to write there. There is no
+    # model object here to read a `db_table` off, so there is no honest answer to give.
     strfk = Model("dbt_strfk_scratch",
       id = IDField(), other = ForeignKey("Some_Model", pk_field = "id", on_delete = "CASCADE"))
-    @test fk_target_table(strfk.fields["other"]) == "some_model"
+    @test_throws PormG.ModelDefinitionError fk_target_table(strfk.fields["other"])
+    err = try; fk_target_table(strfk.fields["other"]); nothing; catch e; e end
+    @test occursin("Some_Model", err.msg)          # names the target it could not resolve
+    @test !occursin("some_model", err.msg)         # and never the invented table name
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A `db_table` holding a double quote must not escape its identifier in a REFERENCES clause (#388).
+  #
+  # The table being CREATED has gone through `_quote_table_ddl` since #59; the table being REFERENCED
+  # had not. So the two halves of the same statement disagreed, and a parent pinned to `Ev"il`
+  # rendered `REFERENCES "Ev"il"("id")` — the identifier closes at the embedded quote, leaving `il`
+  # as stray SQL. Malformed at best, and a DDL-injection seam through a value the schema author
+  # controls. #388 made `db_table` authoritative on one more path, which is what surfaced it.
+  #
+  # Both engines, because they reach the clause through different renderers: SQLite writes the FK
+  # inline in `create_table`, PostgreSQL through the planner's `add_foreign_key` (whose caller
+  # pre-quotes every identifier, so the escape has to happen at the call site there).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "an embedded quote in a referenced db_table is escaped, not closed (#388)" begin
+    evil_parent = Model("dbt_evil_parent_scratch", db_table = "Ev\"il", id = IDField())
+    evil_child  = Model("dbt_evil_child_scratch",
+      id = IDField(), pid = ForeignKey(evil_parent, pk_field = "id", on_delete = "CASCADE"))
+
+    sl_ddl = PormG.Dialect.create_table(MockSQLiteDbTable(), evil_child)
+    @test occursin("REFERENCES \"Ev\"\"il\"", sl_ddl)   # doubled — the identifier stays one token
+    @test !occursin("REFERENCES \"Ev\"il\"", sl_ddl)    # the broken rendering must be gone
+
+    # The CREATE side already escaped; assert both halves now agree rather than only the new one.
+    parent_ddl = PormG.Dialect.create_table(MockSQLiteDbTable(), evil_parent)
+    @test occursin("CREATE TABLE IF NOT EXISTS \"Ev\"\"il\"", parent_ddl)
+
+    # PostgreSQL's path: the planner pre-quotes, so `add_foreign_key` receives it already escaped.
+    pg_fk = PormG.Dialect.add_foreign_key(MockPostgresDbTable(), "dbt_evil_child_scratch",
+      "\"c_fk\"", "\"pid\"",
+      "\"$(PormG.Dialect._quote_table_ddl(fk_target_table(evil_child.fields["pid"])))\"", "\"id\"")
+    @test occursin("REFERENCES \"Ev\"\"il\"", pg_fk)
+    @test !occursin("REFERENCES \"Ev\"il\"", pg_fk)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

@@ -20,9 +20,18 @@ using PormG.Models
 struct MockPGConv <: PormG.PormGPostgres end
 struct MockSLConv <: PormG.PormGSQLite end
 
+# The FK parent, as a MODEL rather than a bare `"driver"` string (#388). `fk_target_table` renders the
+# parent's physical table off the resolved target and refuses an unresolved one — `.to` is a Julia
+# BINDING, not a table, so lowercasing it into one was a guess that happened to be right only for a
+# name already spelled like a legal lowercase identifier. These testsets are about the FK COLUMN and
+# the `ON DELETE` mapping; the target just has to be real, and passing the model makes it so without
+# needing a models module. The rendered table is `"driver"` either way, so every assertion below is
+# unchanged.
+const CONV_DRIVER = Models.Model("driver", id = Models.IDField())
+
 # Render a model whose single FK carries the given keyword args, for on_delete assertions.
 _fk_ddl(; fk_kw...) = PormG.Dialect.create_table(MockSLConv(),
-    Models.Model("ratings", id = Models.IDField(), driver = Models.ForeignKey("driver"; fk_kw...)))
+    Models.Model("ratings", id = Models.IDField(), driver = Models.ForeignKey(CONV_DRIVER; fk_kw...)))
 
 @testset "Schema Conventions Freeze (#33)" begin
 
@@ -61,10 +70,12 @@ _fk_ddl(; fk_kw...) = PormG.Dialect.create_table(MockSLConv(),
     # importer's job, not native schema generation).
     @testset "FK column is the field name verbatim (no _id suffix)" begin
         ddl = PormG.Dialect.create_table(MockSLConv(),
-            Models.Model("result", resultid = Models.IDField(), driverid = Models.ForeignKey("driver")))
+            Models.Model("result", resultid = Models.IDField(),
+                         driverid = Models.ForeignKey(CONV_DRIVER)))   # model target, see #388 above
         @test occursin("\"driverid\"", ddl)     # the column equals the field name
         @test !occursin("driverid_id", ddl)     # no Django-style _id suffix
         @test !occursin("\"driver_id\"", ddl)   # not silently transformed
+        @test occursin("REFERENCES \"driver\"", ddl)   # …and the parent table is still `driver`
     end
 
     # Default on_delete is NO ACTION; the documented mapping is frozen (note PROTECT→RESTRICT and

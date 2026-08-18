@@ -196,6 +196,23 @@ the binding that table actually gets, not the unusable `"2fast"`.
     older version and your schema has colliding or non-identifier table names, re-run the import
     rather than hand-patching the targets.
 
+Because the target is a **binding**, the target model has to be *in the models module* for the key to
+mean anything. A key whose target is not there — filtered out by `include_table` / `ignore_table`, in
+another schema, or hand-edited — cannot name a table, and PormG says so rather than guessing:
+`set_models` raises `ModelDefinitionError` when the module loads, and `makemigrations` raises the same
+error when it would otherwise have to render the parent into a `REFERENCES` clause.
+
+!!! warning "Why an unresolved target is not derived from its own spelling"
+    Lowercasing the target would look like it works, and for most schemas it does — it is the exact
+    inverse of the sanitizer for any table name that is *already* a legal lowercase identifier. It is
+    wrong for every other one, silently: a table `2fast` binds as `Col_2fast` and would be referenced
+    as `col_2fast`, and `driver profile` binds as `Driver_profile` and would be referenced as
+    `driver_profile` — a table that may well exist and hold someone else's rows. It also cannot see a
+    [`db_table`](#Pinning-an-explicit-table-name-with-db_table), so a pinned parent would be
+    referenced by the wrong name even where the fold was harmless. The fix is to give the key a model
+    to point at: declare the parent (with `db_table` if its table name differs), or widen the
+    `include_table` / `ignore_table` filter and re-import.
+
 ### `django_prefix` interop
 
 A connection may set `django_prefix` in its `connection.yml` `config:` block (default: unset). It

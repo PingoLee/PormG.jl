@@ -242,6 +242,22 @@ const DOCERR_CASES = [
                 columns = ["c1" => "status", "c2" => "status"], show_query = :dict)
         end,
     ),
+    (
+        # The page's claim is about `makemigrations`, which needs a database. This pins it one layer
+        # down, at a DDL renderer that reaches the same throw with no connection.
+        #
+        # SQLite specifically, and that is not arbitrary: `create_table(::PormGPostgres, …)` renders
+        # columns only and never calls `fk_target_table`, so the PG arm of this call would assert
+        # nothing. PG reaches the throw through the planner's `add_foreign_key` paths instead, which
+        # `test_fk_unresolved_target.jl` covers. The throw itself lives in `fk_target_table` and is
+        # engine-agnostic, so one engine is enough to pin the TYPE — which is all this table claims.
+        "schema_conventions.md — a foreign key whose target is not in the models module raises (#388)",
+        ModelDefinitionError,
+        () -> PormG.Dialect.create_table(DocErrMockSQLite(),
+            Model("docerr_orphan_child_probe",
+                id       = IDField(),
+                parentid = ForeignKey("Docerr_Never_Declared", pk_field = "id"))),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

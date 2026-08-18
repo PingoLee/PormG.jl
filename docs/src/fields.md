@@ -942,6 +942,8 @@ Team_member_settings = Models.Model(
 
 When `through` is not supplied, PormG migrations synthesize a join table with two foreign keys and a composite unique index. The relation can be traversed in filters and projections with the same double-underscore syntax used by `ForeignKey` joins.
 
+The field may also target the model that declares it (pass the model name as a string). Both join columns are then prefixed `from_` / `to_`, since one table cannot carry the same column twice — see [Self-Referential Relationships](many_to_many.md#Self-Referential-Relationships).
+
 ```julia
 Driver_collection = Models.Model("driver_collections",
     id = Models.IDField(),

@@ -43,6 +43,111 @@ This is essential for multi-hop joins and reverse-lookups. Without it, PormG def
 
 ---
 
+## Self-Referential Relationships
+
+A `ManyToManyField` may point at the model that declares it — drivers who were teammates, circuits
+that succeed one another, constructors that share an engine supplier. Reference the model **by
+string**, since its own binding does not exist yet at the point the field is written:
+
+```julia
+M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
+  id = Models.IDField(),
+  driverref = Models.CharField(unique=true),
+  teammates = Models.ManyToManyField("M2m_teammate_scratch", related_name="teammate_of")
+)
+```
+
+Both ends of this relation are the same model, so the usual `<model>_<pk>` column rule would name
+them identically — and one table cannot carry the same column twice. PormG therefore prefixes the
+two ends, exactly as Django does:
+
+| | Normal relation | Self-referential relation |
+|---|---|---|
+| Owner end | `<owner model>_<pk>` | `from_<model>_<pk>` |
+| Target end | `<target model>_<pk>` | `to_<model>_<pk>` |
+
+So `m2m_teammate_scratch_teammates` is created with `from_m2m_teammate_scratch_id` and
+`to_m2m_teammate_scratch_id`. With the conventional `id` primary key this is byte-identical to
+Django's `from_<model>_id` / `to_<model>_id`; a model keyed on something else keeps that key's name
+in the stem, matching the column PormG's own migrations create.
+
+Everything else behaves exactly like any other many-to-many — the manager, the `__` traversal, and
+the reverse accessor:
+
+```julia
+senna = M.M2m_teammate_scratch.objects.get("driverref" => "senna")
+
+M.M2m_teammate_scratch.teammates(senna[:id]).add(prost_id, berger_id)
+
+# Forward: which drivers list prost as a teammate?
+teammates_of_prost = M.M2m_teammate_scratch.objects.filter(
+    "teammates__driverref" => "prost"
+).values("driverref").list()
+
+# Reverse, through related_name: which drivers is senna listed as a teammate of?
+listed_with_senna = M.M2m_teammate_scratch.objects.filter(
+    "teammate_of__driverref" => "senna"
+).values("driverref").list()
+```
+
+The forward query joins out on `from_…` and back on `to_…`; the reverse swaps them. Both traverse
+the same base table twice, which PormG resolves with distinct aliases:
+
+```sql
+SELECT "Tb"."driverref" as "driverref"
+FROM "m2m_teammate_scratch" as "Tb"
+  INNER JOIN "m2m_teammate_scratch_teammates" AS "Tb_1" ON "Tb"."id" = "Tb_1"."from_m2m_teammate_scratch_id"
+  INNER JOIN "m2m_teammate_scratch" AS "Tb_2" ON "Tb_1"."to_m2m_teammate_scratch_id" = "Tb_2"."id"
+WHERE "Tb_2"."driverref" = $1
+```
+
+!!! warning "The relation is directional — there is no `symmetrical=`"
+    Django's `ManyToManyField('self')` defaults to `symmetrical=True`, which makes `add` write the
+    link both ways and suppresses the reverse accessor. **PormG has no equivalent**: a link is
+    stored in one direction only, so `senna.teammates.add(prost)` does *not* make senna appear in
+    prost's `teammates`. If you want a symmetric relationship, add both directions yourself.
+
+    That is also why `related_name` is worth setting here. The forward and reverse accessors land on
+    the *same* model, so the default reverse name — the bare model name — reads like a foreign key
+    rather than the other end of the link.
+
+    **It must differ from every field name on that model**, the relation's own field included.
+    `teammates = ManyToManyField("…", related_name="teammates")` is the tempting spelling for a link
+    you think of as symmetric, and it would leave the reverse end permanently shadowed by the
+    forward one. PormG rejects it with a `ModelDefinitionError` rather than letting the two collapse
+    into one accessor.
+
+!!! warning "A self-`ForeignKey` and a self-`ManyToManyField` on one model need an explicit `related_name`"
+    Both derive the *same* default reverse accessor — the model's own name — and the two
+    registration paths disagree about what to do when they collide: depending on the order the
+    model's fields happen to be iterated, you either get a `ModelDefinitionError` naming the model
+    twice and neither field, or the many-to-many reverse accessor is silently discarded
+    ([#396](https://github.com/PingoLee/PormG.jl/issues/396)).
+
+    Give at least one of them an explicit `related_name` and the ambiguity disappears:
+
+    ```julia
+    M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
+      id = Models.IDField(),
+      driverref = Models.CharField(unique=true),
+      mentor = Models.ForeignKey("M2m_teammate_scratch", null=true, related_name="mentees"),
+      teammates = Models.ManyToManyField("M2m_teammate_scratch", related_name="teammate_of")
+    )
+    ```
+
+!!! note "An explicit `through=` needs its ends named"
+    On a self-relation PormG cannot infer which of the through model's two foreign keys is the
+    source and which is the target — both point at the same model. It refuses rather than guessing;
+    pin `source_field` and `target_field` to the through model's own field names, the same way
+    Django requires `through_fields`:
+
+    ```julia
+    rivals = Models.ManyToManyField("M2m_racer_scratch", through="M2m_rivalry_scratch",
+                                    source_field="challenger", target_field="defender")
+    ```
+
+---
+
 ## Explicit Through Tables
 
 Sometimes you need to store extra data *on the relationship itself*. For example, you might want to know not just *which* team a driver races for, but *what year* they joined.

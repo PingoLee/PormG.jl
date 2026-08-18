@@ -46,10 +46,30 @@ const _M2M_SCRATCH_TABLES = (
     "m2m_squad_dbtable_scratch",
     "m2m_tester_dbtable_scratch",
     "m2m_enrolment_join_tbl",
+    # #364, self-referential M2M. Both the owner table and its auto-generated join table are listed.
+    "m2m_teammate_scratch",
+    "m2m_teammate_scratch_teammates",
+)
+
+# Tables whose SHAPE also has to be checked, not just their existence.
+#
+# `table_exists` answers existence only, so it cannot see the #364 failure mode: a database migrated
+# against the pre-fix tree has `m2m_teammate_scratch_teammates` — it just has ONE endpoint column
+# instead of two, because the duplicate `Dict` key collapsed. That table passes the existence sweep,
+# so `makemigrations` never fires and the run dies further down with a confusing "no such column".
+# Listing the required columns here makes the stale-schema case self-heal exactly like the
+# missing-table case.
+const _M2M_SCRATCH_TABLE_COLUMNS = Dict(
+    "m2m_teammate_scratch_teammates" => ["from_m2m_teammate_scratch_id", "to_m2m_teammate_scratch_id"],
 )
 
 function _m2m_scratch_table_exists(pool, table_name::String)::Bool
-    return Base.invokelatest(table_exists, pool, table_name)
+    Base.invokelatest(table_exists, pool, table_name) || return false
+    required = get(_M2M_SCRATCH_TABLE_COLUMNS, table_name, nothing)
+    required === nothing && return true
+    # Present but the WRONG SHAPE counts as missing, so the migration path below runs (#364).
+    have = Base.invokelatest(column_names, pool, table_name)
+    return all(c -> c in have, required)
 end
 
 function _ensure_m2m_scratch_schema!()
@@ -537,6 +557,99 @@ end
     M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
     M.M2m_brand_scratch.objects.delete(allow_delete_all=true)
     M.M2m_driver_default_reverse_scratch.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #364: a SELF-referential ManyToManyField, end to end.
+#
+# Both ends of the relation resolve to one model, so the join columns used to derive the same string
+# twice. The damage was structural rather than cosmetic: the through model is built from a
+# `Dict{Symbol, Any}` keyed on those two names, so the duplicate key collapsed last-wins and the
+# migration created `m2m_teammate_scratch_teammates` with `id` plus ONE endpoint column. Every
+# assertion below is unreachable on that schema — the join has no second column to land on.
+#
+# What only this layer can prove: that the two `from_`/`to_` columns are real columns in a real
+# table, that a row can be written through one end and read back from the other, and that traversing
+# FORWARD and traversing BACK return different drivers. The unit suite renders the SQL; it cannot
+# tell you the database accepted it.
+#
+# The relation is DIRECTIONAL — PormG has no Django `symmetrical=` — so `senna → prost` does not
+# imply `prost → senna`. The asymmetry assertions below are the point, not an oversight.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Many-to-Many: self-referential relation (#364)" begin
+    # Inside the `try` so a failure here still runs the cleanup below.
+    try
+        M.M2m_teammate_scratch.objects.delete(allow_delete_all=true)
+
+        senna = M.M2m_teammate_scratch.objects.create("driverref" => "senna")
+        prost = M.M2m_teammate_scratch.objects.create("driverref" => "prost")
+        berger = M.M2m_teammate_scratch.objects.create("driverref" => "berger")
+
+        # The relation records two DIFFERENT columns. Stated first because everything after it is
+        # meaningless if this regresses — and on the bug the run would fail here rather than in a
+        # confusing place downstream.
+        rel = Models.get_many_to_many_relation(M.M2m_teammate_scratch, "teammates")
+        @test rel.owner_column == "from_m2m_teammate_scratch_id"
+        @test rel.related_column == "to_m2m_teammate_scratch_id"
+        @test rel.through_table == "m2m_teammate_scratch_teammates"
+
+        # Both are real columns on the real table — the assertion that fails on the collapsed
+        # two-column schema even if the relation metadata were somehow right.
+        cols = Base.invokelatest(column_names, PormG.config[PORMG_DB_FOLDER].connections,
+                                 "m2m_teammate_scratch_teammates")
+        @test "from_m2m_teammate_scratch_id" in cols
+        @test "to_m2m_teammate_scratch_id" in cols
+
+        # --- Writing through the manager ---------------------------------------------------------
+        senna_mgr = M.M2m_teammate_scratch.teammates(senna)
+        @test senna_mgr.add(prost, berger) === nothing
+        @test Set([row[:driverref] for row in senna_mgr.all().list()]) == Set(["prost", "berger"])
+
+        # Idempotent re-add (PostgreSQL: WHERE NOT EXISTS; SQLite: INSERT OR IGNORE) — this is what
+        # the composite unique index over the two columns backs. On the collapsed schema the index
+        # covered one column twice, which capped each driver at a single teammate.
+        @test senna_mgr.add(prost) === nothing
+        @test length(senna_mgr.all().list()) == 2
+
+        # --- The relation is directional ---------------------------------------------------------
+        # senna → prost was written; prost → senna was not. Same table, opposite columns.
+        prost_mgr = M.M2m_teammate_scratch.teammates(prost)
+        @test isempty(prost_mgr.all().list())
+
+        # --- Forward traversal: who has prost as a teammate? --------------------------------------
+        forward = M.M2m_teammate_scratch.objects
+        forward.filter("teammates__driverref" => "prost")
+        forward.values("driverref")
+        forward_rows = forward.list()
+        @test length(forward_rows) == 1
+        @test forward_rows[1][:driverref] == "senna"
+
+        # --- Reverse traversal via related_name: whose teammate is senna? -------------------------
+        # The same physical rows read from the other end. That this returns a DIFFERENT driver than
+        # the forward query is the end-to-end proof the two join columns are distinct: with one
+        # column doing both jobs the two directions cannot disagree.
+        reverse = M.M2m_teammate_scratch.objects
+        reverse.filter("teammate_of__driverref" => "senna")
+        reverse.values("driverref")
+        reverse_rows = reverse.list()
+        @test Set([row[:driverref] for row in reverse_rows]) == Set(["prost", "berger"])
+        @test forward_rows[1][:driverref] ∉ [row[:driverref] for row in reverse_rows]
+
+        # --- set / remove / clear on a self-relation ----------------------------------------------
+        diff = senna_mgr.set(berger)
+        @test diff.added == 0
+        @test diff.removed == 1
+        @test [row[:driverref] for row in senna_mgr.all().list()] == ["berger"]
+
+        @test senna_mgr.remove(berger) === nothing
+        @test isempty(senna_mgr.all().list())
+
+        @test senna_mgr.add(prost, berger) === nothing
+        @test senna_mgr.clear() === nothing
+        @test isempty(senna_mgr.all().list())
+    finally
+        M.M2m_teammate_scratch.objects.delete(allow_delete_all=true)
+    end
 end
 
 @testset "Many-to-Many advanced: read-only guard" begin

@@ -248,6 +248,15 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       @test Base.isidentifier(binding)
       @test !isempty(lstrip(binding, '_'))
     end
+    # #360 strengthens the above from "legal" to a NAMED string, so a child's `.to` can be checked
+    # against something other than the expression that produced it. Written out literally on
+    # purpose: asserting `binding == _model_binding_name(parent)` would be `f(x) == f(x)` — it is
+    # the very call `Model_to_str` makes, so it cannot fail and proves nothing.
+    for (parent, expected) in ["2fast" => "Col_2fast", "driver profile" => "Driver_profile",
+                               "we\"ird" => "We_ird", "_" => "Col", "__" => "Col", "___" => "Col"]
+      m = Model(parent, Dict{String, PormGField}("id" => IDField()))
+      @test first(split(Model_to_str(m; name_is_physical_table = true), " = ")) == expected
+    end
   end
 
   # The language rule the assertion above encodes, pinned directly so it is not folklore.
@@ -393,6 +402,69 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
       @test occursin("Driver2 = Models.Model(\"driver2\"", g2)    # binding ALSO collided — suffixed too
       @test occursin("db_table = \"driver\"", g2)                 # re-pinned to the pre-dedup name
       @test PormG.model_table_name(_reload(g2)) == "driver"       # NOT "driver2"
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # #360: the two mechanics that let an importer decide bindings BEFORE rendering, so a child's
+  # `.to` can name the target's FINAL (possibly digit-suffixed) binding rather than a guess.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "Model_to_str accepts a precomputed binding and never emits to_table (#360)" begin
+
+    # The importers resolve every binding in a pass 1, then hand each one back here. Passing it is
+    # what keeps the derivation SINGLE — the alternative (a second loop re-deriving the same string)
+    # is exactly the drift `_model_binding_name`'s docstring warns about, and here that drift would
+    # mean a foreign key silently addressing a different model.
+    @testset "a caller-supplied binding is emitted verbatim" begin
+      m = Model("driver_profile", Dict{String, PormGField}("id" => IDField()))
+      g = Model_to_str(m; name_is_physical_table = true, binding = "Driver_profile2")
+      @test occursin("Driver_profile2 = Models.Model(\"driver_profile\"", g)
+      # The POSITIONAL name and `db_table` are untouched by the binding override — only the Julia
+      # handle moved, so the model still addresses its own real table.
+      @test PormG.model_table_name(_reload(g)) == "driver_profile"
+    end
+
+    # Omitting it must reproduce the old behaviour exactly, since every non-importer caller does.
+    @testset "omitting it derives the binding as before" begin
+      m = Model("driver_profile", Dict{String, PormGField}("id" => IDField()))
+      @test Model_to_str(m; name_is_physical_table = true) ==
+            Model_to_str(m; name_is_physical_table = true, binding = "Driver_profile")
+    end
+
+    # `to_table` is an in-memory breadcrumb only. `ForeignKey` accepts no such kwarg, so emitting it
+    # would make `_common_kwargs` warn and discard it on every reload — noise for a value nothing
+    # reads. The `!occursin` assertion is what pins the `sfield === :to_table` skip in
+    # `_model_to_str_foreign_key`: drop the skip and the field renders `to_table="driver profile"`.
+    # (Reloading is NOT a gate — an unexpected kwarg is warned about and ignored, not thrown on — so
+    # the reload here only checks that the rest of the rendering survived the skip.)
+    @testset "to_table is never rendered" begin
+      fk = ForeignKey("Driver_profile", pk_field = "id", null = true)
+      fk.to_table = "driver profile"
+      m = Model("pit_stop", Dict{String, PormGField}("id" => IDField(), "profile_id" => fk))
+      g = Model_to_str(m; name_is_physical_table = true)
+      @test !occursin("to_table", g)
+      @test occursin("Models.ForeignKey(\"Driver_profile\"", g)
+      reloaded = _reload(g)
+      @test reloaded.fields["profile_id"].to == "Driver_profile"
+      @test reloaded.fields["profile_id"].to_table === nothing
+    end
+
+    # The round-trip branch: a `.to` that has already been resolved to a model object (set_models and
+    # the migration prelude both write it back) serializes through `_model_binding_name`, not bare
+    # `uppercasefirst`. Before #360 a parent whose name needed sanitizing round-tripped to a `.to`
+    # naming a binding that cannot exist — `"Driver profile"` for a model bound as `Driver_profile`.
+    @testset "a resolved-model .to serializes to the target's real binding" begin
+      parent = Model("driver profile", Dict{String, PormGField}("id" => IDField()))
+      fk = ForeignKey(parent, pk_field = "id", null = true)
+      m = Model("pit_stop", Dict{String, PormGField}("id" => IDField(), "profile_id" => fk))
+      g = Model_to_str(m; name_is_physical_table = true)
+
+      parent_binding = first(split(Model_to_str(parent; name_is_physical_table = true), " = "))
+      @test occursin("Models.ForeignKey(\"$(parent_binding)\"", g)
+      # Stated concretely too, so the assertion above cannot pass by comparing two equally-wrong
+      # strings: it is the sanitized binding, not `uppercasefirst("driver profile")`.
+      @test occursin("Models.ForeignKey(\"Driver_profile\"", g)
+      @test !occursin("Driver profile", g)
     end
   end
 

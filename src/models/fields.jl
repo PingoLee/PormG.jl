@@ -244,6 +244,13 @@ mutable struct sForeignKey <: PormGField
   formatter::Function
   db_constraint::Bool
   initially_deferred::Bool
+  # Physical parent TABLE this key points at, when `.to` came from introspection (#360). NOT declared
+  # API: no constructor kwarg accepts it, `Model_to_str` never emits it, and the migration planner
+  # filters it out of the column diff (`_NON_SCHEMA_FIELD_ATTRS`). It exists so the inspectdb
+  # importers can rewrite `.to` to the target's FINAL, collision-deduped binding before rendering —
+  # `uppercasefirst` is lossy (`Driver` and `driver` both produce `Driver`), so the physical table
+  # cannot be recovered from `.to` afterwards. Set post-construction; see `_plan_inspectdb_bindings!`.
+  to_table::Union{String, Nothing}
 end
 
 """
@@ -407,7 +414,8 @@ function ForeignKey(to::Union{String, PormGModel}; kwargs...)
     "BIGINT",
     format_number_sql,
     db_constraint,
-    initially_deferred
+    initially_deferred,
+    nothing  # to_table — introspection-only breadcrumb (#360), never set from a declaration
   )
 end
 
@@ -553,6 +561,10 @@ mutable struct sOneToOneField <: PormGField
   formatter::Function
   db_constraint::Bool
   initially_deferred::Bool
+  # See `sForeignKey.to_table` above for why this slot exists and why it is not declared API (#360).
+  # It must exist on BOTH structs: the PostgreSQL introspection reader emits a `OneToOneField`
+  # whenever the foreign key column is also UNIQUE.
+  to_table::Union{String, Nothing}
 end
 
 """
@@ -742,7 +754,8 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
     "BIGINT",
     format_number_sql,
     db_constraint,
-    initially_deferred
+    initially_deferred,
+    nothing  # to_table — introspection-only breadcrumb (#360), never set from a declaration
   )
 end
 

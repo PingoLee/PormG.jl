@@ -19,7 +19,7 @@ dependency of PormG), so it needs no external DB setup and runs in the default s
 using Test
 using PormG
 import PormG: Configuration
-import PormG.ConnectionPool: SQLiteConnectionPool, fetch
+import PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
 
 # Top-level mock connection (struct definitions are forbidden inside @testset bodies).
 # Uniquely named so it never clashes with other unit files included into the same module.
@@ -146,6 +146,89 @@ end
         end
       finally
         delete!(PormG.config, key)
+        # Release the SQLite handle so mktempdir can delete the temp DB on Windows (WAL keeps it open).
+        close_pool!(pool)
+      end
+    end
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 5. #360 — a ForeignKey aimed at the collision-SUFFIXED sibling must still reach ITS OWN
+  #    table. This is the half #338 explicitly left open: `.to` was derived independently of
+  #    the binding (`uppercasefirst(<parent table>)`), so when disambiguation renamed the
+  #    binding it was counting on, `.to` still named the un-suffixed spelling and
+  #    `_resolve_target_model` — a pure binding lookup — handed back the WRONG sibling.
+  #
+  #    Two foreign keys, one into each colliding table, on purpose: with only one, the test
+  #    would pass whenever that key happened to aim at whichever sibling kept the un-suffixed
+  #    binding, which is exactly the broken behaviour. Assertions are on the RESOLVED model's
+  #    physical table, never on the generated text — matching `"Driver_profile2"` in the source
+  #    would prove the string was written, not that it points anywhere real.
+  #
+  #    Mutation gate: revert `_plan_inspectdb_bindings!`'s rewrite loop and both foreign keys
+  #    resolve to the same model, failing the `!==` test and one of the two table assertions.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a ForeignKey into a collision-suffixed sibling resolves to its own table (#360)" begin
+    mktempdir() do dir
+      dbfile   = joinpath(dir, "scratch_fk_collision.sqlite")
+      modeldir = joinpath(dir, "generated_models_fk_collision")
+      mkpath(modeldir)
+
+      pool = SQLiteConnectionPool(dbfile; pool_size = 1)
+      # Same colliding pair as testset 4 — both derive the binding `Driver_profile`, so one of
+      # them is renamed to `Driver_profile2` in the generated file.
+      fetch(pool, "CREATE TABLE \"driver profile\" (id INTEGER PRIMARY KEY);")
+      fetch(pool, "CREATE TABLE driver_profile (id INTEGER PRIMARY KEY);")
+      # ...and a child holding one real foreign key into EACH of them.
+      fetch(pool, """CREATE TABLE pit_stop (
+        id INTEGER PRIMARY KEY,
+        spaced_id INTEGER REFERENCES "driver profile"(id),
+        plain_id  INTEGER REFERENCES driver_profile(id)
+      );""")
+
+      key = "importer_fk_collision_test"
+      PormG.config[key] = Configuration.Settings(
+        connections   = pool,
+        db_def_folder = modeldir,
+        change_data   = true,
+      )
+      try
+        PormG.Migrations.import_models_from_sqlite(key)
+        content = read(joinpath(modeldir, "automatic_models.jl"), String)
+
+        scratch = Module(:ImporterFkCollisionScratch360)
+        Base.eval(scratch, :(using PormG))
+        Base.eval(scratch, Meta.parse(content))
+        # `Base.invokelatest` for the same world-age reason as testset 4.
+        Base.invokelatest() do
+          gen_mod = getfield(scratch, :automatic_models)
+          stop    = getfield(gen_mod, :Pit_stop)
+
+          # Resolve each `.to` exactly the way PormG does at load time: binding lookup, nothing else.
+          target_spaced = PormG.Models._resolve_target_model(stop.fields["spaced_id"].to, gen_mod)
+          target_plain  = PormG.Models._resolve_target_model(stop.fields["plain_id"].to, gen_mod)
+
+          # Both `.to` strings name a binding the generated file actually defines. (Pre-#360 this
+          # already held — both resolved fine, just to the same model.)
+          @test target_spaced !== nothing
+          @test target_plain  !== nothing
+
+          # The real assertion: each key reaches the table it was declared against.
+          @test PormG.model_table_name(target_spaced) == "driver profile"
+          @test PormG.model_table_name(target_plain)  == "driver_profile"
+
+          # And they are genuinely two different models — the pre-fix failure was both landing on
+          # whichever sibling kept the un-suffixed binding.
+          @test target_spaced !== target_plain
+
+          # The breadcrumb that made the rewrite possible is an in-memory detail and must NOT reach
+          # the generated file: `ForeignKey` accepts no such kwarg, so every reload would `@warn`
+          # and discard it. Guards the `sfield === :to_table` skip in `_model_to_str_foreign_key`.
+          @test !occursin("to_table", content)
+        end
+      finally
+        delete!(PormG.config, key)
+        close_pool!(pool)
       end
     end
   end

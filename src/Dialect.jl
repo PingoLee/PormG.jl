@@ -890,8 +890,11 @@ function create_table(conn::PormGSQLite, model::PormGModel)
       # Local FK column and referenced parent column both honor db_column (#50).
       local_col = field_db_column(field, string(field_name))
       target_pk = fk_target_column(field)
-      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table.
-      push!(columns, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(fk_target_table(field))\"(\"$target_pk\") ON DELETE $on_delete_str")
+      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table, and is ESCAPED (#388) —
+      # the table being CREATED goes through `_quote_table_ddl` while the table being REFERENCED did
+      # not, so a `db_table` holding a `"` closed the identifier early: a parent pinned to `Ev"il`
+      # rendered `REFERENCES "Ev"il"("id")`, which is malformed SQL and a DDL-injection seam.
+      push!(columns, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(_quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
 
@@ -1164,8 +1167,9 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
       on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
       local_col = field_db_column(f, string(f_name))
       target_pk = fk_target_column(f)
-      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table.
-      push!(columns_defs, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(fk_target_table(f))\"(\"$target_pk\") ON DELETE $on_delete_str")
+      # Referenced (parent) TABLE honors db_table (#59) via fk_target_table, escaped as in
+      # `create_table` above (#388).
+      push!(columns_defs, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(_quote_table_ddl(fk_target_table(f; column = f_name, model = model)))\"(\"$target_pk\") ON DELETE $on_delete_str")
     end
   end
 

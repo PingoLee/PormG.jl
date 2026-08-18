@@ -183,7 +183,10 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
     local_col = Models.field_db_column(new_field, string(field_name))
     on_delete_sql = hasfield(typeof(new_field), :on_delete) ? Dialect._foreign_key_on_delete_sql(new_field.on_delete) : nothing
     _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(fk_target_table(new_field))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+    # `_quote_table_ddl` on the referenced table (#388): `add_foreign_key` interpolates
+    # `ref_table_name` verbatim — every identifier it receives is pre-quoted HERE — so an embedded
+    # `"` in a parent's `db_table` would close the identifier early and corrupt the ALTER.
+    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(new_field; column = field_name, model = model_name)))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
   end
   return nothing
 end
@@ -201,7 +204,8 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
       local_col = Models.field_db_column(field, string(field_name))
       on_delete_sql = hasfield(typeof(field), :on_delete) ? Dialect._foreign_key_on_delete_sql(field.on_delete) : nothing
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
-      Dialect.add_foreign_key(conn, model_table_name(model), "\"$constraint_name\"", "\"$local_col\"",  "\"$(fk_target_table(field))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+      # Referenced table escaped as in `_add_fk_constraint_in_alteration` above (#388).
+      Dialect.add_foreign_key(conn, model_table_name(model), "\"$constraint_name\"", "\"$local_col\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
     # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
     # we might need recreation if it's a FK.
     end
@@ -999,9 +1003,22 @@ end
 
 # Resolve each code model's FK/O2O targets against `models_module` (write-back) and default a
 # missing `pk_field`, by delegating each field to the shared `Models.resolve_fk_target!` (#65).
-# Best-effort (strict=false): an unresolvable string target is left as-is (e.g. a cross-module
-# reference whose verbatim fallback is already correct) with a `@debug`, never breaking the run.
+# Best-effort (strict=false): an unresolvable string target is left as-is with a `@debug` rather
+# than aborting the whole load, so a diff can still be computed for every OTHER model in the file.
 # The runtime path's strict throw lives in `set_models`, so typos surface loudly there first.
+#
+# #388 changed what "left as-is" costs. This comment used to justify the tolerance by saying the
+# unresolved string's "verbatim fallback is already correct" and that it "never breaks the run" —
+# both are now false. There is no fallback: `fk_target_table` refuses an unresolved target, because
+# `.to` is a Julia BINDING and the lowercase that used to stand in for a table name was only ever
+# right by accident. So the run does break, deliberately, at the point where the parent would have
+# been rendered into a `REFERENCES` clause.
+#
+# What is NOT a reason to defer: making the failure narrower. It is not narrower — `makemigrations`
+# puts no `try` around `get_migration_plan` (the guarded call in both arms is `convert_schema_to_models`),
+# so the throw aborts the whole run exactly as a `strict=true` throw here would. The reason to defer
+# is the one above: most models never reach a `REFERENCES` clause at all, so an unresolved target on a
+# model with no pending DDL costs nothing, and the diff for every other model still gets computed.
 function _resolve_fk_targets_and_pk!(current_models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, models_module::Module)::Nothing
   for (_, entry) in current_models
     model = entry[:model]

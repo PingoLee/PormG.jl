@@ -1094,12 +1094,58 @@ function fk_target_column(field::PormGField)::String
 end
 
 # Referenced (parent) physical TABLE for a ForeignKey (#59) — the table-level sibling of
-# fk_target_column above. A resolved PormGModel target goes through model_table_name (so it
-# honors the target's db_table); a still-unresolved String target falls back to
-# format_model_name, matching fk_target_column's own verbatim-fallback shape for that case.
-function fk_target_table(field::PormGField)::String
+# fk_target_column above. Single-sourced on `_fk_reference_table` (#388) so the DDL renderer and the
+# live-vs-declared field comparison answer "which table does this key point at" the same way:
+# `to_table` when introspection recorded one, else the resolved target's `model_table_name`.
+#
+# #388: a still-unresolved String `.to` now RAISES instead of being lowercased into a table name.
+# `.to` is a Julia BINDING (#360/#386), and the lowercase only ever recovered the table by accident —
+# it inverts `uppercasefirst`, which is what introspection used to write there. It is false for any
+# table whose name is not already a legal identifier: a table `2fast` binds as `Col_2fast` and
+# rendered `REFERENCES "col_2fast"`; `driver profile` binds as `Driver_profile` and rendered
+# `REFERENCES "driver_profile"`. Both name tables that do not exist, emitted into DDL with no warning.
+#
+# Nothing here can recover the real name, so the honest answer is to say so. `set_models` already
+# refuses an unresolvable target exactly this loudly (`resolve_fk_target!`, strict=true); this makes
+# the migration prelude's best-effort path (strict=false) fail at the point of USE rather than hand
+# the database an invented identifier that fails later as a missing relation.
+# `column` / `model` are OPTIONAL diagnostic context, used only to build the refusal message. A field
+# knows its target but not its own name or owner, so without them the error can say *which parent* is
+# missing and nothing else — and the realistic failure is a generated file where one filtered-out
+# parent is referenced by a dozen children, where "which key" is the entire question. Every one of the
+# four call sites has both in scope (`Dialect.create_table`/`alter_field` iterate `model.fields`; the
+# planner's two take `model_name` + `field_name` as parameters), so they all pass them. Keyword rather
+# than positional so any other caller keeps working unchanged.
+function fk_target_table(field::PormGField;
+                         column::Union{AbstractString, Symbol, Nothing} = nothing,
+                         model::Union{AbstractString, Symbol, PormGModel, Nothing} = nothing)::String
+  tbl = _fk_reference_table(field)
+  tbl !== nothing && return tbl
+  # `.to` is safe to read here: `_fk_reference_table` only reaches its `nothing` return after
+  # touching it, so a field without the property has already raised inside it.
+  #
+  # A BLANK `.to` joins the `nothing` arm rather than being interpolated: `ForeignKey("")` is legal to
+  # construct, and quoting it produced "its target  is not a model" — a double space wrapping an empty
+  # ANSI pair, which reads as a rendering bug rather than as the missing target it is. `strip`, not
+  # `isempty`: `ForeignKey(" ")` is just as unresolvable and produced the identical symptom.
   tgt = field.to
-  return tgt isa PormGModel ? model_table_name(tgt) : format_model_name(tgt)
+  unset = tgt === nothing || (tgt isa AbstractString && isempty(strip(tgt)))
+  named = unset ? "is not set" : "\e[31m$(tgt)\e[0m is not a model in the loaded models"
+  where = if column === nothing && model === nothing
+    ""
+  else
+    owner = model isa PormGModel ? model.name : model
+    col_part = column === nothing ? "" : " \e[31m$(column)\e[0m"
+    owner_part = owner === nothing ? "" : " in \e[32m$(owner)\e[0m"
+    " (foreign key$(col_part)$(owner_part))"
+  end
+  throw(ModelDefinitionError(
+    "Cannot determine the table a foreign key references$where: its target $named, so the physical " *
+    "table name is unknown. A `to` string names a Julia model BINDING, not a table, and PormG " *
+    "will not guess a table name from it. Either declare the target model in the models module " *
+    "(giving it db_table=\"…\" when its table name differs from the model name), or — if the file " *
+    "was generated with include_table/ignore_table — add the parent's table to that filter and " *
+    "re-import, so the key has a model to point at."))
 end
 
 # Resolve a string FK/O2O target to its model object within `mod` (#62). Returns the
@@ -1127,11 +1173,18 @@ both model-load lifecycles share — the runtime path (`set_models`) and the mig
 (`_load_current_models` → `_resolve_fk_targets_and_pk!`). Side-effect-free with respect to globals: it
 mutates only `field.to`/`field.pk_field`, never `REGISTERED_MODULES`, `Configuration`, or reverse relations.
 
-`strict=true` (runtime) throws `ArgumentError` on an unresolvable target; `strict=false` (migrations) is
-best-effort — it leaves `field.to` a string, emits a `@debug`, and returns `nothing`, which skips the
-`pk_field` default (so an unresolved field keeps both its string `.to` and a `nothing` `.pk_field`, matching
-the pre-#65 migration behavior). The statement order is load-bearing: the strict throw fires *before* the
-write-back so the message still names the originally-declared target string.
+`strict=true` (runtime) throws [`ModelDefinitionError`](@ref) on an unresolvable target; `strict=false`
+(migrations) is best-effort — it leaves `field.to` a string, emits a `@debug`, and returns `nothing`, which
+skips the `pk_field` default (so an unresolved field keeps both its string `.to` and a `nothing`
+`.pk_field`). The statement order is load-bearing: the strict throw fires *before* the write-back so the
+message still names the originally-declared target string.
+
+The docstring said `ArgumentError` until #388 — it had been wrong since the #231/#239 taxonomy landed, and
+was the last place still promising the retired type for this call. `test_docs_error_type_drift.jl` cannot
+catch it: the function is not `public`, so `api.md` never renders this docstring.
+
+An unresolved `.to` is no longer usable downstream: `fk_target_table` refuses to derive a physical table
+from a binding (#388), so `strict=false` defers the failure to the point of use rather than suppressing it.
 
 `field` is left untyped because `sForeignKey`/`sOneToOneField` are defined later in the load order (in
 `models/fields.jl`); both call sites already guard with `field isa sForeignKey || field isa sOneToOneField`,

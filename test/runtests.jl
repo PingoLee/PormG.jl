@@ -56,6 +56,7 @@ end
     @testset "Mixed-case Model Binding in Reverse Joins (#343)" include("unit/test_reverse_join_mixed_case_binding.jl")
     @testset "db_column Authoritative (#50)" include("unit/test_db_column.jl")
     @testset "db_table Authoritative (#59)" include("unit/test_db_table.jl")
+    @testset "Unresolved ForeignKey Target Is Never Guessed (#388)" include("unit/test_fk_unresolved_target.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
     @testset "CTE Ergonomics F() Reference (#44)" include("unit/test_cte_ergonomics.jl")
     @testset "JSON Path Lookups (#27)" include("unit/test_json_lookups.jl")

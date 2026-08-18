@@ -245,6 +245,44 @@ function _reverse_join_table(reverse_model::PormGModel, logical_name::AbstractSt
   return django !== nothing ? string(django, lowercase(logical_name)) : lowercase(logical_name)
 end
 
+# FORWARD FK/O2O join target whose `.to` is still a STRING (#388). `.to` names the target's Julia
+# BINDING (#360/#386), never its table, so the only correct move is to resolve the binding in the
+# owning models module and read the table off the model — which is exactly what the resolved-`.to`
+# arm beside each call site already does, and what the next-hop lookup does one line later.
+#
+# Both call sites used to `lowercase` the binding into a table name instead. That inverts
+# `uppercasefirst`, which is the right inverse only while the binding IS `uppercasefirst(<table>)`:
+# a table `2fast` binds as `Col_2fast` and joined `col_2fast`, `driver profile` binds as
+# `Driver_profile` and joined `driver_profile`. Neither table exists. It also ignored `db_table`
+# outright, so a parent pinned to an explicit table joined the wrong one even when the guess would
+# otherwise have inverted cleanly.
+#
+# The `instruct.django` arm went with it, deliberately. That prefix fallback is documented as the
+# spelling for a REVERSE-join target carrying no `db_table` (`docs/src/schema_conventions.md` →
+# *`django_prefix` interop*), and the resolved-model arm this now joins has never applied it — so the
+# arm only fired when a key happened to reach the String branch, which rendered ONE foreign key as
+# two different tables depending on whether `set_models` had resolved its target yet.
+#
+# Raises rather than returning `nothing`: an unresolvable binding cannot produce a join at all. What
+# changes here is the ERROR, not whether there is one — the old code always failed too, just as a
+# bare `UndefVarError` from a `getfield`: at this hop when the path had exactly two segments, and
+# one iteration later in the `while` loop (`new_object = getfield(…)`) when it had more. Both name a
+# Julia symbol rather than the field path the user wrote, which is the part worth fixing.
+#
+# The genuinely SILENT case was never the unresolvable binding — it was a binding that DOES resolve
+# but whose table is not `lowercase(binding)`, which produced a perfectly well-formed `JOIN` against
+# the wrong table. Not necessarily a MISSING one: `Driver_Profile` folds to `driver_profile`, which on
+# PostgreSQL is a second, real table that may exist and hold someone else's rows — a query that
+# returns results, all of them wrong. That is the case the two mixed-case join testsets pin.
+function _forward_join_model(to::AbstractString, mod::Module, owner::PormGModel, column::AbstractString)::PormGModel
+  model = Models._resolve_target_model(to, mod)
+  model isa PormGModel && return model
+  throw(QueryBuildError(
+    "Invalid field path: the foreign key \e[31m$(column)\e[0m in \e[32m$(owner.name)\e[0m targets " *
+    "\e[31m$(to)\e[0m, which is not a model binding in \e[32m$(mod)\e[0m. A ForeignKey `to` string " *
+    "names a Julia model binding, not a table, so there is no table to join."))
+end
+
 # Shared helper used at the four sites in `_build_row_join` where a many-to-many
 # (forward or reverse) hop must be expanded into the through-table + related-table
 # join pair. Returns the alias of the related-table join, the row dict for that
@@ -306,6 +344,15 @@ end
 
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true)
   vector = copy(field)
+  # The `String` member is UNREACHABLE as of #388, and deliberately left in place. Every one of the
+  # nine assignments below now stores a resolved model — `cte_model`, `_apply_many_to_many_branch`'s
+  # `foreign_model` (×4), `first_model`/`next_model` (the forward arms), and `reverse_model` (×2) —
+  # so narrowing this to `Union{PormGModel, Nothing}` would make that invariant enforced rather than
+  # merely true. It is not narrowed here because the annotation would then `convert` on assignment,
+  # turning any path this audit missed from a working query into a `TypeError`. The unit suite does
+  # reach these branches (`test_cte_ergonomics.jl`, `test_many_to_many.jl`), but not all four M2M call
+  # sites, and this change is not authorized to run the integration suite that would. Narrow it in a
+  # change that can; until then the `isa PormGModel` tests downstream stay.
   foreign_table_name::Union{String, PormGModel, Nothing} = nothing
   foreing_table_module::Module = instruct.object.model._module::Module
   row_join = sizehint!(Dict{String, Union{String, Vector{FilterType}}}(), 8)
@@ -425,16 +472,18 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     first_field = _get_join_field(instruct.object, join_path) !== nothing ? _get_join_field(instruct.object, join_path) : instruct.object.model.fields[first_column]
     # @pormg_debug
     row_join["how"] = _determine_join_type(first_field, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
-    foreign_table_name = first_field.to
-    if foreign_table_name === nothing
+    first_target = first_field.to
+    first_target === nothing &&
       throw(QueryBuildError("Invalid field path: the column $(first_column) does not have a foreign key"))
-    elseif isa(foreign_table_name, PormGModel)
-      row_join["b"] = Models.model_table_name(foreign_table_name)
-      size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
-    else
-      row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
-      size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
-    end
+    # #388: the two arms are ONE arm now. A String `.to` is the target's binding, so resolving it
+    # yields the same model a `set_models`-resolved `.to` already holds, and the table comes off that
+    # model either way. Carrying the model forward (matching the reverse branch below, #343) also
+    # spares the next hop and `_solve_field` from repeating the binding lookup.
+    first_model = first_target isa PormGModel ? first_target :
+      _forward_join_model(first_target, foreing_table_module, instruct.object.model, first_column)
+    row_join["b"] = Models.model_table_name(first_model)
+    size(vector, 1) == 2 && (last_field = first_model.fields[vector[2]])
+    foreign_table_name = first_model
     # @pormg_debug
     row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
     # Local FK column and referenced parent column both honor db_column (#50).
@@ -539,18 +588,20 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       !hasfield(typeof(first_field), :to) && throw(QueryBuildError("Invalid field path: the column $(first_column) is a field from $(new_object.name), but it does not have a foreign key"))
       row_join["a"] = prev_b
       row_join["alias_a"] = tb_alias      
-      row_join["how"] = _determine_join_type(new_object.fields[first_column], previus_how=prev_how, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
-      foreign_table_name = new_object.fields[first_column].to
-      if foreign_table_name === nothing
+      # `first_field`, not a second `new_object.fields[first_column]` lookup — same object, and it is
+      # the one the `hasfield(:to)` guard above already vetted and `fk_target_column` reads below.
+      row_join["how"] = _determine_join_type(first_field, previus_how=prev_how, second_fild_name= size(vector, 1) > 1 ? vector[2] : nothing)
+      next_target = first_field.to
+      if next_target === nothing
         # #197: this used to blame `vector[2]`, but the FK-less column is `first_column`.
         throw(QueryBuildError("Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target"))
-      elseif isa(foreign_table_name, PormGModel)
-        row_join["b"] = Models.model_table_name(foreign_table_name)
-        size(vector, 1) == 2 && (last_field = foreign_table_name.fields[vector[2]])
-      else
-        row_join["b"] = instruct.django !== nothing ? string(instruct.django,  foreign_table_name |> lowercase) : foreign_table_name |> lowercase
-        size(vector, 1) == 2 && (last_field = getfield(foreing_table_module, foreign_table_name |> Symbol).fields[vector[2]])
       end
+      # #388: same single arm as the first hop above — see `_forward_join_model`.
+      next_model = next_target isa PormGModel ? next_target :
+        _forward_join_model(next_target, foreing_table_module, new_object, first_column)
+      row_join["b"] = Models.model_table_name(next_model)
+      size(vector, 1) == 2 && (last_field = next_model.fields[vector[2]])
+      foreign_table_name = next_model
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
       # Local FK column and referenced parent column both honor db_column (#50).
       row_join["key_b"] = Models.fk_target_column(first_field)

@@ -152,8 +152,7 @@ NameCaseDriver.connect_key = "model_name_case_mock"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # The DECOUPLING that closed the underscore split at its root (#317). `format_model_name` no
-  # longer inherits the field-name hatch, so it rewrites nothing but case — and an unresolved
-  # String FK target renders the SAME identifier `create_table` writes. Before, these disagreed.
+  # longer inherits the field-name hatch, so it rewrites nothing but case.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "format_model_name is a pure case fold (#317)" begin
     @test Models.format_model_name("_Order")  == "_order"    # was: "order" — the split
@@ -161,10 +160,19 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     @test Models.format_model_name("a__b")    == "a__b"      # was: ModelDefinitionError
     @test Models.format_model_name("Driver")  == "driver"    # the fold itself is unchanged
 
-    # The property that matters: an FK pointing at an unresolved `_`-prefixed target references the
-    # table that name denotes, not a stripped variant of it.
+    # #317's own FK claim is RETIRED here, not merely re-asserted (#388). It used to read
+    # `fk_target_table(fk) == "_fk317_parent"` — "an FK pointing at an unresolved `_`-prefixed
+    # target references the table that name denotes". That property depended on `.to` holding the
+    # table name, which #360/#386 ended: `.to` is now the target's Julia BINDING, and lowercasing a
+    # binding back into a table only works while the binding is exactly `uppercasefirst(<table>)`.
+    # `_Fk317_Parent` happens to satisfy that; `Col_2fast` and `Driver_profile` do not, and used to
+    # render tables that do not exist. So the honest property is that it refuses.
+    #
+    # `format_model_name` itself is untouched by that — it is still the pure fold asserted above,
+    # and still the right function for a LOGICAL-name comparison. It simply no longer has any
+    # business deriving a physical table.
     fk = Models.ForeignKey("_Fk317_Parent", pk_field = "id")
-    @test Models.fk_target_table(fk) == "_fk317_parent"
+    @test_throws PormG.ModelDefinitionError Models.fk_target_table(fk)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

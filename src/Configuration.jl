@@ -401,8 +401,11 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   elseif settings.db_config_settings["adapter"] == "PostgreSQL"
     dns = String[]
 
-    # Check for direct URL/Connection String support
-    if haskey(settings.db_config_settings, "url") && settings.db_config_settings["url"] !== nothing
+    # Check for direct URL/Connection String support. A blank `url:` counts as unset, not as an
+    # empty DSN: gating on `!== nothing` meant `url: ''` discarded every credential below it and
+    # handed libpq an empty conninfo, which falls back to PGHOST/PGUSER or the local socket as the
+    # OS user — a fully-populated-looking config silently connecting to the wrong database (#348).
+    if !_is_unset(get(settings.db_config_settings, "url", nothing))
       dns_str = settings.db_config_settings["url"]
     else
       # Standard parameters loop
@@ -444,23 +447,11 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
 end
 
 """
-    read_db_connection_data(db_settings_file::String) :: Dict{Any,Any}
+    _configured_extensions(settings::PormGSettings)::Vector{String}
 
-Attempts to read the database configuration file and returns the part corresponding to the current environment as a `Dict`.
-Does not check if `db_settings_file` actually exists so it can throw errors.
-If the database connection information for the current environment does not exist, it returns an empty `Dict`.
-
-# Examples
-```julia
-julia> Configuration.read_db_connection_data(...)
-Dict{Any,Any} with 6 entries:
-  "host"     => "localhost"
-  "password" => "..."
-  "username" => "..."
-  "port"     => 5432
-  "database" => "..."
-  "adapter"  => "PostgreSQL"
-```
+Normalize the environment block's `extensions:` value into a clean list of extension names.
+Accepts a list or a bare string, trims and lower-cases each entry, and drops empties. Returns
+an empty vector when the key is absent, `nothing`, or `missing`.
 """
 function _configured_extensions(settings::PormGSettings)::Vector{String}
   raw = get(settings.db_config_settings, "extensions", String[])
@@ -598,6 +589,186 @@ const VALID_CONFIG_KEYS = (
   "model_file",
 )
 
+"""
+    VALID_CONNECTION_KEYS
+
+Allowed keys directly under an environment block in `connection.yml` (#348) — the peers of
+`config:`. Every entry is read by `_build_connection_pool!` or `_configured_extensions`;
+anything else is dead weight in the file and is warned about on load.
+
+Keep `host` ahead of `hostaddr`: `_suggest_name` keeps the *first* minimum, and `hostname`
+is equidistant from both.
+"""
+const VALID_CONNECTION_KEYS = (
+  # Target
+  "adapter", "url", "database", "host", "hostaddr", "port", "username", "password",
+  # libpq passthrough (PostgreSQL only; forwarded verbatim into the DSN)
+  "passfile", "connect_timeout", "client_encoding",
+  "sslmode", "sslrootcert", "sslcert", "sslkey",
+  # Pool
+  "pool_size", "pool_timeout", "idle_timeout", "max_lifetime",
+  "leak_detection_threshold", "fail_fast_on_connect",
+  # Backend behaviour
+  "sqlite_split_read_write", "extensions",
+  # Nested blocks
+  "options", "config",
+)
+
+"""
+    VALID_OPTION_KEYS
+
+The only key ever read out of a nested `options:` block. `options:` exists solely as legacy
+nesting for `sqlite_split_read_write`, which is also accepted directly on the environment block.
+"""
+const VALID_OPTION_KEYS = ("sqlite_split_read_write",)
+
+"""
+    CONNECTION_KEY_ALIASES
+
+Spellings borrowed from *other tools* — libpq (`user`, `dbname`), ActiveRecord (`pool`), Django
+(`ENGINE`, `NAME`, `USER`) — rather than typos of PormG's own names. Edit distance cannot reach
+them and must not try: `user` is 4 edits from `username` on a 4-character word, and worse,
+`_suggest_name("pool", VALID_CONNECTION_KEYS)` lands on `port` (distance 2, inside the relative
+threshold), i.e. the flagship footgun would receive a *wrong* suggestion rather than none.
+
+Consulted **before** `_suggest_name` so it overrides that. Looked up case-folded, which covers
+Django's uppercase `DATABASES` keys for free.
+"""
+const CONNECTION_KEY_ALIASES = Dict{String,String}(
+  "user" => "username", "usr" => "username", "uid" => "username",
+  "pass" => "password", "passwd" => "password", "pwd" => "password",
+  "db" => "database", "dbname" => "database", "db_name" => "database", "name" => "database",
+  "pool" => "pool_size", "poolsize" => "pool_size", "max_pool_size" => "pool_size",
+  "hostname" => "host",
+  "engine" => "adapter", "driver" => "adapter",
+)
+
+# A key written with no value (`url:`) parses to `nothing`, and one written blank (`url: ''`) to an
+# empty string. Both mean "not set" — neither should be treated as a configured value.
+_is_unset(v) = v === nothing || (v isa AbstractString && isempty(strip(v)))
+
+# Ordered, not a Dict: `Dict` iteration order is unspecified, so a value matching two names
+# (e.g. "debug_info") previously resolved differently between runs.
+const LOG_LEVEL_NAMES = (("debug", Logging.Debug), ("info", Logging.Info),
+                         ("warn", Logging.Warn), ("error", Logging.Error))
+
+# Apply a `config: log_level:` value. Substring matching is deliberate — "warning" means `warn` —
+# but a value matching nothing used to leave the default in place silently (#348).
+function _apply_log_level!(settings::PormGSettings, v)::Nothing
+  text = lowercase(string(v))
+  for (name, level) in LOG_LEVEL_NAMES
+    if occursin(name, text)
+      settings.log_level = level
+      return nothing
+    end
+  end
+  @warn "connection.yml: unrecognised `log_level:` value; keeping the default" value=v env=settings.app_env supported=first.(LOG_LEVEL_NAMES)
+  return nothing
+end
+
+# Every message in this family is prefixed `connection.yml: ` on purpose — one `occursin` filter
+# then covers the whole family in tests, including the "a valid file emits none of them" guard.
+# No `maxlog`/`_id`: the output is bounded by the file's key count on a single `load()`, and the
+# repo's warn-once policy (src/AdvisoryLock.jl) exists for unbounded call sites, not this.
+function _warn_unknown_env_key(k::String, app_env::AbstractString)::Nothing
+  if k in VALID_CONFIG_KEYS
+    @warn "connection.yml: key belongs under the environment's `config:` block; ignored here" key=k env=app_env move_to="config"
+    return nothing
+  end
+
+  alias = get(CONNECTION_KEY_ALIASES, lowercase(k), nothing)
+  if alias !== nothing
+    @warn "connection.yml: unrecognised connection key; ignored" key=k env=app_env did_you_mean=alias
+    return nothing
+  end
+
+  suggestion = _suggest_name(k, VALID_CONNECTION_KEYS)
+  if suggestion !== nothing
+    @warn "connection.yml: unrecognised connection key; ignored" key=k env=app_env did_you_mean=suggestion
+    return nothing
+  end
+
+  # Only once nothing in this block's OWN vocabulary is close: a near-miss on a `config:` key is
+  # almost certainly a misplaced *and* misspelled setting (`timezone:` sitting at the env level).
+  # Deliberately NOT mirrored in the `config:` loop — there the same fallback resolves
+  # `connections` to `options` (distance 5 on an 11-character word), a false positive the #365
+  # tests pin.
+  misplaced = _suggest_name(k, VALID_CONFIG_KEYS)
+  if misplaced !== nothing
+    @warn "connection.yml: key belongs under the environment's `config:` block; ignored here" key=k env=app_env move_to="config" did_you_mean=misplaced
+    return nothing
+  end
+
+  @warn "connection.yml: unrecognised connection key; ignored" key=k env=app_env
+  return nothing
+end
+
+function _warn_unknown_env_keys(env_block::AbstractDict, app_env::AbstractString)::Nothing
+  for k in keys(env_block)
+    k_str = string(k)
+    k_str in VALID_CONNECTION_KEYS && continue
+    _warn_unknown_env_key(k_str, app_env)
+  end
+  return nothing
+end
+
+function _warn_unknown_option_keys(options::AbstractDict, app_env::AbstractString)::Nothing
+  for k in keys(options)
+    k_str = string(k)
+    k_str in VALID_OPTION_KEYS && continue
+    # The two levels are distinguished, not merged: sending a `config:` setting to the environment
+    # block would just earn it a second warning telling it to move again.
+    if k_str in VALID_CONNECTION_KEYS
+      @warn "connection.yml: key does not belong under `options:`; ignored" key=k_str env=app_env move_to="environment"
+    elseif k_str in VALID_CONFIG_KEYS
+      @warn "connection.yml: key does not belong under `options:`; ignored" key=k_str env=app_env move_to="config"
+    else
+      @warn "connection.yml: unrecognised `options:` key; ignored" key=k_str env=app_env supported=VALID_OPTION_KEYS
+    end
+  end
+  return nothing
+end
+
+# Environment-block NAMES are arbitrary user strings, so the only decidable rule at the file level
+# is "a value that is not a mapping". A block written with an empty body (`prod:` and nothing
+# under it) parses to `nothing`, so it is skipped too — it is a block, just an empty one.
+#
+# `app_env` is skipped as well: a malformed *active* block (`dev: somestring`) is not an unknown
+# key, and the caller raises a precise InvalidConfigurationError for it a few lines later. Without
+# this the user would get a misleading "unrecognised top-level key: dev" first.
+function _warn_unknown_top_level_keys(db_conn_data::AbstractDict, app_env::AbstractString)::Nothing
+  for (k, v) in db_conn_data
+    (v isa AbstractDict || v === nothing) && continue
+    k_str = string(k)
+    (k_str == "default_env" || k_str == "env" || k_str == app_env) && continue
+    if k_str in VALID_CONNECTION_KEYS || k_str in VALID_CONFIG_KEYS
+      @warn "connection.yml: setting found outside any environment block; ignored" key=k_str move_to="environment"
+    else
+      suggestion = _suggest_name(k_str, ("default_env",))
+      if suggestion !== nothing
+        @warn "connection.yml: unrecognised top-level key; ignored" key=k_str did_you_mean=suggestion
+      else
+        @warn "connection.yml: unrecognised top-level key; ignored" key=k_str
+      end
+    end
+  end
+  return nothing
+end
+
+"""
+    read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
+
+Read `<path>/connection.yml` and return the block for `settings.app_env`, after applying that
+block's `config:` settings onto `settings`.
+
+Validates as it goes (#348/#365): any key PormG does not read — at the file level, on the
+environment block, under `config:`, or under `options:` — emits a `@warn` naming the key, with a
+"did you mean" suggestion when the name is close to a real one. Keys written at the wrong level
+are reported as misplaced rather than unknown.
+
+Throws `MissingConfigurationError` when the file has no block for the selected environment, and
+`InvalidConfigurationError` when the block is not a mapping or has no `adapter:`.
+"""
 function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
   db_settings_file = joinpath(path, PORMG_DB_CONFIG_FILE_NAME) 
 
@@ -614,32 +785,72 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
     @warn "Ignoring the legacy top-level `env:` key in $(db_settings_file) — it was renamed to `default_env:` (#205) and a bare `env:` no longer selects an environment. Rename it to `default_env:` or remove it. Active environment: $(settings.app_env)." maxlog=1 _id=Symbol(:pormg_legacy_env_key_, db_settings_file)
   end
 
-  if  haskey(db_conn_data, settings.app_env)
-      if haskey(db_conn_data[settings.app_env], "config") && isa(db_conn_data[settings.app_env]["config"], Dict)
-        for (k, v) in db_conn_data[settings.app_env]["config"]
-          k_str = string(k)
-          if k_str in VALID_CONFIG_KEYS
-            if k_str == "log_level"
-              for dl in Dict("debug" => Logging.Debug, "error" => Logging.Error, "info" => Logging.Info, "warn" => Logging.Warn)
-                occursin(dl[1], lowercase(string(v))) && setfield!(settings, Symbol(k_str), dl[2])
-              end
-            else
-              setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
-            end
+  # A key nobody reads is a silent misconfiguration (#348): warn at every level of the file — the
+  # environment block, its `options:` sub-block, and the file level — before the pool is built.
+  # The ordering is load-bearing: `_build_connection_pool!` injects ~14 `nothing` keys into this
+  # dict via `get!`, so validating after it would warn on PormG's own bookkeeping.
+  _warn_unknown_top_level_keys(db_conn_data, settings.app_env)
+
+  if haskey(db_conn_data, settings.app_env)
+    env_block = db_conn_data[settings.app_env]
+    env_block isa AbstractDict || throw(InvalidConfigurationError(
+      "environment \"$(settings.app_env)\" in $(db_settings_file) is not a block of settings. " *
+      "Indent its keys (`adapter:`, `database:`, …) underneath it."))
+
+    _warn_unknown_env_keys(env_block, settings.app_env)
+
+    # Checked here rather than in `_build_connection_pool!`, which used to index it unguarded and
+    # raise a bare `KeyError("adapter")` several frames from the file that lacked it (#348).
+    adapter = get(env_block, "adapter", nothing)
+    if _is_unset(adapter)
+      throw(InvalidConfigurationError(
+        "environment \"$(settings.app_env)\" in $(db_settings_file) has no `adapter:`. " *
+        "Set `adapter: PostgreSQL` or `adapter: SQLite`."))
+    end
+
+    # `url:` is honoured only by the PostgreSQL branch of `_build_connection_pool!`. Under SQLite
+    # it is dropped and the pool silently falls back to `host:`/`database:` — or, with neither, to
+    # an in-memory database that vanishes at exit. Same class of silent loss as an unknown key
+    # (#348), and the existing `extensions`-on-SQLite warning sets the precedent.
+    if adapter == "SQLite" && !_is_unset(get(env_block, "url", nothing))
+      @warn "connection.yml: `url:` is ignored on SQLite; set the file path in `database:` instead" key="url" env=settings.app_env
+    end
+
+    cfg = get(env_block, "config", nothing)
+    if cfg isa AbstractDict
+      for (k, v) in cfg
+        k_str = string(k)
+        if k_str in VALID_CONFIG_KEYS
+          if k_str == "log_level"
+            _apply_log_level!(settings, v)
           else
-            did_you_mean = _suggest_name(k_str, VALID_CONFIG_KEYS)
-            if did_you_mean !== nothing
-              @warn "connection.yml: unrecognised config key; ignored" key=k_str env=settings.app_env did_you_mean=did_you_mean
-            else
-              @warn "connection.yml: unrecognised config key; ignored" key=k_str env=settings.app_env
-            end
+            setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
+          end
+        elseif k_str in VALID_CONNECTION_KEYS
+          # Exact membership only — no `_suggest_name` fallback in this direction, which would
+          # resolve `connections:` to `options` and mislabel an internal-field attempt.
+          @warn "connection.yml: key belongs directly under the environment block, not under `config:`; ignored" key=k_str env=settings.app_env move_to="environment"
+        else
+          did_you_mean = _suggest_name(k_str, VALID_CONFIG_KEYS)
+          if did_you_mean !== nothing
+            @warn "connection.yml: unrecognised config key; ignored" key=k_str env=settings.app_env did_you_mean=did_you_mean
+          else
+            @warn "connection.yml: unrecognised config key; ignored" key=k_str env=settings.app_env
           end
         end
       end
+    elseif cfg !== nothing
+      @warn "connection.yml: `config:` must be a block of settings; ignored" env=settings.app_env got=typeof(cfg)
+    end
 
-      if ! haskey(db_conn_data[settings.app_env], "options") || ! isa(db_conn_data[settings.app_env]["options"], Dict)
-        db_conn_data[settings.app_env]["options"] = Dict{String,String}()
-      end
+    opts = get(env_block, "options", nothing)
+    if opts isa AbstractDict
+      _warn_unknown_option_keys(opts, settings.app_env)
+    else
+      opts === nothing ||
+        @warn "connection.yml: `options:` must be a block of settings; ignored" env=settings.app_env got=typeof(opts)
+      env_block["options"] = Dict{String,String}()
+    end
   end
 
   haskey(db_conn_data, settings.app_env) && return db_conn_data[settings.app_env]

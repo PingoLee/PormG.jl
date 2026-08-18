@@ -36,13 +36,17 @@ import Logging
   mktempdir() do tmpdir
     original_dir = pwd()
     cd(tmpdir) do
-      # Create dummy connection files so load doesn't error or trigger Generator's interactive/long errors
+      # Create dummy connection files so load doesn't error or trigger Generator's interactive/long errors.
+      # `adapter:`/`database:` must sit inside an environment block: written at the top level they
+      # belong to no environment, so `load()` threw `MissingConfigurationError` into the `try` below
+      # and this workload only ever warmed the *failure* path (#348).
       for d in ["db", "db_sch"]
         mkdir(d)
         open(joinpath(d, "connection.yml"), "w") do f
           write(f, """
-          adapter: SQLite
-          database: ":memory:"
+          dev:
+            adapter: SQLite
+            database: ":memory:"
           """)
         end
       end
@@ -50,8 +54,11 @@ import Logging
       @compile_workload begin
         # 0. Precompile Configuration Loading (Mocked environment)
         try
-          Configuration.load()
-          Configuration.load("db_sch")
+          # `env=` explicitly: `_effective_env` lets `ENV["PORMG_ENV"]` outrank the file, so a
+          # maintainer precompiling with PORMG_ENV=test exported would otherwise miss the `dev:`
+          # block and land back on the swallowed-error path this fixture exists to avoid.
+          Configuration.load(; env="dev")
+          Configuration.load("db_sch"; env="dev")
         catch
         end
 
@@ -121,8 +128,15 @@ import Logging
     end
   end
 
-  # Cleanup mock config after precompilation is done
-  delete!(config, "precompile")
+  # Cleanup mock config after precompilation is done. "db"/"db_sch" are registered by the
+  # `Configuration.load` calls above and point at a now-deleted tmpdir, so they must not be
+  # serialized into the cache image alongside their pools.
+  for k in ("precompile", "db", "db_sch")
+    s = get(config, k, nothing)
+    s === nothing && continue
+    s.connections === nothing || close_pool!(s.connections)
+    delete!(config, k)
+  end
 end
 
 # ── Snoop-generated precompile hints ─────────────────────────────────────────

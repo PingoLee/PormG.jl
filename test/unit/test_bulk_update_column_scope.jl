@@ -796,7 +796,16 @@ end
                 # the guard lives in the shared _prepare_bulk_df!, so a regression could hit
                 # one path only if a caller ever stopped routing through it.
                 @testset "$op_name" begin
+                    # `Base.have_color` is PINNED for the call, not just for the assertion: the
+                    # subtype constructor bakes the color decision into `msg` at construction time
+                    # (`_emsg`, `src/Kernel.jl`), so by the time the error is caught the escapes are
+                    # already in or already out. Unpinned, the ANSI assertion below silently depended
+                    # on how Julia was launched — it passed under a bare `julia` and failed under
+                    # `julia --color=yes`, which is exactly how CI runs the suite. Same idiom, and
+                    # the same reason, as `_with_have_color` in test_error_message_ansi.jl.
+                    _saved_have_color = Base.have_color
                     err = try
+                        Base.eval(Base, :(have_color = false))
                         bulk_op(
                             Metric.objects, df_conflict,
                             columns    = ["c1" => "weight", "c2" => "weight"],
@@ -805,6 +814,8 @@ end
                         nothing
                     catch e
                         e
+                    finally
+                        Base.eval(Base, :(have_color = $_saved_have_color))
                     end
                     @test err isa PormG.QueryBuildError
                     msg = sprint(showerror, err)
@@ -814,6 +825,10 @@ end
                     @test occursin("mapped from two different columns", msg)
                     # The message must name the operation it came from, and must render clean
                     # off-TTY — QueryBuildError's constructor runs _emsg, so no raw ANSI leaks.
+                    # Meaningful only because the construction above ran with color pinned OFF:
+                    # with color ON, `_emsg` is the identity, so this would pass even for a
+                    # constructor that never called it (the tautology test_error_message_ansi.jl
+                    # documents).
                     @test occursin("Error in $(op_name),", msg)
                     @test !occursin("\e[", msg)
                 end

@@ -2791,8 +2791,11 @@ function _many_to_many_table_name(source_model::PormGModel, field_name::String, 
   return format_model_name("$(source_name)_$(field_name)")
 end
 
-function _many_to_many_column_name(model::PormGModel, pk_field::String)::String
-  return format_fild_name("$(format_model_name(model.name))_$(pk_field)")
+# `prefix` exists for the SELF-REFERENTIAL case (#364) and is empty everywhere else. It prefixes the
+# whole derived name rather than being spliced in, so `from_`/`to_` land where Django puts them and
+# the stem stays byte-identical to the ordinary derivation.
+function _many_to_many_column_name(model::PormGModel, pk_field::String; prefix::String = "")::String
+  return format_fild_name("$(prefix)$(format_model_name(model.name))_$(pk_field)")
 end
 
 function _infer_through_field(through_model::PormGModel, target_model::PormGModel, role::String)::String
@@ -2830,8 +2833,30 @@ function _relation_from_many_to_many(
   # verbatim when the field pins one, and the synthesized name otherwise (#59/#345).
   through_table_name = _many_to_many_table_name(owner_model, field_name, field, settings)
   through_resolved = nothing
-  owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
-  related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
+  # #364: a SELF-referential relation derives the same string for both ends, because both ends are
+  # the same model. That is not a cosmetic clash — `synthesize_many_to_many_through_models` builds
+  # the through model from a `Dict{Symbol, Any}` keyed on these two names, so the duplicate key
+  # resolves last-wins and the join table is created with ONE endpoint column instead of two.
+  # Silently: no error, and a table that cannot represent the relation it exists for.
+  #
+  # Django's rule for this case differs from its normal one for exactly that reason — one table
+  # cannot carry the same column twice — so it names the ends `from_<model>_id` / `to_<model>_id`.
+  # PormG keeps its own `<model>_<pk>` stem rather than Django's hardcoded `_id`, so a model keyed on
+  # `codigo` gets `from_driver_codigo`; for the usual `id` pk the two spellings coincide.
+  #
+  # Gated on NEITHER side being pinned, not per-side. `ManyToManyField("Driver", source_field =
+  # "mentor_id")` on a self-relation already yields the valid pair `mentor_id` / `driver_id` today —
+  # deriving `to_driver_id` for the unpinned half would rewrite a working schema. Explicit wins here
+  # as it does everywhere else; the residue (a pin that collides with the derived half) is caught by
+  # the guard below rather than by silently overriding what the user wrote.
+  self_relation = field.through === nothing && _same_model_reference(owner_model, related_model)
+  if self_relation && field.source_field === nothing && field.target_field === nothing
+    owner_column = _many_to_many_column_name(owner_model, owner_pk; prefix = "from_")
+    related_column = _many_to_many_column_name(related_model, related_pk; prefix = "to_")
+  else
+    owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
+    related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
+  end
 
   if field.through !== nothing
     through_model = if field.through isa PormGModel
@@ -2858,6 +2883,16 @@ function _relation_from_many_to_many(
     owner_pk = owner_fk.pk_field === nothing ? owner_pk : String(owner_fk.pk_field)
     related_pk = related_fk.pk_field === nothing ? related_pk : String(related_fk.pk_field)
   end
+
+  # #364, fail-closed. Everything downstream — the synthesized through model's field `Dict`, the
+  # unique index, both join legs, the manager mutators — assumes these two name DIFFERENT columns.
+  # The derivation above can no longer produce a pair that violates it, so what is left is what a
+  # user wrote: both sides pinned to one name, or one side pinned to the string the other derives.
+  # Placed after the `through` block so it covers the explicit path too, where `source_field` /
+  # `target_field` bypass `_infer_through_field` entirely.
+  owner_column == related_column && throw(ModelDefinitionError(
+    "ManyToManyField $(owner_model.name).$(field_name) resolves both join columns to \e[31m$(owner_column)\e[0m; " *
+    "one join table cannot carry the same column twice. Set source_field and target_field to distinct names."))
 
   inverse_accessor = field.related_name === nothing ? get_model_name(owner_model, settings, false) : field.related_name
   return ManyToManyRelation(
@@ -2926,6 +2961,28 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
   _cache_many_to_many_relation!(model, field_name, relation)
 
   reverse_accessor = relation.inverse_accessor
+  # #364: on a SELF-relation both accessors land on the SAME model but in two DIFFERENT dicts — the
+  # forward one in `model.cache["many_to_many"]` (written just above), the reverse one in
+  # `related_objects` — so the `haskey` check below is blind to a collision between them. And the
+  # readers resolve the cache FIRST (`has_many_to_many_accessor` / `get_many_to_many_relation`), so
+  # an equal name leaves the reverse relation permanently shadowed by the forward one. That is not a
+  # dead accessor: the manager's `_m2m_query` filters on `inverse_accessor`, so every `.all()` would
+  # traverse the join table backwards and silently answer the opposite question.
+  #
+  # Checked against `model.fields` rather than just `field_name` because the join builder resolves a
+  # field before a reverse accessor (`_build_row_join`), so ANY field name shadows it the same way.
+  # A non-self relation cannot reach this — its two accessors live on different models, which is why
+  # the `haskey` guard alone was sufficient before a self-relation could be built at all.
+  if _same_model_reference(related_model, model) && haskey(model.fields, reverse_accessor)
+    # The default accessor is the bare model name, so this fires on models that never wrote a
+    # `related_name` at all — say where the name came from rather than pointing at an option the
+    # user cannot find in their own source.
+    origin = field.related_name === nothing ? " (derived from the model name, because related_name is unset)" : ""
+    throw(ModelDefinitionError(
+      "ManyToManyField $(model.name).$(field_name) is self-referential, so its reverse accessor " *
+      "\e[31m$(reverse_accessor)\e[0m$(origin) collides with a field of the same name on that model " *
+      "and would be silently unreachable. Give the reverse end a distinct related_name."))
+  end
   haskey(related_model.related_objects, reverse_accessor) && throw(ModelDefinitionError("The related_name $(reverse_accessor) in the model $(model.name) is already defined"))
   related_model.related_objects[reverse_accessor] = _reverse_many_to_many_relation(relation, reverse_accessor)
   field.related_name === nothing && (field.related_name = reverse_accessor)

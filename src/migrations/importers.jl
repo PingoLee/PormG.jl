@@ -1240,7 +1240,14 @@ A self-referential M2M is the one case where Django does not use `<class>_id` at
 cannot carry the same column twice, so it names the ends `from_<class>_id` / `to_<class>_id`. That
 case was unreachable before #346 — `ManyToManyField("self")` died at `set_models` — so resolving
 `"self"` without this would have traded a loud failure for a join table with one column doing two
-jobs. (The same defect for hand-written models is #364.)
+jobs.
+
+The same defect for hand-written models was #364, now fixed in `_relation_from_many_to_many`, which
+derives `from_<model>_<pk>` / `to_<model>_<pk>` for a self-relation. This pin is therefore no longer
+load-bearing for an `id`-keyed model — the two derivations agree byte for byte — but it is still
+required for any other primary key, because Django hardcodes `_id` where PormG carries the pk field
+name. Pinning both ends here also routes the field down the explicit branch, which is what keeps the
+importer's output independent of PormG's own derivation.
 """
 function _pin_m2m_join_columns!(index::_DjangoClassIndex)
   by_binding = Dict{String, _DjangoClass}()

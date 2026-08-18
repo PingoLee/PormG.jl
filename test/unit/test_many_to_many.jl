@@ -793,3 +793,329 @@ end
   source_sql = join(values(plan[:racing_driver]), "\n")
   @test !occursin("\"teams\"", source_sql)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #364 fixture: SELF-referential ManyToManyFields.
+#
+# Both ends of the relation resolve to one model, which is the case where PormG's ordinary
+# `<model>_<pk>` derivation produces the SAME string twice. Registered through `set_models` so the
+# join-rendering testset below has a real `_module` to resolve bindings against — the derivation
+# testsets call `_relation_from_many_to_many` directly and do not need it.
+#
+# `Teammate` carries the default `id` primary key (the Django-identical case) and `Rival` a `codigo`
+# one, so both spellings the fix has to produce are fixtured.
+# ─────────────────────────────────────────────────────────────────────────────
+module ManyToManySelfModels
+import PormG
+import PormG.Models
+
+Teammate = Models.Model("teammate",
+  id = Models.IDField(),
+  driverref = Models.CharField(),
+  teammates = Models.ManyToManyField("Teammate", related_name="teammate_of"),
+)
+
+Rival = Models.Model("rival",
+  codigo = Models.CharField(primary_key=true),
+  rivals = Models.ManyToManyField("Rival", related_name="rival_of"),
+)
+
+PormG.Models.set_models(@__MODULE__, "m2m_mock")
+end
+
+const M2MSELF = ManyToManySelfModels
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField (#364): a self-referential relation derives `from_`/`to_`-prefixed join columns.
+# Both ends resolve to the same model, so the plain `<model>_<pk>` rule derives one string twice and
+# the join table ends up with a single endpoint column. Django prefixes the ends for exactly this
+# reason; PormG keeps its own `<model>_<pk>` STEM rather than Django's hardcoded `_id`, so the two
+# agree whenever the primary key is `id` and diverge intentionally when it is not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a self-referential ManyToManyField derives from_/to_ join columns (#364)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  # --- The plain `id` case: byte-identical to Django's from_driver_id / to_driver_id -------------
+  driver = Models.Model("driver", id = Models.IDField(), surname = Models.CharField())
+  field = Models.ManyToManyField("Driver")
+  rel = Models._relation_from_many_to_many(driver, "Driver", "teammates", field, driver, "Driver", settings)
+
+  @test rel.owner_column == "from_driver_id"
+  @test rel.related_column == "to_driver_id"
+  # The property that actually matters, stated directly rather than implied by the two above.
+  @test rel.owner_column != rel.related_column
+  # The through TABLE name never carried the collision and is untouched by any of this.
+  @test rel.through_table == "driver_teammates"
+
+  # --- A non-`id` primary key keeps PormG's stem ------------------------------------------------
+  # Django would spell both ends `_id` regardless; PormG addresses the column its own migration
+  # planner creates, which follows the pk field name.
+  codigo = Models.Model("piloto", codigo = Models.CharField(primary_key=true))
+  codigo_rel = Models._relation_from_many_to_many(
+    codigo, "Piloto", "parceiros", Models.ManyToManyField("Piloto"), codigo, "Piloto", settings)
+  @test codigo_rel.owner_column == "from_piloto_codigo"
+  @test codigo_rel.related_column == "to_piloto_codigo"
+
+  # --- Explicit pins still win, on both sides ---------------------------------------------------
+  pinned = Models.ManyToManyField("Driver", source_field="left_id", target_field="right_id")
+  pinned_rel = Models._relation_from_many_to_many(driver, "Driver", "teammates", pinned, driver, "Driver", settings)
+  @test pinned_rel.owner_column == "left_id"
+  @test pinned_rel.related_column == "right_id"
+
+  # --- Pinning ONE side leaves the other on the plain derivation ---------------------------------
+  # Deliberate, and the reason the branch is gated on "neither pinned" rather than applied per side:
+  # `source_field = "mentor_id"` already yields the valid pair mentor_id / driver_id today, and
+  # deriving `to_driver_id` for the unpinned half would rewrite a schema that works.
+  half = Models.ManyToManyField("Driver", source_field="mentor_id")
+  half_rel = Models._relation_from_many_to_many(driver, "Driver", "teammates", half, driver, "Driver", settings)
+  @test half_rel.owner_column == "mentor_id"
+  @test half_rel.related_column == "driver_id"
+
+  # --- A NON-self relation is completely unaffected ---------------------------------------------
+  # The guard against "fixing" this by prefixing every m2m column.
+  sponsor = Models.Model("sponsor", id = Models.IDField())
+  plain_rel = Models._relation_from_many_to_many(
+    driver, "Driver", "sponsors", Models.ManyToManyField(sponsor), sponsor, "Sponsor", settings)
+  @test plain_rel.owner_column == "driver_id"
+  @test plain_rel.related_column == "sponsor_id"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField (#364): the synthesized through table carries THREE columns, not two.
+# This is the assertion that catches the real damage. `synthesize_many_to_many_through_models` builds
+# the through model from a `Dict{Symbol, Any}` keyed on the two join column names, so when they were
+# equal the duplicate key resolved last-wins and the table was planned with `id` plus ONE endpoint —
+# silently, with a unique index over the same column twice. Counting the fields is what fails on the
+# bug; asserting the two names alone would not, because the Dict collapse happens downstream of them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a self-referential ManyToManyField synthesizes a three-column through table (#364)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  current_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
+    :teammate => Dict{Symbol, Union{Bool, PormGModel}}(:model => M2MSELF.Teammate, :exist => false),
+  )
+
+  expanded = Models.synthesize_many_to_many_through_models(current_schema, settings)
+  @test haskey(expanded, :teammate_teammates)
+
+  through = expanded[:teammate_teammates][:model]
+  # `id` + BOTH endpoints. On the bug this was ["id", "teammate_id"] — length 2.
+  @test length(through.fields) == 3
+  @test sort(collect(keys(through.fields))) == ["from_teammate_id", "id", "to_teammate_id"]
+
+  # The unique index names both columns, so it is a real composite constraint rather than the same
+  # column repeated (which capped each row at a single link).
+  auto = through.cache["many_to_many_auto"]
+  @test auto["owner_column"] == "from_teammate_id"
+  @test auto["related_column"] == "to_teammate_id"
+  @test auto["unique_index"] == "teammate_teammates_from_teammate_id_to_teammate_id_uniq"
+
+  # And it reaches the emitted DDL, not just the cache.
+  plan = Migrations.get_migration_plan(PormGModel[], current_schema, M2MMockPostgres(), settings, interactive=false)
+  through_sql = join(values(plan[:teammate_teammates]), "\n")
+  @test occursin("CREATE TABLE", through_sql)
+  @test occursin("from_teammate_id", through_sql)
+  @test occursin("to_teammate_id", through_sql)
+  @test occursin("CREATE UNIQUE INDEX", through_sql)
+  # The source table gains no column of its own for the relation.
+  @test !occursin("\"teammates\"", join(values(plan[:teammate]), "\n"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField (#364): two join columns resolving to one name is refused, not planned.
+# The derivation can no longer produce a colliding pair on its own, so what reaches this guard is
+# what a user wrote — both sides pinned to one name, or one side pinned to the string the other
+# derives. Fail-closed: every downstream consumer (the through model's field Dict, the unique index,
+# both join legs, the manager mutators) assumes the two name different columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a ManyToManyField whose ends resolve to one column is refused (#364)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+  driver = Models.Model("driver", id = Models.IDField())
+
+  # Both sides pinned to the same name.
+  both = Models.ManyToManyField("Driver", source_field="link_id", target_field="link_id")
+  err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Driver", "teammates", both, driver, "Driver", settings)
+  @test occursin("link_id", err.value.msg)
+  @test occursin("source_field", err.value.msg)
+
+  # One side pinned to exactly what the other derives — the residue the "neither pinned" gate leaves.
+  # The cause is asserted, not just the type: `ModelDefinitionError` is this file's catch-all (some
+  # two dozen throw sites in `Models.jl`), so a future validator firing earlier on the same input
+  # would keep a type-only assertion green with THIS guard deleted.
+  collide = Models.ManyToManyField("Driver", source_field="driver_id")
+  collide_err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Driver", "teammates", collide, driver, "Driver", settings)
+  @test occursin("cannot carry the same column twice", collide_err.value.msg)
+
+  # The guard sits AFTER the `through` block, so the explicit path is covered too — there
+  # `source_field`/`target_field` bypass `_infer_through_field` entirely.
+  target = Models.Model("team", id = Models.IDField())
+  through_model = Models.Model("membership",
+    id = Models.IDField(),
+    driver = Models.ForeignKey(driver, on_delete=Models.CASCADE),
+    team = Models.ForeignKey(target, on_delete=Models.CASCADE),
+  )
+  # `through_model.fields["driver"]` exists, so nothing else on this path can throw — which is
+  # exactly why the cause is asserted: a DIFFERENT future error is what would masquerade here.
+  through_collide = Models.ManyToManyField(target, through=through_model,
+                                           source_field="driver", target_field="driver")
+  through_err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Driver", "teams", through_collide, target, "Team", settings)
+  @test occursin("cannot carry the same column twice", through_err.value.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField (#364): on a self-relation the reverse accessor may not collide with a field.
+# The two accessors for a self-relation land on ONE model but in two different dicts — the forward in
+# `model.cache["many_to_many"]`, the reverse in `related_objects` — so the pre-existing duplicate
+# `related_name` check cannot see a collision between them. Since every reader resolves the cache (and
+# the join builder resolves `fields`) FIRST, an equal name leaves the reverse relation permanently
+# shadowed, and the manager then traverses the join table backwards while reporting no error at all.
+# Same silent-collapse class as the column bug this issue is about, one dict over.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a self-referential ManyToMany refuses a reverse accessor that shadows a field (#364)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  # `related_name` equal to the m2m field's OWN name — the natural spelling for a relation a user
+  # thinks of as symmetric, and the one the docs steer toward by recommending `related_name`.
+  shadow_module = Module(:M2MShadowSelf)
+  Core.eval(shadow_module, :(import PormG; import PormG.Models))
+  Core.eval(shadow_module, :(Teammate = Models.Model("teammate_shadow",
+    id = Models.IDField(),
+    driverref = Models.CharField(),
+    teammates = Models.ManyToManyField("Teammate", related_name="teammates"),
+  )))
+  shadow = Core.eval(shadow_module, :(Teammate))
+  err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
+    shadow_module, settings, shadow, "teammates", shadow.fields["teammates"])
+  @test occursin("self-referential", err.value.msg)
+  @test occursin("related_name", err.value.msg)
+
+  # Any OTHER field name shadows it identically, because the join builder resolves a field before a
+  # reverse accessor — so the guard checks `model.fields`, not just the m2m field's own name.
+  other_module = Module(:M2MShadowOther)
+  Core.eval(other_module, :(import PormG; import PormG.Models))
+  Core.eval(other_module, :(Teammate = Models.Model("teammate_shadow2",
+    id = Models.IDField(),
+    driverref = Models.CharField(),
+    teammates = Models.ManyToManyField("Teammate", related_name="driverref"),
+  )))
+  other = Core.eval(other_module, :(Teammate))
+  other_err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
+    other_module, settings, other, "teammates", other.fields["teammates"])
+  # This case covers the WIDENED half of the guard, so it is the one where a masquerading
+  # `ModelDefinitionError` from somewhere else would hide the most. Assert the cause.
+  @test occursin("collides with a field", other_err.value.msg)
+
+  # A DISTINCT related_name registers both ends, and they stay distinguishable. This is the
+  # assertion that keeps the guard from being over-broad.
+  @test Models.get_many_to_many_relation(M2MSELF.Teammate, "teammates").reverse == false
+  @test M2MSELF.Teammate.related_objects["teammate_of"].reverse == true
+
+  # A NON-self relation is untouched: its two accessors land on DIFFERENT models, so a related_name
+  # matching a field on the OWNER is not a collision at all.
+  #
+  # `chassis` exists on the owner and NOT on the target, deliberately. The reverse accessor is
+  # installed on the TARGET, so a name that also exists there would be a genuine shadow — the same
+  # failure this guard closes, one model over — and asserting success on it would pin a broken
+  # configuration as correct. That cross-model half is pre-existing and out of this issue's scope
+  # (the correct general check is `haskey(related_model.fields, …)`, equivalent to the shipped
+  # `haskey(model.fields, …)` only under the self gate); this fixture must not bless it either way.
+  sponsor = Models.Model("shadow_sponsor", id = Models.IDField(), name = Models.CharField())
+  cross_module = Module(:M2MShadowCross)
+  Core.eval(cross_module, :(import PormG; import PormG.Models))
+  Core.eval(cross_module, :(Sponsor = $sponsor))
+  Core.eval(cross_module, :(Racer = Models.Model("shadow_racer",
+    id = Models.IDField(),
+    chassis = Models.CharField(),
+    sponsors = Models.ManyToManyField(Sponsor, related_name="chassis"),
+  )))
+  racer = Core.eval(cross_module, :(Racer))
+  @test !haskey(sponsor.fields, "chassis")   # precondition: not a shadow on the target either
+  @test Models._register_many_to_many_relation!(
+    cross_module, settings, racer, "sponsors", racer.fields["sponsors"]) === nothing
+  # And the reverse accessor it installed is genuinely reachable.
+  @test sponsor.related_objects["chassis"] isa Models.ManyToManyRelation
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField (#364): a self-relation renders a correct self-join in BOTH directions.
+# Asserting the two column names differ passes for any two distinct strings — it cannot tell whether
+# the join builder puts them on the right legs. This renders the SQL instead: the base table appears
+# twice under DIFFERENT aliases with the through table between them, the forward direction leaves on
+# `from_` and arrives on `to_`, and the reverse direction swaps exactly those two.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a self-referential ManyToMany renders a correct self-join both ways (#364)" begin
+  # --- Forward: the field's own accessor ---------------------------------------------------------
+  forward = M2MSELF.Teammate.objects
+  forward.filter("teammates__driverref" => "senna")
+  forward.values("driverref")
+  forward_sql = inspect_query(forward)[:sql_text]
+
+  @test occursin("FROM \"teammate\" as \"Tb\"", forward_sql)
+  @test occursin("\"teammate_teammates\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"from_teammate_id\"", forward_sql)
+  @test occursin("\"teammate\" AS \"Tb_2\" ON \"Tb_1\".\"to_teammate_id\" = \"Tb_2\".\"id\"", forward_sql)
+
+  # --- Reverse: the related_name accessor, which must mirror the two legs ------------------------
+  reverse = M2MSELF.Teammate.objects
+  reverse.filter("teammate_of__driverref" => "prost")
+  reverse.values("driverref")
+  reverse_sql = inspect_query(reverse)[:sql_text]
+
+  @test occursin("\"teammate_teammates\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"to_teammate_id\"", reverse_sql)
+  @test occursin("\"teammate\" AS \"Tb_2\" ON \"Tb_1\".\"from_teammate_id\" = \"Tb_2\".\"id\"", reverse_sql)
+
+  # The two directions are genuinely different queries — on the bug both legs referenced one column,
+  # so traversing forward and traversing back were indistinguishable.
+  @test forward_sql != reverse_sql
+
+  # --- The relation is registered on ONE model, forward and reverse both -------------------------
+  fwd_rel = Models.get_many_to_many_relation(M2MSELF.Teammate, "teammates")
+  rev_rel = M2MSELF.Teammate.related_objects["teammate_of"]
+  @test fwd_rel.owner_column == "from_teammate_id"
+  @test fwd_rel.related_column == "to_teammate_id"
+  @test rev_rel isa Models.ManyToManyRelation
+  @test rev_rel.reverse
+  # The reverse relation swaps the two ends; the through table is the same one read backwards.
+  @test rev_rel.owner_column == fwd_rel.related_column
+  @test rev_rel.related_column == fwd_rel.owner_column
+  @test rev_rel.through_table == fwd_rel.through_table
+
+  # --- The non-`id` primary key fixture reaches the same place ----------------------------------
+  rival_rel = Models.get_many_to_many_relation(M2MSELF.Rival, "rivals")
+  @test rival_rel.owner_column == "from_rival_codigo"
+  @test rival_rel.related_column == "to_rival_codigo"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ManyToManyField (#364, adjacent): an explicit `through=` on a self-relation still fails LOUDLY.
+# Nothing here changed, and pinning it says so. `_infer_through_field` scans the through model for
+# foreign keys to the target; on a self-relation both sides find the same TWO, so it refuses rather
+# than guessing which end is which. That matches Django, which requires `through_fields` in exactly
+# this case, and the message names the escape hatch.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an explicit through= on a self-relation demands explicit source/target fields (#364)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  driver = Models.Model("racer", id = Models.IDField(), surname = Models.CharField())
+  rivalry = Models.Model("rivalry",
+    id = Models.IDField(),
+    challenger = Models.ForeignKey(driver, on_delete=Models.CASCADE),
+    defender = Models.ForeignKey(driver, on_delete=Models.CASCADE),
+  )
+
+  err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Racer", "rivals", Models.ManyToManyField(driver, through=rivalry), driver, "Racer", settings)
+  @test occursin("multiple foreign keys", err.value.msg)
+  @test occursin("source_field", err.value.msg)
+
+  # And pinning both ends resolves it — the through model's own FK field names become the columns.
+  resolved = Models._relation_from_many_to_many(
+    driver, "Racer", "rivals",
+    Models.ManyToManyField(driver, through=rivalry, source_field="challenger", target_field="defender"),
+    driver, "Racer", settings)
+  @test resolved.owner_column == "challenger"
+  @test resolved.related_column == "defender"
+  @test resolved.through_table == "rivalry"
+end

@@ -383,6 +383,23 @@ M2m_driver_default_reverse_scratch = Models.Model("m2m_driver_default_reverse_sc
   partners = Models.ManyToManyField(M2m_brand_scratch),
 )
 
+# #364 — SELF-referential ManyToManyField: both ends of the relation resolve to THIS model, so the
+# join columns take Django's `from_`/`to_` spelling (`from_m2m_teammate_scratch_id` /
+# `to_m2m_teammate_scratch_id`) instead of the same `<model>_<pk>` string twice. Mirrors the Django
+# importer fixture's `racing.Driver.teammates` (#346), which reaches the same shape by pinning.
+#
+# The target is a STRING on purpose: a model cannot reference its own binding before it exists, so
+# the string is the only way to write this by hand — and it is resolved at `set_models`.
+#
+# `related_name` is set because the reverse accessor lands on this same model alongside the forward
+# one; the default would be the bare model name, which reads as a foreign key rather than the other
+# end of a teammate link. PormG has no Django `symmetrical=`, so the relation is DIRECTIONAL.
+M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
+  id = Models.IDField(),
+  driverref = Models.CharField(unique=true),
+  teammates = Models.ManyToManyField("M2m_teammate_scratch", related_name="teammate_of"),
+)
+
 # Case-preservation (#57) fixtures — DELIBERATELY mixed-case COLUMNS (driverRef,
 # foreName, parentRef, lapTime) to prove PormG creates and queries genuinely
 # mixed-case columns on a live DB. These are capability fixtures, NOT the house

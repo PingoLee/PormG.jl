@@ -129,7 +129,13 @@ exactly as it always has, so no existing schema changes and nothing needs re-mig
 
     On the auto-derived path the join **columns** follow the logical name too (`<model>_<pk field>`),
     which is why they are
-    unaffected by a `db_table` pin. Against a Django-owned schema that closes most of the gap but not
+    unaffected by a `db_table` pin. **One exception**: when the field points at its own model, both
+    ends would derive the same string, and one table cannot carry the same column twice — so a
+    self-referential relation is spelled `from_<model>_<pk field>` / `to_<model>_<pk field>` instead
+    (#364), matching Django's rule for that case. With the conventional `id` primary key the two
+    agree byte for byte; see
+    [Self-Referential Relationships](many_to_many.md#Self-Referential-Relationships).
+    Against a Django-owned schema that closes most of the gap but not
     all of it: Django's through table is `<the owning model's table>_<field>`, so the table needs the
     pin the importer applies, while the columns line up on their own — *provided the primary key is
     named `id`*. Django always spells its m2m columns `<model_name>_id`; PormG uses the target's

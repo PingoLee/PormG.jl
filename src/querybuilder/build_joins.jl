@@ -450,6 +450,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       # the values() projection ALIASES (`"pk_code" AS "code"`), so the join references the
       # alias "code", not the physical column. Only the main-table side (key_a above) is a
       # real physical column and is db_column-resolved.
+      # #376 generalized this from the KEY to every CTE COLUMN, by stripping db_column from the CTE
+      # model's fields at construction. So this literal is now also what `Models.model_column(
+      # cte_model, cte_table_key)` would answer — kept literal because it needs no lookup.
       row_join["key_b"] = cte_table_key
     end
 
@@ -603,7 +606,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       size(vector, 1) == 2 && (last_field = next_model.fields[vector[2]])
       foreign_table_name = next_model
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias) # TODO chage by row_join and test the speed
-      # Local FK column and referenced parent column both honor db_column (#50).
+      # Local FK column and referenced parent column both honor db_column (#50). When `new_object`
+      # is a CTE model this stays correct WITHOUT a branch (#376): its fields carry no db_column, so
+      # `key_a` resolves to the projection alias the CTE actually exposes, while `key_b` reads the
+      # REAL target model and keeps its physical column — the two halves of the same contract.
       row_join["key_b"] = Models.fk_target_column(first_field)
       row_join["key_a"] = Models.field_db_column(first_field, first_column)
     elseif haskey(new_object.related_objects, vector[1])

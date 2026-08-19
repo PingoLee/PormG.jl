@@ -17,6 +17,7 @@ using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, OneToOn
                     field_db_column, fk_target_column, model_column, model_has_db_column,
                     are_model_fields_equal
 using PormG.QueryBuilder: inspect_query, Count
+using InteractiveUtils: subtypes   # #376: walk every field TYPE, not a hand-maintained list
 
 # Dedicated mock connections — uniquely named so they never clash with other unit files'
 # mock structs when runtests.jl includes them into the same module.
@@ -100,6 +101,75 @@ Entry.connect_key = "default"
     @test model_column(Product, "not_a_field") == "not_a_field"   # verbatim fallback
     @test model_has_db_column(Product)
     @test !model_has_db_column(Model("nocol_scratch", id=IDField(), name=CharField()))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # field_without_db_column (#376): the same field as a DERIVED table exposes it.
+  # A CTE's columns are its `values()` projection ALIASES, so the field object that TYPES a CTE
+  # column must stop claiming the base table's physical name. Two guards: a STRUCTURAL one over
+  # every field type (the rebuild goes through the default positional constructor, which only
+  # exists while no field struct declares an inner one), and a BEHAVIORAL round-trip.
+  # Rendering coverage for the CTE itself lives in `test_cte_db_column.jl`.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "field_without_db_column strips the physical name (#376)" begin
+
+    # Structural: the helper rebuilds `T(getfield(f, 1), …)`, so every concrete field type must
+    # still be a plain struct with only Julia's two AUTO-GENERATED constructors (the `::Any` one
+    # and the field-typed one). An inner constructor would sit in front of the rebuild and could
+    # normalize, reorder or reject the arguments — silently changing what the CTE model holds.
+    #
+    # Counting methods, NOT `hasmethod(T, Tuple{fieldtypes(T)...})`: the auto-generated `::Any`
+    # constructor makes that true for ANY same-arity tuple (measured: it also accepts N `Int`s),
+    # so it detects nothing except an arity change. `SQLOrder` in `querybuilder/types.jl` shows a
+    # same-arity inner constructor is a shape this repo actually uses.
+    concrete = filter(isconcretetype, subtypes(PormG.PormGField))
+    @test length(concrete) == 26                        # fails loudly when a field type is added —
+    for T in concrete                                   # exactly when this helper wants re-reading
+      @test length(methods(T)) == 2                     # no inner constructor in front of the rebuild
+    end
+    # Every field type carries a `db_column` slot except ManyToMany, which adds no physical column
+    # to the owning table at all. A NEW slot-less type would make the helper a silent no-op there.
+    @test [T for T in concrete if !(:db_column in fieldnames(T))] == [PormG.Models.sManyToManyField]
+
+    # Behavioral: a renamed field is rebuilt as the SAME type with db_column cleared and every
+    # other slot preserved — checked field-by-field, so a constructor-argument-order slip (which
+    # would silently swap two same-typed slots) cannot pass.
+    renamed = CharField(db_column = "product_sku", null = true, max_length = 42)
+    stripped = PormG.Models.field_without_db_column(renamed)
+    @test typeof(stripped) === typeof(renamed)
+    @test stripped.db_column === nothing
+    @test field_db_column(stripped, "sku") == "sku"     # ... so it now answers the ALIAS
+    for f in fieldnames(typeof(renamed))
+      f === :db_column && continue
+      @test getfield(stripped, f) === getfield(renamed, f)
+    end
+
+    # sIDField is the one IMMUTABLE field struct — the reason the helper rebuilds instead of
+    # mutating, since `id` appears in nearly every CTE projection.
+    @test !ismutabletype(PormG.Models.sIDField)
+    stripped_id = PormG.Models.field_without_db_column(IDField(db_column = "pk_code"))
+    @test stripped_id isa PormG.Models.sIDField && stripped_id.db_column === nothing
+
+    # A ForeignKey keeps its resolved target BY REFERENCE — the copy must not deep-copy the model
+    # graph, or `fk_target_column` would read a detached parent.
+    fk = ForeignKey(DriverRef, pk_field = "code", db_column = "drv")
+    fk_stripped = PormG.Models.field_without_db_column(fk)
+    @test fk_stripped.db_column === nothing
+    @test fk_stripped.to === DriverRef                    # same model object, not a copy
+    @test fk_target_column(fk_stripped) == "driver_code"  # parent's own db_column still resolves
+
+    # JSONField: the base column of a `payload__key` extraction goes through the same helper.
+    json_stripped = PormG.Models.field_without_db_column(PormG.Models.JSONField(db_column = "meta_json", null = true))
+    @test json_stripped.db_column === nothing
+
+    # No-op cases return the IDENTICAL object — this is what makes the fix allocate nothing and
+    # render byte-identically for the overwhelmingly common db_column-free model.
+    plain = CharField(null = true)
+    @test PormG.Models.field_without_db_column(plain) === plain
+    empty_dbc = CharField(db_column = "")                 # already a no-op for field_db_column
+    @test PormG.Models.field_without_db_column(empty_dbc) === empty_dbc
+    m2m = PormG.Models.ManyToManyField(DriverRef)          # no db_column slot at all
+    @test PormG.Models.field_without_db_column(m2m) === m2m
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

@@ -1076,6 +1076,38 @@ function field_db_column(field::PormGField, name::AbstractString)::String
 end
 field_db_column(field::PormGField, name::Symbol)::String = field_db_column(field, String(name))
 
+# The same field as a DERIVED table exposes it (#376). A CTE (or any `values()`-projected
+# subquery) has no physical columns of its own: its columns ARE the projection ALIASES, because
+# the physical name is consumed INSIDE the body (`"Tb"."product_sku" as "sku"`). A field object
+# reused to TYPE such a column must therefore stop claiming the base table's `db_column`, or the
+# outer query references `"ev"."product_sku"` — a column the CTE does not expose, which both
+# backends reject at execution. Clearing the slot makes `field_db_column` fall back to the name it
+# is asked about, and at every CTE call site that name IS the alias. This is the column-side half
+# of the rule #64 already applies to the CTE side of a `join_field` key.
+#
+# COPY, never mutate: `_build_cte_custom_model` reuses the REAL model's field objects verbatim, and
+# a model is live shared schema state — `Base.deepcopy_internal(::Model_Type, …)` shares it on
+# purpose. Mutating here would rename the base table's column for every other query.
+#
+# Rebuilt through the struct's DEFAULT POSITIONAL CONSTRUCTOR rather than `setfield!`, because
+# `sIDField` is an IMMUTABLE struct while the other 25 field types are mutable — this is the one
+# form that works for both, and `id` appears in nearly every CTE projection. No field struct
+# declares an inner constructor, so `T(fields...)` exists for all of them; if one ever does, the
+# structural guard in `test/unit/test_db_column.jl` fails.
+#
+# A type with no `db_column` slot (`sManyToManyField`) and a field that declares none both return
+# the IDENTICAL object, so the common path allocates nothing and renders byte-identically. The
+# emptiness guard mirrors `field_db_column`'s own test, so `db_column = ""` — already a no-op
+# there — is not copied either.
+function field_without_db_column(field::PormGField)::PormGField
+  T = typeof(field)
+  idx = findfirst(==(:db_column), fieldnames(T))
+  idx === nothing && return field
+  dbc = getfield(field, idx)
+  (dbc isa AbstractString && !isempty(dbc)) || return field
+  return T((i == idx ? nothing : getfield(field, i) for i in 1:fieldcount(T))...)
+end
+
 # `model_table_name` / `model_has_db_table` (#59) — the table-level mirror of `field_db_column`
 # above — live in `Kernel` and are imported at the top of this module, because layer-2
 # `Configuration` needs them and is included before `Models`. See Kernel.jl for the definitions.

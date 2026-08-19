@@ -605,7 +605,31 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
     key_new = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
     try
-      fields[key_new] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
+      # #376: `key_new` is the alias `_query_select` renders for this column, and a CTE's columns
+      # ARE its aliases — the physical name is consumed inside the body. So the field object that
+      # TYPES this column must not carry the SOURCE table's db_column, or every outer reference
+      # (`_solve_field`'s terminal column, the deep-path join key, the JSON-lookup base column, and
+      # the #373 bucket-column drift guard) names a column the CTE does not expose. Fixing it HERE
+      # rather than at those four reference sites is what keeps them branch-free — see
+      # `Models.field_without_db_column` for the full reasoning.
+      #
+      # It rests on every CTE column having an alias `key_new` agrees with. Two ways a body could
+      # render bare physical names, and neither reaches this loop:
+      #   - `values("*")` — `_set_field_from_sql_function` raises UnknownFieldError on the field `*`.
+      #   - no `.values()` at all — the body renders `SELECT *`, but `values` is then empty, so this
+      #     loop produces a model with ZERO fields and every outer reference fails closed with
+      #     UnknownFieldError. Fail-closed, not wrong SQL.
+      # If a `SELECT "R1".*` projection is ever allowed inside a CTE it must be excluded from this
+      # call, not folded into it.
+      #
+      # The `key_new` == rendered-alias correspondence does have one PRE-EXISTING hole, unrelated to
+      # db_column and not introduced here: two `values()` entries sharing an `_as` collapse onto ONE
+      # rendered ALIAS — `get_select_query` reuses the cached SQLField for the second entry, so the
+      # body emits two columns under the same name — while this loop still registers both names. So
+      # `values("id", "sku", "code" => "sku")` puts `code` on the model though the body emits `sku`
+      # twice and no `code` at all. It reproduces identically with no db_column anywhere.
+      fields[key_new] = Models.field_without_db_column(
+        _set_field_from_sql_function(value_part.field, value_part._as, instruct))
       push!(selected_field_names, key_new)
     catch e
       @pormg_debug false

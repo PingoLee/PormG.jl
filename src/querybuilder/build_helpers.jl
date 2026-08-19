@@ -1129,6 +1129,16 @@ function _resolve_bucket_column(raw_field::String, instruc::SQLInstruction)
   # carry the base DateField and genuinely produce a date; and every OTHER function — `ToChar`
   # included, which is what would actually produce a "1991-10" text column — is rejected outright
   # when the CTE model is built. So the DATE gate is as trustworthy here as anywhere else.
+  #
+  # #376: the drift guard below still MATCHES on a CTE path. It matched before the fix too — both
+  # sides read the SAME field object, so they agreed on the physical name and the rewrite was
+  # applied to a column the CTE does not expose. What changed is WHICH name they agree on: the CTE
+  # model's fields now carry no db_column (`Models.field_without_db_column`, applied in
+  # `_build_cte_custom_model`), so `field_db_column(f_meta, <alias>)` and the rendered column both
+  # answer the projection ALIAS. Resolving the alias at the REFERENCE site instead would have left
+  # `f_meta` claiming the physical name while the render answered the alias — failing this guard
+  # closed and silently dropping the #352/#373 rewrite for every CTE date-bucket filter, with no
+  # other symptom. That is why the fix belongs at construction.
   column_sql = _get_select_query(raw_field, instruc)
   f_meta = get(instruc.tab_field_cache, raw_field, nothing)
   f_meta === nothing && return (nothing, "")

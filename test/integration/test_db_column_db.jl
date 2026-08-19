@@ -328,14 +328,99 @@ end
 
         main = M.Db_column_pk_scratch.objects
         main.with("rpk_cte" => cte, join_field="code" => "code", join_type="INNER")
-        main.values("code", "lbl" => "rpk_cte__label")
+        # #376: `rpk_cte__code` is the half this testset used to miss. `label` has no db_column, so
+        # projecting only it never exercised the CTE COLUMN rule; `code` does (→ "pk_code"), and
+        # before #376 the outer query asked the CTE for "pk_code" — a column it does not expose.
+        main.values("code", "cte_code" => "rpk_cte__code", "lbl" => "rpk_cte__label")
         rows = main.list()
         @test length(rows) == 1                 # INNER join keeps only the matched code (700)
         @test rows[1][:code] == 700
+        @test rows[1][:cte_code] == 700         # the CTE's own projection of the renamed PK
         @test rows[1][:lbl] == "CT"
     finally
         M.Db_column_pk_child_scratch.objects.delete(allow_delete_all=true)
         M.Db_column_pk_strchild_scratch.objects.delete(allow_delete_all=true)
         M.Db_column_pk_scratch.objects.delete(allow_delete_all=true)
+    end
+end
+
+# #376: a CTE PROJECTS a db_column-mapped field, and the outer query references it. A CTE is a
+# derived table whose columns are the values() projection ALIASES, so the reference must name
+# "sku" — the physical "product_sku" is consumed inside the WITH body and is not visible outside.
+# Executed rather than merely rendered: the pre-#376 failure was at execution time
+# (`column R1_1.product_sku does not exist` / `no such column`), which SQL-shape asserts miss.
+@testset "db_column: CTE-projected column is referenced by its alias (#376)" begin
+    # Clear children before the parent (CASCADE) so this testset is order-independent, matching
+    # the convention of the FK testsets above.
+    M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
+    M.Db_column_scratch.objects.delete(allow_delete_all=true)
+    try
+        M.Db_column_scratch.objects.create("sku" => "CTE-A", "name" => "Alpha")
+        M.Db_column_scratch.objects.create("sku" => "CTE-B", "name" => "Beta")
+
+        # The CTE projects `sku` (physical "product_sku") plus the join key `id` (no db_column, so
+        # the join key itself is unaffected — this isolates the COLUMN rule from the #64 KEY rule).
+        cte = M.Db_column_scratch.objects
+        cte.filter("name" => "Alpha")
+        cte.values("id", "sku")
+
+        # filter + values on the CTE-reached column, in one query.
+        main = M.Db_column_scratch.objects
+        main.with("ev" => cte, join_field="id" => "id", join_type="INNER")
+        main.filter("ev__sku" => "CTE-A")
+        main.values("name", "s" => "ev__sku")
+        rows = main.list()
+        @test length(rows) == 1
+        @test rows[1][:name] == "Alpha"
+        @test rows[1][:s] == "CTE-A"          # the CTE's projection, keyed by the FIELD name
+
+        # order_by on a CTE-reached db_column field that is neither projected nor filtered, so it
+        # is resolved here for the first time: `get_order_query` reuses `instruc.cache` when the
+        # same path was already resolved, and the filter runs first — hence `name` (no db_column)
+        # is the filtered column and `sku` the ordered one. The filter also exists to emit the
+        # JOIN: a CTE column referenced ONLY by order_by registers the alias without emitting one
+        # (a separate, pre-#376 defect that also hits plain FK paths on models with no db_column),
+        # and this testset must not depend on it. Built as a FRESH CTE object: a `.with` source is
+        # shared state, and reusing one across queries is what the #43 coverage exists to police.
+        cte2 = M.Db_column_scratch.objects
+        cte2.values("id", "sku", "name")
+
+        ordered = M.Db_column_scratch.objects
+        ordered.with("ev2" => cte2, join_field="id" => "id", join_type="INNER")
+        ordered.filter("ev2__name" => "Alpha")
+        ordered.values("name")
+        ordered.order_by("ev2__sku")
+        ord_rows = ordered.list()
+        @test length(ord_rows) == 1           # executes at all — the pre-#376 failure mode
+        @test ord_rows[1][:name] == "Alpha"
+    finally
+        M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
+        M.Db_column_scratch.objects.delete(allow_delete_all=true)
+    end
+end
+
+# #376 sibling: a CTE projects a FOREIGN KEY (physical "parent_fk") and the outer query TRAVERSES
+# it. The join out of the CTE keys on the alias "parent"; the joined REAL table still resolves its
+# own db_column ("product_sku"). Both halves of the contract in one executed query.
+@testset "db_column: traversing a CTE-projected ForeignKey (#376)" begin
+    M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
+    M.Db_column_scratch.objects.delete(allow_delete_all=true)
+    try
+        parent = M.Db_column_scratch.objects.create("sku" => "FKP", "name" => "Parent")
+        M.Db_column_child_scratch.objects.create("parent" => parent[:id], "note" => "kid")
+
+        cte = M.Db_column_child_scratch.objects
+        cte.values("id", "parent")
+
+        main = M.Db_column_child_scratch.objects
+        main.with("ev" => cte, join_field="id" => "id", join_type="INNER")
+        main.values("note", "s" => "ev__parent__sku")
+        rows = main.list()
+        @test length(rows) == 1
+        @test rows[1][:note] == "kid"
+        @test rows[1][:s] == "FKP"            # reached through the CTE's aliased FK column
+    finally
+        M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
+        M.Db_column_scratch.objects.delete(allow_delete_all=true)
     end
 end

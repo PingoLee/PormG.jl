@@ -252,6 +252,29 @@ The `.with()` method:
 2. Creates a `LEFT JOIN stats ON result.driverid = stats.driverid`.
 3. Makes `stats__total_results` available for selection via `values()`.
 
+!!! note "A CTE's columns are its projection aliases"
+    A CTE is a **derived table**: the only columns it exposes are the names its `values()` call
+    produces. That matters when a projected field declares
+    [`db_column`](../fields.md#Database-Column-Mapping) — the physical name is consumed *inside*
+    the `WITH` body, so the outer query names the **field**, never the column.
+
+    Suppose `Race` declared `name = Models.CharField(db_column = "race_name")`:
+
+    ```julia
+    # The CTE body renders `"race_name" AS "name"` — `name` is the column it exposes.
+    races_91 = M.Race.objects.filter("year" => 1991).values("raceid", "name")
+
+    q = M.Result.objects
+    q.with("r91" => races_91, join_field="raceid" => "raceid")
+    q.filter("r91__name" => "Brazilian Grand Prix")   # → the CTE's "name" column, not "race_name"
+    q.values("resultid", "race" => "r91__name")
+    ```
+
+    Give the projection a custom alias (`values("rname" => "name")`) and *that* becomes the outer
+    name (`r91__rname`). The `join_field` follows the same split: its **second** element names a
+    CTE column and is a field name, while the first names a real column on the main table and does
+    resolve through `db_column`.
+
 ---
 
 ## Correlating a CTE with `F()` (no `join_field`)

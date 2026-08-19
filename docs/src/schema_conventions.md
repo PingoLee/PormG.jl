@@ -434,6 +434,16 @@ Two consequences worth noting:
       ([#64](https://github.com/PingoLee/PormG.jl/issues/64)). The one surface that is **not**
       configurable is the **auto-generated ManyToMany through-table column names** (`<model>_<pk>`).
 
+  !!! note "A CTE exposes aliases, not columns"
+      A CTE (or any `values()`-projected subquery) is a **derived table**: its columns are the
+      projection *aliases*, because the physical name is consumed inside the `WITH` body
+      (`"product_sku" AS "sku"`). So an outer reference to a CTE-projected field names the **field**
+      (or its custom alias), not the `db_column`
+      ([#376](https://github.com/PingoLee/PormG.jl/issues/376)) — the column-side half of the
+      join-key rule above. Fields on real tables reached *through* the CTE are unaffected and still
+      resolve their own `db_column`. See
+      [Subqueries and CTEs](read/subqueries_and_ctes.md#Basic-CTE-with-JOIN).
+
 !!! note "Imported models differ"
     The Django importer appends `_id` to a `ForeignKey`/`OneToOneField` field and points it at the
     referenced `id` — e.g. Django's `category = ForeignKey(...)` becomes a `category_id` column —

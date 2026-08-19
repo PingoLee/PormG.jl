@@ -165,8 +165,16 @@ class SupportedThing(models.Model):
         generated = read(generated_path, String)
         @test occursin("SupportedThing = Models.Model(\"supportedthing\"", generated)
         @test occursin("label = Models.CharField(max_length=50)", generated)
+        # `PlainHelper(object)` is a helper by its base list, so it leaves no trace at all.
         @test !occursin("PlainHelper", generated)
-        @test !occursin("ProxyUser", generated)
+        # `ProxyUser(CustomUser)` is NOT the same case, and used to be treated as though it were.
+        # Its only base is unresolvable and its body is `pass`, so every column it might have lives
+        # somewhere the importer cannot see — which is equally the shape of a real model and of a
+        # helper. It is still not emitted as a table, but dropping it in silence is how a genuine
+        # model disappears without a trace, so it now says so (#370).
+        @test !occursin("ProxyUser = Models.Model", generated)
+        @test occursin("# PormG: class 'ProxyUser' inherits 'CustomUser'", generated)
+        @test occursin("declares no field of its own", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

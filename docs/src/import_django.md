@@ -227,17 +227,59 @@ ImportBatch = Models.Model("importbatch", db_table = "imports_importbatch",
     only resolves after the whole module body has run.
 
 Importing the apps together also merges an **abstract base declared in another app** — the shared
-`core.models.TimeStampedModel` shape — and resolves a `TextChoices` enumeration the same way. Each
-app's own classes win, so a name two apps both declare resolves locally, as it does in Django.
+`core.models.TimeStampedModel` shape — and resolves a `TextChoices` enumeration the same way.
 
-!!! warning "A base name is matched across apps, whether or not that app imported it ([#370](https://github.com/PingoLee/PormG.jl/issues/370))"
-    The importer reads `models.py` files, not their `import` statements, so a base is matched by
-    **name** across the whole project. If one app inherits `BaseReport` from a third-party library and
-    an unrelated app happens to declare a concrete `BaseReport` of its own, the first is read as
-    multi-table inheritance and **not imported** — so adding an app to the list can remove a table
-    belonging to another app. It is always reported with a `# PormG:` marker, never silent. Importing
-    that app on its own is the workaround until
-    [#370](https://github.com/PingoLee/PormG.jl/issues/370) settles how narrow the lookup should be.
+**A class from another app has to be imported, exactly as Python requires.** Each app's own classes
+win, so a name two apps both declare resolves locally, as it does in Django; anything else is looked
+up through that `models.py`'s own `from … import …` lines:
+
+```python
+# imports/models.py
+from core.models import TimeStampedModel        # <- this line is what makes the merge happen
+
+class ImportBatch(TimeStampedModel):
+    note = models.CharField(max_length=40)
+```
+
+Without the import the base is reported as unresolved and the model keeps only its own columns —
+which is also what Python would do, since the name would not be defined. The lookup accepts the
+spellings a real project uses: an alias (`import TimeStampedModel as TSM`), a star import, a
+re-export through another app, and a nested package (`from apps.core.models import …`).
+
+A module path names an app when the app's own name is followed by its **models module** —
+`core.models`, `core.models.base` — or by nothing at all, the package re-exporting through its
+`__init__.py` (`from core import …`). The name matched is the app's label **or** its package
+directory, because Django's `AppConfig.label` is frequently not the directory name:
+`"crm" => "server/customers/models.py"` resolves `from customers.models import …` as well as
+`from crm.models import …`.
+
+Anything written **in front** of that name has to be where the app actually lives. A project laid
+out as `apps/core/` resolves `from apps.core.models import …`; the same import against an app at
+`server/core/` does not, and neither does `from wagtail.core.models import Page` — Wagtail is not
+your `core` app, however much the path looks alike. `from core.forms import Pedido` is refused too:
+a sibling module is not the models module.
+
+A **single** leading dot is this app's own package and never names another app, so `from .core.models
+import …` stays local; **two or more** ascend, so `apps/{core,shop}/` can write
+`from ..core.models import …` and have it resolve.
+
+!!! note "Pass a path, spelled from your Python import root"
+    The package directory can only be read from a **path**, and only as deeply as you spell it. An
+    app handed over as source text (`"crm" => read("customers/models.py", String)`) is known by its
+    label alone, so neither `from customers.models import …` nor any qualified spelling reaches it.
+    Equally, an app passed as `"core/models.py"` cannot match `from apps.core.models import …` even
+    when Python roots it under `apps/` — pass `"apps/core/models.py"`. Either way the failure is an
+    unresolved base with a marker, never a wrong match.
+
+!!! note "Why the import line matters — a table used to disappear ([#370](https://github.com/PingoLee/PormG.jl/issues/370))"
+    Matching bases by **name** alone meant a base one app inherited from a third-party library
+    resolved against an unrelated app's class of the same name. If that class was concrete, the
+    child was read as multi-table inheritance and **not imported** — so adding an app to the list
+    removed a table belonging to another app, which Python's per-module namespaces make impossible.
+    Resolution now follows the `import` statements, so a name imported from outside the app set can
+    no longer collide with an app's class. When a base is left unresolved and another app *does*
+    declare that name, the marker says so and names the app — and says whether the module failed to
+    import it or imported it from somewhere else entirely, because those want different fixes.
 
 A `django_prefix` on the connection is **rejected** here rather than ignored. It is one value for the
 whole connection, and relationship accessor names strip it — so `racing_circuit` would become
@@ -538,8 +580,26 @@ Relatorio = Models.Model("relatorio",
   titulo = Models.CharField(max_length=80))
 ```
 
-Importing the defining app alongside this one resolves it — see
+Importing the defining app alongside this one resolves it — provided this `models.py` really does
+`from core.models import TimeStampedModel`, which is what the lookup follows. See
 [Importing a multi-app project](@ref).
+
+**A class with no resolvable base and no column of its own is reported, not skipped quietly.** Every
+field it might have lives in a base the importer cannot see, so there is no evidence either way and
+it produces no table — but saying nothing is how a real model disappears without a trace. The marker
+names the module the base was imported from, which is usually all it takes to tell the two apart:
+
+```julia
+# PormG: class 'MeuManager' inherits 'InheritanceManager', imported from 'model_utils.managers',
+#   which nothing in this import defines, and declares no field of its own — not imported. …
+# PormG: class 'Pedido' inherits 'TimeStampedModel', imported from 'core.models', which nothing in
+#   this import defines, and declares no field of its own — not imported. …
+```
+
+The first is a library and nothing is missing; the second says which app to add to the call. A base
+with no `import` line at all says that instead. A **dotted** base (`forms.Form`,
+`serializers.Serializer`) stays silent: it names a module, so it is a helper by construction, and
+the namespace is the same discriminator that keeps a `ModelForm` out of the schema.
 
 Dropping the model instead would be the worse trade: a table that silently disappears is harder to
 notice than one that is present and annotated.
@@ -573,6 +633,14 @@ ImportBatch = Models.Model("importbatch",
 or declared on an **abstract base** the model inherits. Lookup is scoped in that order, so two models
 may each nest a `Status` with different members and each resolves to its own. A nested enum can also
 be addressed through its owner (`ImportBatch.Status.choices`), as Django allows.
+
+A module-level enum in **another app** follows the same rule as a base: it resolves only when this
+`models.py` imports it — alias, star import and re-export included, exactly as for a base. Matching
+by name alone handed a model another app's enumeration with no marker anywhere — the wrong `choices`
+and `default` in the schema and nothing in the file to show it (#370).
+
+A **nested** enum belongs to its owning class in its own app, so two apps may each declare a `Base`
+with its own nested `Status` and a child of either resolves to the right one.
 
 | Reference | Result |
 |---|---|

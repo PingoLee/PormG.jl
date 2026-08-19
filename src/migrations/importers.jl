@@ -624,6 +624,82 @@ function _lift_meta!(cls::PyClass)
   return cls
 end
 
+"""
+    _PyImports
+
+The module-level `from … import …` bindings of one `models.py`.
+
+`names` maps a name as it appears in a base list to `(module path, origin name)`, so
+`from core.models import TimeStampedModel as TSM` records
+`"TSM" => ("core.models", "TimeStampedModel")`. `stars` holds the module paths of
+`from … import *`, which binds names no parser can enumerate without reading that module.
+
+Read for ONE purpose: deciding whether a base name this app does not define may resolve against
+another app's class (#370). A name the module never imported is not in scope in Python either, so
+resolving it across apps invents an inheritance edge the project does not have — and when the other
+app's class is concrete, that edge is read as multi-table inheritance and costs a whole table.
+"""
+struct _PyImports
+  names::Dict{String, Tuple{String, String}}
+  stars::Vector{String}
+end
+
+# `from <module> import <rest>`. The module may carry leading dots (a relative import) or be
+# nothing but dots (`from . import models`), which is why it is `[.\w]+` and not a dotted name.
+const _FROM_IMPORT_RE = r"^from\s+([.\w]+)\s+import\s+(.+)$"
+
+"""
+    _py_imports(stmts) -> _PyImports
+
+The module-level `from … import …` bindings of a parsed `models.py`.
+
+Only `indent == 0` statements count: an import inside `if TYPE_CHECKING:` or a `try/except
+ImportError` is not an unconditional module-level binding, and a base arriving that way is reported
+as unresolved rather than guessed at.
+
+Plain `import x.y [as z]` is deliberately NOT recorded. It binds a MODULE, so the base it enables is
+written dotted (`class Foo(x.y.Base)`) — and a dotted token has never matched the bare-name class
+index (`_class_bases` keeps the token verbatim), so honouring it here would resolve nothing.
+Supporting it means teaching base resolution about dotted tokens first; until then leaving it out is
+neither a regression nor a gap this function could close on its own.
+"""
+function _py_imports(stmts::Vector{PyStmt})::_PyImports
+  names = Dict{String, Tuple{String, String}}()
+  stars = String[]
+  for s in stmts
+    s.indent == 0 || continue
+    m = match(_FROM_IMPORT_RE, s.text)
+    m === nothing && continue
+    mod = String(m.captures[1])
+    rest = strip(String(m.captures[2]))
+    # `_py_logical_lines` folds a wrapped `from m import (\n  A,\n  B,\n)` into ONE statement, so
+    # the brackets arrive inline. Stripping them here is what makes the parenthesised form — the
+    # spelling every formatter produces once the list is long — behave like the flat one.
+    if startswith(rest, "(")
+      rest = strip(rest[nextind(rest, firstindex(rest)):end])
+      endswith(rest, ")") && (rest = strip(rest[firstindex(rest):prevind(rest, lastindex(rest))]))
+    end
+    if rest == "*"
+      mod in stars || push!(stars, mod)
+      continue
+    end
+    for item in split(rest, ',')
+      t = strip(item)
+      isempty(t) && continue                        # the trailing comma of a parenthesised list
+      parts = split(t, r"\s+as\s+")
+      origin = String(strip(parts[1]))
+      local_name = length(parts) > 1 ? String(strip(parts[end])) : origin
+      (isempty(origin) || isempty(local_name)) && continue
+      # LAST binding wins, because that is what Python does: a second `from b import X` rebinds the
+      # name the first bound. The opposite of the first-wins rule the class index uses, and
+      # deliberately so — that rule is about PRECEDENCE between apps, this one about rebinding
+      # inside one module.
+      names[local_name] = (mod, origin)
+    end
+  end
+  return _PyImports(names, stars)
+end
+
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: The Django import engine — one or many apps (#346)
@@ -1521,7 +1597,20 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # standalone comment in the generated module. That is the #70 convention applied one level up:
       # the artifact itself shows what is missing, instead of the gap living only in a console warning
       # the reader of the file will never see.
-      if ci.kind === :not_a_model || ci.kind === :abstract
+      if ci.kind === :not_a_model && ci.ancestry_lost
+        # NOT silent, unlike its neighbours below. Every base is unresolvable and the body declares
+        # no column, so this is either a helper or a model whose every field lives in a base the
+        # importer cannot see — and nothing in the source separates the two. Skipping was the right
+        # call and saying nothing was not: a real model then left no trace anywhere.
+        @warn "import: class skipped — no resolvable base and no field of its own" class=class_name bases=join(ci.unresolved, ", ")
+        push!(Instructions, "# PormG: class '$(class_name)' inherits " *
+                            join(("'$(b)'" for b in ci.unresolved), ", ") *
+                            _bound_module_note(graph, ci.unresolved) *
+                            ", and declares no field of its own — not imported. If it is a model, " *
+                            "its columns all come from that base: " * _resolve_base_advice(app.label) *
+                            _declaring_apps_hint(graph, [(b, graph.self) for b in ci.unresolved]))
+        continue
+      elseif ci.kind === :not_a_model || ci.kind === :abstract
         continue                       # a QuerySet/Manager/Form/enum/helper, or a base — silent
       end
 
@@ -1560,18 +1649,19 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # marker on, so its gap would otherwise reach the file unannounced.
       unresolved_bases = _inherited_unresolved(graph, class)
       if !isempty(unresolved_bases)
-        for b in unresolved_bases
+        for (b, _) in unresolved_bases
           @warn "import: base class is not defined in this file; any fields it declares are missing from the imported model" class=class_name base=b
         end
         push!(markers, "# PormG: model '$(class_name)' inherits " *
-                       join(("'$(b)'" for b in unresolved_bases), ", ") *
+                       join(("'$(b)'" for (b, _) in unresolved_bases), ", ") *
                        ", not defined in " *
                        (app.label === nothing ? "this file" : "any app of this import") *
                        " — any fields declared there are MISSING below. Add them by hand, or " *
                        (app.label === nothing ?
                          "pass every app of the project as \"<app_label>\" => \"<models.py>\" pairs " *
                          "so a base in another app is merged." :
-                         "add the app that defines them to the pair list."))
+                         "add the app that defines them to the pair list.") *
+                       _declaring_apps_hint(graph, unresolved_bases))
       end
 
       # Django would hand this model its abstract base's `db_table`, giving every child of that base
@@ -2096,7 +2186,7 @@ function import_models_from_django(
     "that call instead."))
 
   labels = Set{String}()
-  staged = Tuple{String, Vector{PyClass}}[]
+  staged = _AppScope[]
   for pair in apps
     label = strip(String(first(pair)))
     isempty(label) && throw(InvalidMigrationError(
@@ -2127,20 +2217,21 @@ function import_models_from_django(
         "the path to that app's models.py, or its source text — and source text contains newlines, " *
         "so this is a path that does not exist."))
     end
-    push!(staged, (label, _py_classes(_py_logical_lines(_django_source_text(source)))))
+    # The PATH is kept, not just its contents: it carries the app's package directory name, which is
+    # the second key a Python module path may name this app by. Django's `AppConfig.label` is often
+    # not the package directory (`server/core/models.py` imported as `from server.core.models import
+    # …` while the label is `core`), so keeping both is what stops a legitimate import from reading
+    # as third-party. Source text handed over inline has no path, and then the label is all there is.
+    push!(staged, _app_scope(label, occursin('\n', source) ? nothing : source,
+                             _py_logical_lines(_django_source_text(source))))
   end
 
   # Classification is deferred until every app is parsed, so each app's bases and enum references
-  # resolve against the WHOLE project — its own classes first, then the rest in the order given.
-  # A shared abstract base in a `core` app is the shape that needs it; see
-  # `_django_graph_from_classes`.
-  parsed = _DjangoApp[_DjangoApp(label,
-                        _django_graph_from_classes(classes,
-                          # Own app first, then every other app in the order they were listed. Kept
-                          # as GROUPS so both the class index and the enum scopes resolve first-wins
-                          # with the same precedence.
-                          vcat([classes], [g for (l, g) in staged if l != label])))
-                      for (label, classes) in staged]
+  # resolve against the WHOLE project — its own classes first, then whatever this app's `models.py`
+  # actually imports from the others. A shared abstract base in a `core` app is the shape that needs
+  # it; see `_django_graph_from_scopes`.
+  parsed = _DjangoApp[_DjangoApp(sc.label, _django_graph_from_scopes(staged, i))
+                      for (i, sc) in enumerate(staged)]
 
   # An app that contributes no table is legal (a Django app can declare no models) but it is never
   # what you meant when the other apps reference it, so it is reported per app rather than only in
@@ -2235,19 +2326,28 @@ What the importer decided about one `class` in the source.
   Both put a schema on disk that does not match the database, so neither is emitted.
 - `:not_a_model` — a QuerySet, Manager, Form, enum or plain helper. Skipped silently.
 
-`unresolved` holds bases that name nothing in this file (`from core.models import TimeStampedModel`).
-The class is still imported — dropping it would re-create the vanishing-model bug — but it carries a
-marker saying whose fields are missing. Importing several apps together (#346) resolves these.
+`unresolved` holds bases that name nothing this module can see (`from core.models import
+TimeStampedModel` without that app in the run, or a base from a third-party library). The class is
+still imported — dropping it would re-create the vanishing-model bug — but it carries a marker
+saying whose fields are missing. Importing several apps together (#346) resolves these, provided
+this module actually imports the name (#370).
+
+`ancestry_lost` marks the ONE `:not_a_model` that is not a helper: a class whose entire base list is
+unresolvable and which declares no column of its own, so nothing distinguishes it from a plain
+`class Foo(SomeMixin)`. It is recorded at the point the decision is made rather than recomputed by
+the reporter, because rederiving it there means two predicates that have to agree — and the reporter
+would have to guess whether `:not_a_model` came from a blacklisted base, a `Meta.model`, or this.
 """
 struct _ClassInfo
   kind::Symbol
   bases::Vector{String}
   parents::Vector{String}              # in-file ABSTRACT bases whose fields this class inherits
-  unresolved::Vector{String}           # bases this file does not define
+  unresolved::Vector{String}           # bases nothing in scope defines
   mti_parent::Union{String, Nothing}
   meta::Dict{String, String}
   is_auth_user::Bool
   proxy::Bool
+  ancestry_lost::Bool
 end
 
 # A class this importer emits a `Models.Model(...)` for. A proxy is `:concrete` in every other
@@ -2321,9 +2421,202 @@ end
 # `abstract = True` / `proxy = True`, read off the raw right-hand side.
 _meta_is_true(raw::AbstractString)::Bool = parse_value(raw) === true
 
-function _classify_class!(info::Dict{String, _ClassInfo}, index::Dict{String, PyClass},
-                          visiting::Set{String}, cls::PyClass)::_ClassInfo
-  haskey(info, cls.name) && return info[cls.name]
+"""
+    _AppScope
+
+One app's contribution to an import run: its `label`, the `keys` a Python module path may name it
+by, its own `classes` in source order, the `own` name→class table (first-wins), and its
+[`_PyImports`](@ref).
+
+`keys` is EMPTY for the single-app arity. That is not a detail — it is what makes the one-app path
+provably unchanged by #370: with no key, no module path can ever match an app, so import and star
+resolution cannot fire and `_resolve_base` degenerates to a lookup in `own`, exactly the
+`haskey(index, b)` the flat index used to perform.
+"""
+struct _AppScope
+  label::String
+  keys::Vector{String}
+  pkg_path::Vector{String}             # lowercased package chain of this app's models.py; see below
+  classes::Vector{PyClass}
+  own::Dict{String, PyClass}
+  imports::_PyImports
+end
+
+# The package chain leading to this app's models module: `server/core/models.py` and
+# `server/core/models/__init__.py` both give `["server", "core"]`. Empty when the app was handed over
+# as source text, which has no location to compare against.
+#
+# Absolute leading components (a temp dir, a checkout root) are harmless because the only thing that
+# ever reads this is a SUFFIX comparison — how a Python import spells the path depends on where
+# `sys.path` is rooted, and only the tail is knowable.
+function _app_pkg_path(path::Union{Nothing, AbstractString})::Vector{String}
+  path === nothing && return String[]
+  d = dirname(String(path))
+  lowercase(basename(d)) == "models" && (d = dirname(d))
+  comps = [lowercase(c) for c in split(replace(d, '\\' => '/'), '/') if !isempty(c)]
+  return comps
+end
+
+# Django's `AppConfig.label` is frequently not the package directory name, so the directory is
+# carried as a SECOND key rather than as a replacement: whichever of the two an import spells, it
+# resolves.
+_app_package_key(path::Union{Nothing, AbstractString})::Union{Nothing, String} =
+  (p = _app_pkg_path(path); isempty(p) ? nothing : p[end])
+
+function _app_scope(label::AbstractString, path::Union{Nothing, AbstractString},
+                    stmts::Vector{PyStmt})::_AppScope
+  classes = _py_classes(stmts)
+  own = Dict{String, PyClass}()
+  for c in classes
+    haskey(own, c.name) || (own[c.name] = c)   # first-wins; a module-level redefinition is pathological
+  end
+  keys = String[]
+  pkg = String[]
+  if !isempty(label)
+    push!(keys, lowercase(label))
+    pkg = _app_pkg_path(path)
+    d = isempty(pkg) ? nothing : pkg[end]
+    (d === nothing || d in keys) || push!(keys, d)
+  end
+  return _AppScope(String(label), keys, pkg, classes, own, _py_imports(stmts))
+end
+
+"""
+    _app_for_module(scopes, mod) -> Union{Int, Nothing}
+
+The app in `scopes` that a Python module path names, or `nothing`.
+
+A component `c` names an app when `c` is one of that app's keys (its label or its package directory)
+**and** the app's models module follows — `core.models`, `core.models.base` — or nothing follows,
+which is the app package re-exporting through its `__init__.py` (`from core import …`). Components
+are scanned RIGHT TO LEFT, because a nested app package is ordinary and a left-to-right first match
+would stop at `apps`/`server` and resolve nothing.
+
+**Anything in front of the key must be where the app actually lives.** That is the load-bearing
+half, and matching the key plus a `models` tail alone is not enough: `from wagtail.core.models
+import Page` — the canonical Wagtail import — has a key `core` followed by `models`, so a project
+with a `core` app read a third-party base as its own and refused the child as multi-table
+inheritance. #370 verbatim, one module name over. So `comps[1:i]` must be a SUFFIX of the app's
+`pkg_path`; `apps.core.models` resolves for an app at `apps/core/`, and `wagtail.core.models` for
+the same app does not. A key at position 1 needs no prefix to agree with, which is what keeps the
+plain `core.models` spelling working — and what makes an app handed over as SOURCE TEXT (no path,
+so no `pkg_path`) reachable only by that plain spelling.
+
+`from core.forms import Pedido` is refused by the same rule: a sibling module is not the models
+module, and binding a form to a model would be the same defect one file over.
+
+The prefix check is deliberately NOT total: position 1 has nothing in front of it, so a *top-level*
+distribution whose package name equals an app key (`from core.models import X` where `core` is a
+third-party package) still resolves. Closing that would take the plain `<label>.models` spelling
+with it, and that is the spelling an app handed over as source text can only be reached by.
+
+`pkg_path` is read from the path the CALLER passed, not from an importable root, so how deeply the
+path is spelled decides which qualified spellings match: an app passed as `"core/models.py"` cannot
+match `apps.core.models` even when Python roots it there. It degrades to an unresolved base with a
+marker, never to a wrong match.
+
+**A SINGLE leading dot names this app's own package and can never name another app.** `from .base
+import X` is `base.py` next to this `models.py`, and `from .core.models import X` is an internal
+`core/` subpackage — both leave components that are perfectly ordinary app labels once the dot is
+stripped, and reading them as another app is #370 again. **Two or more dots ascend** to a parent
+package, which is exactly how a project laid out as `apps/{core,shop}/` writes a genuine cross-app
+import (`from ..core.models import TimeStampedModel`), so those do resolve.
+"""
+function _app_for_module(scopes::Vector{_AppScope}, mod::AbstractString)::Union{Int, Nothing}
+  dots = something(findfirst(!isequal('.'), mod), lastindex(mod) + 1) - 1
+  dots == 1 && return nothing                          # this app's own package — never another app
+  comps = [lowercase(c) for c in split(mod, '.') if !isempty(c)]
+  isempty(comps) && return nothing
+  for i in length(comps):-1:1
+    # Either the app's models module follows the key, or nothing does (the package re-export).
+    (get(comps, i + 1, "") == "models" || i == length(comps)) || continue
+    key = comps[i]
+    for (j, sc) in enumerate(scopes)
+      key in sc.keys || continue
+      # Position 1 has nothing in front of it to disagree with. Anything deeper must match where the
+      # app's models.py actually sits, or a vendor package sharing the app's name resolves into it.
+      (i == 1 || (length(sc.pkg_path) >= i && sc.pkg_path[end - i + 1:end] == comps[1:i])) || continue
+      return j
+    end
+  end
+  return nothing
+end
+
+"""
+    _resolve_base(scopes, from_idx, token) -> Union{Tuple{Int, PyClass}, Nothing}
+
+The class a base token names, as seen from app `from_idx`, with the app that owns it.
+
+The app's OWN classes win — Django's rule for an unqualified reference, and the precedence #346
+documents. Everything else has to be imported: a name this `models.py` never bound is not in scope
+in Python, so resolving it against another app would invent an inheritance edge the project does not
+have (#370).
+"""
+_resolve_base(scopes::Vector{_AppScope}, from_idx::Int, token::AbstractString) =
+  haskey(scopes[from_idx].own, token) ? (from_idx, scopes[from_idx].own[token]) :
+    _resolve_imported(scopes, from_idx, String(token), Set{Tuple{Int, String}}())
+
+# `seen` is keyed by (app, NAME), not by app. The token changes across a re-export hop — an app
+# reached for `Foo` may still have to be asked about `Bar` — so an app-keyed set makes a second,
+# valid branch of the star-import loop below return `nothing` purely because an earlier branch had
+# already visited that app for a different name. That made the result depend on the ORDER of two
+# `from … import *` lines.
+function _resolve_imported(scopes::Vector{_AppScope}, idx::Int, token::String,
+                           seen::Set{Tuple{Int, String}})::Union{Tuple{Int, PyClass}, Nothing}
+  (idx, token) in seen && return nothing
+  push!(seen, (idx, token))
+  imp = scopes[idx].imports
+  entry = get(imp.names, token, nothing)
+  if entry !== nothing
+    (mod, origin) = entry
+    a = _app_for_module(scopes, mod)
+    # The name is BOUND, and bound to something outside the app set — a third-party base. Stopping
+    # here rather than falling through to the star imports is the #370 fix itself.
+    a === nothing && return nothing
+    haskey(scopes[a].own, origin) && return (a, scopes[a].own[origin])
+    # A re-export façade: `reports` imports from `access`, which imported it from `core`. Common
+    # enough in projects with a "base app" that not following it would be a fresh silent loss.
+    return _resolve_imported(scopes, a, origin, seen)
+  end
+  for mod in imp.stars
+    a = _app_for_module(scopes, mod)
+    a === nothing && continue
+    haskey(scopes[a].own, token) && return (a, scopes[a].own[token])
+    r = _resolve_imported(scopes, a, token, seen)
+    r === nothing || return r
+  end
+  return nothing
+end
+
+"""
+    _ClassifyState
+
+The working tables of one classification run, all keyed by `(app index, class name)`.
+
+Keying by app is not bookkeeping. A bare class name is ambiguous the moment two apps declare one —
+which `_build_class_index`'s whole collision machinery exists because they DO — and both tables here
+are consulted across app boundaries as the walk follows a base into the app that defines it.
+`visiting` in particular reported a false inheritance cycle: `core.Bar(Foo)` reached from `L.Foo`
+found `"Foo"` already in a bare-name set, refused `core.Bar`, poisoned `L.Foo`, and dropped the
+model in silence.
+
+`resolved` records the edge each `(app, token)` pair took, so the projection that builds the public
+graph can follow exactly the chain classification followed.
+"""
+struct _ClassifyState
+  scopes::Vector{_AppScope}
+  info::Dict{Tuple{Int, String}, _ClassInfo}
+  visiting::Set{Tuple{Int, String}}
+  resolved::Dict{Tuple{Int, String}, Tuple{Int, PyClass}}
+end
+
+_ClassifyState(scopes::Vector{_AppScope}) =
+  _ClassifyState(scopes, Dict{Tuple{Int, String}, _ClassInfo}(), Set{Tuple{Int, String}}(),
+                 Dict{Tuple{Int, String}, Tuple{Int, PyClass}}())
+
+function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInfo
+  key = (app, cls.name)
+  haskey(st.info, key) && return st.info[key]
 
   meta = _parse_meta_options(cls.meta)
   bases = _class_bases(cls)
@@ -2333,8 +2626,8 @@ function _classify_class!(info::Dict{String, _ClassInfo}, index::Dict{String, Py
 
   # An inheritance CYCLE is malformed Python. Refuse the class rather than recurse forever; not
   # memoized, because the in-progress outer call owns the entry for this name.
-  if cls.name in visiting
-    return _ClassInfo(:not_a_model, bases, String[], String[], nothing, meta, is_auth, proxy)
+  if key in st.visiting
+    return _ClassInfo(:not_a_model, bases, String[], String[], nothing, meta, is_auth, proxy, false)
   end
 
   is_root = is_auth || any(b -> b in _MODEL_ROOT_BASES, bases)
@@ -2357,18 +2650,28 @@ function _classify_class!(info::Dict{String, _ClassInfo}, index::Dict{String, Py
   # Bases are resolved even when one of them is blacklisted, because a blacklisted base no longer
   # decides the outcome on its own — see the `kind` selection below.
   #
-  # `haskey(index, b)` is tested BEFORE `_NON_MODEL_BASES`, and that ordering is the whole fix for a
+  # A RESOLVED base is tested BEFORE `_NON_MODEL_BASES`, and that ordering is the whole fix for a
   # real silent loss: `Manager`, `Choices` and `Enum` are perfectly good model names — a Manager in
   # an HR schema is a person — and dismissing such a base by NAME made the class invisible as an
   # ancestor. Its children then resolved no parent, fell through to `non_model`, and were dropped
-  # without a word, taking the base's columns with them. A definition in this file always outranks
-  # a name on a list.
-  push!(visiting, cls.name)
+  # without a word, taking the base's columns with them. A definition always outranks a name on a
+  # list — and now that resolution is import-aware, it is only the definition this module can
+  # actually SEE, so `class Foo(Manager)` in an app that wrote `from django.db.models import
+  # Manager` correctly falls to the blacklist instead of borrowing another app's `Manager` class.
+  push!(st.visiting, key)
   try
     for b in bases
       (b in _MODEL_ROOT_BASES || b in _AUTH_USER_BASES) && continue
-      if haskey(index, b)
-        pk = _classify_class!(info, index, visiting, index[b]).kind
+      r = _resolve_base(st.scopes, app, b)
+      if r !== nothing
+        (bapp, bcls) = r
+        st.resolved[(app, b)] = r
+        # Recursion carries the RESOLVED app, never the importing one. A base's own bases are names
+        # in ITS module, so classifying `core.Auditavel` in the importing app's namespace loses
+        # `TimeStampedModel`, makes `Auditavel` field-less and therefore `:not_a_model`, poisons the
+        # child — and the child is then dropped with no marker at all, which is strictly worse than
+        # the defect this change exists to remove.
+        pk = _classify_class!(st, bapp, bcls).kind
         if pk === :abstract
           push!(parents, b)
         elseif pk === :concrete || pk === :mti
@@ -2380,7 +2683,7 @@ function _classify_class!(info::Dict{String, _ClassInfo}, index::Dict{String, Py
           poisoned = true
         end
       elseif b in _NON_MODEL_BASES
-        # A known non-model NAME that this file does not define. Already reflected in `non_model`;
+        # A known non-model NAME that nothing in scope defines. Already reflected in `non_model`;
         # it is not an unresolved ancestor, so it must not be marked as one.
         continue
       else
@@ -2388,7 +2691,7 @@ function _classify_class!(info::Dict{String, _ClassInfo}, index::Dict{String, Py
       end
     end
   finally
-    delete!(visiting, cls.name)
+    delete!(st.visiting, key)
   end
 
   kind = if describes_a_model || isempty(bases)
@@ -2422,8 +2725,30 @@ function _classify_class!(info::Dict{String, _ClassInfo}, index::Dict{String, Py
     :not_a_model
   end
 
-  ci = _ClassInfo(kind, bases, parents, unresolved, mti_parent, meta, is_auth, proxy)
-  info[cls.name] = ci
+  # Reached the final `else` with bases nothing could resolve: every column this class has lives in a
+  # base the importer cannot see, so there is no evidence either way and it is skipped. Recorded so
+  # the reporter can say so — skipping it in silence is how a real model disappears without a trace.
+  #
+  # Restricted to BARE base names, using the same discriminator `_declares_fields` uses one screen
+  # down: a namespace is the one piece of information already in the source. `forms.Form` and
+  # `serializers.Serializer` are dotted, so they name a module this file never had and a dotted token
+  # could not have resolved anyway — those are helpers, definitively, and marking them would be pure
+  # noise on every `models.py` that also holds a ModelForm. A BARE `CustomUser` is the ambiguous one:
+  # it is exactly what an `import` would have bound, which is what makes it worth a line.
+  #
+  # Deliberately NOT narrowed further by "the name was imported from a module naming no app". That
+  # test cannot tell a third-party library from an app of this project the caller simply did not
+  # pass — and those are the same string. Worse, the single-app arity has no app keys at all, so the
+  # test is true for EVERY explicitly-imported base there and the marker never fired for the case it
+  # exists for. The module name goes into the message instead: naming `model_utils.managers` lets a
+  # reader dismiss a library in one glance, and naming `core.models` tells them which pair is
+  # missing. A comment too many is recoverable; a model that vanished silently is not.
+  ancestry_lost = kind === :not_a_model && !isempty(unresolved) &&
+                  !describes_a_model && !non_model && !poisoned &&
+                  all(b -> !occursin('.', b), unresolved)
+
+  ci = _ClassInfo(kind, bases, parents, unresolved, mti_parent, meta, is_auth, proxy, ancestry_lost)
+  st.info[key] = ci
   return ci
 end
 
@@ -2437,84 +2762,137 @@ Deliberately silent: classification emits no warnings, so `parse_class` can be c
 without side effects. The importer reads `info` and does the reporting.
 """
 function _django_class_graph(model_py_string::AbstractString)
-  classes = _py_classes(_py_logical_lines(model_py_string))
-  return _django_graph_from_classes(classes, [classes])
+  stmts = _py_logical_lines(model_py_string)
+  # No label and therefore no module keys: `_app_for_module` can never match, so import resolution
+  # is inert and this path behaves exactly as it did when the index was one flat name→class table.
+  return _django_graph_from_scopes([_app_scope("", nothing, stmts)], 1)
 end
 
 """
-    _django_graph_from_classes(classes, scope_classes) -> NamedTuple
+    _django_graph_from_scopes(scopes, self) -> NamedTuple
 
-Classify `classes`, resolving their bases and enum references against `scope_classes`.
+Classify `scopes[self]`'s classes, resolving their bases and enum references across `scopes`.
 
-The two arguments differ only for a multi-app project (#346), where `scope_classes` is EVERY app's
-classes (this app's first) while `classes` stays this app's own. That is what lets
+`scopes` holds every app of the import run (#346); `self` says which one this graph is for. That is
+what lets
 
 ```python
 # core/models.py                       # imports/models.py
-class TimeStampedModel(models.Model):  class ImportBatch(TimeStampedModel):
-    class Meta: abstract = True            note = models.CharField(max_length=40)
+class TimeStampedModel(models.Model):  from core.models import TimeStampedModel
+    class Meta: abstract = True        class ImportBatch(TimeStampedModel):
+                                           note = models.CharField(max_length=40)
 ```
 
 merge — a shared abstract base in a `core` app is one of the commonest shapes in a real Django
 project, and importing the apps separately is exactly what `_inherited_unresolved`'s marker has been
 telling people to stop doing since #341 ("import the app that defines them together with this one").
-Before this, importing them together changed nothing: the graph was built per file, so the base was
-still "not defined in this file" and the child silently lost its columns.
 
-This app's own definitions come first, so a class name that two apps both declare resolves to the
-LOCAL one — Django's rule for an unqualified reference, and the same precedence
-`_lookup_class_ref` applies to relation targets.
+**Resolution follows the `import` statements, not the name (#370).** An app's own classes win, as
+Django resolves an unqualified reference; anything else must have been imported by that module.
+Matching purely by name meant a base one app inherited from a third-party library resolved against
+an unrelated app's class of the same name — and when that class was concrete, the child was refused
+as multi-table inheritance and its table vanished from the generated file. Adding an app to the
+import removed a table from another app, which Python's per-module namespaces make impossible.
 
-Cross-app inheritance keeps Django's semantics rather than gaining new ones: an abstract base merges
-its fields, and a CONCRETE base in another app is still multi-table inheritance and still refused.
+Cross-app inheritance still keeps Django's semantics rather than gaining new ones: an abstract base
+merges its fields, and a CONCRETE base in another app — genuinely imported — is still multi-table
+inheritance and still refused.
 
-The lookup is by NAME, and this file reads `models.py` rather than its `import` statements — so a base
-one app inherits from a library resolves against an unrelated app's class of the same name, and is
-then refused as MTI. Reported with a marker, never silent, and tracked as #370, which is where the
-decision belongs: parse the imports, restrict the cross-app scope to abstract bases, or accept it.
-`info` stays per app because it is keyed by class name, and two apps may legitimately declare the
-same one.
+`index` and `info` describe **this app's own classes only**, name-keyed, which is what every caller
+reading them by class name expects. The ancestor walkers cannot use a bare name (two apps may
+declare one), so they read `byapp` and `resolved` instead: `byapp[(app, name)]` is the classified
+info of any class the walk reached, and `resolved[(app, token)]` is the edge a base token took.
 """
-function _django_graph_from_classes(classes::Vector{PyClass}, scope_groups::Vector{Vector{PyClass}})
-  index = Dict{String, PyClass}()
-  for group in scope_groups, c in group
-    # First definition wins; within one file a name redefined at module level is pathological
-    # Python, and across files this is what makes the local app outrank the rest of the project.
-    haskey(index, c.name) || (index[c.name] = c)
-  end
-  info = Dict{String, _ClassInfo}()
-  visiting = Set{String}()
+function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
+  st = _ClassifyState(scopes)
+  classes = scopes[self].classes
   for c in classes
-    _classify_class!(info, index, visiting, c)
+    _classify_class!(st, self, c)
   end
-  # Enums follow the same scope as bases — and the same PRECEDENCE, which is why the groups arrive
-  # separately instead of pre-flattened. `_collect_enums` is last-wins within a file (`out[c.name] =`
-  # overwrites), so merging a flat "own classes, then every app" vector let the LAST-listed app's
-  # `Status` overwrite everyone's, including the app that declares its own — silently handing a model
-  # another app's enumeration, and then reporting its own member as "not a member of Status".
-  # Collected per group and merged first-wins, so precedence matches `index` exactly.
-  enums = Dict{String, Dict{String, _PyEnum}}()
-  for group in scope_groups
-    _merge_enum_scopes!(enums, _collect_enums(group))
-  end
-  return (classes = classes, index = index, info = info, enums = enums)
-end
 
-# Merge `from` into `into` keeping whatever `into` already has, at BOTH levels: the scope key (a
-# class name, or `""` for module scope) and the enum name inside it. Two apps can each declare an
-# enum of the same name in the same scope, and the earlier group — the local app — must win.
-#
-# Parameters are untyped on purpose: `_PyEnum` is declared further down this file, and a signature
-# is evaluated at DEFINITION time, so naming it here is an `UndefVarError` at load. Same forward
-# reference that keeps `_is_emitted` untyped at its call sites.
-function _merge_enum_scopes!(into, from)
-  for (scope, members) in from
-    dest = get!(into, scope, valtype(into)())
-    for (name, e) in members
-      haskey(dest, name) || (dest[name] = e)
+  # Own classes, source order, first-wins — the invariant `_build_class_index` relies on when it
+  # indexes `graph.index[e.class]` without a guard.
+  index = Dict{String, PyClass}()
+  info = Dict{String, _ClassInfo}()
+  for c in classes
+    haskey(index, c.name) && continue
+    index[c.name] = c
+    info[c.name] = st.info[(self, c.name)]
+  end
+
+  # Enum scope, keyed by `(app, scope)` — a class name, or `""` for module level.
+  #
+  # The app half is not bookkeeping. Keyed by bare scope name, two apps that each declare a `Base`
+  # with a nested `Situacao` collapse into one entry, and `core.Base`'s own field silently takes
+  # `shop.Base`'s members — a wrong enumeration in the schema with no marker anywhere. The base
+  # resolved perfectly; only the scope table could not tell the two classes apart. `_enum_scopes`
+  # hands back the `(app, name)` pairs it already resolved, so the lookup asks the right app.
+  #
+  # The MODULE scope of THIS app is the one place anything crosses: a top-level
+  # `class Status(models.TextChoices)` referenced as `choices=Status.choices` is a Python name
+  # lookup, so it is gated exactly like a base (#370). Every other app's module scope stays its own
+  # and is reached only as an ancestor's, below.
+  per_app = [_collect_enums(sc.classes) for sc in scopes]
+  enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}()
+  for (i, t) in enumerate(per_app), (scope, members) in t
+    enums[(i, scope)] = members
+  end
+  mod_scope = Dict{String, _PyEnum}()
+  own_mod = get(per_app[self], "", nothing)
+  own_mod === nothing || merge!(mod_scope, own_mod)      # own declarations always win
+  for local_name in keys(scopes[self].imports.names)
+    haskey(mod_scope, local_name) && continue
+    e = _resolve_enum(scopes, per_app, self, local_name, Set{Tuple{Int, String}}())
+    e === nothing || (mod_scope[local_name] = e)
+  end
+  # A star import cannot be enumerated, so it contributes the other app's own module-level names.
+  # Not its re-exports: those have no name here to ask about, and inventing the closure of every
+  # star-imported app's imports would bind names the source never mentions.
+  for mod in scopes[self].imports.stars
+    a = _app_for_module(scopes, mod)
+    (a === nothing || a == self) && continue
+    src = get(per_app[a], "", nothing)
+    src === nothing && continue
+    for (n, e) in src
+      haskey(mod_scope, n) || (mod_scope[n] = e)
     end
   end
-  return into
+  enums[(self, "")] = mod_scope
+
+  return (classes = classes, index = index, info = info, enums = enums,
+          scopes = scopes, self = self, byapp = st.info, resolved = st.resolved)
+end
+
+# The base resolver's walk, for a module-level enumeration instead of a class: own declarations, then
+# named imports, following a re-export façade exactly as `_resolve_imported` does.
+#
+# Kept as a second function rather than one generic because the tables differ — `own` versus the `""`
+# scope of `_collect_enums` — but the RULES must not drift. They did in the first cut of #370: a base
+# behind `shop → access → core` resolved and the enum behind the same façade did not, and the marker
+# then told the reader to import a module they had already imported.
+function _resolve_enum(scopes::Vector{_AppScope}, per_app, idx::Int, token::String,
+                       seen::Set{Tuple{Int, String}})
+  (idx, token) in seen && return nothing
+  push!(seen, (idx, token))
+  imp = scopes[idx].imports
+  entry = get(imp.names, token, nothing)
+  if entry !== nothing
+    (mod, origin) = entry
+    a = _app_for_module(scopes, mod)
+    a === nothing && return nothing          # bound to something outside the app set
+    src = get(per_app[a], "", nothing)
+    src !== nothing && haskey(src, origin) && return src[origin]
+    return _resolve_enum(scopes, per_app, a, origin, seen)
+  end
+  for mod in imp.stars
+    a = _app_for_module(scopes, mod)
+    a === nothing && continue
+    src = get(per_app[a], "", nothing)
+    src !== nothing && haskey(src, token) && return src[token]
+    r = _resolve_enum(scopes, per_app, a, token, seen)
+    r === nothing || return r
+  end
+  return nothing
 end
 
 # ── Django `TextChoices` / `IntegerChoices` (#342) ───────────────────────────────────────────────
@@ -2703,44 +3081,81 @@ function _collect_nested_enums!(into::Dict{String, _PyEnum}, cls::PyClass, prefi
 end
 
 """
-    _enum_scopes(graph, cls) -> Vector{String}
+    _enum_scopes(graph, cls) -> Vector{Tuple{Int, String}}
 
-The scopes an enum reference inside `cls` may name, in precedence order: the class itself, then its
-ABSTRACT BASES (nearest first), then module level (`""`).
+The scopes an enum reference inside `cls` may name, as `(app, scope)` in precedence order: the class
+itself, then its ABSTRACT BASES (nearest first), then module level — this app's first, then that of
+each app an ancestor came from.
 
 The abstract-base step is not optional. `_inherited_statements` merges a base's field statements
 into the child and processes them under the CHILD's name, so a base declaring both
 `class Status(TextChoices)` and a field using it hands the child a reference that is nowhere in the
 child's own scope — which this importer then reported as "not defined in this file" while it sat
 three lines above. An abstract base with an enumerated status column is mainstream Django.
+
+The ancestor's module scope is in the list for the same reason one step further out: a base in
+`core` may reference a MODULE-level `Status` that `core` declares, and once that statement has been
+merged into a child in another app, nothing in the child's own scopes can see it.
+
+Every entry carries the app it belongs to. Two apps may each declare a `Base` with a nested
+`Situacao`, and a scope list of bare names cannot say which one a merged statement meant.
+
+!!! warning "Known imprecision — the list is per CLASS, not per statement"
+    `_inherited_statements` merges an ancestor's statements into the child and they are all
+    processed under one scope list, so the ancestor-module tail is reachable from the child's OWN
+    statements too, and this app's module scope outranks the ancestor's even for a statement that
+    came out of the ancestor's body — where Python would resolve in the ancestor's module.
+
+    Both are narrower than what preceded them: the enum table used to be one flat, app-blind
+    dictionary, so every app's module scope was reachable from everywhere. Closing them properly
+    means tagging each merged statement with the app it came from and resolving per statement, which
+    is a change to the field pipeline rather than to this list.
 """
-function _enum_scopes(graph, cls::PyClass)::Vector{String}
-  out = String[cls.name]
-  seen = Set{String}()
-  function walk(name::AbstractString)
-    info = get(graph.info, String(name), nothing)
-    info === nothing && return
-    for b in info.parents
-      b in seen && continue
-      push!(seen, b)
-      push!(out, b)
-      walk(b)
+function _enum_scopes(graph, cls::PyClass)::Vector{Tuple{Int, String}}
+  out = Tuple{Int, String}[(graph.self, cls.name)]
+  ancestor_apps = Int[]
+  seen = Set{Tuple{Int, String}}()
+  function walk(a::Int, c::PyClass)
+    key = (a, c.name)
+    key in seen && return
+    push!(seen, key)
+    ci = get(graph.byapp, key, nothing)
+    ci === nothing && return
+    for b in ci.parents
+      r = get(graph.resolved, (a, b), nothing)
+      r === nothing && continue
+      (pa, pc) = r
+      (pa, pc.name) in seen && continue
+      # The scope key is the ancestor's OWN name, because that is how `_collect_enums` keys a class
+      # scope — not the token the child referred to it by, which an `as` alias makes a different
+      # string entirely.
+      push!(out, (pa, pc.name))
+      pa == graph.self || pa in ancestor_apps || push!(ancestor_apps, pa)
+      walk(pa, pc)
     end
     return
   end
-  walk(cls.name)
-  push!(out, "")
+  walk(graph.self, cls)
+  push!(out, (graph.self, ""))                 # this app's module scope outranks any borrowed one
+  for a in ancestor_apps
+    push!(out, (a, ""))
+  end
   return out
 end
 
 """
     _lookup_enum(enums, scopes, ref) -> Union{_PyEnum, Nothing}
 
-Resolve an enum NAME against an ordered list of scopes. First match wins, so a nested enum shadows a
-module-level one of the same name — Python's own rule. A qualified `Owner.Status` is accepted last,
-since Django permits addressing a nested enum through its owner.
+Resolve an enum NAME against an ordered list of `(app, scope)` keys. First match wins, so a nested
+enum shadows a module-level one of the same name — Python's own rule. A qualified `Owner.Status` is
+accepted last, since Django permits addressing a nested enum through its owner.
+
+The qualified form is tried against the apps already in `scopes` and no others: `Owner` is a name in
+one of those modules, so widening the search to every app would resolve it in a module the source
+cannot see — the flat-table defect one level down.
 """
-function _lookup_enum(enums, scopes::Vector{String}, ref::AbstractString)::Union{_PyEnum, Nothing}
+function _lookup_enum(enums, scopes::Vector{Tuple{Int, String}},
+                      ref::AbstractString)::Union{_PyEnum, Nothing}
   for s in scopes
     scope = get(enums, s, nothing)
     scope === nothing && continue
@@ -2748,10 +3163,13 @@ function _lookup_enum(enums, scopes::Vector{String}, ref::AbstractString)::Union
   end
   idx = findlast('.', ref)
   if idx !== nothing
-    owner = ref[firstindex(ref):prevind(ref, idx)]
+    owner = String(ref[firstindex(ref):prevind(ref, idx)])
     inner = ref[nextind(ref, idx):end]
-    scope = get(enums, String(owner), nothing)
-    scope === nothing || (haskey(scope, inner) && return scope[inner])
+    for (a, _) in scopes
+      scope = get(enums, (a, owner), nothing)
+      scope === nothing && continue
+      haskey(scope, inner) && return scope[inner]
+    end
   end
   return nothing
 end
@@ -2766,38 +3184,52 @@ before the class's own body is the whole merge: `process_class_fields!` writes i
 Bases are walked in **reverse** declaration order, because Python resolves `class C(A, B)` left to
 right — A must win, so A's statements have to be written last.
 """
+# ── Walking the abstract-ancestor chain ──────────────────────────────────────────────────────────
+# Every helper below follows `_ClassInfo.parents`, and none of them can do it with a bare class
+# name. `graph.info` describes THIS app's own classes; a parent token is a name in the CHILD's
+# module, two apps may each declare a `Base`, and an `as` alias makes the token differ from the
+# class's own name. So they read `graph.resolved[(app, token)]` — the edge classification actually
+# took — and `graph.byapp[(app, name)]`, which covers every class the walk reached, in any app.
+
 function _inherited_statements(graph, cls::PyClass)::Vector{PyStmt}
   out = PyStmt[]
-  seen = Set{String}()
-  function walk(c::PyClass)
-    ci = get(graph.info, c.name, nothing)
+  seen = Set{Tuple{Int, String}}()
+  function walk(a::Int, c::PyClass)
+    ci = get(graph.byapp, (a, c.name), nothing)
     ci === nothing && return
     for b in Iterators.reverse(ci.parents)
-      b in seen && continue
-      push!(seen, b)
-      p = get(graph.index, b, nothing)
-      p === nothing && continue
-      walk(p)
-      append!(out, p.body)
+      r = get(graph.resolved, (a, b), nothing)
+      r === nothing && continue
+      (pa, pc) = r
+      (pa, pc.name) in seen && continue
+      push!(seen, (pa, pc.name))
+      walk(pa, pc)
+      append!(out, pc.body)
     end
     return
   end
-  walk(cls)
+  walk(graph.self, cls)
   return out
 end
 
 # Django's `AbstractUser` columns reach a class through an abstract base too:
 # `class BaseUser(AbstractUser): class Meta: abstract = True` then `class User(BaseUser)`.
 function _inherits_auth_user(graph, cls::PyClass)::Bool
-  ci = get(graph.info, cls.name, nothing)
-  ci === nothing && return false
-  ci.is_auth_user && return true
-  for b in ci.parents
-    p = get(graph.index, b, nothing)
-    p === nothing && continue
-    _inherits_auth_user(graph, p) && return true
+  function walk(a::Int, c::PyClass, seen::Set{Tuple{Int, String}})::Bool
+    key = (a, c.name)
+    key in seen && return false
+    push!(seen, key)
+    ci = get(graph.byapp, key, nothing)
+    ci === nothing && return false
+    ci.is_auth_user && return true
+    for b in ci.parents
+      r = get(graph.resolved, (a, b), nothing)
+      r === nothing && continue
+      walk(r[1], r[2], seen) && return true
+    end
+    return false
   end
-  return false
+  return walk(graph.self, cls, Set{Tuple{Int, String}}())
 end
 
 """
@@ -2822,16 +3254,18 @@ const _META_KEYS_NOT_INHERITED = ("abstract", "db_table")
 
 function _effective_meta(graph, cls::PyClass)::Dict{String, String}
   b = _inherited_meta_base(graph, cls)
-  b === nothing && return graph.info[cls.name].meta
-  pm = graph.info[b].meta
+  b === nothing && return graph.byapp[(graph.self, cls.name)].meta
+  pm = graph.byapp[(b[1], b[2].name)].meta
   return Dict{String, String}(k => v for (k, v) in pm if !(k in _META_KEYS_NOT_INHERITED))
 end
 
 """
-    _inherited_meta_base(graph, cls) -> Union{String, Nothing}
+    _inherited_meta_base(graph, cls) -> Union{Tuple{Int, PyClass}, Nothing}
 
-The abstract base whose `Meta` Django installs on `cls`: the nearest ancestor declaring a `Meta`
-block at all. `nothing` when `cls` declares its own, or when no ancestor has one.
+The abstract base whose `Meta` Django installs on `cls`, as `(owning app, class)`: the nearest
+ancestor declaring a `Meta` block at all. `nothing` when `cls` declares its own, or when no ancestor
+has one. The owning app travels with the class because a bare name cannot address it — see the
+ancestor-walk note above.
 
 One walk, used by BOTH consumers — `_effective_meta` and the withheld-`db_table` report. They used
 to walk separately and disagree: the reporter climbed the whole chain while `_effective_meta`
@@ -2841,54 +3275,148 @@ would never have inherited it (Django resolves `Meta` to one class, not a merge 
 Gated on whether a Meta BLOCK was declared, not on whether it yielded options: `class Meta:`
 carrying only a docstring is still a declaration, and Django does not inherit past one.
 """
-function _inherited_meta_base(graph, cls::PyClass)::Union{String, Nothing}
+function _inherited_meta_base(graph, cls::PyClass)::Union{Tuple{Int, PyClass}, Nothing}
   isempty(cls.meta) || return nothing
-  seen = Set{String}()
-  function walk(c::PyClass)::Union{String, Nothing}
-    ci = get(graph.info, c.name, nothing)
+  seen = Set{Tuple{Int, String}}()
+  function walk(a::Int, c::PyClass)::Union{Tuple{Int, PyClass}, Nothing}
+    ci = get(graph.byapp, (a, c.name), nothing)
     ci === nothing && return nothing
     for b in ci.parents
-      b in seen && continue
-      push!(seen, b)
-      p = get(graph.index, b, nothing)
-      p === nothing && continue
-      isempty(p.meta) || return b
-      r = walk(p)
-      r === nothing || return r
+      r = get(graph.resolved, (a, b), nothing)
+      r === nothing && continue
+      (pa, pc) = r
+      (pa, pc.name) in seen && continue
+      push!(seen, (pa, pc.name))
+      isempty(pc.meta) || return (pa, pc)
+      w = walk(pa, pc)
+      w === nothing || return w
     end
     return nothing
   end
-  return walk(cls)
+  return walk(graph.self, cls)
 end
 
 """
-    _inherited_unresolved(graph, cls) -> Vector{String}
+    _inherited_unresolved(graph, cls) -> Vector{Tuple{String, Int}}
 
-Bases that neither `cls` nor any of its abstract ancestors could resolve.
+Bases that neither `cls` nor any of its abstract ancestors could resolve, each with the index of the
+app whose `models.py` actually declares the class carrying that base.
 
 An abstract base with its own unresolvable base (`class Auditavel(TimeStampedModel)` with
 `abstract = True`) loses columns exactly as the child would, but the base emits nothing — so without
 walking the chain its gap reaches the generated file with no marker at all.
+
+The owning app travels with the token because the walk crosses apps: an unresolved base found on
+`core.Auditavel` while emitting `shop.Pedido` needs its `import` line in **`core`**, and advice
+pointing at `shop` would be advice that cannot work.
 """
-function _inherited_unresolved(graph, cls::PyClass)::Vector{String}
-  out = String[]
-  seen = Set{String}()
-  function walk(c::PyClass)
-    ci = get(graph.info, c.name, nothing)
+function _inherited_unresolved(graph, cls::PyClass)::Vector{Tuple{String, Int}}
+  out = Tuple{String, Int}[]
+  seen = Set{Tuple{Int, String}}()
+  function walk(a::Int, c::PyClass)
+    ci = get(graph.byapp, (a, c.name), nothing)
     ci === nothing && return
     for b in ci.unresolved
-      b in out || push!(out, b)
+      any(t -> first(t) == b, out) || push!(out, (b, a))
     end
     for b in ci.parents
-      b in seen && continue
-      push!(seen, b)
-      p = get(graph.index, b, nothing)
-      p === nothing || walk(p)
+      r = get(graph.resolved, (a, b), nothing)
+      r === nothing && continue
+      (pa, pc) = r
+      (pa, pc.name) in seen && continue
+      push!(seen, (pa, pc.name))
+      walk(pa, pc)
     end
     return
   end
-  walk(cls)
+  walk(graph.self, cls)
   return out
+end
+
+# The fix to suggest for a base nothing in the run defines, in the vocabulary of the arity in use.
+# Conditional on purpose: the same marker covers a base from a third-party library, where there is
+# no app to add and nothing to do, and an unconditional "add the app" would be advice that cannot be
+# followed.
+_resolve_base_advice(label)::String =
+  label === nothing ?
+    "if that module is an app of this project, pass every app as \"<app_label>\" => " *
+    "\"<models.py>\" pairs so a base in another app is merged." :
+    "if that module is an app of this project, add it to the pair list."
+
+"""
+    _bound_module_note(graph, bases) -> String
+
+`", imported from 'model_utils.managers'"` when the module bound these names from somewhere the
+import table records, or a phrase saying nothing in the run defines them.
+
+This is what replaced *suppressing* the skip marker for a name bound outside the app set. The two
+things that test conflates — a third-party library, and an app of this project the caller did not
+pass — are the same string, and the caller is the only one who can tell them apart. Printing the
+module lets them: `model_utils.managers` is dismissed at a glance, `core.models` says which pair is
+missing.
+"""
+function _bound_module_note(graph, bases::Vector{String})::String
+  mods = String[]
+  for b in bases
+    entry = get(graph.scopes[graph.self].imports.names, b, nothing)
+    entry === nothing && continue
+    entry[1] in mods || push!(mods, entry[1])
+  end
+  isempty(mods) && return ", which nothing in this import defines and this models.py does not import"
+  return ", imported from " * join(("'$(m)'" for m in mods), ", ") *
+         ", which nothing in this import defines"
+end
+
+"""
+    _declaring_apps_hint(graph, bases) -> String
+
+A sentence naming the other apps of this run that DECLARE a class of one of these names, or `""`.
+
+Since #370 a base resolves across apps only when the module imported it, so two very different
+situations would otherwise print the same marker: a base nothing in the project defines, and a base
+another app defines but this one never imported. The fixes differ — one wants a pair added to the
+call, the other an `import` line in the source — and only naming the app tells them apart. This is
+the part of the issue's "improve the marker" option worth keeping once the lookup itself is fixed.
+
+It states only what the import table can back, because the two shapes want different advice and a
+guess told users something false in testing:
+
+- the name was never imported → the fix is an `import` line;
+- the name WAS imported, from a module outside the app set (`from library.base import BaseReport`)
+  → there is nothing to fix, and the useful thing to say is that the two are simply different
+  classes. This is #370's own shape, and "does not import it" would have been a plain lie.
+
+A star import can bind the name invisibly, so nothing is claimed there at all. And `bases` carries
+the app that declares the class holding the base — for an inherited gap that is an ancestor's app,
+not the one being emitted, and advice naming the wrong module cannot work.
+"""
+function _declaring_apps_hint(graph, bases::Vector{Tuple{String, Int}})::String
+  parts = String[]
+  for (b, owner) in bases
+    apps = String[]
+    for (i, sc) in enumerate(graph.scopes)
+      (i == owner || isempty(sc.label)) && continue
+      haskey(sc.own, b) && push!(apps, sc.label)
+    end
+    isempty(apps) && continue
+    sc = graph.scopes[owner]
+    where = isempty(sc.label) ? "this file" : "app '$(sc.label)'"
+    declared = "'$(b)' is declared by app" * (length(apps) == 1 ? " " : "s ") *
+               join(("'$(a)'" for a in apps), ", ")
+    entry = get(sc.imports.names, b, nothing)
+    if entry !== nothing && _app_for_module(graph.scopes, entry[1]) === nothing
+      # NOT "so they are different classes" — they may well be the same one. A qualified path can
+      # fail to match an app that was handed over as SOURCE TEXT, because there is no location to
+      # check the prefix against, and asserting difference there is simply false.
+      push!(parts, declared * ", but $(where) imports it from '$(entry[1])', which this import " *
+                   "could not match to any app — so they were not treated as the same class. If " *
+                   "they are, pass that app by PATH so its package can be matched")
+    elseif entry === nothing && isempty(sc.imports.stars)
+      push!(parts, declared * ", but $(where) does not import it — add the import if that is what " *
+                   "you meant")
+    end
+  end
+  return isempty(parts) ? "" : " Note: " * join(parts, "; ") * "."
 end
 
 # An abstract base declaring `db_table` is a Django footgun the importer refuses to reproduce (see
@@ -2897,7 +3425,7 @@ end
 function _abstract_db_table_base(graph, cls::PyClass)::Union{String, Nothing}
   b = _inherited_meta_base(graph, cls)
   b === nothing && return nothing
-  return haskey(graph.info[b].meta, "db_table") ? b : nothing
+  return haskey(graph.byapp[(b[1], b[2].name)].meta, "db_table") ? b[2].name : nothing
 end
 
 """
@@ -2993,7 +3521,7 @@ function _match_field_statement(text::AbstractString)
   return (name = lhs, type = String(m.captures[1]), args = args)
 end
 
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[], enums = Dict{String, Dict{String, _PyEnum}}(), enum_scopes::Vector{String} = String[String(class_name), ""])
+function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[], enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(), enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")])
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -3167,9 +3695,9 @@ function django_field_type(field_type::AbstractString)::String
 end
 
 function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String};
-                         enums = Dict{String, Dict{String, _PyEnum}}(),
+                         enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
                          class_name::AbstractString = "",
-                         enum_scopes::Vector{String} = String[String(class_name), ""],
+                         enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")],
                          field_name::AbstractString = "",
                          markers::Vector{String} = String[])
   # This function parses field arguments handling nested parentheses and commas
@@ -3313,7 +3841,7 @@ Resolve a Django enum reference in a field option.
 Returns the resolved value, `_ENUM_NOT_A_REFERENCE` when `value` is not one, or `_ENUM_DROP` to mean
 "drop this option" (already warned and marked).
 """
-function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vector{String},
+function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vector{Tuple{Int, String}},
                                  class_name::AbstractString,
                                  field_name::AbstractString, key::AbstractString,
                                  markers::Vector{String},

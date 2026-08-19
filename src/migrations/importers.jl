@@ -772,9 +772,19 @@ mutable struct _DjangoClass
   model::Union{Nothing, PormGModel}
 end
 
-# How a class is spelled in an error message and in a `Meta`-style reference: `core.Pessoa` when the
-# app is known, the bare class name otherwise.
-_django_ref_label(e::_DjangoClass)::String = e.app === nothing ? e.class : string(e.app, ".", e.class)
+# How a class is spelled in a report — a `@warn`, an error, or a `# PormG:` marker — and in a
+# `Meta`-style reference: `core.Pessoa` when the app is known, the bare class name otherwise.
+#
+# Split out of `_django_ref_label` for #371, because pass 2 reports on classes BEFORE it holds a
+# `_DjangoClass`: a duplicate declaration, a proxy and a multi-table-inheritance child are all
+# reported above the `index.by_ref` lookup, and those are the reports a reader has least other
+# context for — a bare 'Pessoa' in a project where two apps declare one traces back to neither.
+# The two spellings agree by construction: `_django_ref_label` reads `e.class`, which is the same
+# verbatim Python class name pass 2 carries in `class_name`.
+_django_class_label(app::Union{Nothing, String}, class_name::AbstractString)::String =
+  app === nothing ? String(class_name) : string(app, ".", class_name)
+
+_django_ref_label(e::_DjangoClass)::String = _django_class_label(e.app, e.class)
 
 # Lookup key for an app label. `nothing` (unlabelled single-app import) and a label are one namespace
 # — an unlabelled import has exactly one app, so there is nothing to collide with.
@@ -1569,6 +1579,16 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
 
     for class in graph.classes
       class_name = class.name
+      # Every report below NAMES this class with `class_label`, never `class_name` (#371). Two apps
+      # of one project may each declare `Pessoa`, and the generated file then holds `Core_pessoa`
+      # and `Access_pessoa` — so a marker saying `on 'Pessoa'` points at neither. Computed HERE,
+      # before the index lookup, because the duplicate-declaration, proxy and MTI reports below all
+      # `continue` before `entry` is bound.
+      #
+      # The rule, applied uniformly from here down: the class a report is ABOUT is app-qualified; a
+      # name quoted because the source WROTE it — a base class, an enum, a field, `mti_parent` —
+      # stays verbatim, because qualifying it would misquote the models.py.
+      class_label = _django_class_label(app.label, class_name)
       ci = graph.info[class_name]
 
       # A class name declared twice at module level used to emit TWO `X = Models.Model(...)`
@@ -1583,8 +1603,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # declarations reveal it.
       if class_name in seen_names
         if _is_emitted(ci) || _declares_fields(class)
-          @warn "import: class name is declared more than once at module level; only the first declaration is used" class=class_name
-          push!(Instructions, "# PormG: '$(class_name)' is declared more than once in this " *
+          @warn "import: class name is declared more than once at module level; only the first declaration is used" class=class_label
+          push!(Instructions, "# PormG: '$(class_label)' is declared more than once in this " *
                               "models.py — only the FIRST declaration is used here. Python binds the " *
                               "last one, so this may not be the class you expect.")
         end
@@ -1602,8 +1622,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         # no column, so this is either a helper or a model whose every field lives in a base the
         # importer cannot see — and nothing in the source separates the two. Skipping was the right
         # call and saying nothing was not: a real model then left no trace anywhere.
-        @warn "import: class skipped — no resolvable base and no field of its own" class=class_name bases=join(ci.unresolved, ", ")
-        push!(Instructions, "# PormG: class '$(class_name)' inherits " *
+        @warn "import: class skipped — no resolvable base and no field of its own" class=class_label bases=join(ci.unresolved, ", ")
+        push!(Instructions, "# PormG: class '$(class_label)' inherits " *
                             join(("'$(b)'" for b in ci.unresolved), ", ") *
                             _bound_module_note(graph, ci.unresolved) *
                             ", and declares no field of its own — not imported. If it is a model, " *
@@ -1615,13 +1635,13 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       end
 
       if ci.proxy
-        @warn "import: proxy model shares its parent's table; not imported" class=class_name
-        push!(Instructions, "# PormG: model '$(class_name)' is a Django proxy (Meta.proxy = True) — " *
+        @warn "import: proxy model shares its parent's table; not imported" class=class_label
+        push!(Instructions, "# PormG: model '$(class_label)' is a Django proxy (Meta.proxy = True) — " *
                             "not imported, because it has no table of its own.")
         continue
       elseif ci.kind === :mti
-        @warn "import: Django multi-table inheritance has no PormG equivalent; model not imported" class=class_name parent=ci.mti_parent
-        push!(Instructions, "# PormG: model '$(class_name)' inherits the concrete model " *
+        @warn "import: Django multi-table inheritance has no PormG equivalent; model not imported" class=class_label parent=ci.mti_parent
+        push!(Instructions, "# PormG: model '$(class_label)' inherits the concrete model " *
                             "'$(ci.mti_parent)' (Django multi-table inheritance) — not imported. " *
                             "Django keys the child table on a '$(lowercase(String(ci.mti_parent)))_ptr_id' " *
                             "one-to-one to the parent, which PormG cannot express.")
@@ -1633,7 +1653,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # where the cause is one function away, rather than at the user's `set_models`.
       entry = get(index.by_ref, (_django_app_key(app.label), lowercase(class_name)), nothing)
       entry === nothing && throw(InvalidMigrationError(
-        "import: internal — class '$(class_name)' is being emitted but was not indexed. This is a " *
+        "import: internal — class '$(class_label)' is being emitted but was not indexed. This is a " *
         "PormG bug; please report it with the models.py that triggered it."))
 
       # `# PormG:` lines to emit directly above this model's declaration.
@@ -1650,9 +1670,9 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       unresolved_bases = _inherited_unresolved(graph, class)
       if !isempty(unresolved_bases)
         for (b, _) in unresolved_bases
-          @warn "import: base class is not defined in this file; any fields it declares are missing from the imported model" class=class_name base=b
+          @warn "import: base class is not defined in this file; any fields it declares are missing from the imported model" class=class_label base=b
         end
-        push!(markers, "# PormG: model '$(class_name)' inherits " *
+        push!(markers, "# PormG: model '$(class_label)' inherits " *
                        join(("'$(b)'" for (b, _) in unresolved_bases), ", ") *
                        ", not defined in " *
                        (app.label === nothing ? "this file" : "any app of this import") *
@@ -1669,9 +1689,9 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # a silently different table name is the defect this issue is about.
       db_table_base = _abstract_db_table_base(graph, class)
       if db_table_base !== nothing
-        @warn "import: db_table on an abstract base is not inherited; the child keeps its own derived table name" class=class_name base=db_table_base
+        @warn "import: db_table on an abstract base is not inherited; the child keeps its own derived table name" class=class_label base=db_table_base
         push!(markers, "# PormG: abstract base '$(db_table_base)' declares Meta.db_table — NOT " *
-                       "inherited by '$(class_name)', because that would point every child of " *
+                       "inherited by '$(class_label)', because that would point every child of " *
                        "'$(db_table_base)' at one table. Declare db_table on this model if it really " *
                        "shares that table.")
       end
@@ -1684,7 +1704,12 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       fields_dict = Dict{Symbol, Any}()
 
       # Process fields separately
-      declared_pk = process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), autofields_ignore, parameters_ignore, markers, graph.enums, _enum_scopes(graph, class))
+      # `class_name` and `class_label` both go down, and they are not interchangeable: the first is
+      # the enum scope key, the second is what the reports NAME (#371). See `process_class_fields!`.
+      declared_pk = process_class_fields!(fields_dict, class_content, class_name,
+                                          _inherits_auth_user(graph, class), autofields_ignore,
+                                          parameters_ignore, markers, graph.enums,
+                                          _enum_scopes(graph, class); class_label = class_label)
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -1714,8 +1739,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       lost_pk = sort(String[String(k) for k in declared_pk
                             if !(haskey(fields_dict, k) && fields_dict[k].primary_key)])
       if !isempty(lost_pk)
-        @warn "import: a declared primary key is a field type PormG cannot key on; the column is imported without it" class=class_name fields=join(lost_pk, ", ") model_still_has_a_key=built_pk
-        push!(markers, "# PormG: '$(class_name)' declares its primary key on " *
+        @warn "import: a declared primary key is a field type PormG cannot key on; the column is imported without it" class=class_label fields=join(lost_pk, ", ") model_still_has_a_key=built_pk
+        push!(markers, "# PormG: '$(class_label)' declares its primary key on " *
                        join(("'$(f)'" for f in lost_pk), ", ") *
                        " — a field type PormG cannot make a primary key (only IDField, AutoField, " *
                        "CharField, UUIDField, ForeignKey and OneToOneField can), so the column is " *
@@ -1757,6 +1782,9 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # `entry.name`, not `class_name`: a cross-app collision or a `binding_overrides` entry may
       # have renamed this model. `class_name` stays the source of every DJANGO-derived name below
       # (the table, the join columns), because those follow the Python class, not our handle.
+      # `class_label` is the third spelling and does neither job — it only NAMES this class in a
+      # report (#371), and like `class_name` it follows the Python class, so a renamed model is
+      # still reported under the name its models.py actually uses.
       model = Models.Model(entry.name, fields_dict)
       meta_options = _effective_meta(graph, class)
 
@@ -1765,8 +1793,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       if haskey(meta_options, "db_table")
         dt = _meta_string_literal(meta_options["db_table"])
         if dt === nothing || isempty(dt)
-          @warn "import: Meta.db_table is not a non-empty string literal; ignored" class=class_name value=meta_options["db_table"]
-          push!(markers, "# PormG: Meta.db_table on '$(class_name)' is not a string literal — " *
+          @warn "import: Meta.db_table is not a non-empty string literal; ignored" class=class_label value=meta_options["db_table"]
+          push!(markers, "# PormG: Meta.db_table on '$(class_label)' is not a string literal — " *
                          "ignored; the table name below is derived from the class name.")
         else
           Models._apply_db_table!(model, dt)
@@ -1817,14 +1845,14 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       constraints = Models.UniqueConstraint[]
       if haskey(meta_options, "unique_together")
         try
-          append!(constraints, parse_meta_unique_together(meta_options["unique_together"], fields_dict, class_name, markers))
+          append!(constraints, parse_meta_unique_together(meta_options["unique_together"], fields_dict, class_label, markers))
         catch e
-          @warn "import: could not parse unique_together; skipping" class=class_name exception=e
-          push!(markers, "# PormG: Meta.unique_together on '$(class_name)' could not be read — dropped.")
+          @warn "import: could not parse unique_together; skipping" class=class_label exception=e
+          push!(markers, "# PormG: Meta.unique_together on '$(class_label)' could not be read — dropped.")
         end
       end
       if haskey(meta_options, "constraints")
-        append!(constraints, _parse_meta_constraints(meta_options["constraints"], fields_dict, class_name, markers))
+        append!(constraints, _parse_meta_constraints(meta_options["constraints"], fields_dict, class_label, markers))
       end
       for c in constraints
         # The same duplicate-declaration collapse the index loop below does, for the same reason:
@@ -1832,22 +1860,22 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         # index name twice, and the planner then refuses the model with advice ("give each a distinct
         # name") that cannot be followed. The generated file loads and is unmigratable.
         if any(p -> p.fields == c.fields && p.name == c.name, _existing_unique_constraints(model))
-          @warn "import: duplicate unique constraint; keeping one" class=class_name fields=c.fields
+          @warn "import: duplicate unique constraint; keeping one" class=class_label fields=c.fields
           push!(markers, "# PormG: a duplicate constraint over ($(join(c.fields, ", "))) on " *
-                         "'$(class_name)' was dropped — the same constraint is declared twice.")
+                         "'$(class_label)' was dropped — the same constraint is declared twice.")
           continue
         end
         # An explicit name reused across models is a silent no-op at migration time; surrender it and
         # let PormG derive one per table. See `_claim_index_name!`.
-        kept = _claim_index_name!(taken_index_names, c.name, markers, class_name, "constraint", c.fields)
+        kept = _claim_index_name!(taken_index_names, c.name, markers, class_label, "constraint", c.fields)
         kept === c.name || (c = Models.UniqueConstraint(fields = c.fields, name = kept))
         try
           Models._apply_unique_constraints!(model, vcat(_existing_unique_constraints(model), [c]))
         catch e
           # A declaration that never lands must not burn its name for every later model.
           kept === nothing || delete!(taken_index_names, kept)
-          @warn "import: could not apply a unique constraint; skipping it" class=class_name fields=c.fields exception=e
-          push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_name)' " *
+          @warn "import: could not apply a unique constraint; skipping it" class=class_label fields=c.fields exception=e
+          push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_label)' " *
                          "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
         end
       end
@@ -1858,11 +1886,11 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       indexes = Models.Index[]
       single_column_indexes = String[]
       if haskey(meta_options, "indexes")
-        ix, sc = _parse_meta_indexes(meta_options["indexes"], fields_dict, class_name, markers)
+        ix, sc = _parse_meta_indexes(meta_options["indexes"], fields_dict, class_label, markers)
         append!(indexes, ix); append!(single_column_indexes, sc)
       end
       if haskey(meta_options, "index_together")
-        ix, sc = _parse_meta_index_together(meta_options["index_together"], fields_dict, class_name, markers)
+        ix, sc = _parse_meta_index_together(meta_options["index_together"], fields_dict, class_label, markers)
         append!(indexes, ix); append!(single_column_indexes, sc)
       end
       for ix in indexes
@@ -1874,21 +1902,21 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         # The generated file would load and be unmigratable. Collapse it here, where the Django
         # source is still in view to name in the report.
         if any(p -> p.fields == ix.fields && p.name == ix.name, _existing_indexes(model))
-          @warn "import: duplicate index declaration; keeping one" class=class_name fields=ix.fields
+          @warn "import: duplicate index declaration; keeping one" class=class_label fields=ix.fields
           push!(markers, "# PormG: a duplicate index over ($(join(ix.fields, ", "))) on " *
-                         "'$(class_name)' was dropped — the same index is declared twice " *
+                         "'$(class_label)' was dropped — the same index is declared twice " *
                          "(Meta.indexes and Meta.index_together can overlap).")
           continue
         end
-        kept = _claim_index_name!(taken_index_names, ix.name, markers, class_name, "index", ix.fields)
+        kept = _claim_index_name!(taken_index_names, ix.name, markers, class_label, "index", ix.fields)
         kept === ix.name || (ix = Models.Index(fields = ix.fields, name = kept))
         try
           Models._apply_indexes!(model, vcat(_existing_indexes(model), [ix]))
         catch e
           # A declaration that never lands must not burn its name for every later model.
           kept === nothing || delete!(taken_index_names, kept)
-          @warn "import: could not apply an index; skipping it" class=class_name fields=ix.fields exception=e
-          push!(markers, "# PormG: an index over ($(join(ix.fields, ", "))) on '$(class_name)' " *
+          @warn "import: could not apply an index; skipping it" class=class_label fields=ix.fields exception=e
+          push!(markers, "# PormG: an index over ($(join(ix.fields, ", "))) on '$(class_label)' " *
                          "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
         end
       end
@@ -1898,8 +1926,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           # Unreachable in practice — `col` was resolved against the same dict the model was built
           # from — but reporting "this field type has no db_index option" for a MISSING field would
           # name the wrong cause.
-          @warn "import: single-column index names a field the model does not carry; dropped" class=class_name field=col
-          push!(markers, "# PormG: a single-column index on '$(class_name)'.$(col) was dropped — " *
+          @warn "import: single-column index names a field the model does not carry; dropped" class=class_label field=col
+          push!(markers, "# PormG: a single-column index on '$(class_label)'.$(col) was dropped — " *
                          "that field is not on the imported model.")
         elseif hasproperty(f, :primary_key) && getproperty(f, :primary_key) === true
           # A primary key already carries an index on both backends, so Django's index on it is
@@ -1908,14 +1936,14 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           # the assignment below raises a raw `setfield!` ErrorException that nothing catches — one
           # legal `Meta.indexes = [Index(fields=['id'])]` used to abort the entire import with no
           # marker, no warning and no models file.
-          @debug "import: single-column index on a primary key is redundant; the key is already indexed" class=class_name field=col
+          @debug "import: single-column index on a primary key is redundant; the key is already indexed" class=class_label field=col
         elseif ismutable(f) && hasproperty(f, :db_index)
           f.db_index = true
         else
           # `PasswordField` excludes `db_index` entirely (src/models/fields.jl), and any future
           # immutable field type lands here too rather than raising.
-          @warn "import: single-column index maps to db_index, which this field cannot carry; dropped" class=class_name field=col
-          push!(markers, "# PormG: a single-column index on '$(class_name)'.$(col) was dropped — " *
+          @warn "import: single-column index maps to db_index, which this field cannot carry; dropped" class=class_label field=col
+          push!(markers, "# PormG: a single-column index on '$(class_label)'.$(col) was dropped — " *
                          "that field type has no db_index option.")
         end
       end
@@ -1927,11 +1955,11 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         k in _META_OPTIONS_CONSUMED && continue
         reason = get(_META_OPTION_REASONS, k, nothing)
         if reason === nothing
-          @warn "import: unrecognised Meta option; dropped" option=k class=class_name
-          push!(markers, "# PormG: Meta.$(k) on '$(class_name)' is not recognised — dropped.")
+          @warn "import: unrecognised Meta option; dropped" option=k class=class_label
+          push!(markers, "# PormG: Meta.$(k) on '$(class_label)' is not recognised — dropped.")
         else
-          @warn "import: Meta option has no PormG equivalent; dropped" option=k class=class_name reason=reason
-          push!(markers, "# PormG: Meta.$(k) on '$(class_name)' — dropped: $(reason).")
+          @warn "import: Meta option has no PormG equivalent; dropped" option=k class=class_label reason=reason
+          push!(markers, "# PormG: Meta.$(k) on '$(class_label)' — dropped: $(reason).")
         end
       end
 
@@ -3521,7 +3549,29 @@ function _match_field_statement(text::AbstractString)
   return (name = lhs, type = String(m.captures[1]), args = args)
 end
 
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[], enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(), enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")])
+# `class_name` and `class_label` are two different jobs and must NOT be collapsed into one (#371):
+#
+#   - `class_name` is half of the enum SCOPE KEY. `enums` is keyed by `(app_index, bare Python
+#     class name)`, so the `enum_scopes` default below has to stay bare — an "app.Class" string in
+#     that slot makes every `_lookup_enum` miss and silently drops the choices and defaults of every
+#     `TextChoices` in a labelled import, which is precisely what #342 exists to make work. Note the
+#     app is ALREADY carried, as the `Int`; spelling it again in the string would double-qualify.
+#   - `class_label` is what a `# PormG:` marker and a `@warn` NAME. That has to be app-qualified, or
+#     two apps' `Pessoa` produce reports the reader cannot tell apart.
+#
+# They coincide exactly when the import carries no app label, which is why the default is safe.
+#
+# (`enum_scopes` looks droppable — the sole production caller passes it explicitly, so its default
+# is dead on the real path. Leave it: it is the only thing documenting how the vector is built, and
+# removing it turns this comment into the next reader's silent enum regression.)
+function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt},
+                               class_name::AbstractString, is_auth_user::Bool,
+                               autofields_ignore::Vector{String}, parameters_ignore::Vector{String},
+                               markers::Vector{String} = String[],
+                               enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
+                               enum_scopes::Vector{Tuple{Int, String}} =
+                                 Tuple{Int, String}[(1, String(class_name)), (1, "")];
+                               class_label::AbstractString = class_name)
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -3563,10 +3613,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
       # author can declare it by hand. Managers, constants and enum members are not fields and
       # stay quiet: see `_looks_like_a_field_call` for why the test is deliberately narrow.
       if _looks_like_a_field_call(parsed.args)
-        @warn "import: field-shaped call the importer cannot read; not imported — declare it in PormG by hand" field=parsed.name class=class_name line=stmt.lineno
+        @warn "import: field-shaped call the importer cannot read; not imported — declare it in PormG by hand" field=parsed.name class=class_label line=stmt.lineno
         # ...and a marker in the generated file, not the warning alone (#341). A console warning
         # scrolls away; whoever opens the generated file months later needs to see the gap there.
-        push!(markers, "# PormG: field '$(parsed.name)' on '$(class_name)' (models.py line " *
+        push!(markers, "# PormG: field '$(parsed.name)' on '$(class_label)' (models.py line " *
                        "$(stmt.lineno)) is a field-shaped call the importer cannot read — NOT " *
                        "imported. Declare it in PormG by hand.")
       end
@@ -3580,7 +3630,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     # Parse field arguments
     options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore;
                                               enums = enums, class_name = class_name,
-                                              enum_scopes = enum_scopes,
+                                              enum_scopes = enum_scopes, class_label = class_label,
                                               field_name = field_name, markers = markers)
 
     # An IGNORED field type contributes no column, so it cannot be the primary key either. Tested
@@ -3619,7 +3669,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
       if field_type in ["ForeignKey", "OneToOneField"]
         # `field_key` already carries the "_id" suffix foreign keys take.
         # println(related_model, " ", related_model |> typeof)
-        _normalize_django_set_default!(options, field_name)
+        _normalize_django_set_default!(options, field_name, class_label)
         fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
       elseif field_type == "ManyToManyField"
         fields_dict[field_key] = Models.ManyToManyField(related_model; options...)
@@ -3673,8 +3723,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
           tail = haskey(options, :choices) ? " The column is real; the enumeration is not enforced." :
                                              " The column is real, but its default is now unset here" *
                                              " while Django still declares one."
-          @warn "import: field option rejected; field imported without it" class=class_name field=field_name dropped=dropped reason=reason
-          push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' — $(dropped) rejected " *
+          @warn "import: field option rejected; field imported without it" class=class_label field=field_name dropped=dropped reason=reason
+          push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' — $(dropped) rejected " *
                          "and dropped: $(reason).$(tail)")
           continue
         end
@@ -3682,7 +3732,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
       # A FieldValidationError/InvalidValueError from field construction is already the right
       # type — stringifying it into an ErrorException would eject it from the taxonomy (audit).
       e isa PormGError && rethrow()
-      throw(InvalidMigrationError("Error processing field '$field_name' in class '$class_name': $(e)"))
+      throw(InvalidMigrationError("Error processing field '$field_name' in class '$class_label': $(e)"))
     end
   end
 
@@ -3694,10 +3744,22 @@ function django_field_type(field_type::AbstractString)::String
   return String(field_type)
 end
 
+# `class_name` seeds `enum_scopes` — the key vector into `enums`, which is keyed by `(app_index,
+# BARE Python class name)` — so it must not be app-qualified; the app is already the `Int`.
+# `class_label` only NAMES the class in a report and must be. See the note on
+# `process_class_fields!` for why collapsing them silently kills enum resolution (#371, #342). On
+# the production path the seeding is moot: the sole caller passes `enum_scopes` explicitly, so
+# `class_name` reaches nothing but that default here.
+#
+# `class_label` is declared AFTER `enum_scopes` deliberately: a keyword default may reference only
+# keywords listed before it, and putting `class_label = class_name` above `class_name` compiles
+# cleanly and throws `UndefVarError(:class_name)` at call time — on the default path only. Keeping
+# it last also leaves the `class_name` → `enum_scopes` coupling visually adjacent.
 function parse_field_args(args_str::AbstractString, field_type::AbstractString, parameters_ignore::Vector{String};
                          enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
                          class_name::AbstractString = "",
                          enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")],
+                         class_label::AbstractString = class_name,
                          field_name::AbstractString = "",
                          markers::Vector{String} = String[])
   # This function parses field arguments handling nested parentheses and commas
@@ -3728,7 +3790,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           end
           # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would
           # otherwise hand the literal text through and let CharField reject the pair.
-          resolved = _resolve_enum_reference(value, enums, enum_scopes, class_name, field_name, key, markers, unresolved_enums)
+          resolved = _resolve_enum_reference(value, enums, enum_scopes, class_label, field_name, key, markers, unresolved_enums)
           # A DISTINCT sentinel, not `nothing`: `parse_value("None")` is `nothing`, so an enum
           # member declared `NENHUM = None, "Nenhum"` resolved to `nothing` and was read here as
           # "dropped" — the option vanished with no warn and no marker, which is the one thing this
@@ -3748,11 +3810,11 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
               # WHOLE option was unreadable (a bare name, nothing parsed), or ONE entry inside a
               # readable container was malformed and its siblings survived.
               whole = isempty(parsed) && length(bad) == 1 && b == _one_line(value)
-              @warn "import: choices could not be read; dropped" class=class_name field=field_name entry=_one_line(b) whole_option=whole
+              @warn "import: choices could not be read; dropped" class=class_label field=field_name entry=_one_line(b) whole_option=whole
               push!(markers, whole ?
-                "# PormG: field '$(field_name)' on '$(class_name)' has `choices=$(_one_line(b))`, " *
+                "# PormG: field '$(field_name)' on '$(class_label)' has `choices=$(_one_line(b))`, " *
                 "which is a name rather than a literal — the whole option was dropped." :
-                "# PormG: field '$(field_name)' on '$(class_name)' has a choices entry that is not " *
+                "# PormG: field '$(field_name)' on '$(class_label)' has a choices entry that is not " *
                 "a (value, label) pair — that entry was dropped: $(_one_line(b))")
             end
             # Nothing readable means the option is DROPPED, not set to `()`. An empty tuple declares
@@ -3783,8 +3845,8 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
     # "does not define", not "enum": the same shape catches a module constant
     # (`default=constants.MAX_QTD`), and calling that an enumeration in the artifact is a lie the
     # reader has no way to check.
-    @warn "import: name is not defined in this file; option dropped" class=class_name field=field_name reference=unique(last.(unresolved_enums)) options=unique(first.(unresolved_enums))
-    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' references $(names), which " *
+    @warn "import: name is not defined in this file; option dropped" class=class_label field=field_name reference=unique(last.(unresolved_enums)) options=unique(first.(unresolved_enums))
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' references $(names), which " *
                    "this file does not define — $(opts) dropped. The column is real. If that is an " *
                    "enumeration, import the module defining it alongside this one, or declare the " *
                    "choices by hand.")
@@ -3795,8 +3857,8 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
   # for finding the field. Report it here, where the field, class and value are all known.
   if haskey(options, :choices) && field_type != "CharField"
     delete!(options, :choices)
-    @warn "import: this field type has no choices slot; the option was dropped" class=class_name field=field_name field_type=field_type
-    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' declares choices, but " *
+    @warn "import: this field type has no choices slot; the option was dropped" class=class_label field=field_name field_type=field_type
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' declares choices, but " *
                    "$(field_type) has no choices slot in PormG (only CharField does) — dropped. " *
                    "The column is unaffected.")
   end
@@ -3834,15 +3896,19 @@ _looks_like_enum_attr(attr::AbstractString)::Bool =
 const _ENUM_MEMBER_ATTRS = ("value", "label", "name")
 
 """
-    _resolve_enum_reference(value, enums, class_name, field_name, key, markers, unresolved) -> Any
+    _resolve_enum_reference(value, enums, enum_scopes, class_label, field_name, key, markers, unresolved) -> Any
 
 Resolve a Django enum reference in a field option.
+
+`enum_scopes` does the LOOKUP — it is the ordered list of keys into `enums`, which is keyed by
+`(app_index, bare Python class name)`. `class_label` only NAMES the owning class in a report and is
+app-qualified (#371); it never reaches a lookup, so the two must not be swapped.
 
 Returns the resolved value, `_ENUM_NOT_A_REFERENCE` when `value` is not one, or `_ENUM_DROP` to mean
 "drop this option" (already warned and marked).
 """
 function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vector{Tuple{Int, String}},
-                                 class_name::AbstractString,
+                                 class_label::AbstractString,
                                  field_name::AbstractString, key::AbstractString,
                                  markers::Vector{String},
                                  unresolved::Vector{Tuple{String, String}})
@@ -3861,8 +3927,8 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
       member = head[nextind(head, inner):end]
       if _lookup_enum(enums, enum_scopes, enum_ref) !== nothing
         if attr != "value"
-          @warn "import: enum member attribute has no PormG equivalent; the option was dropped" class=class_name field=field_name attribute="$(head).$(attr)"
-          push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses " *
+          @warn "import: enum member attribute has no PormG equivalent; the option was dropped" class=class_label field=field_name attribute="$(head).$(attr)"
+          push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' uses " *
                          "`$(head).$(attr)`, which is the member's $(attr) rather than its stored " *
                          "value — PormG has no equivalent, so `$(key)` was dropped.")
           return _ENUM_DROP
@@ -3886,8 +3952,8 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
       # syntax alone. Guessing either way is wrong for the other, so the value is left untouched
       # and the reader is told a dotted expression landed in the schema as a literal.
       key == "default" || return _ENUM_NOT_A_REFERENCE
-      @warn "import: dotted default kept verbatim; the importer cannot evaluate it" class=class_name field=field_name value=_one_line(value)
-      push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' has " *
+      @warn "import: dotted default kept verbatim; the importer cannot evaluate it" class=class_label field=field_name value=_one_line(value)
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
                      "`default=$(_one_line(value))`, an expression the importer cannot evaluate — " *
                      "kept verbatim as text. Check it: if it names an enum member or a constant, " *
                      "the stored default is the expression, not its value.")
@@ -3903,23 +3969,23 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
       # `CARRO = auto()` is a documented Django idiom, and importing it verbatim gives every member
       # the value "auto()" — duplicates that then PASS validation, because the default is literally
       # in the set. Wrong metadata kept in silence is the mirror of a silent drop.
-      @warn "import: enum has members whose values are not literals; choices dropped" class=class_name field=field_name enum=head members=bad
-      push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses `$(head).choices`, but " *
+      @warn "import: enum has members whose values are not literals; choices dropped" class=class_label field=field_name enum=head members=bad
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' uses `$(head).choices`, but " *
                      "$(join(("`$(head).$(b)`" for b in bad), ", ")) " *
                      "$(length(bad) == 1 ? "has a value" : "have values") the importer cannot read " *
                      "(a call or an expression, not a literal) — `$(key)` was dropped.")
       return _ENUM_DROP
     end
     if isempty(enum.members)
-      @warn "import: enum declares no members; choices dropped" class=class_name field=field_name enum=head
-      push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses `$(head).choices`, " *
+      @warn "import: enum declares no members; choices dropped" class=class_label field=field_name enum=head
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' uses `$(head).choices`, " *
                      "but `$(head)` declares no members — `$(key)` was dropped.")
       return _ENUM_DROP
     end
     return Tuple((_py_scalar_text(v), l) for (_, v, l) in enum.members)
   elseif attr in _ENUM_PLURAL_ATTRS
-    @warn "import: enum attribute has no PormG equivalent; the option was dropped" class=class_name field=field_name attribute="$(head).$(attr)"
-    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' uses `$(head).$(attr)`, " *
+    @warn "import: enum attribute has no PormG equivalent; the option was dropped" class=class_label field=field_name attribute="$(head).$(attr)"
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' uses `$(head).$(attr)`, " *
                    "which is a list of $(attr) rather than (value, label) pairs — PormG has no " *
                    "equivalent, so `$(key)` was dropped.")
     return _ENUM_DROP
@@ -3927,15 +3993,15 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_scopes::Vect
 
   idx = findfirst(t -> t[1] == attr, enum.members)
   if idx === nothing
-    @warn "import: enum has no such member; the option was dropped" class=class_name field=field_name reference="$(head).$(attr)"
-    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' references " *
+    @warn "import: enum has no such member; the option was dropped" class=class_label field=field_name reference="$(head).$(attr)"
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' references " *
                    "`$(head).$(attr)`, which is not a member of `$(head)` — `$(key)` was dropped.")
     return _ENUM_DROP
   end
   member_value = enum.members[idx][2]
   if !_is_py_literal(member_value)
-    @warn "import: enum member value is not a literal; the option was dropped" class=class_name field=field_name reference="$(head).$(attr)" value=_one_line(member_value)
-    push!(markers, "# PormG: field '$(field_name)' on '$(class_name)' references " *
+    @warn "import: enum member value is not a literal; the option was dropped" class=class_label field=field_name reference="$(head).$(attr)" value=_one_line(member_value)
+    push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' references " *
                    "`$(head).$(attr)`, whose value is `$(_one_line(member_value))` — a call or an " *
                    "expression the importer cannot read, not a literal. `$(key)` was dropped.")
     return _ENUM_DROP
@@ -3967,7 +4033,7 @@ function is_current_time_default(value::AbstractString)::Bool
 end
 
 """
-    _normalize_django_set_default!(options, field_name) -> options
+    _normalize_django_set_default!(options, field_name, class_label) -> options
 
 Rewrite Django's `on_delete=SET_DEFAULT, default=None` on a nullable FK to `SET_NULL` (#287).
 
@@ -3980,7 +4046,7 @@ loaded through `@import_models`, and regenerating produces the identical unloada
 nullable case is rewritten: `SET_DEFAULT` with no default on a **non**-nullable FK is genuinely
 contradictory in both ORMs and is left to fail loudly at registration.
 """
-function _normalize_django_set_default!(options::Dict, field_name)
+function _normalize_django_set_default!(options::Dict, field_name, class_label::AbstractString)
   haskey(options, :on_delete) || return options
   # A malformed on_delete (e.g. Django's `SET(callable)`) throws here; let the field constructor
   # raise it in its usual place rather than from this helper.
@@ -3993,7 +4059,10 @@ function _normalize_django_set_default!(options::Dict, field_name)
   get(options, :default, nothing) === nothing || return options
   get(options, :null, false) === true || return options
 
-  @warn "Django field $(field_name): on_delete=SET_DEFAULT with default=None denotes SET NULL; importing it as on_delete=SET_NULL."
+  # Structured, and NAMING the class app-qualified like every other report (#371). It used to
+  # carry the field name alone interpolated into the message — the one diagnostic in this file a
+  # reader of a multi-app import could not attribute to a model.
+  @warn "import: on_delete=SET_DEFAULT with default=None denotes SET NULL; importing it as on_delete=SET_NULL" class=class_label field=field_name
   options[:on_delete] = "SET_NULL"
   return options
 end
@@ -4265,28 +4334,28 @@ parse is a catastrophic outcome for a guard this cheap.
 _one_line(s::AbstractString, limit::Int = 120)::String =
   String(first(strip(replace(s, r"\s+" => " ")), limit))
 
-function _drop_constraint!(markers::Vector{String}, class_name::AbstractString,
+function _drop_constraint!(markers::Vector{String}, class_label::AbstractString,
                            element::AbstractString, reason::AbstractString)
   short = _one_line(element)
   reason = _one_line(reason, 200)
-  @warn "import: Meta.constraints entry dropped" class=class_name reason=reason constraint=short
-  push!(markers, "# PormG: a constraint on '$(class_name)' was dropped — $(reason): $(short)")
+  @warn "import: Meta.constraints entry dropped" class=class_label reason=reason constraint=short
+  push!(markers, "# PormG: a constraint on '$(class_label)' was dropped — $(reason): $(short)")
   return markers
 end
 
 # The `Meta.indexes` sibling of `_drop_constraint!` (#347). Separate wording, because "a constraint
 # was dropped" pointing at an index sends the reader to the wrong Meta option.
-function _drop_index_decl!(markers::Vector{String}, class_name::AbstractString,
+function _drop_index_decl!(markers::Vector{String}, class_label::AbstractString,
                            element::AbstractString, reason::AbstractString)
   short = _one_line(element)
   reason = _one_line(reason, 200)
-  @warn "import: Meta.indexes entry dropped" class=class_name reason=reason index=short
-  push!(markers, "# PormG: an index on '$(class_name)' was dropped — $(reason): $(short)")
+  @warn "import: Meta.indexes entry dropped" class=class_label reason=reason index=short
+  push!(markers, "# PormG: an index on '$(class_label)' was dropped — $(reason): $(short)")
   return markers
 end
 
 """
-    _claim_index_name!(taken, name, markers, class_name, kind, cols) -> Union{String, Nothing}
+    _claim_index_name!(taken, name, markers, class_label, kind, cols) -> Union{String, Nothing}
 
 Reserve an explicit index name for one generated file, returning it — or `nothing` when another
 model in the same import already claimed it, so PormG derives one per table instead (#347).
@@ -4311,15 +4380,15 @@ Only EXPLICIT names are registered. A derived name already carries its table, so
 with another model's derived name.
 """
 function _claim_index_name!(taken::Set{String}, name::Union{String, Nothing},
-                            markers::Vector{String}, class_name::AbstractString,
+                            markers::Vector{String}, class_label::AbstractString,
                             kind::AbstractString, cols::Vector{String})::Union{String, Nothing}
   name === nothing && return nothing
   if name in taken
     # Says "another declaration", not "another model": the registry is also consulted for two
     # declarations on the SAME class that share a name, and blaming a different model there would
     # send the reader to the wrong `models.py`.
-    @warn "import: index name is already claimed in this import; importing with a derived name" name=name class=class_name kind=kind
-    push!(markers, "# PormG: the $(kind) over ($(join(cols, ", "))) on '$(class_name)' kept its " *
+    @warn "import: index name is already claimed in this import; importing with a derived name" name=name class=class_label kind=kind
+    push!(markers, "# PormG: the $(kind) over ($(join(cols, ", "))) on '$(class_label)' kept its " *
                    "columns but LOST its name '$(_one_line(name))' — another declaration in this " *
                    "import already claims that name, and an index name is unique per database. " *
                    "PormG derives one from the table and columns instead.")
@@ -4330,7 +4399,7 @@ function _claim_index_name!(taken::Set{String}, name::Union{String, Nothing},
 end
 
 """
-    _parse_meta_constraints(raw, fields_dict, class_name, markers) -> Vector{UniqueConstraint}
+    _parse_meta_constraints(raw, fields_dict, class_label, markers) -> Vector{UniqueConstraint}
 
 Django `Meta.constraints = [...]` → PormG composite uniqueness.
 
@@ -4345,12 +4414,12 @@ the only direction that fails safe.
 Each entry is judged on its own: one rejected constraint never takes its siblings with it.
 """
 function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, Any},
-                                 class_name::AbstractString, markers::Vector{String})
+                                 class_label::AbstractString, markers::Vector{String})
   out = Models.UniqueConstraint[]
   inner = _balanced_group(raw)
   if inner === nothing
-    @warn "import: Meta.constraints is not a list or tuple literal; dropped" class=class_name
-    push!(markers, "# PormG: Meta.constraints on '$(class_name)' could not be read — dropped.")
+    @warn "import: Meta.constraints is not a list or tuple literal; dropped" class=class_label
+    push!(markers, "# PormG: Meta.constraints on '$(class_label)' could not be read — dropped.")
     return out
   end
 
@@ -4361,14 +4430,14 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     m = match(_CONSTRAINT_CTOR_RE, el)
     ctor = m === nothing ? "" : String(m.captures[1])
     if ctor != "UniqueConstraint"
-      _drop_constraint!(markers, class_name, el,
+      _drop_constraint!(markers, class_label, el,
         isempty(ctor) ? "it is not a constraint constructor" : "$(ctor) has no PormG equivalent")
       continue
     end
 
     args = _balanced_group(el)
     if args === nothing
-      _drop_constraint!(markers, class_name, el, "its argument list could not be read")
+      _drop_constraint!(markers, class_label, el, "its argument list could not be read")
       continue
     end
 
@@ -4392,23 +4461,23 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
       kwargs[k] = v
     end
     if reason !== nothing
-      _drop_constraint!(markers, class_name, el, reason)
+      _drop_constraint!(markers, class_label, el, reason)
       continue
     end
 
     if !haskey(kwargs, "fields")
-      _drop_constraint!(markers, class_name, el, "it declares no `fields=`")
+      _drop_constraint!(markers, class_label, el, "it declares no `fields=`")
       continue
     end
     fields_inner = _balanced_group(kwargs["fields"])
     if fields_inner === nothing
-      _drop_constraint!(markers, class_name, el, "its `fields=` is not a list or tuple literal")
+      _drop_constraint!(markers, class_label, el, "its `fields=` is not a list or tuple literal")
       continue
     end
 
     declared = _clean_constraint_field_names(split_field_options(fields_inner))
     if isempty(declared)
-      _drop_constraint!(markers, class_name, el, "its `fields=` is empty")
+      _drop_constraint!(markers, class_label, el, "its `fields=` is empty")
       continue
     end
     resolved = String[]
@@ -4422,7 +4491,7 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
       push!(resolved, r)
     end
     if unknown !== nothing
-      _drop_constraint!(markers, class_name, el, "field '$(unknown)' matches no imported field")
+      _drop_constraint!(markers, class_label, el, "field '$(unknown)' matches no imported field")
       continue
     end
 
@@ -4431,21 +4500,21 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     # what matters, its identifier is not.
     cname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
     if haskey(kwargs, "name") && cname === nothing
-      @warn "import: UniqueConstraint name is not a string literal; importing with a derived name" class=class_name value=kwargs["name"]
+      @warn "import: UniqueConstraint name is not a string literal; importing with a derived name" class=class_label value=kwargs["name"]
     end
     try
       push!(out, Models.UniqueConstraint(fields = resolved, name = cname))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS constraint and
       # keep the rest, rather than losing every constraint on the model to one bad entry.
-      _drop_constraint!(markers, class_name, el, replace(sprint(showerror, e), "\n" => " "))
+      _drop_constraint!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
     end
   end
   return out
 end
 
 """
-    _resolve_index_group(declared, fields_dict, class_name, markers, element)
+    _resolve_index_group(declared, fields_dict, class_label, markers, element)
         -> Union{Vector{String}, Nothing}
 
 Resolve one Django index's declared field names to imported PormG field names, or `nothing` when the
@@ -4462,22 +4531,22 @@ Two rejections beyond "the field does not exist":
     the arity back by returning the resolved vector and letting the caller branch on its length.
 """
 function _resolve_index_group(declared::Vector{String}, fields_dict::Dict{Symbol, Any},
-                              class_name::AbstractString, markers::Vector{String},
+                              class_label::AbstractString, markers::Vector{String},
                               element::AbstractString)::Union{Vector{String}, Nothing}
   if isempty(declared)
-    _drop_index_decl!(markers, class_name, element, "it names no fields")
+    _drop_index_decl!(markers, class_label, element, "it names no fields")
     return nothing
   end
   resolved = String[]
   for name in declared
     if startswith(name, "-")
-      _drop_index_decl!(markers, class_name, element,
+      _drop_index_decl!(markers, class_label, element,
         "'$(_one_line(name))' is a DESCENDING column and PormG indexes have no column order")
       return nothing
     end
     r = _resolve_django_constraint_field(name, fields_dict)
     if r === nothing
-      _drop_index_decl!(markers, class_name, element,
+      _drop_index_decl!(markers, class_label, element,
         "field '$(_one_line(name))' matches no imported field")
       return nothing
     end
@@ -4487,7 +4556,7 @@ function _resolve_index_group(declared::Vector{String}, fields_dict::Dict{Symbol
 end
 
 """
-    _parse_meta_indexes(raw, fields_dict, class_name, markers) -> (Vector{Index}, Vector{String})
+    _parse_meta_indexes(raw, fields_dict, class_label, markers) -> (Vector{Index}, Vector{String})
 
 Django `Meta.indexes = [...]` → PormG composite indexes (#347).
 
@@ -4507,13 +4576,13 @@ are reported and skipped, since PormG emits only a default b-tree (#29).
 Each entry is judged on its own: one rejected index never takes its siblings with it.
 """
 function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any},
-                             class_name::AbstractString, markers::Vector{String})
+                             class_label::AbstractString, markers::Vector{String})
   out = Models.Index[]
   single = String[]
   inner = _balanced_group(raw)
   if inner === nothing
-    @warn "import: Meta.indexes is not a list or tuple literal; dropped" class=class_name value=_one_line(raw)
-    push!(markers, "# PormG: Meta.indexes on '$(class_name)' could not be read — dropped.")
+    @warn "import: Meta.indexes is not a list or tuple literal; dropped" class=class_label value=_one_line(raw)
+    push!(markers, "# PormG: Meta.indexes on '$(class_label)' could not be read — dropped.")
     return out, single
   end
 
@@ -4524,14 +4593,14 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     m = match(_CONSTRAINT_CTOR_RE, el)
     ctor = m === nothing ? "" : String(m.captures[1])
     if ctor != "Index"
-      _drop_index_decl!(markers, class_name, el,
+      _drop_index_decl!(markers, class_label, el,
         isempty(ctor) ? "it is not an index constructor" : "$(ctor) has no PormG equivalent")
       continue
     end
 
     args = _balanced_group(el)
     if args === nothing
-      _drop_index_decl!(markers, class_name, el, "its argument list could not be read")
+      _drop_index_decl!(markers, class_label, el, "its argument list could not be read")
       continue
     end
 
@@ -4555,23 +4624,23 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
       kwargs[k] = v
     end
     if reason !== nothing
-      _drop_index_decl!(markers, class_name, el, reason)
+      _drop_index_decl!(markers, class_label, el, reason)
       continue
     end
 
     if !haskey(kwargs, "fields")
-      _drop_index_decl!(markers, class_name, el, "it declares no `fields=`")
+      _drop_index_decl!(markers, class_label, el, "it declares no `fields=`")
       continue
     end
     fields_inner = _balanced_group(kwargs["fields"])
     if fields_inner === nothing
-      _drop_index_decl!(markers, class_name, el, "its `fields=` is not a list or tuple literal")
+      _drop_index_decl!(markers, class_label, el, "its `fields=` is not a list or tuple literal")
       continue
     end
 
     resolved = _resolve_index_group(
       _clean_constraint_field_names(split_field_options(fields_inner)),
-      fields_dict, class_name, markers, el)
+      fields_dict, class_label, markers, el)
     resolved === nothing && continue
 
     if length(resolved) == 1
@@ -4585,21 +4654,21 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     # carry — either way PormG derives `<table>_<cols>_idx`, so this is not a reason to drop.
     iname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
     if haskey(kwargs, "name") && iname === nothing
-      @warn "import: Index name is not a string literal; importing with a derived name" class=class_name value=kwargs["name"]
+      @warn "import: Index name is not a string literal; importing with a derived name" class=class_label value=kwargs["name"]
     end
     try
       push!(out, Models.Index(fields = resolved, name = iname))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS index and keep
       # the rest, rather than losing every index on the model to one bad entry.
-      _drop_index_decl!(markers, class_name, el, replace(sprint(showerror, e), "\n" => " "))
+      _drop_index_decl!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
     end
   end
   return out, single
 end
 
 """
-    _parse_meta_index_together(raw, fields_dict, class_name, markers) -> (Vector{Index}, Vector{String})
+    _parse_meta_index_together(raw, fields_dict, class_label, markers) -> (Vector{Index}, Vector{String})
 
 Django's legacy `Meta.index_together = (('a','b'), …)` → the same two collections
 [`_parse_meta_indexes`](@ref) returns.
@@ -4609,20 +4678,20 @@ options — so it reuses `_parse_unique_together_groups` outright rather than re
 flat-vs-grouped distinction a second time.
 """
 function _parse_meta_index_together(raw::AbstractString, fields_dict::Dict{Symbol, Any},
-                                    class_name::AbstractString, markers::Vector{String})
+                                    class_label::AbstractString, markers::Vector{String})
   out = Models.Index[]
   single = String[]
   inner = _balanced_group(raw)
   if inner === nothing
-    @warn "import: Meta.index_together is not a tuple or list literal; dropped" class=class_name value=_one_line(raw)
-    push!(markers, "# PormG: Meta.index_together on '$(class_name)' is not a tuple or list " *
+    @warn "import: Meta.index_together is not a tuple or list literal; dropped" class=class_label value=_one_line(raw)
+    push!(markers, "# PormG: Meta.index_together on '$(class_label)' is not a tuple or list " *
                    "literal — dropped.")
     return out, single
   end
   skipped = String[]
   for group in _parse_unique_together_groups(inner, skipped)
     el = "index_together ($(join(group, ", ")))"
-    resolved = _resolve_index_group(group, fields_dict, class_name, markers, el)
+    resolved = _resolve_index_group(group, fields_dict, class_label, markers, el)
     resolved === nothing && continue
     if length(resolved) == 1
       push!(single, resolved[1])
@@ -4635,12 +4704,12 @@ function _parse_meta_index_together(raw::AbstractString, fields_dict::Dict{Symbo
       # `('lap','lap')` is the obvious case, but the realistic one is a group naming BOTH spellings of
       # one foreign key — `('race', 'race_id')` — which `_resolve_django_constraint_field` collapses
       # to the same imported column. Unwrapped, either takes the whole import down.
-      _drop_index_decl!(markers, class_name, el, replace(sprint(showerror, e), "\n" => " "))
+      _drop_index_decl!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
     end
   end
   for s in skipped
-    @warn "import: index_together entry is not a field group; dropped" class=class_name entry=s
-    push!(markers, "# PormG: an index_together entry on '$(class_name)' is not a field group — " *
+    @warn "import: index_together entry is not a field group; dropped" class=class_label entry=s
+    push!(markers, "# PormG: an index_together entry on '$(class_label)' is not a field group — " *
                    "dropped: $(_one_line(s))")
   end
   return out, single
@@ -4735,15 +4804,15 @@ end
 # to be the Meta block's joined text, matched with `\bunique_together\s*=\s*(.*)`s — a regex whose
 # `\b` anchor was there only because there was no real parse to lean on.
 function parse_meta_unique_together(raw::AbstractString, fields_dict::Dict{Symbol, Any},
-                                    class_name::AbstractString,
+                                    class_label::AbstractString,
                                     markers::Vector{String} = String[])
   inner = _balanced_group(raw)
   if inner === nothing
     # `unique_together = CHAVE_EXTERNA` — a name, not a literal. This used to return an empty vector
     # and the composite key vanished without a word, while the SAME shape on `Meta.constraints` was
     # reported. Same loss, same report.
-    @warn "import: Meta.unique_together is not a tuple or list literal; dropped" class=class_name value=_one_line(raw)
-    push!(markers, "# PormG: Meta.unique_together on '$(class_name)' is not a tuple or list " *
+    @warn "import: Meta.unique_together is not a tuple or list literal; dropped" class=class_label value=_one_line(raw)
+    push!(markers, "# PormG: Meta.unique_together on '$(class_label)' is not a tuple or list " *
                    "literal — dropped.")
     return Models.UniqueConstraint[]
   end
@@ -4755,12 +4824,12 @@ function parse_meta_unique_together(raw::AbstractString, fields_dict::Dict{Symbo
     for name in group
       r = _resolve_django_constraint_field(name, fields_dict)
       if r === nothing
-        @warn "import: unique_together field matches no imported field; skipping constraint" field=name class=class_name
+        @warn "import: unique_together field matches no imported field; skipping constraint" field=name class=class_label
         # Whitespace collapsed before interpolation, like every other marker: a field name can
         # carry a real newline (a triple-quoted string survives `_py_logical_lines` intact), and a
         # marker that spans two lines breaks the generated module outright. Verified: without this,
         # `unique_together = ("""nao\nexiste""", "a")` produces a file that will not parse.
-        push!(markers, "# PormG: a unique_together group on '$(class_name)' was dropped — field " *
+        push!(markers, "# PormG: a unique_together group on '$(class_label)' was dropped — field " *
                        "'$(_one_line(name))' matches no imported field: " *
                        "($(_one_line(join(group, ", "))))")
         ok = false
@@ -4771,8 +4840,8 @@ function parse_meta_unique_together(raw::AbstractString, fields_dict::Dict{Symbo
     ok && !isempty(resolved) && push!(constraints, Models.UniqueConstraint(fields = resolved))
   end
   for s in skipped
-    @warn "import: unique_together entry is not a field group; dropped" class=class_name entry=s
-    push!(markers, "# PormG: a unique_together entry on '$(class_name)' is not a field group — " *
+    @warn "import: unique_together entry is not a field group; dropped" class=class_label entry=s
+    push!(markers, "# PormG: a unique_together entry on '$(class_label)' is not a field group — " *
                    "dropped: $(_one_line(s))")
   end
   return constraints

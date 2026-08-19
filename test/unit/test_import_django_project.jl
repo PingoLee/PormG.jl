@@ -1053,8 +1053,12 @@ class TimeStampedModel(models.Model):
 class Circuit(models.Model):
     name = models.CharField(max_length=120)
 """
+    # The `from core.models import …` line is not decoration: since #370 a base resolves across apps
+    # only when this module actually imported it, which is also the only spelling Python would run —
+    # without it `TimeStampedModel` is an undefined name and Django raises at import time.
     downstream = """
 from django.db import models
+from core.models import TimeStampedModel
 
 class ImportBatch(TimeStampedModel):
     note = models.CharField(max_length=40)
@@ -1098,6 +1102,7 @@ class Venda(models.Model):
 """
     child = """
 from django.db import models
+from core.models import Venda
 
 class Pedido(Venda):
     obs = models.CharField(max_length=40)
@@ -1385,8 +1390,11 @@ class Status(models.TextChoices):
     DRAFT = "d", "Draft"
     SENT = "s", "Sent"
 """
+    # As with a cross-app base, the import line is what puts `Status` in this module's namespace —
+    # and since #370 that is what the importer resolves on, rather than the bare name.
     consumer = """
 from django.db import models
+from core.models import Status
 
 class Batch(models.Model):
     situacao = models.CharField(max_length=1, choices=Status.choices, default=Status.DRAFT)
@@ -1845,5 +1853,825 @@ class Pessoa(models.Model):
         @test occursin("core.Pessoa", msg)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#370): a base resolves across apps only when the module imported it.
+#
+# #346 resolved every app's bases against every app's classes, by NAME. That is what merges a shared
+# `core.models.TimeStampedModel` — and it is also how a base an app inherits from a THIRD-PARTY
+# library resolved against an unrelated app's class of the same name. When that class was concrete
+# the child was refused as multi-table inheritance and its table vanished from the generated file:
+# adding an app to the import REMOVED a table belonging to another app, which Python's per-module
+# namespaces make impossible.
+#
+# The rule is now Python's own — an app's own classes win, and anything else must have been imported.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@testset "a base from a third-party library does not collide with another app's class (#370)" begin
+    # `reports` inherits BaseReport from a library. `billing` happens to declare a CONCRETE class of
+    # the same name and knows nothing about `reports`. Before #370 the two were the same name and so
+    # the same class, and `Relatorio` was refused as multi-table inheritance and dropped.
+    reports = """
+from django.db import models
+from library.base import BaseReport
+
+class Relatorio(BaseReport):
+    titulo = models.CharField(max_length=80)
+"""
+    billing = """
+from django.db import models
+
+class BaseReport(models.Model):
+    total = models.IntegerField()
+"""
+    generated, key, existed = import_project(["reports" => reports, "billing" => billing];
+                                             output_file = "crossapp_thirdparty.jl")
+    try
+        # The table is HERE. This assertion is the issue.
+        @test occursin("Relatorio = Models.Model(\"relatorio\", db_table = \"reports_relatorio\"", generated)
+        @test occursin("titulo = Models.CharField(max_length=80)", generated)
+        # ...and it is not refused for inheritance it never had.
+        @test !occursin("Django multi-table inheritance", generated)
+        # `billing`'s own class is untouched by any of this.
+        @test occursin("BaseReport = Models.Model(\"basereport\", db_table = \"billing_basereport\"", generated)
+        # The marker still reports the missing columns, and now says why the same-named class next
+        # door was not used — and says it accurately. `reports` DOES import `BaseReport`; claiming
+        # it does not would be a plain lie, and the useful fact is where it imports it from.
+        @test occursin("'BaseReport' is declared by app 'billing', but app 'reports' imports it " *
+                       "from 'library.base', which this import could not match to any app — so " *
+                       "they were not treated as the same class", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # The invariant behind the issue title: adding an app must never REMOVE a table.
+    alone, key2, existed2 = import_project(["reports" => reports];
+                                           output_file = "alone_thirdparty.jl")
+    try
+        @test occursin("Relatorio = Models.Model(", alone)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+end
+
+@testset "an imported base still merges, and a concrete one is still refused (#370)" begin
+    core = """
+from django.db import models
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+
+class Venda(models.Model):
+    total = models.IntegerField()
+"""
+    good = """
+from django.db import models
+from core.models import TimeStampedModel
+
+class Pedido(TimeStampedModel):
+    obs = models.CharField(max_length=40)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => good];
+                                             output_file = "gate_merge.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        @test !occursin("not defined in", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # A CONCRETE base, genuinely imported, is still multi-table inheritance and still refused —
+    # gating the lookup must not cost the refusal that keeps a wrong primary key off the disk.
+    mti = """
+from django.db import models
+from core.models import Venda
+
+class Pedido(Venda):
+    obs = models.CharField(max_length=40)
+"""
+    generated2, key2, existed2 = import_project(["core" => core, "shop" => mti];
+                                                output_file = "gate_mti.jl")
+    try
+        @test occursin("Django multi-table inheritance", generated2)
+        @test !occursin("Pedido = Models.Model", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+
+    # The same abstract base, NOT imported: no merge, and the columns are reported missing rather
+    # than silently taken from a class this module cannot see.
+    ungated = """
+from django.db import models
+
+class Pedido(TimeStampedModel):
+    obs = models.CharField(max_length=40)
+"""
+    generated3, key3, existed3 = import_project(["core" => core, "shop" => ungated];
+                                                output_file = "gate_ungated.jl")
+    try
+        @test !occursin("created_at", generated3)
+        @test occursin("not defined in any app of this import", generated3)
+        # Here the module really did NOT import it, so that is what the hint says.
+        @test occursin("'TimeStampedModel' is declared by app 'core', but app 'shop' does not " *
+                       "import it — add the import if that is what you meant", generated3)
+        # The table itself survives — a missing base never costs a table.
+        @test occursin("Pedido = Models.Model(", generated3)
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+end
+
+@testset "a base's own bases resolve in ITS app, not the importing one (#370)" begin
+    # Two-hop abstract chain. `shop` imports only `Auditavel`, whose own base exists solely in
+    # `core`. Resolving that in the IMPORTING app's namespace loses it, which makes `Auditavel`
+    # field-less and therefore not-a-model, which poisons `Pedido` — and `Pedido` is then dropped
+    # with no marker at all. Strictly worse than the defect #370 set out to remove.
+    core = """
+from django.db import models
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+
+class Auditavel(TimeStampedModel):
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Auditavel
+
+class Pedido(Auditavel):
+    obs = models.CharField(max_length=40)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "twohop.jl")
+    try
+        @test occursin("Pedido = Models.Model(", generated)
+        # The grandparent's column arrives through a base that declares none of its own.
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        @test occursin("obs = Models.CharField(max_length=40)", generated)
+        @test !occursin("not defined in", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a class name two apps share does not fabricate an inheritance cycle (#370)" begin
+    # Fails before this change. `core.Bar` reaches its base `Foo` while `l.Foo` is mid-classification
+    # and a BARE-NAME `visiting` set reads that as a cycle: `core.Bar` is refused, which poisons
+    # `l.Foo`, which is dropped in silence. The two `Foo`s are different classes in different
+    # modules, and only a name-keyed table could confuse them.
+    core = """
+from django.db import models
+
+class Foo(models.Model):
+    a = models.IntegerField()
+
+    class Meta:
+        abstract = True
+
+class Bar(Foo):
+    shared = models.CharField(max_length=10)
+
+    class Meta:
+        abstract = True
+"""
+    l = """
+from django.db import models
+from core.models import Bar
+
+class Foo(Bar):
+    b = models.IntegerField()
+"""
+    generated, key, existed = import_project(["core" => core, "l" => l];
+                                             output_file = "false_cycle.jl")
+    try
+        # On `main`, classifying `l.Foo` marks the bare name "Foo" as in-progress; the walk into
+        # `core.Bar` then resolves ITS base `Foo` through an own-app-first flat index straight back
+        # to `l.Foo`, reads that as a cycle, and drops the model without a word. Here it is emitted.
+        @test occursin("Foo = Models.Model(\"foo\", db_table = \"l_foo\"", generated)
+        # And it carries the whole chain: its own column, `core.Bar`'s, and `core.Foo`'s.
+        @test occursin("b = Models.IntegerField()", generated)
+        @test occursin("shared = Models.CharField(max_length=10)", generated)
+        @test occursin("a = Models.IntegerField()", generated)
+        # Both `core` classes are abstract, so neither emits a table of its own.
+        @test !occursin("core_foo", generated)
+        @test !occursin("Bar = Models.Model", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "an alias, a star import and a re-export all resolve a base (#370)" begin
+    core = """
+from django.db import models
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+"""
+    # `from core.models import X as Y` — the base is spelled by its LOCAL name.
+    aliased = """
+from django.db import models
+from core.models import TimeStampedModel as TSM
+
+class Pedido(TSM):
+    obs = models.CharField(max_length=40)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => aliased];
+                                             output_file = "alias.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        @test !occursin("not defined in", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # `from core.models import *` binds names no parser can enumerate, so the whole app comes into
+    # scope rather than none of it.
+    starred = """
+from django.db import models
+from core.models import *
+
+class Pedido(TimeStampedModel):
+    obs = models.CharField(max_length=40)
+"""
+    generated2, key2, existed2 = import_project(["core" => core, "shop" => starred];
+                                                output_file = "star.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated2)
+        @test !occursin("not defined in", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+
+    # A re-export façade: `shop` imports from `access`, which imported it from `core` and declares no
+    # such class of its own. Stopping at `access` would be a fresh silent loss.
+    access = """
+from django.db import models
+from core.models import TimeStampedModel
+
+class Perfil(TimeStampedModel):
+    nome = models.CharField(max_length=20)
+"""
+    downstream = """
+from django.db import models
+from access.models import TimeStampedModel
+
+class Pedido(TimeStampedModel):
+    obs = models.CharField(max_length=40)
+"""
+    generated3, key3, existed3 = import_project(["core" => core, "access" => access,
+                                                 "shop" => downstream];
+                                                output_file = "reexport.jl")
+    try
+        @test occursin("Pedido = Models.Model(", generated3)
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated3)
+        @test !occursin("not defined in", generated3)
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+end
+
+@testset "a module path names an app by label or by package directory (#370)" begin
+    # `Page` is here so the vendor-path sub-test below can actually FAIL when the rule is wrong.
+    # Without a concrete class of that name in `core`, `from wagtail.core.models import Page` leaves
+    # `Page` unresolved either way, `Artigo` is emitted either way, and the assertion passes whether
+    # or not the module path was matched — a test that cannot see the bug it was written for.
+    core = """
+from django.db import models
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+
+class Pedido(models.Model):
+    total = models.IntegerField()
+
+class Page(models.Model):
+    slug = models.CharField(max_length=30)
+"""
+    # A nested app package. A LEFT-to-right first-component match would stop at `apps` and resolve
+    # nothing, which is why the scan runs right to left — but what makes `apps` acceptable here is
+    # that the app's models.py really does live under `apps/`, so a PATH is required.
+    nest_root = mktempdir()
+    mkpath(joinpath(nest_root, "apps", "core"))
+    write(joinpath(nest_root, "apps", "core", "models.py"), core)
+    nested = """
+from django.db import models
+from apps.core.models import TimeStampedModel
+
+class Nota(TimeStampedModel):
+    texto = models.CharField(max_length=20)
+"""
+    generated, key, existed = import_project(
+        ["core" => joinpath(nest_root, "apps", "core", "models.py"), "shop" => nested];
+        output_file = "nested_pkg.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        @test !occursin("not defined in", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # The same app package re-exporting through its `__init__.py`, still qualified by `apps`.
+    pkg_nested = """
+from django.db import models
+from apps.core import TimeStampedModel
+
+class Nota(TimeStampedModel):
+    texto = models.CharField(max_length=20)
+"""
+    generated5, key5, existed5 = import_project(
+        ["core" => joinpath(nest_root, "apps", "core", "models.py"), "shop" => pkg_nested];
+        output_file = "nested_pkg_init.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated5)
+        @test !occursin("not defined in", generated5)
+    finally
+        cleanup_project_test!(key5, existed5)
+    end
+
+    # A THIRD-PARTY package whose own layout happens to contain the app's name followed by `models`.
+    # `wagtail.core.models` is the canonical Wagtail import, and matching "an app key with `models`
+    # after it" anywhere in the path read it as this project's `core` — #370 all over again. What
+    # rejects it is that `wagtail` is not where `core/models.py` actually lives.
+    vendor = """
+from django.db import models
+from wagtail.core.models import Page
+
+class Artigo(Page):
+    corpo = models.CharField(max_length=100)
+"""
+    generated6, key6, existed6 = import_project(
+        ["core" => joinpath(nest_root, "apps", "core", "models.py"), "cms" => vendor];
+        output_file = "vendor_models_tail.jl")
+    try
+        @test occursin("Artigo = Models.Model(\"artigo\", db_table = \"cms_artigo\"", generated6)
+        @test occursin("corpo = Models.CharField(max_length=100)", generated6)
+        @test !occursin("Django multi-table inheritance", generated6)
+    finally
+        cleanup_project_test!(key6, existed6)
+        rm(nest_root; recursive = true, force = true)
+    end
+
+    # A SIBLING module of the same app is not its models module. `core/forms.py` may perfectly well
+    # declare its own `Pedido`, and binding that to the model `core/models.py` declares would be
+    # #370 one module over.
+    from_forms = """
+from django.db import models
+from core.forms import Pedido
+
+class Recibo(Pedido):
+    valor = models.IntegerField()
+"""
+    generated2, key2, existed2 = import_project(["core" => core, "shop" => from_forms];
+                                                output_file = "sibling_module.jl")
+    try
+        @test !occursin("Django multi-table inheritance", generated2)
+        @test occursin("Recibo = Models.Model(", generated2)
+        @test occursin("not defined in any app of this import", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+
+    # The label is often NOT the package directory — Django's `AppConfig.label` frequently differs.
+    # A pair given as a PATH carries the directory as a second key, so an import spelling the package
+    # name resolves even though the label differs.
+    dir_root = mktempdir()
+    mkpath(joinpath(dir_root, "customers"))
+    write(joinpath(dir_root, "customers", "models.py"), core)
+    by_package = """
+from django.db import models
+from customers.models import TimeStampedModel
+
+class Nota(TimeStampedModel):
+    texto = models.CharField(max_length=20)
+"""
+    generated3, key3, existed3 = import_project(["crm" => joinpath(dir_root, "customers", "models.py"),
+                                                 "shop" => by_package];
+                                                output_file = "label_vs_dir.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated3)
+        @test !occursin("not defined in", generated3)
+        # The label still drives the table prefix; only the LOOKUP accepts either spelling.
+        @test occursin("db_table = \"crm_pedido\"", generated3)
+    finally
+        cleanup_project_test!(key3, existed3)
+        rm(dir_root; recursive = true, force = true)
+    end
+end
+
+@testset "a class with no resolvable base and no field of its own is not dropped in silence (#370)" begin
+    # Every column this class might have lives in a base the importer cannot see, so there is no
+    # evidence either way and it is skipped — but skipping it without a word is exactly how a real
+    # model disappears leaving no trace. A DOTTED base is a different case and stays silent: it names
+    # a module, so it is a helper by construction.
+    src = """
+from django.db import models
+
+class Perfil(CustomUser):
+    pass
+
+class ContatoForm(forms.Form):
+    pass
+
+class Real(models.Model):
+    nome = models.CharField(max_length=10)
+"""
+    generated, key, existed = import_project(["app" => src]; output_file = "silent_drop.jl")
+    try
+        @test occursin("Real = Models.Model(", generated)
+        @test !occursin("Perfil = Models.Model", generated)
+        @test occursin("# PormG: class 'Perfil' inherits 'CustomUser'", generated)
+        @test occursin("declares no field of its own", generated)
+        # A `forms.Form` helper produces no noise — the namespace already settles what it is.
+        @test !occursin("ContatoForm", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a module-level enum crosses apps only when imported (#370)" begin
+    core = """
+from django.db import models
+
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+    SENT = "s", "Sent"
+"""
+    # `shop` never imports `Status` and declares no enum of its own. Before #370 it silently received
+    # `core`'s enumeration — no marker anywhere, and the wrong choices reached the schema.
+    shop = """
+from django.db import models
+
+class Batch(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_ungated.jl")
+    try
+        @test !occursin("(\"d\", \"Draft\")", generated)
+        @test occursin("Batch = Models.Model(", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # Imported, so it resolves — including through an alias.
+    shop2 = """
+from django.db import models
+from core.models import Status as S
+
+class Batch(models.Model):
+    situacao = models.CharField(max_length=1, choices=S.choices, default=S.DRAFT)
+"""
+    generated2, key2, existed2 = import_project(["core" => core, "shop" => shop2];
+                                                output_file = "enum_gated.jl")
+    try
+        @test occursin("choices=((\"d\", \"Draft\"), (\"s\", \"Sent\"))", generated2)
+        @test occursin("default=\"d\"", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+
+    # An app declaring its OWN `Status` keeps it, whatever another app imported into scope.
+    shop3 = """
+from django.db import models
+from core.models import Status
+
+class Batch(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+
+class Status(models.TextChoices):
+    OPEN = "o", "Open"
+"""
+    generated3, key3, existed3 = import_project(["core" => core, "shop" => shop3];
+                                                output_file = "enum_local_wins.jl")
+    try
+        @test occursin("(\"o\", \"Open\")", generated3)
+        @test !occursin("(\"d\", \"Draft\")", generated3)
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+end
+
+@testset "a cross-app AbstractUser chain resolves only when imported (#370)" begin
+    # `settings.AUTH_USER_MODEL` auto-detection walks the abstract chain to find the single
+    # AbstractUser subclass. If gating broke that walk the reference would stop resolving — the one
+    # regression shape that turns a working import into a FAILING one rather than a marked one.
+    core = """
+from django.contrib.auth.models import AbstractUser
+
+class BaseUser(AbstractUser):
+    class Meta:
+        abstract = True
+"""
+    access = """
+from django.db import models
+from core.models import BaseUser
+
+class User(BaseUser):
+    matricula = models.CharField(max_length=20)
+"""
+    racing = """
+from django.conf import settings
+from django.db import models
+
+class Race(models.Model):
+    reported_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+"""
+    generated, key, existed = import_project(["core" => core, "access" => access,
+                                              "racing" => racing];
+                                             output_file = "auth_chain.jl")
+    try
+        # The AbstractUser columns reached `User` through the imported abstract base...
+        @test occursin("username = Models.CharField", generated)
+        # ...so AUTH_USER_MODEL found its single candidate and the FK resolves to it.
+        @test occursin("reported_by_id = Models.ForeignKey(\"User\"", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a module path matches an app only where the app's models module follows (#370)" begin
+    # The first cut of #370 accepted a match on the LAST component of any path, which let a
+    # third-party module resolve into an app whose label happened to equal that component — the
+    # original defect, one module name over. Every case here failed that way.
+    core = """
+from django.db import models
+
+class Page(models.Model):
+    slug = models.CharField(max_length=30)
+
+class Perfil(models.Model):
+    apelido = models.CharField(max_length=30)
+"""
+    # `wagtail.core` ends in `core`, and `core` is a real app in this run.
+    cms = """
+from django.db import models
+from wagtail.core import Page
+
+class Artigo(Page):
+    corpo = models.CharField(max_length=100)
+"""
+    generated, key, existed = import_project(["core" => core, "cms" => cms];
+                                             output_file = "thirdparty_tail.jl")
+    try
+        @test occursin("Artigo = Models.Model(\"artigo\", db_table = \"cms_artigo\"", generated)
+        @test occursin("corpo = Models.CharField(max_length=100)", generated)
+        @test !occursin("Django multi-table inheritance", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # A SINGLE-dot import names a submodule of the app doing the importing. Stripping the dot leaves
+    # `core`, a perfectly ordinary app label — so one dot must never be read as naming another app,
+    # with or without a `models` tail.
+    for (name, line) in (("dot_pkg", "from .core import Perfil"),
+                         ("dot_models", "from .core.models import Perfil"))
+        shop = """
+from django.db import models
+$(line)
+
+class Conta(Perfil):
+    saldo = models.IntegerField()
+"""
+        generated2, key2, existed2 = import_project(["core" => core, "shop" => shop];
+                                                    output_file = "relative_$(name).jl")
+        try
+            @test occursin("Conta = Models.Model(\"conta\", db_table = \"shop_conta\"", generated2)
+            @test !occursin("Django multi-table inheritance", generated2)
+        finally
+            cleanup_project_test!(key2, existed2)
+        end
+    end
+
+    # TWO dots ascend to the parent package, which is how a project laid out as `apps/{core,shop}/`
+    # spells a genuine cross-app import. That one must resolve.
+    ascending = """
+from django.db import models
+from ..core.models import Perfil
+
+class Conta(Perfil):
+    saldo = models.IntegerField()
+"""
+    generated4, key4, existed4 = import_project(["core" => core, "shop" => ascending];
+                                                output_file = "relative_ascend.jl")
+    try
+        # Genuinely imported and genuinely concrete, so this IS multi-table inheritance.
+        @test occursin("Django multi-table inheritance", generated4)
+    finally
+        cleanup_project_test!(key4, existed4)
+    end
+
+    # The one absolute single-component form IS the app package, re-exporting through `__init__.py`.
+    pkg = """
+from django.db import models
+from core import Perfil
+
+class Conta(Perfil):
+    saldo = models.IntegerField()
+"""
+    generated3, key3, existed3 = import_project(["core" => core, "shop" => pkg];
+                                                output_file = "bare_package.jl")
+    try
+        # Genuinely imported and genuinely concrete, so this one IS multi-table inheritance.
+        @test occursin("Django multi-table inheritance", generated3)
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+end
+
+@testset "two apps declaring the same class name keep their own nested enums (#370)" begin
+    # The base resolved correctly here from the very first cut; it was the ENUM scope table that was
+    # still flat and name-keyed, so `core.Base`'s own field silently took `shop.Base`'s members.
+    # Nothing in the generated file said so — the same silent-wrong-schema class as #370 itself.
+    core = """
+from django.db import models
+
+class Base(models.Model):
+    class Situacao(models.TextChoices):
+        ATIVO = "A", "Ativo"
+
+    situacao = models.CharField(max_length=1, choices=Situacao.choices)
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base as CoreBase
+
+class Base(models.Model):
+    class Situacao(models.TextChoices):
+        OUTRO = "O", "Outro"
+
+    class Meta:
+        abstract = True
+
+class Pedido(CoreBase):
+    total = models.IntegerField()
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_class_scope.jl")
+    try
+        # `Pedido` inherits `core.Base`, so its `situacao` must carry CORE's members.
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"A\", \"Ativo\"),))",
+                       generated)
+        @test !occursin("\"Outro\"", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a module-level enum resolves through a re-export, as a base does (#370)" begin
+    # Base resolution followed a re-export façade from the start; enum resolution did not, so an
+    # identically-shaped project resolved the base and dropped the enumeration — with a marker
+    # telling the reader to import a module they had already imported.
+    core = """
+from django.db import models
+
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+"""
+    access = """
+from django.db import models
+from core.models import Status
+"""
+    shop = """
+from django.db import models
+from access.models import Status
+
+class Batch(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices, default=Status.DRAFT)
+"""
+    generated, key, existed = import_project(["core" => core, "access" => access, "shop" => shop];
+                                             output_file = "enum_reexport.jl")
+    try
+        @test occursin("choices=((\"d\", \"Draft\"),)", generated)
+        @test occursin("default=\"d\"", generated)
+        @test !occursin("which this file does not define", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "star-import order does not decide whether a base resolves (#370)" begin
+    # `seen` guarding the re-export walk was keyed by APP, not by (app, name). An app already
+    # visited for one token then answered `nothing` for a different token, so which of two
+    # `from … import *` lines came first decided whether the base resolved at all.
+    y = """
+from django.db import models
+
+class Foo(models.Model):
+    ycol = models.IntegerField()
+
+    class Meta:
+        abstract = True
+
+class Bar(models.Model):
+    bcol = models.IntegerField()
+
+    class Meta:
+        abstract = True
+"""
+    x = """
+from django.db import models
+from y.models import Foo, Bar
+"""
+    b = """
+from django.db import models
+from x.models import *
+"""
+    c = """
+from django.db import models
+from x.models import Bar as Foo
+"""
+    for (label, first, second) in (("c_then_b", "c", "b"), ("b_then_c", "b", "c"))
+        a = """
+from django.db import models
+from $(first).models import *
+from $(second).models import *
+
+class Conta(Foo):
+    own = models.IntegerField()
+"""
+        generated, key, existed = import_project(["y" => y, "x" => x, "b" => b, "c" => c,
+                                                  "a" => a];
+                                                 output_file = "star_order_$(label).jl")
+        try
+            # Whichever order the two star imports appear in, `Foo` resolves and its column arrives.
+            @test occursin("Conta = Models.Model(", generated)
+            @test !occursin("not defined in any app of this import", generated)
+        finally
+            cleanup_project_test!(key, existed)
+        end
+    end
+end
+
+@testset "a skipped no-field class names the module its base came from (#370)" begin
+    # `ancestry_lost` exists for a class that MIGHT be a model whose columns all live in a base the
+    # importer cannot see. "The base came from a module naming no app" does NOT settle that: a
+    # third-party library and an app the caller forgot to pass are the same string — and in the
+    # single-app arity there are no app keys at all, so that test is true for every imported base
+    # and the marker would never fire for the case it exists for. The module goes in the message.
+    src = """
+from django.db import models
+from model_utils.managers import InheritanceManager
+
+class MeuManager(InheritanceManager):
+    pass
+
+class Perfil(CustomUser):
+    pass
+
+class Real(models.Model):
+    nome = models.CharField(max_length=10)
+"""
+    generated, key, existed = import_project(["app" => src]; output_file = "thirdparty_helper.jl")
+    try
+        @test occursin("Real = Models.Model(", generated)
+        # Named, so a reader dismisses the library in one glance...
+        @test occursin("# PormG: class 'MeuManager' inherits 'InheritanceManager', imported from " *
+                       "'model_utils.managers', which nothing in this import defines", generated)
+        # ...and a base with no import line at all says exactly that instead.
+        @test occursin("# PormG: class 'Perfil' inherits 'CustomUser', which nothing in this " *
+                       "import defines and this models.py does not import", generated)
+        @test !occursin("Perfil = Models.Model", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+
+    # The single-app arity is where this matters most, and where the discarded guard disabled it
+    # outright: an app whose base lives in a sibling app the caller did not pass.
+    single = """
+from django.db import models
+from core.models import TimeStampedModel
+
+class Pedido(TimeStampedModel):
+    pass
+
+class Outro(models.Model):
+    nome = models.CharField(max_length=10)
+"""
+    generated2, key2, existed2 = import_one_app(single; output_file = "single_ancestry_lost.jl")
+    try
+        @test occursin("# PormG: class 'Pedido' inherits 'TimeStampedModel', imported from " *
+                       "'core.models', which nothing in this import defines", generated2)
+        @test occursin("\"<app_label>\" => \"<models.py>\" pairs", generated2)
+    finally
+        cleanup_project_test!(key2, existed2)
     end
 end

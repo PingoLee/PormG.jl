@@ -285,8 +285,9 @@ class Circuit(models.Model):
     end
 
     # Django's shared-primary-key pattern pointed outside the import. There is nowhere to degrade to:
-    # the fallback column type cannot be a primary key, and `has_primary_key` was already decided, so
-    # no `id` is synthesized to replace it — the model would come out with NO primary key, which
+    # the fallback column type cannot be a primary key, and the implicit `id` was already decided —
+    # this field still counted as the key then — so none is synthesized to replace it. The model
+    # would come out with NO primary key, which
     # breaks `save()`, every M2M touching it, and the planner. A hard error even when
     # `strict_relations` is off.
     pk_relation = """
@@ -1405,19 +1406,24 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#346): a model with two primary keys must not take the import down
 #
-# `get_model_pk_field` THROWS on more than one primary key, and a model can have two:
-# `process_class_fields!` injects an `id` for every AbstractUser subclass, so a legacy user table
-# keyed on `matricula` has both. Reading the primary key eagerly for every entry — to decide
-# ManyToMany join columns — turned that into a raw ModelDefinitionError that aborted the WHOLE
-# import, on a project with no ManyToManyField at all, on BOTH arities.
+# `get_model_pk_field` THROWS on more than one primary key, and nothing counts primary keys when the
+# model is declared — so a class declaring `primary_key=True` on two fields builds a malformed model
+# that reaches the throw later (at `set_models` if it owns a ManyToManyField, whose relation wiring
+# reads the key; otherwise at the first query or `save()`). Reading the primary key eagerly for every
+# entry — to decide ManyToMany join columns — turned that into a raw ModelDefinitionError that
+# aborted the WHOLE import, on a project with no ManyToManyField at all, on BOTH arities.
+#
+# The original fixture for this was an AbstractUser subclass with its own key, which the importer
+# handed a second, injected `id`. That is fixed at the root (#369, below), so this now uses a class
+# that is two-key on its own terms — otherwise the containment property loses its only coverage.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a two-primary-key model does not abort the import (#346)" begin
     source = """
-from django.contrib.auth.models import AbstractUser
 from django.db import models
 
-class User(AbstractUser):
-    matricula = models.CharField(max_length=20, primary_key=True)
+class Thing(models.Model):
+    a = models.CharField(max_length=5, primary_key=True)
+    b = models.CharField(max_length=5, primary_key=True)
 
 class Circuit(models.Model):
     name = models.CharField(max_length=40)
@@ -1426,10 +1432,17 @@ class Circuit(models.Model):
                                                            output_file = "two_pk.jl")
     try
         # Every OTHER model survives — that is the property, and it is ALL this asserts. The two-PK
-        # model itself is malformed and is refused later at `set_models`, exactly as it was before
-        # this pass existed; the injected-`id`-plus-declared-PK defect behind it is #369.
+        # model itself is malformed and blows up at the first thing that reads its key, exactly as it
+        # did before this pass existed. Declaring it does not refuse it — nothing counts primary keys
+        # there — and for this `Thing`, which owns no relation, `set_models` does not either; the
+        # throw waits for a query or a `save()`. (The `with_m2m` variant below is the shape that DOES
+        # fail at `set_models`, because relation wiring reads the key.)
         @test occursin("Circuit = Models.Model(\"circuit\", db_table = \"access_circuit\"", generated)
-        @test occursin("User = Models.Model(\"user\", db_table = \"access_user\"", generated)
+        @test occursin("Thing = Models.Model(\"thing\", db_table = \"access_thing\"", generated)
+        # Both declared keys are emitted verbatim: the importer reports what the models.py says, it
+        # does not silently pick a winner.
+        @test occursin("a = Models.CharField(primary_key=true, max_length=5)", generated)
+        @test occursin("b = Models.CharField(primary_key=true, max_length=5)", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -1452,15 +1465,15 @@ class Circuit(models.Model):
     # unreadable primary key means "do not know", and pinning on a guess would write a column name
     # into the artifact with nothing behind it.
     with_m2m = """
-from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 class Circuit(models.Model):
     name = models.CharField(max_length=40)
 
-class User(AbstractUser):
-    matricula = models.CharField(max_length=20, primary_key=True)
-    circuits = models.ManyToManyField(Circuit)
+class Thing(models.Model):
+    a = models.CharField(max_length=5, primary_key=True)
+    b = models.CharField(max_length=5, primary_key=True)
+    others = models.ManyToManyField(Circuit)
 """
     config_key3, existed3 = project_config!()
     try
@@ -1471,10 +1484,265 @@ class User(AbstractUser):
         end
         @test occursin("Circuit = Models.Model(\"circuit\"", generated)
         # The join TABLE still pins (it needs no primary key); the columns do not.
-        @test occursin("circuits = Models.ManyToManyField(\"Circuit\", db_table=\"access_user_circuits\")", generated)
+        @test occursin("others = Models.ManyToManyField(\"Circuit\", db_table=\"access_thing_others\")", generated)
         @test !occursin("source_field=", generated)
     finally
         cleanup_project_test!(config_key3, existed3)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#369): a declared primary key suppresses Django's implicit `id`
+#
+# `AbstractUser` INHERITS `id` from `models.Model` rather than owning it, so declaring any
+# `primary_key=True` field suppresses it — exactly as on any other model. The importer instead
+# injected an `id` for every AbstractUser subclass before reading a single field, so a legacy user
+# table keyed on `matricula` came out with TWO primary keys and was unusable: `get_model_pk_field`
+# refuses more than one, and `save()`, every ManyToManyField touching the model, the relation wiring
+# and the migration planner all go through it. The failure is deferred, not immediate — the model is
+# built and registered without complaint, then throws at the first read.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an AbstractUser subclass with its own primary key has exactly one (#369)" begin
+    own_pk = """
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+
+class User(AbstractUser):
+    matricula = models.CharField(max_length=20, primary_key=True)
+"""
+    generated, config_key, db_dir_existed = import_project(["access" => own_pk];
+                                                           output_file = "auth_own_pk.jl")
+    try
+        @test occursin("matricula = Models.CharField(primary_key=true, max_length=20)", generated)
+        # The implicit `id` is GONE, not merely shadowed. `User` is the only model in this file, so
+        # a bare search for the field is unambiguous.
+        @test !occursin("Models.IDField()", generated)
+        # The other ten auth columns are untouched — only `id` was ever wrong.
+        @test occursin("date_joined = Models.DateTimeField()", generated)
+        @test occursin("username = Models.CharField()", generated)
+
+        # The property the old #346 test deliberately did not assert: the model LOADS. Before this
+        # fix `get_model_pk_field` threw ModelDefinitionError here, naming `matricula, id`.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        user = Core.eval(sandbox, :(auth_own_pk.User))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, user) == :matricula
+        @test !haskey(user.fields, "id")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # An AbstractUser subclass that declares NO key still gets Django's implicit `id` — the fix
+    # removes the unconditional injection, not the implicit key itself.
+    no_pk = """
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+
+class User(AbstractUser):
+    apelido = models.CharField(max_length=20)
+"""
+    generated2, key2, existed2 = import_project(["access" => no_pk];
+                                                 output_file = "auth_no_pk.jl")
+    try
+        @test occursin("id = Models.IDField()", generated2)
+        sandbox2 = Module()
+        Core.eval(sandbox2, Meta.parse(generated2))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox2, :(auth_no_pk.User))) == :id
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+
+    # The class declares `id` ITSELF. This was already correct — the declared field overwrote the
+    # injected one and there was exactly one key — and it has to stay correct: the declared type
+    # must survive, not be replaced by an IDField.
+    declared_id = """
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+
+class User(AbstractUser):
+    id = models.UUIDField(primary_key=True)
+"""
+    generated3, key3, existed3 = import_project(["access" => declared_id];
+                                                 output_file = "auth_declared_id.jl")
+    try
+        @test occursin("id = Models.UUIDField(primary_key=true)", generated3)
+        @test !occursin("Models.IDField()", generated3)
+        sandbox3 = Module()
+        Core.eval(sandbox3, Meta.parse(generated3))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox3, :(auth_declared_id.User))) == :id
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#369): an inherited primary key overridden by a non-key field
+#
+# Django permits overriding a field inherited from an ABSTRACT base. The importer merges such a base
+# by statement concatenation (ancestors first, last write wins), so the base's `primary_key=True`
+# statement ran and the child's plain redeclaration replaced the value. A boolean flag recorded the
+# base's claim and was never unset, so the model came out with NO key and no implicit `id` either —
+# the same flag-versus-dict desync as the AbstractUser injection, in the other direction. The claim
+# is now recorded per field and retracted when the field is rewritten, so an override drops it along
+# with the value; nothing survives that the final field set does not agree with.
+#
+# The base here is a plain `models.Model`, deliberately: on an AbstractUser base the unconditional
+# `id` injection masked this outcome, so that shape produces identical output before and after the
+# fix and would prove nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an overridden inherited primary key falls back to the implicit id (#369)" begin
+    source = """
+from django.db import models
+
+class Base(models.Model):
+    codigo = models.CharField(max_length=10, primary_key=True)
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    codigo = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["access" => source];
+                                                           output_file = "abstract_pk_override.jl")
+    try
+        # The child's redeclaration wins, and it is not a key...
+        @test occursin("codigo = Models.CharField(max_length=10)", generated)
+        @test !occursin("codigo = Models.CharField(primary_key=true", generated)
+        # ...so nothing claims the key and Django's implicit `id` is what the model gets. Before the
+        # fix this model was emitted with `codigo` as its ONLY field and no primary key anywhere.
+        @test occursin("id = Models.IDField()", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox, :(abstract_pk_override.Thing))) == :id
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#369): a legacy-keyed user table now pins its ManyToMany join column
+#
+# `_pin_m2m_join_columns!` exists for exactly this shape — Django hardcodes `<class>_id` for the join
+# column while PormG derives it from the primary-key field name, so a model keyed on anything but
+# `id` needs the pin. It could never reach that shape for an AbstractUser subclass: the model had two
+# keys, `get_model_pk_field` threw, and the pass caught it and left the columns derived. With one key
+# the pin fires, which is the visible downstream half of this fix.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a ManyToMany owned by a legacy-keyed user table pins source_field (#369)" begin
+    source = """
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class User(AbstractUser):
+    matricula = models.CharField(max_length=20, primary_key=True)
+    circuits = models.ManyToManyField(Circuit)
+"""
+    config_key, db_dir_existed = project_config!()
+    try
+        # No warning at all now — the primary key is readable, so nothing is "left derived". Asserts
+        # the ABSENCE of the `cannot read the primary key` warn this fixture used to produce.
+        generated = @test_logs min_level=Logging.Warn begin
+            import_models_from_django(["access" => source]; db = config_key,
+                                      file = "auth_pk_m2m.jl", force_replace = true)
+            read(joinpath(config_key, "auth_pk_m2m.jl"), String)
+        end
+        # Django names the join column from the CLASS (`user_id`), not from the key field
+        # (`matricula_id`), which is why the pin is needed at all.
+        @test occursin("circuits = Models.ManyToManyField(\"Circuit\", db_table=\"access_user_circuits\", source_field=\"user_id\")",
+                       generated)
+        # `Circuit` is keyed on `id` and its binding matches its class name, so its end needs no pin.
+        @test !occursin("target_field=", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#369): "did anything claim the key" has to be asked TWICE
+#
+# The built field and the Django declaration each miss a case the other catches, in opposite
+# directions, so deciding the implicit `id` from either one alone is wrong:
+#
+#   - `IntegerField(primary_key=True)` DECLARES the key, but PormG's IntegerField does not accept
+#     `primary_key` and constructs with `false`. Reading the built fields alone concludes "no key"
+#     and adds an `id` — naming a column the Django table has not got, which breaks every query that
+#     expands the field list. This is a legacy-schema shape, not a hypothetical.
+#   - `AutoField()` DECLARES nothing, but PormG's AutoField defaults `primary_key = true`. Reading
+#     the declarations alone concludes "no key" and adds an `id` beside it — two primary keys, the
+#     very defect #369 is about.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a primary key PormG cannot express is reported, never replaced by an id (#369)" begin
+    unkeyable = """
+from django.db import models
+
+class Municipio(models.Model):
+    codigo = models.IntegerField(primary_key=True)
+    nome = models.CharField(max_length=40)
+"""
+    generated, config_key, db_dir_existed = import_project(["access" => unkeyable];
+                                                           output_file = "unkeyable_pk.jl")
+    try
+        @test occursin("codigo = Models.IntegerField()", generated)
+        # NO phantom `id`. `access_municipio` is keyed on `codigo` and has no `id` column.
+        @test !occursin("Models.IDField()", generated)
+        # ...and the artifact states the gap rather than shipping a silently key-less model.
+        @test occursin("# PormG: 'Municipio' declares its primary key on 'codigo'", generated)
+        @test occursin("This model therefore has NO primary key", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox, :(unkeyable_pk.Municipio))) === nothing
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A ManyToManyField is never a candidate: it contributes no column, so reporting a "lost" key on
+    # one would name a column that never existed — and the model still needs its implicit `id`.
+    m2m_pk = """
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class Thing(models.Model):
+    others = models.ManyToManyField(Circuit, primary_key=True)
+"""
+    generated3, key3, existed3 = import_project(["access" => m2m_pk]; output_file = "m2m_pk.jl")
+    try
+        @test occursin("id = Models.IDField()", generated3)
+        @test !occursin("declares its primary key", generated3)
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+
+    # The mirror case. `AutoField()` must NOT also receive an `id`, and must not be reported as
+    # unkeyable either — the built field is a perfectly good primary key.
+    auto = """
+from django.db import models
+
+class Thing(models.Model):
+    codigo = models.AutoField()
+    nome = models.CharField(max_length=40)
+"""
+    generated2, key2, existed2 = import_project(["access" => auto]; output_file = "auto_pk.jl")
+    try
+        @test occursin("codigo = Models.AutoField()", generated2)
+        @test !occursin("Models.IDField()", generated2)
+        @test !occursin("# PormG:", generated2)
+        sandbox2 = Module()
+        Core.eval(sandbox2, Meta.parse(generated2))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox2, :(auto_pk.Thing))) == :codigo
+    finally
+        cleanup_project_test!(key2, existed2)
     end
 end
 

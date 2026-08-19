@@ -626,8 +626,40 @@ field and its source line; it is never dropped silently.
 
 ### Automatic Additions
 
-- **Primary Key**: If no primary key is defined, `id = Models.IDField()` is automatically added
-- **AbstractUser**: For models inheriting from `AbstractUser`, additional fields like `date_joined` are added
+- **Primary Key**: If no primary key is defined, `id = Models.IDField()` is automatically added.
+  Declaring any field `primary_key=True` **suppresses** it, as in Django — including a field named
+  `id` itself, which then keeps its declared type
+- **AbstractUser**: For models inheriting from `AbstractUser`, additional fields like `date_joined` are added.
+  `id` is **not** one of them: `AbstractUser` inherits Django's implicit `id` from `models.Model`
+  rather than owning it, so a user model keyed on its own field — `matricula = CharField(primary_key=True)`
+  on a legacy table — has that one key and no `id`, like any other model
+
+!!! warning "Not every field type can be a primary key in PormG"
+    `primary_key=True` is honoured on exactly six types: `IDField`, `AutoField`, `CharField`,
+    `UUIDField`, `ForeignKey` and `OneToOneField`.
+
+    `DecimalField` and `FloatField` reject it deliberately (precision-comparison risk) and **raise**,
+    which stops the import — re-declare that column as a `CharField` key in Django, or exclude it.
+
+    On every other type it is silently **dropped** at construction, so
+    `codigo = models.IntegerField(primary_key=True)` imports as a plain `IntegerField` and the model
+    ends up with **no** primary key at all.
+
+    The importer does **not** paper over that with a synthetic `id`: the Django table has no such
+    column, and naming one would break every query that expands the field list. It emits a `# PormG:`
+    marker above the model and a warning naming the field, so the gap is visible in the artifact.
+
+    **Fix it — do not ship it.** A model with no primary key is not merely limited:
+
+    - a `ManyToManyField` pointing at it makes the **whole generated file fail to load**
+      (`ModelDefinitionError: … requires the target model to define a single primary key`), taking
+      every other model in the file with it;
+    - a `ForeignKey` pointing at it **loads and is silently wrong** — the key is rendered as
+      `pk_field="id"`, naming a column the table does not have;
+    - `save()` and the migration planner have nothing to key on.
+
+    Re-declare the key by hand as `Models.CharField(primary_key=true, …)` or
+    `Models.UUIDField(primary_key=true)`, matching the real column.
 
 !!! note "Django-import conventions differ from native PormG"
     The importer deliberately matches **Django's** schema conventions, not PormG's: it auto-adds an
@@ -645,7 +677,7 @@ field and its source line; it is never dropped silently.
 | | |
 |---|---|
 | **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them |
+| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above) |
 | **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
 | **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
 

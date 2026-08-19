@@ -1254,15 +1254,19 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
   for e in index.entries
     e.model === nothing || (by_binding[e.binding] = e)
   end
-  # `get_model_pk_field` THROWS when a model carries more than one primary key, and a model can:
-  # `process_class_fields!` injects an `id` for every `AbstractUser` subclass, so a legacy user table
-  # that also declares `matricula = CharField(primary_key=True)` has two (#369). Calling it eagerly for every
-  # entry turned that into a raw `ModelDefinitionError` that aborted the WHOLE import — no file, no
-  # marker, every other model lost — for a project that has no ManyToManyField anywhere, on both
-  # arities. So it is called lazily, only for models that actually own an auto-derived M2M, and a
-  # throw skips the pin rather than the import: the field keeps PormG's own derivation, exactly as
-  # before this pass existed. The two-primary-key model is broken either way (it is refused at
-  # `set_models`); that is not this pass's to fix or to escalate.
+  # `get_model_pk_field` THROWS when a model carries more than one primary key, and a model still
+  # can: a class that declares `primary_key=True` on two fields outright builds without complaint —
+  # nothing counts primary keys at declaration — so the throw stays reachable from any models.py.
+  # `set_models` raises it only for a model that OWNS a ManyToManyField (relation wiring reads the
+  # key); otherwise the model registers cleanly and throws at the first read. (The commonest source
+  # used to be an `AbstractUser` subclass with a key of its own, which this importer handed a second,
+  # injected `id`; that is fixed at the root in `_import_django_apps` — #369.)
+  # Calling it eagerly for every entry turned the throw into a raw `ModelDefinitionError` that
+  # aborted the WHOLE import — no file, no marker, every other model lost — for a project that has
+  # no ManyToManyField anywhere, on both arities. So it is called lazily, only for models that
+  # actually own an auto-derived M2M, and a throw skips the pin rather than the import: the field
+  # keeps PormG's own derivation, exactly as before this pass existed. The two-primary-key model is
+  # broken either way; that is not this pass's to fix or to escalate.
   pk_cache = Dict{_DjangoClass, Union{Nothing, String}}()
   function pk_name(e)
     get!(pk_cache, e) do
@@ -1382,8 +1386,9 @@ end
 # propose DROPPING it. `db_index` is the same story one severity down.
 function _degraded_relation_column(field, owner::_DjangoClass, field_key::String)
   # A relation that is also the PRIMARY KEY has nowhere to degrade to: `BigIntegerField` cannot be
-  # one (it hardcodes `primary_key = false`), and `has_primary_key` was decided before this pass, so
-  # no `id` is synthesized to replace it. Degrading would emit a model with NO primary key — which
+  # one (it hardcodes `primary_key = false`), and the implicit `id` was already decided in
+  # `_import_django_apps` before this pass runs, so none is synthesized to replace it — this field
+  # still counted as the key when that ran. Degrading would emit a model with NO primary key — which
   # breaks `save()`, every ManyToManyField touching it, and the migration planner, none of them where
   # a reader would look. Erroring is the honest outcome even under `strict_relations = false`.
   if field.primary_key
@@ -1587,14 +1592,53 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
 
       # Initialize fields_dict
       fields_dict = Dict{Symbol, Any}()
-      has_primary_key = Ref(false)  # Flag to check if a primary key exists
 
       # Process fields separately
-      process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), has_primary_key, autofields_ignore, parameters_ignore, markers, graph.enums, _enum_scopes(graph, class))
+      declared_pk = process_class_fields!(fields_dict, class_content, class_name, _inherits_auth_user(graph, class), autofields_ignore, parameters_ignore, markers, graph.enums, _enum_scopes(graph, class))
 
-      # Insert IDField if no primary key is defined
-      if !has_primary_key[]
+      # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
+      # what was built and from what the models.py declared, never tracked with a class-wide flag
+      # (#369). Such a flag desynchronized from `fields_dict` in both directions: the `AbstractUser`
+      # branch set it before a single field had been read, so a user table declaring its own key got
+      # a SECOND primary key; and it stayed set when a class overrode a `primary_key=True` field
+      # inherited from an abstract base with a plain one — legal Django — leaving a model with no key
+      # and no `id` either.
+      #
+      # BOTH readings are needed, and they disagree in opposite directions:
+      #   - the built field alone misses `codigo = models.IntegerField(primary_key=True)`, because
+      #     most PormG field types refuse `primary_key` and construct with `false` — and injecting
+      #     `id` there would name a column the Django table does not have;
+      #   - the declaration alone misses `codigo = models.AutoField()`, which declares nothing but
+      #     builds a field that IS the key, because PormG's `AutoField` defaults `primary_key = true`.
+      # `get_model_pk_field`, which reads this model downstream, sees only the first.
+      built_pk = any(f -> f.primary_key, values(fields_dict))
+      if !built_pk && isempty(declared_pk)
           fields_dict[:id] = Models.IDField()
+      end
+
+      # Declared keys that did NOT survive into a built one — the field type refused `primary_key`
+      # and the column came through plain. Tested per declaration rather than as "no key was built",
+      # because a class can lose one key and still have another: PormG then keys the model on a
+      # different column from the one Django keys its table on, and that disagreement is exactly as
+      # worth reporting as having no key at all.
+      lost_pk = sort(String[String(k) for k in declared_pk
+                            if !(haskey(fields_dict, k) && fields_dict[k].primary_key)])
+      if !isempty(lost_pk)
+        @warn "import: a declared primary key is a field type PormG cannot key on; the column is imported without it" class=class_name fields=join(lost_pk, ", ") model_still_has_a_key=built_pk
+        push!(markers, "# PormG: '$(class_name)' declares its primary key on " *
+                       join(("'$(f)'" for f in lost_pk), ", ") *
+                       " — a field type PormG cannot make a primary key (only IDField, AutoField, " *
+                       "CharField, UUIDField, ForeignKey and OneToOneField can), so the column is " *
+                       "imported WITHOUT it. " *
+                       (built_pk ?
+                          "Another field on this model is a primary key, so PormG keys it on that " *
+                          "one while Django keys the table on the column above — they disagree." :
+                          "This model therefore has NO primary key. No `id` was substituted, " *
+                          "because Django's table has no such column — but that leaves the model " *
+                          "unusable by anything that needs a key: a ManyToManyField pointing at it " *
+                          "makes the WHOLE generated file fail to load, and a ForeignKey pointing " *
+                          "at it loads and is silently wrong.") *
+                       " Re-declare the key by hand as a CharField/UUIDField primary key.")
       end
 
       # Rewrite every relation target to the BINDING of the model it names, before the model is
@@ -2949,14 +2993,23 @@ function _match_field_statement(text::AbstractString)
   return (name = lhs, type = String(m.captures[1]), args = args)
 end
 
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, has_primary_key::Base.RefValue{Bool}, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[], enums = Dict{String, Dict{String, _PyEnum}}(), enum_scopes::Vector{String} = String[String(class_name), ""])
+function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt}, class_name::AbstractString, is_auth_user::Bool, autofields_ignore::Vector{String}, parameters_ignore::Vector{String}, markers::Vector{String} = String[], enums = Dict{String, Dict{String, _PyEnum}}(), enum_scopes::Vector{String} = String[String(class_name), ""])
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
   # whole base list matched neither.
+  #
+  # `id` is deliberately NOT one of them (#369). `AbstractUser` INHERITS Django's implicit `id`
+  # from `models.Model` rather than owning it, so a declared `primary_key=True` suppresses it here
+  # exactly as on any other model — and the caller already applies that rule to every class it
+  # emits. Injecting one here instead claimed the key before a single field had been read, so a
+  # legacy user table keyed on `matricula` came out with TWO primary keys and could never load.
+  # Do not re-add it.
+  #
+  # Returns the field keys whose surviving declaration said `primary_key=True` — see the loop.
+  declared_pk = Set{Symbol}()
+
   if is_auth_user
-      has_primary_key[] = true
-      fields_dict[:id] = Models.IDField()
       fields_dict[:password] = Models.CharField()
       fields_dict[:last_login] = Models.DateTimeField()
       fields_dict[:is_superuser] = Models.BooleanField()
@@ -3003,31 +3056,47 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
                                               field_name = field_name, markers = markers)
 
     # An IGNORED field type contributes no column, so it cannot be the primary key either. Tested
-    # BEFORE `has_primary_key` for that reason (#346): the other order let
+    # BEFORE the primary-key bookkeeping below for that reason (#346): the other order let
     # `autofields_ignore = [… "CharField"]` claim the PK from a `CharField(primary_key=True)` and
     # then drop it, so the synthetic `id` was suppressed and the model came out with NO fields at
     # all. `_import_django_apps` then skipped it silently — while the class index had already handed
     # it a binding, so every ForeignKey to it named a binding the generated file never defined.
     field_type in autofields_ignore && continue
 
-    # Check for primary key
-    if haskey(options, :primary_key) && options[:primary_key] == true
-        has_primary_key[] = true
+    # The key this statement writes, computed up front so the bookkeeping below can name it without
+    # restating the ForeignKey `_id` rule.
+    field_key = field_type in ["ForeignKey", "OneToOneField"] ? Symbol("$(field_name)_id") :
+                                                                Symbol(field_name)
+
+    # Whether DJANGO called this field the primary key — recorded beside the built field because it
+    # cannot be read back off it (#369). Most PormG field types do not accept `primary_key` at all:
+    # `_common_kwargs` warns "Unexpected parameter" and constructs with `primary_key = false`, so a
+    # legacy table keyed on `codigo = models.IntegerField(primary_key=True)` yields a field that
+    # denies being the key. Deciding the implicit `id` from the built fields ALONE would then invent
+    # an `id` column the Django table has not got. Mirrors `fields_dict`'s last-write-wins, so a
+    # child overriding an inherited key with a plain field drops the claim along with the value.
+    #
+    # A ManyToManyField is excluded outright: it contributes no column, `sManyToManyField` hardcodes
+    # `primary_key = false`, and Django rejects the combination anyway — so recording one would
+    # report a lost column that never was a column.
+    if field_type != "ManyToManyField" && get(options, :primary_key, false) == true
+      push!(declared_pk, field_key)
+    else
+      delete!(declared_pk, field_key)
     end
 
     # Instantiate the field
     try
       # println(field_type)
       if field_type in ["ForeignKey", "OneToOneField"]
-        # Add "_id" suffix for foreign keys
-        field_key = Symbol("$(field_name)_id")
+        # `field_key` already carries the "_id" suffix foreign keys take.
         # println(related_model, " ", related_model |> typeof)
         _normalize_django_set_default!(options, field_name)
         fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
       elseif field_type == "ManyToManyField"
-        fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; options...)
+        fields_dict[field_key] = Models.ManyToManyField(related_model; options...)
       else
-        fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; options...)
+        fields_dict[field_key] = getfield(Models, Symbol(field_type))(; options...)
       end
     catch e
       @pormg_debug
@@ -3053,11 +3122,11 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
         retry_options = filter(kv -> !(kv.first in (:choices, :default)), options)
         recovered = try
           if field_type in ["ForeignKey", "OneToOneField"]
-            fields_dict[Symbol("$(field_name)_id")] = getfield(Models, Symbol(field_type))(related_model; retry_options...)
+            fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; retry_options...)
           elseif field_type == "ManyToManyField"
-            fields_dict[Symbol(field_name)] = Models.ManyToManyField(related_model; retry_options...)
+            fields_dict[field_key] = Models.ManyToManyField(related_model; retry_options...)
           else
-            fields_dict[Symbol(field_name)] = getfield(Models, Symbol(field_type))(; retry_options...)
+            fields_dict[field_key] = getfield(Models, Symbol(field_type))(; retry_options...)
           end
           true
         catch e2
@@ -3089,7 +3158,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     end
   end
 
-  return nothing
+  return declared_pk
 
 end
 

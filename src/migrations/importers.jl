@@ -3624,11 +3624,20 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     end
 
     field_name = parsed.name
-    field_type = django_field_type(parsed.type)
+    # Django's spelling and PormG's are tracked SEPARATELY (#399), because only one of the two jobs
+    # wants the mapped name. `django_type` is what the models.py actually wrote, and it is what every
+    # path that REPORTS or IGNORES a field must name: `autofields_ignore` is documented in Django's
+    # vocabulary (`["Manager"]`), and a marker naming a type the author never typed is #371 all over
+    # again. `field_type` — the mapped name — exists for the CONSTRUCTOR lookup and nothing else.
+    # They differ only for the names in `DJANGO_AUTO_KEY_TYPES`; for every other type the map is the
+    # identity and the two are the same string. `AutoField` is why this separation is not academic:
+    # it is a name BOTH vocabularies use, for two different field types.
+    django_type = String(parsed.type)
+    field_type = django_field_type(django_type)
     field_args_str = parsed.args
 
     # Parse field arguments
-    options, related_model = parse_field_args(field_args_str, field_type, parameters_ignore;
+    options, related_model = parse_field_args(field_args_str, django_type, parameters_ignore;
                                               enums = enums, class_name = class_name,
                                               enum_scopes = enum_scopes, class_label = class_label,
                                               field_name = field_name, markers = markers)
@@ -3639,7 +3648,24 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     # then drop it, so the synthetic `id` was suppressed and the model came out with NO fields at
     # all. `_import_django_apps` then skipped it silently — while the class index had already handed
     # it a binding, so every ForeignKey to it named a binding the generated file never defined.
-    field_type in autofields_ignore && continue
+    #
+    # Matched on `django_type`, NOT the mapped name: the option is documented as "Django field types
+    # to ignore", so `autofields_ignore = ["BigAutoField"]` has to mean the name in the models.py.
+    # Matching the mapped name would make that entry a silent no-op AND make `["AutoField"]` quietly
+    # swallow types the caller never named.
+    django_type in autofields_ignore && continue
+
+    # A narrower Django key came through as the one PormG can round-trip — the key is faithful, the
+    # declared width is not. Reported for the same reason every other degrade in this file is:
+    # whoever opens the generated file months from now has no other way to learn that the models.py
+    # said something narrower. Placed AFTER the ignore check, so a field the caller dropped is not
+    # reported as imported.
+    if haskey(DJANGO_DEGRADED_FIELD_TYPES, django_type)
+      @warn "import: no PormG key type round-trips this Django field type; imported as IDField" class=class_label field=field_name django_type=django_type django_width=DJANGO_AUTO_KEY_TYPES[django_type]
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' is a Django " *
+                     "$(django_type) ($(DJANGO_AUTO_KEY_TYPES[django_type])) — imported as " *
+                     "$(field_type) (BIGINT). " * DJANGO_DEGRADED_FIELD_TYPES[django_type])
+    end
 
     # The key this statement writes, computed up front so the bookkeeping below can name it without
     # restating the ForeignKey `_id` rule.
@@ -3740,7 +3766,48 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
 
 end
 
+# Django's auto-increment key types → the PormG constructor to call. ALL of them resolve to
+# `IDField`, and the reason is not "closest match" — it is that `IDField` is the ONLY integer key
+# type an imported model can be given without condemning it to a migration that never converges:
+#
+#   * `introspection.jl` force-converts every non-UUID primary key it reads to `IDField` (the
+#     `elseif primary_key` branch — deliberate, see #334), so `IDField` is what the database will
+#     ALWAYS appear to hold, whatever the column's real width;
+#   * `Dialect.describes_same_column` returns `false` outright when either side declares a key, so
+#     the "different Julia type, same physical column" escape hatch is closed for exactly this case;
+#   * a model declaring anything else therefore never equals what introspection reports,
+#     `planner.jl` pushes `:type`, and `makemigrations` proposes the same ALTER on that column on
+#     every single run, forever.
+#
+# `AutoField` (#399) is the counter-intuitive entry: PormG HAS a field by that name, so mapping the
+# Django type onto it is the obvious move and it is the wrong one — `sAutoField` is not a fixed
+# point of the introspection above. The synthetic `id` this file injects has always used `IDField`
+# for the same reason; these mappings just stop a DECLARED key from being treated worse than an
+# undeclared one.
+#
+# `BigAutoField` and `SmallAutoField` had no PormG counterpart at all, and
+# `getfield(Models, :BigAutoField)` used to abort the import of the WHOLE file — every other model
+# in it lost to one column.
+const DJANGO_AUTO_KEY_TYPES = Dict{String, String}(
+  "AutoField"      => "INTEGER",   # Django: serial
+  "BigAutoField"   => "BIGINT",    # Django: bigserial — 3.2+'s DEFAULT_AUTO_FIELD, an exact match
+  "SmallAutoField" => "SMALLINT",  # Django: smallserial
+)
+
+# The subset whose substitution actually LOSES something a reader of the generated file would
+# otherwise never learn. `BigAutoField` is absent on purpose: BIGINT auto-increment is precisely
+# what `IDField` is, so reporting it would be noise, and a marker emitted for everything is a
+# marker that means nothing.
+const DJANGO_DEGRADED_FIELD_TYPES = Dict{String, String}(
+  dj => "PormG has no $(width) auto-increment key it can round-trip: introspection reports EVERY " *
+        "integer primary key as IDField, so any narrower type here would leave makemigrations " *
+        "proposing the same ALTER on this column on every run. Your EXISTING column is not " *
+        "re-typed; but a table PormG CREATES from this model gets BIGINT, not $(width)."
+  for (dj, width) in DJANGO_AUTO_KEY_TYPES if width != "BIGINT"
+)
+
 function django_field_type(field_type::AbstractString)::String
+  haskey(DJANGO_AUTO_KEY_TYPES, field_type) && return "IDField"
   return String(field_type)
 end
 

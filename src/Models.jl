@@ -116,11 +116,34 @@ end
   owner_model::String
   owner_binding::String
   owner_pk::String
+  # The two join-key axes, split (#377). `*_column` is the PHYSICAL column on the join table — the
+  # only thing a renderer wants, and the only one of the pair that ever reaches SQL. `*_field` is the
+  # through model's FIELD name, i.e. a key into `through_model.fields`.
+  #
+  # They used to be one slot that meant both. `_infer_through_field` returns a field name, which
+  # equals the column exactly when that field declares no `db_column` — so on an explicit `through=`
+  # a `db_column` (what every Django import writes for a legacy schema) made every join and every
+  # mutator address a column that does not exist, while `QueryBuilder._m2m_has_extra_fields`, which
+  # compares against `keys(through_model.fields)`, was the lone reader that wanted the field name and
+  # got it by luck. Resolving into the single slot would have repaired the SQL and broken that guard
+  # in the same commit — the mirror image of the trap #363 fell into on the table axis.
+  #
+  # Django keeps this same split, and for the same reason: `ManyToManyField.contribute_to_class`
+  # binds `m2m_column_name` to the through FK's `column` (`db_column or attname`) and
+  # `m2m_field_name` to its `name`.
+  #
+  # On the AUTO path the two hold the same string by construction, not by coincidence:
+  # `synthesize_many_to_many_through_models` builds that join table FROM these names, so there is no
+  # `db_column` to resolve and nothing downstream can shift. Both are REQUIRED rather than defaulted,
+  # for the reason `through_model_resolved` is: a default would let a future constructor mean "no
+  # db_column" by omission, which is the fail-open shape this split exists to close.
   owner_column::String
+  owner_field::String
   related_model::String
   related_binding::String
   related_pk::String
   related_column::String
+  related_field::String
   inverse_accessor::String
   reverse::Bool = false
   # #65: resolved model objects for the two sides, populated wherever a relation is built
@@ -2883,6 +2906,71 @@ function _many_to_many_column_name(model::PormGModel, pk_field::String; prefix::
   return format_fild_name("$(prefix)$(format_model_name(model.name))_$(pk_field)")
 end
 
+# Could this through-model field serve as the join key for the end that points at `target_model`
+# (#377)? Used by the PIN path only — `_infer_through_field` below deliberately asks a STRICTER
+# question, and the difference between the two is the point of having both.
+#
+# LENIENT on an unresolved reference, and that is load-bearing rather than sloppy. A `String` `.to`
+# holds the target's Julia BINDING, not its table or logical name (#360/#386), and recovering a model
+# from it by case-fold is only the correct inverse while the binding happens to be
+# `uppercasefirst(model.name)` — the exact flaw #388 closed elsewhere. `Driver = Model("drivers", ...)`
+# breaks it, and that is this repo's own house idiom. Worse, whether a through model's foreign keys
+# are still strings HERE depends on where its binding sorts in the single registration loop of
+# `set_models`, so a strict test would accept or refuse the same models file across a rename.
+#
+# Refusing would also point fail-closed in the wrong direction: `_infer_through_field` ALREADY fails
+# on that shape, and pinning is the documented rescue for exactly that (`docs/src/many_to_many.md`).
+# So verify what can be verified and take the human's word otherwise. The E338 half still fires, and
+# it is the half that catches the common slip — a `db_column` written where a field name belongs.
+_through_fk_for(f, target_model::PormGModel)::Bool =
+  (f isa sForeignKey || f isa sOneToOneField) &&
+  (!(f.to isa PormGModel) || _same_model_reference(f.to, target_model))
+
+# Is `pin` a usable `source_field` / `target_field` for the end that points at `target_model` (#377)?
+#
+# Two conditions, and they are the two Django checks for `through_fields`: the pin must name a FIELD
+# on the through model (`fields.E338`), and that field must be a foreign key TO the model this end
+# stands for (`fields.E339`). Checking only the first is not enough — the two ends of a through model
+# are usually both foreign keys, so a pin that names the wrong one passes a mere existence test and
+# builds a relation whose join keys are swapped: SQL that executes and returns the wrong rows.
+_is_through_pin_for(through_model::PormGModel, pin::String, target_model::PormGModel)::Bool =
+  haskey(through_model.fields, pin) && _through_fk_for(through_model.fields[pin], target_model)
+
+# Composes the refusal for a pin `_is_through_pin_for` rejected; the CALL SITE throws it, per the
+# funnel convention in `.github/skills/pormg-querybuilder-internals`. It separates the two rejection
+# reasons because the remedies differ — a name that is not a field at all is usually a `db_column`
+# written where a field name belongs, while a name that IS a field but points elsewhere is usually
+# the two ends written the wrong way round. Lists the foreign keys that would have worked, because
+# the pin exists precisely for the case where a human has to choose between several.
+#
+# The two models are KEYWORDS on purpose: `target_model` and `owner_model` are the same object on the
+# source arm, so transposing two adjacent positionals would compile, run, and quietly name the wrong
+# model on the target arm — with the suggestion list to match, and no test able to see it.
+function _through_pin_invalid(through_model::PormGModel, pin::String, field_name::String, option::String;
+                              target_model::PormGModel, owner_model::PormGModel)::ModelDefinitionError
+  # The SAME predicate that rejected the pin, so the suggestion can never contradict the refusal —
+  # in particular it cannot claim "no foreign key at all" about a key the check would have accepted.
+  usable = sort!([String(n) for (n, f) in through_model.fields if _through_fk_for(f, target_model)])
+  reason = if !haskey(through_model.fields, pin)
+    "is not a field of the through model $(through_model.name). Pin the FIELD name, not the " *
+    "db_column — the column is resolved from the field"
+  else
+    "is a field of the through model $(through_model.name) but not a foreign key to " *
+    "$(target_model.name), which is the side $(option) names"
+  end
+  usable_msg = isempty(usable) ?
+    "That through model has no foreign key to $(target_model.name) at all" :
+    "Foreign keys to $(target_model.name): $(join(usable, ", "))"
+  return ModelDefinitionError(
+    "ManyToManyField $(owner_model.name).$(field_name) pins $(option) = \e[31m$(pin)\e[0m, which " *
+    "$(reason). $(usable_msg).")
+end
+
+# NOTE the deliberate asymmetry with `_through_fk_for` above: inference uses the STRICT comparison,
+# and must. It is choosing among candidates, so counting an unresolved reference as a match would make
+# every foreign key on the through model a candidate and then either pick the wrong one or report a
+# spurious ambiguity. A pin has no such problem — the human already chose — which is why the pin
+# path is allowed to be lenient, and is the documented rescue when this function cannot decide (#377).
 function _infer_through_field(through_model::PormGModel, target_model::PormGModel, role::String)::String
   matches = String[]
   for (field_name, field) in through_model.fields
@@ -2942,6 +3030,13 @@ function _relation_from_many_to_many(
     owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
     related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
   end
+  # #377: on the AUTO path the field name and the physical column are the same string by
+  # construction — `synthesize_many_to_many_through_models` builds the join table FROM these very
+  # names, so there is no user-declared `db_column` anywhere to diverge from. Seeded (rather than
+  # defaulted on the struct) so the slot is written on every path exactly once; the `through` branch
+  # below overwrites all four.
+  owner_field = owner_column
+  related_field = related_column
 
   if field.through !== nothing
     through_model = if field.through isa PormGModel
@@ -2961,12 +3056,39 @@ function _relation_from_many_to_many(
     # The model itself is recorded below, so nothing has to recover it from this string.
     through_table_name = model_table_name(through_model)
     through_resolved = through_model
-    owner_column = field.source_field === nothing ? _infer_through_field(through_model, owner_model, "source") : field.source_field
-    related_column = field.target_field === nothing ? _infer_through_field(through_model, related_model, "target") : field.target_field
-    owner_fk = through_model.fields[owner_column]
-    related_fk = through_model.fields[related_column]
+    # FIELD names, both arms (#377). That is what `_infer_through_field` returns, and what
+    # `source_field` / `target_field` are documented to take — the same contract as Django's
+    # `through_fields`, which `_get_m2m_attr` matches against the through FK's `name`.
+    owner_field = field.source_field === nothing ? _infer_through_field(through_model, owner_model, "source") : field.source_field
+    related_field = field.target_field === nothing ? _infer_through_field(through_model, related_model, "target") : field.target_field
+    # A bad pin used to die in the `getindex` below with a bare `KeyError` — or, when it named a
+    # non-FK field, one line further on with a `FieldError` about `.pk_field` — naming neither model
+    # nor field, and in neither case a `PormGError`. A pin naming the WRONG foreign key did not fail
+    # at all: it built a relation with the join keys swapped. Pinning the COLUMN name is also now the
+    # likeliest slip, because it was the documented workaround for #377 before this commit removed
+    # the need for it. Django refuses all three as system checks (`fields.E338`/`E339`); this is that
+    # rule, raised where models are defined.
+    #
+    # Inferred names cannot reach it — `_infer_through_field` returns a key it just read off
+    # `through_model.fields` after testing the very same predicate — so it fires only on a pin.
+    _is_through_pin_for(through_model, owner_field, owner_model) || throw(_through_pin_invalid(
+      through_model, owner_field, field_name, "source_field";
+      target_model = owner_model, owner_model = owner_model))
+    _is_through_pin_for(through_model, related_field, related_model) || throw(_through_pin_invalid(
+      through_model, related_field, field_name, "target_field";
+      target_model = related_model, owner_model = owner_model))
+    owner_fk = through_model.fields[owner_field]
+    related_fk = through_model.fields[related_field]
     owner_pk = owner_fk.pk_field === nothing ? owner_pk : String(owner_fk.pk_field)
     related_pk = related_fk.pk_field === nothing ? related_pk : String(related_fk.pk_field)
+    # #377: the through side's PHYSICAL columns, resolved ONCE — the column-axis mirror of the
+    # `model_table_name` call above. The eight sites that render these (both through-side join keys
+    # in `_insert_many_to_many_joins`, the four manager mutators, and the `_m2m_current_ids`
+    # read-back) all want the column and none of them can see the through model, so resolving here
+    # is what keeps them correct without teaching each one to re-resolve. `model_column` is a strict
+    # no-op when the field declares no `db_column`, which is why the common case is untouched.
+    owner_column = model_column(through_model, owner_field)
+    related_column = model_column(through_model, related_field)
   end
 
   # #364, fail-closed. Everything downstream — the synthesized through model's field `Dict`, the
@@ -2975,9 +3097,20 @@ function _relation_from_many_to_many(
   # user wrote: both sides pinned to one name, or one side pinned to the string the other derives.
   # Placed after the `through` block so it covers the explicit path too, where `source_field` /
   # `target_field` bypass `_infer_through_field` entirely.
+  #
+  # #377 widened what this catches without moving it: on the explicit path these are now the RESOLVED
+  # columns, so two DISTINCT through fields that both pin the same `db_column` are refused here as
+  # well. That is the condition the message always described — one join table cannot carry the same
+  # column twice — and it was previously invisible, because the comparison saw field names.
+  # The remedy depends on WHICH way the pair collided (#377). Two different fields landing on one
+  # column is a `db_column` clash and no amount of re-pinning fixes it — saying "set them to distinct
+  # names" there sends the reader to the one thing that is already true.
   owner_column == related_column && throw(ModelDefinitionError(
     "ManyToManyField $(owner_model.name).$(field_name) resolves both join columns to \e[31m$(owner_column)\e[0m; " *
-    "one join table cannot carry the same column twice. Set source_field and target_field to distinct names."))
+    "one join table cannot carry the same column twice. " *
+    (owner_field == related_field ?
+      "Set source_field and target_field to distinct names." :
+      "The fields $(owner_field) and $(related_field) both map to that column — give one of them a distinct db_column.")))
 
   inverse_accessor = field.related_name === nothing ? get_model_name(owner_model, settings, false) : field.related_name
   return ManyToManyRelation(
@@ -2987,10 +3120,12 @@ function _relation_from_many_to_many(
     owner_binding=owner_binding,
     owner_pk=owner_pk,
     owner_column=owner_column,
+    owner_field=owner_field,
     related_model=related_model.name,
     related_binding=related_binding,
     related_pk=related_pk,
     related_column=related_column,
+    related_field=related_field,
     inverse_accessor=inverse_accessor,
     reverse=false,
     # #65: persist the already-resolved model objects (both sides arrive here resolved from either
@@ -3010,10 +3145,16 @@ function _reverse_many_to_many_relation(relation::ManyToManyRelation, reverse_ac
     owner_binding=relation.related_binding,
     owner_pk=relation.related_pk,
     owner_column=relation.related_column,
+    # Swapped with its column (#377), not carried: `*_field` names ONE SIDE's foreign key on the
+    # through model, so it follows that side across the flip exactly as `*_column` does. Contrast
+    # `through_model_resolved` below, which is deliberately not swapped because the join table is
+    # not a side.
+    owner_field=relation.related_field,
     related_model=relation.owner_model,
     related_binding=relation.owner_binding,
     related_pk=relation.owner_pk,
     related_column=relation.owner_column,
+    related_field=relation.owner_field,
     inverse_accessor=relation.field_name,
     reverse=true,
     # #65: swap the resolved sides to match the swapped string fields above.

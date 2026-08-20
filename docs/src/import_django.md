@@ -426,8 +426,25 @@ The function supports conversion of the following Django field types:
 - `OneToOneField` → `OneToOneField`
 
 ### Special Fields
-- `AutoField` → `AutoField`
+- `AutoField` → `IDField` (reported — see below)
+- `BigAutoField` → `IDField`
+- `SmallAutoField` → `IDField` (reported — see below)
 - `ImageField` → `ImageField`
+
+!!! note "Every Django auto key imports as `IDField` — including `AutoField`"
+    `BigAutoField` is Django 3.2+'s `DEFAULT_AUTO_FIELD`. It is BIGINT auto-increment, which is
+    exactly what `IDField` is, so it imports silently.
+
+    `AutoField` (INTEGER) and `SmallAutoField` (SMALLINT) map to `IDField` too — **not** to PormG's
+    own `AutoField`, despite the shared name. `IDField` is the only integer key type PormG's
+    introspection reads back: every non-UUID primary key it finds comes back as one, whatever the
+    column's real width. A model declaring any other key type therefore never matches what the
+    database reports, and `makemigrations` proposes the same `ALTER` on that column *on every run,
+    forever*. It is also why the implicit `id` this importer injects has always been an `IDField`.
+
+    Both are annotated in the generated file, so the substitution is visible. Your existing column
+    is **not** re-typed — but a table PormG *creates* from these models gets BIGINT rather than
+    INTEGER or SMALLINT.
 
 
 ## Field Mapping
@@ -773,8 +790,8 @@ field and its source line; it is never dropped silently.
 
 | | |
 |---|---|
-| **Imported** | Fields (including definitions wrapped across lines), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above) |
+| **Imported** | Fields (including definitions wrapped across lines; Django's `BigAutoField` maps to `IDField`, an exact match), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
+| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is the only integer key type PormG's introspection reads back (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above) |
 | **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
 | **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
 

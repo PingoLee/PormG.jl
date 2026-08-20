@@ -1682,9 +1682,10 @@ end
 #     `primary_key` and constructs with `false`. Reading the built fields alone concludes "no key"
 #     and adds an `id` — naming a column the Django table has not got, which breaks every query that
 #     expands the field list. This is a legacy-schema shape, not a hypothetical.
-#   - `AutoField()` DECLARES nothing, but PormG's AutoField defaults `primary_key = true`. Reading
+#   - `AutoField()` DECLARES nothing, but the field it builds defaults `primary_key = true`. Reading
 #     the declarations alone concludes "no key" and adds an `id` beside it — two primary keys, the
-#     very defect #369 is about.
+#     very defect #369 is about. (Since #399 that build is an `IDField`, not an `sAutoField`; the
+#     asymmetry this case guards is unchanged, both types default the key to `true`.)
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a primary key PormG cannot express is reported, never replaced by an id (#369)" begin
     unkeyable = """
@@ -1743,13 +1744,19 @@ class Thing(models.Model):
 """
     generated2, key2, existed2 = import_project(["access" => auto]; output_file = "auto_pk.jl")
     try
-        @test occursin("codigo = Models.AutoField()", generated2)
-        @test !occursin("Models.IDField()", generated2)
-        @test !occursin("# PormG:", generated2)
+        # `IDField`, not `AutoField` (#399) — but the property under test is unchanged: a bare
+        # `models.AutoField()` declares no `primary_key`, yet the field it BUILDS is the key, so the
+        # synthetic `id` must stay away. Asserted on the built model rather than on the rendered
+        # text, since `codigo` and a phantom `id` would now render as the same field type.
+        @test occursin("codigo = Models.IDField()", generated2)
+        # ...and it must not be reported as unkeyable either — the built field is a fine key.
+        @test !occursin("declares its primary key", generated2)
         sandbox2 = Module()
         Core.eval(sandbox2, Meta.parse(generated2))
-        @test Base.invokelatest(PormG.Models.get_model_pk_field,
-                                Core.eval(sandbox2, :(auto_pk.Thing))) == :codigo
+        thing = Core.eval(sandbox2, :(auto_pk.Thing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :codigo
+        @test !haskey(thing.fields, "id")
+        @test length(thing.fields) == 2
     finally
         cleanup_project_test!(key2, existed2)
     end
@@ -3100,3 +3107,210 @@ class Dupla(models.Model):
         cleanup_project_test!(config_key, db_dir_existed)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#399): every Django auto-increment key type maps to IDField
+#
+# `BigAutoField` (3.2+'s `DEFAULT_AUTO_FIELD`) and `SmallAutoField` do not exist in `PormG.Models`
+# at all, and `getfield(Models, :BigAutoField)` used to abort the import of the whole FILE — every
+# other model in it lost to one column. `AutoField` does exist, and mapping Django's onto it is the
+# obvious move — which is why it is the one worth pinning hardest.
+#
+# ALL THREE map to `IDField`, and the reason is round-tripping, not closeness: PostgreSQL
+# introspection force-converts every non-UUID primary key it reads to `IDField`, and
+# `Dialect.describes_same_column` refuses to equate two field types when either declares a key — so
+# an `sAutoField` key can never equal what the database reports, `planner.jl` pushes `:type`, and
+# `makemigrations` proposes the same ALTER on that column on every run, forever. `IDField` is the
+# only integer key type that is a fixed point of the introspection the model gets diffed against,
+# which is also why the synthetic `id` has always used it.
+#
+# Asserts that:
+#   1. `id = models.<Any>AutoField(primary_key=True)` imports without error and produces exactly one
+#      primary key (:id), rendered as `IDField`;
+#   2. Non-id declarations (`seq = models.BigAutoField(primary_key=True)`, and the SmallAutoField
+#      spelling) import cleanly, suppress synthetic `id`, and make :seq the primary key;
+#   3. Implicit/unadorned `models.BigAutoField()` declarations import and resolve primary keys correctly;
+#   4. The generated module evaluates in a sandbox and `get_model_pk_field` succeeds;
+#   5. `AutoField` and `SmallAutoField` carry a `# PormG:` marker naming the width they lost, while
+#      `BigAutoField` — BIGINT auto-increment, exactly what IDField is — is imported silently;
+#   6. `autofields_ignore` still speaks Django's vocabulary: it matches the name the models.py wrote,
+#      not the PormG type the importer substituted.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer maps every auto-increment key type to IDField (#399)" begin
+    # 1. BigAutoField on explicit id
+    big_id_src = """
+from django.db import models
+
+class BigThing(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=50)
+"""
+    gen1, key1, existed1 = import_project(["core" => big_id_src]; output_file = "big_id_test.jl")
+    try
+        @test occursin("id = Models.IDField()", gen1)
+        @test occursin("name = Models.CharField(max_length=50)", gen1)
+        # An EXACT match loses nothing, so it must not be reported. The negative half of the marker
+        # contract: without it, "we emit a marker" is satisfied by emitting one for everything.
+        @test !occursin("BigAutoField", gen1)
+        sandbox1 = Module()
+        Core.eval(sandbox1, Meta.parse(gen1))
+        model1 = Core.eval(sandbox1, :(big_id_test.BigThing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, model1) == :id
+        @test length(model1.fields) == 2
+    finally
+        cleanup_project_test!(key1, existed1)
+    end
+
+    # 2. SmallAutoField on explicit id
+    small_id_src = """
+from django.db import models
+
+class SmallThing(models.Model):
+    id = models.SmallAutoField(primary_key=True)
+    name = models.CharField(max_length=50)
+"""
+    gen2, key2, existed2 = import_project(["core" => small_id_src]; output_file = "small_id_test.jl")
+    try
+        @test occursin("id = Models.IDField()", gen2)
+        @test occursin("name = Models.CharField(max_length=50)", gen2)
+        # NOT AutoField: `sAutoField` is not a fixed point of introspection for a key column, so it
+        # would leave makemigrations proposing an ALTER on this column on every run.
+        @test !occursin("Models.AutoField", gen2)
+        # The width IS lost, so the generated file has to say so — naming the DJANGO type, which is
+        # the only name the author ever typed.
+        @test occursin("# PormG: field 'id' on 'core.SmallThing' is a Django SmallAutoField", gen2)
+        @test occursin("imported as IDField", gen2)
+        sandbox2 = Module()
+        Core.eval(sandbox2, Meta.parse(gen2))
+        model2 = Core.eval(sandbox2, :(small_id_test.SmallThing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, model2) == :id
+        @test length(model2.fields) == 2
+    finally
+        cleanup_project_test!(key2, existed2)
+    end
+
+    # 3. BigAutoField on custom non-id field
+    big_seq_src = """
+from django.db import models
+
+class SeqThing(models.Model):
+    seq = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=50)
+"""
+    gen3, key3, existed3 = import_project(["core" => big_seq_src]; output_file = "big_seq_test.jl")
+    try
+        @test occursin("seq = Models.IDField()", gen3)
+        @test !occursin("id = Models.IDField()", gen3)
+        sandbox3 = Module()
+        Core.eval(sandbox3, Meta.parse(gen3))
+        model3 = Core.eval(sandbox3, :(big_seq_test.SeqThing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, model3) == :seq
+        @test !haskey(model3.fields, "id")
+        @test haskey(model3.fields, "seq")
+    finally
+        cleanup_project_test!(key3, existed3)
+    end
+
+    # 4. SmallAutoField on custom non-id field
+    small_seq_src = """
+from django.db import models
+
+class SmallSeqThing(models.Model):
+    seq = models.SmallAutoField(primary_key=True)
+    name = models.CharField(max_length=50)
+"""
+    gen4, key4, existed4 = import_project(["core" => small_seq_src]; output_file = "small_seq_test.jl")
+    try
+        @test occursin("seq = Models.IDField()", gen4)
+        @test !occursin("id = Models.IDField()", gen4)
+        @test occursin("# PormG: field 'seq' on 'core.SmallSeqThing' is a Django SmallAutoField", gen4)
+        sandbox4 = Module()
+        Core.eval(sandbox4, Meta.parse(gen4))
+        model4 = Core.eval(sandbox4, :(small_seq_test.SmallSeqThing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, model4) == :seq
+        @test !haskey(model4.fields, "id")
+        @test haskey(model4.fields, "seq")
+    finally
+        cleanup_project_test!(key4, existed4)
+    end
+
+    # 5. BigAutoField without explicit primary_key kwarg
+    big_no_kw_src = """
+from django.db import models
+
+class ImplicitBigThing(models.Model):
+    id = models.BigAutoField()
+    title = models.CharField(max_length=30)
+"""
+    gen5, key5, existed5 = import_project(["core" => big_no_kw_src]; output_file = "big_no_kw_test.jl")
+    try
+        @test occursin("id = Models.IDField()", gen5)
+        sandbox5 = Module()
+        Core.eval(sandbox5, Meta.parse(gen5))
+        model5 = Core.eval(sandbox5, :(big_no_kw_test.ImplicitBigThing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, model5) == :id
+        @test length(model5.fields) == 2
+    finally
+        cleanup_project_test!(key5, existed5)
+    end
+
+    # 6. `autofields_ignore` matches what the models.py WROTE, not what the importer substituted.
+    #    Both directions are asserted, because only the pair proves the option reads the Django name:
+    #    "BigAutoField" must drop the column, and "IDField" — the type it maps to, which appears
+    #    nowhere in this models.py — must NOT. Mapping inside the shared `field_type` variable
+    #    passes the first check and fails the second.
+    ignore_src = """
+from django.db import models
+
+class IgnoreThing(models.Model):
+    seq = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=50)
+"""
+    gen6, key6, existed6 = import_project(["core" => ignore_src]; output_file = "ignore_django_name.jl",
+                                          autofields_ignore = ["Manager", "BigAutoField"])
+    try
+        @test !occursin("seq = Models.IDField()", gen6)
+        @test occursin("name = Models.CharField(max_length=50)", gen6)
+        # The column is gone, so nothing claimed the key and Django's implicit `id` takes over.
+        @test occursin("id = Models.IDField()", gen6)
+    finally
+        cleanup_project_test!(key6, existed6)
+    end
+
+    gen7, key7, existed7 = import_project(["core" => ignore_src]; output_file = "ignore_pormg_name.jl",
+                                          autofields_ignore = ["Manager", "IDField"])
+    try
+        @test occursin("seq = Models.IDField()", gen7)
+        @test !occursin("id = Models.IDField()", gen7)
+    finally
+        cleanup_project_test!(key7, existed7)
+    end
+
+    # 8. Plain `AutoField` — the counter-intuitive one. PormG HAS a field by that name, so mapping
+    #    the Django type onto it is the obvious move and it is wrong: `sAutoField` is not a fixed
+    #    point of introspection for a key column. Pinned as a POSITIVE (IDField is emitted) and a
+    #    NEGATIVE (the same-named PormG type is not), because only the pair rules out the obvious
+    #    mapping being reintroduced.
+    plain_auto_src = """
+from django.db import models
+
+class PlainAutoThing(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=50)
+"""
+    gen8, key8, existed8 = import_project(["core" => plain_auto_src]; output_file = "plain_auto_test.jl")
+    try
+        @test occursin("id = Models.IDField()", gen8)
+        @test !occursin("Models.AutoField", gen8)
+        @test occursin("# PormG: field 'id' on 'core.PlainAutoThing' is a Django AutoField (INTEGER)", gen8)
+        @test occursin("imported as IDField (BIGINT)", gen8)
+        sandbox8 = Module()
+        Core.eval(sandbox8, Meta.parse(gen8))
+        model8 = Core.eval(sandbox8, :(plain_auto_test.PlainAutoThing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, model8) == :id
+        @test length(model8.fields) == 2
+    finally
+        cleanup_project_test!(key8, existed8)
+    end
+end
+

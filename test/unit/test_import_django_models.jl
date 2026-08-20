@@ -92,8 +92,14 @@ end
         @test occursin("Cust_adminHOD = Models.Model(\"cust_adminhod\"", generated)
         # `id` is emitted as `id`, not `_id` (#317): it was only ever prefixed because PormG's
         # `reserved_words` list wrongly carried it — it is an ordinary Julia identifier.
-        @test occursin("id = Models.AutoField()", generated)
-        @test !occursin("_id = Models.AutoField()", generated)
+        #
+        # The DECLARED `id = models.AutoField(primary_key=True)` on `Cust_adminHOD` now renders as
+        # `IDField` (#399), which every synthetic `id` in this file also renders as — so the
+        # rendered line alone no longer pins the name to THIS class. The marker does: it names the
+        # class and the field, and it is emitted only for the declaration, never for a synthetic id.
+        @test occursin("field 'id' on 'Cust_adminHOD' is a Django AutoField (INTEGER)", generated)
+        @test occursin("id = Models.IDField()", generated)
+        @test !occursin("_id = Models.IDField()", generated)
         @test occursin("user_id = Models.OneToOneField(\"CustomUser\"", generated)
         @test occursin("criado_em = Models.DateTimeField(auto_now=true)", generated)
         @test !occursin("objects = Models.Manager", generated)

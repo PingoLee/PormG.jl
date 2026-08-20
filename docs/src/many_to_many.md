@@ -146,6 +146,17 @@ WHERE "Tb_2"."driverref" = $1
                                     source_field="challenger", target_field="defender")
     ```
 
+    With an explicit `through=`, each is a **field name** on that model, never a column: PormG
+    resolves it to the field's `db_column` on its way into the SQL, exactly as it does for an
+    inferred end. A pin that names no field of the through model — or names one that is not a
+    foreign key to the side it stands for — raises `ModelDefinitionError` and lists the foreign keys
+    it could have named ([#377](https://github.com/PingoLee/PormG.jl/issues/377)). Same two checks
+    Django runs on `through_fields`.
+
+    (On the *auto-generated* join table these two options name the join **columns** directly — there
+    is no through model to hold a field. See
+    [Foreign-key columns](schema_conventions.md#Foreign-key-columns).)
+
 ---
 
 ## Explicit Through Tables
@@ -206,6 +217,37 @@ This pattern matches Django exactly and keeps your model definitions clean and r
     and `drivers__driverref`, and in the manager mutators for a through model that permits them.
     The `db_table` option on the `ManyToManyField` itself names the *auto-generated* join table only;
     with an explicit `through=` there is no generated table to name, so that option is ignored.
+
+!!! note "The through model's `db_column`s are the join columns"
+    The column-axis half of the same rule. A through model's two foreign keys are ordinary fields, so
+    each may map to a differently-named column with
+    [`db_column`](fields.md#Database-Column-Mapping), and PormG addresses the column —
+    not the field name — in every join and every mutator
+    ([#377](https://github.com/PingoLee/PormG.jl/issues/377)):
+
+    ```julia
+    M2m_membership_scratch = Models.Model("m2m_membership_scratch",
+      db_table = "racing_membership",
+      id = Models.IDField(),
+      driver_id = Models.ForeignKey(M2m_driver_explicit_scratch, db_column="drv", on_delete=Models.CASCADE),
+      team_id = Models.ForeignKey(M2m_team_scratch, db_column="tm", on_delete=Models.CASCADE),
+      joined_year = Models.IntegerField()
+    )
+    ```
+
+    ```sql
+    INNER JOIN "racing_membership" AS "Tb_1" ON "Tb"."id" = "Tb_1"."drv"
+    INNER JOIN "m2m_team_scratch" AS "Tb_2" ON "Tb_1"."tm" = "Tb_2"."id"
+    ```
+
+    The fields are spelled `driver_id` / `team_id` here only to match an existing schema that names
+    its columns that way — the same interop choice described under
+    [Foreign-key columns](schema_conventions.md#Foreign-key-columns), and what the Django importer
+    emits. `db_column` works exactly the same on the `driver` / `team` spelling used above.
+    Either way you keep querying by the **field** name —
+    `driver_id`, not `drv` — as everywhere else; only the rendered column changes. This matches
+    Django, which reads the through foreign key's `column` (`db_column` when set) for the join and
+    its `name` for `through_fields`.
 
 ### Relationship Mutator Limitations on Custom Through Tables
 

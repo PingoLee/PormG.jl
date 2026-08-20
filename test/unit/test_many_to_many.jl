@@ -91,6 +91,70 @@ end
 
 const M2MDBT = ManyToManyDbTableModels
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #377 fixture: explicit `through=` models whose FOREIGN KEYS declare a `db_column`.
+#
+# The column-axis sibling of the block above. `db_table` is pinned here too, on purpose: that is the
+# shape a Django import produces for a legacy schema (an app label AND `db_column=` on the FKs), and
+# carrying both proves the two axes are independent rather than one accidentally covering the other.
+#
+# The FIELD names carry Django's `_id` suffix (`driver_id`, not `driver`) because that is exactly
+# what `process_class_fields!` emits, and it is the pair that makes the bug visible: the field is
+# `driver_id`, the column is `drv`, and every renderer used to reach for the former.
+#
+# TWO through models again, for the same reason as #363's fixture: `Contract` carries an extra
+# column so the mutator guard is exercised on the arm that refuses, `Signing` carries only the two
+# foreign keys so it is exercised on the arm that permits — and THAT arm is the one that regresses
+# if `_m2m_has_extra_fields` is left reading the column slot.
+# ─────────────────────────────────────────────────────────────────────────────
+module ManyToManyDbColumnModels
+  import PormG
+  import PormG.Models
+
+  Marque = Models.Model("marque", db_table = "racing_marque",
+    id = Models.IDField(),
+    name = Models.CharField(),
+  )
+
+  Pilot = Models.Model("pilot", db_table = "racing_pilot",
+    id = Models.IDField(),
+    surname = Models.CharField(),
+    marques = Models.ManyToManyField(Marque, through = "Contract", related_name = "pilots"),
+  )
+
+  Contract = Models.Model("contract", db_table = "racing_contract",
+    id = Models.IDField(),
+    # Field `pilot_id` → column "plt"; field `marque_id` → column "mrq". Deliberately unlike the
+    # field names in every character, not merely in case: SQLite compares identifiers
+    # case-insensitively, so a case-only difference would address the same column and could not
+    # discriminate a fixed tree from a broken one.
+    pilot_id = Models.ForeignKey(Pilot, db_column = "plt", on_delete = Models.CASCADE),
+    marque_id = Models.ForeignKey(Marque, db_column = "mrq", on_delete = Models.CASCADE),
+    signed_year = Models.IntegerField(null = true),   # the extra column that locks the mutators
+  )
+
+  Livery = Models.Model("livery", db_table = "racing_livery",
+    id = Models.IDField(),
+    name = Models.CharField(),
+  )
+
+  Scout = Models.Model("scout", db_table = "racing_scout",
+    id = Models.IDField(),
+    surname = Models.CharField(),
+    liveries = Models.ManyToManyField(Livery, through = "Signing", related_name = "scouts"),
+  )
+
+  Signing = Models.Model("signing", db_table = "racing_signing",
+    id = Models.IDField(),
+    scout_id = Models.ForeignKey(Scout, db_column = "sct", on_delete = Models.CASCADE),
+    livery_id = Models.ForeignKey(Livery, db_column = "lvr", on_delete = Models.CASCADE),
+  )
+
+  PormG.Models.set_models(@__MODULE__, "m2m_mock")
+end
+
+const M2MDBC = ManyToManyDbColumnModels
+
 @testset "ManyToManyField metadata and query generation" begin
   @test Models.is_many_to_many_field(M2M.Driver_championship.fields["drivers"])
   @test !("drivers" in M2M.Driver_championship.field_names)
@@ -358,6 +422,25 @@ end
   mgr_plain = PormG.QueryBuilder.ManyToManyManager(
     _m2m_detach_module(M2MDBT.Tester), M2MDBT.Squad, rel_plain, 1)
   @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_plain) == false
+
+  # ── #377: the arm that a column-axis fix breaks if it is done in ONE slot. `Signing` carries only
+  # the two foreign keys, so the mutators must stay open — but both of those keys declare a
+  # `db_column`, so a guard reading `owner_column`/`related_column` would match neither field name,
+  # count both foreign keys as "extra", and lock a relation that Django and PormG both permit.
+  # The guard reads `owner_field`/`related_field` for exactly this reason.
+  rel_dbcol_plain = Models.get_many_to_many_relation(M2MDBC.Scout, "liveries")
+  @test rel_dbcol_plain.owner_field != rel_dbcol_plain.owner_column      # the two axes really differ
+  mgr_dbcol_plain = PormG.QueryBuilder.ManyToManyManager(
+    _m2m_detach_module(M2MDBC.Scout), M2MDBC.Livery, rel_dbcol_plain, 1)
+  @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_dbcol_plain) == false
+
+  # ...and the guard did not become "always false" on the db_column path either: `Contract` adds
+  # `signed_year` on top of two renamed foreign keys, and still refuses.
+  rel_dbcol_extras = Models.get_many_to_many_relation(M2MDBC.Pilot, "marques")
+  mgr_dbcol_extras = PormG.QueryBuilder.ManyToManyManager(
+    _m2m_detach_module(M2MDBC.Pilot), M2MDBC.Marque, rel_dbcol_extras, 1)
+  @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_dbcol_extras) == true
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder.add(mgr_dbcol_extras)
 
   # ── Negative control 2: the auto-generated join table. `through_model_resolved === nothing` is the
   # signal, and the answer is a fact about how the planner builds that table (`id` + the two FKs),
@@ -720,6 +803,271 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #377: a `through=` model's foreign keys resolve their `db_column` into the join columns.
+#
+# `_infer_through_field` returns the through model's FIELD name, and the relation rendered that name
+# straight into SQL. It equals the physical column exactly when the field declares no `db_column`,
+# which is every fixture that existed before this one — so the slot read as correct while a legacy
+# schema (or any Django import carrying `db_column=`) joined and wrote against a column that is not
+# there. The relation now records both axes; this asserts the recorded pair AND the rendered SQL, in
+# both directions, because `_reverse_many_to_many_relation` is its own code path.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "explicit through= resolves the FK db_column into the join column (#377)" begin
+  # Preconditions. Without them every assertion below passes vacuously on a fixture whose field names
+  # and columns agree — the condition that hid this bug behind every earlier `through=` test.
+  @test Models.model_column(M2MDBC.Contract, "pilot_id") == "plt"
+  @test Models.model_column(M2MDBC.Contract, "marque_id") == "mrq"
+  @test haskey(M2MDBC.Contract.fields, "pilot_id")     # the FIELD really is spelled with `_id`
+  @test !haskey(M2MDBC.Contract.fields, "plt")         # ...and the column is not a field at all
+
+  fwd = Models.get_many_to_many_relation(M2MDBC.Pilot, "marques")
+  @test fwd.owner_column == "plt"          # was "pilot_id" — the bug
+  @test fwd.related_column == "mrq"        # was "marque_id"
+  # The field axis is kept, not discarded: it is what `_m2m_has_extra_fields` reads, and what
+  # `through_model.fields` is keyed on.
+  @test fwd.owner_field == "pilot_id"
+  @test fwd.related_field == "marque_id"
+  # The table axis (#363) is untouched by this — the two overrides are independent.
+  @test fwd.through_table == "racing_contract"
+
+  # The reverse relation is built by its own function; BOTH pairs must follow their side across the
+  # flip. A fix that swapped only the columns would leave the mutator guard reading the wrong end.
+  rev = Models.get_many_to_many_relation(M2MDBC.Marque, "pilots")
+  @test rev.reverse
+  @test rev.owner_column == "mrq"
+  @test rev.related_column == "plt"
+  @test rev.owner_field == "marque_id"
+  @test rev.related_field == "pilot_id"
+
+  # ── The half only SQL can prove. Both spellings are asserted as QUOTED identifiers: a bare
+  # `occursin("plt", sql)` would be satisfied by any substring, and the field name `pilot_id` is not
+  # a substring of anything else here, so the negative assertion is the one that fails pre-fix.
+  fwd_sql = M2MDBC.Pilot.objects.filter(
+      "marques__name" => "Renault"
+    ).values(
+      "surname"
+    ).list(show_query=:dict)[:sql_text]
+  @test occursin("\"plt\"", fwd_sql)
+  @test occursin("\"mrq\"", fwd_sql)
+  @test !occursin("\"pilot_id\"", fwd_sql)
+  @test !occursin("\"marque_id\"", fwd_sql)
+  # Both join legs really are present, so the assertions above are about the keys and not about a
+  # query that silently lost its joins.
+  @test occursin("\"racing_contract\"", fwd_sql)
+  @test occursin("\"racing_marque\"", fwd_sql)
+
+  rev_sql = M2MDBC.Marque.objects.filter(
+      "pilots__surname" => "Senna"
+    ).values(
+      "name"
+    ).list(show_query=:dict)[:sql_text]
+  @test occursin("\"plt\"", rev_sql)
+  @test occursin("\"mrq\"", rev_sql)
+  @test !occursin("\"pilot_id\"", rev_sql)
+  @test !occursin("\"marque_id\"", rev_sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #377: a `source_field` / `target_field` pin is a FIELD name, and resolves like an inferred one.
+#
+# The pin is the only route to the join columns on a self-relation, where `_infer_through_field`
+# refuses to guess (#364) — so leaving it unresolved would have fixed the inferred case and left the
+# one case that CANNOT use inference still broken. Django reads `through_fields` the same way:
+# `_get_m2m_attr` matches each entry against the through FK's `name`, then returns its `column`.
+#
+# The second half pins the refusal for a pin that names no field. It used to surface as a bare
+# `KeyError` from `through_model.fields[…]`, naming neither model nor field — and it is now the
+# likeliest mistake anyone will make here, because pinning the COLUMN name was the documented
+# workaround for #377 before this commit removed the need for it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a source_field/target_field pin is a field name and resolves its db_column (#377)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  # Pinned to the FIELD names, on a through model whose FKs both rename their column. Identical
+  # output to the inferred path — the pin selects WHICH foreign key, it does not bypass resolution.
+  pinned = Models._relation_from_many_to_many(
+    M2MDBC.Pilot, "Pilot", "marques",
+    Models.ManyToManyField(M2MDBC.Marque, through = M2MDBC.Contract,
+                           source_field = "pilot_id", target_field = "marque_id"),
+    M2MDBC.Marque, "Marque", settings)
+  @test pinned.owner_column == "plt"
+  @test pinned.related_column == "mrq"
+  @test pinned.owner_field == "pilot_id"
+  @test pinned.related_field == "marque_id"
+
+  # A pin naming the COLUMN is refused, and the message says which model, which option, which pin,
+  # and what it could have written instead.
+  err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    M2MDBC.Pilot, "Pilot", "marques",
+    Models.ManyToManyField(M2MDBC.Marque, through = M2MDBC.Contract,
+                           source_field = "plt", target_field = "marque_id"),
+    M2MDBC.Marque, "Marque", settings)
+  @test occursin("source_field", err.value.msg)
+  @test occursin("plt", err.value.msg)
+  @test occursin("contract", err.value.msg)          # the through model, by name
+  # The suggestion is scoped to the end that was pinned: `source_field` stands for the owner side, so
+  # only the through model's foreign keys TO that side are offered. Listing `marque_id` here would
+  # suggest a key that this option cannot legally take.
+  @test occursin("pilot_id", err.value.msg)
+  @test !occursin("marque_id", err.value.msg)
+
+  # The target side is guarded too, and reports ITS option rather than the source one.
+  err2 = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    M2MDBC.Pilot, "Pilot", "marques",
+    Models.ManyToManyField(M2MDBC.Marque, through = M2MDBC.Contract,
+                           source_field = "pilot_id", target_field = "mrq"),
+    M2MDBC.Marque, "Marque", settings)
+  @test occursin("target_field", err2.value.msg)
+  @test !occursin("source_field", err2.value.msg)
+
+  # A pin naming a real field that is NOT a foreign key. `haskey` alone accepts this, and it then
+  # died a line later on `sIntegerField` having no `pk_field` — a raw `FieldError`, not a
+  # `PormGError`, naming neither model nor field.
+  err3 = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    M2MDBC.Pilot, "Pilot", "marques",
+    Models.ManyToManyField(M2MDBC.Marque, through = M2MDBC.Contract,
+                           source_field = "signed_year", target_field = "marque_id"),
+    M2MDBC.Marque, "Marque", settings)
+  @test occursin("not a foreign key", err3.value.msg)
+  @test occursin("signed_year", err3.value.msg)
+  @test occursin("pilot_id", err3.value.msg)         # the key it could have named
+
+  # ── The one that never failed at all: BOTH ends pinned to real foreign keys, but to each other's
+  # side. Existence holds for both, so a `haskey`-only guard builds a relation with the join keys
+  # swapped — SQL that executes and silently returns the wrong rows. Django refuses it as
+  # `fields.E339`; so does PormG now.
+  err4 = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    M2MDBC.Pilot, "Pilot", "marques",
+    Models.ManyToManyField(M2MDBC.Marque, through = M2MDBC.Contract,
+                           source_field = "marque_id", target_field = "pilot_id"),
+    M2MDBC.Marque, "Marque", settings)
+  @test occursin("not a foreign key to pilot", err4.value.msg)
+
+  # ...and the check is per-END, not "is it any foreign key": `pilot_id` is a perfectly good pin for
+  # the SOURCE side and is refused only when offered as the target.
+  @test Models._relation_from_many_to_many(
+    M2MDBC.Pilot, "Pilot", "marques",
+    Models.ManyToManyField(M2MDBC.Marque, through = M2MDBC.Contract,
+                           source_field = "pilot_id", target_field = "marque_id"),
+    M2MDBC.Marque, "Marque", settings).owner_field == "pilot_id"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #377: a pin is still honoured when the through model's foreign keys are UNRESOLVED.
+#
+# The per-end check (`fields.E339`) asks whether the pinned field points at this end's model, and a
+# `String` `.to` cannot answer that: it holds the target's Julia BINDING, and case-folding a binding
+# back to a model name only works while the binding is `uppercasefirst(model.name)` — the flaw #388
+# closed elsewhere. `Driver = Model("drivers", …)` breaks it, and that is this file's own house
+# idiom (see `M2M` at the top). Whether a through model's keys are still strings at this point
+# depends on where its binding sorts in `set_models`' registration loop, so a strict test here would
+# accept or refuse the SAME models file across a rename.
+#
+# It is also the wrong direction to fail: `_infer_through_field` already refuses this shape, and
+# pinning is the documented rescue for exactly that. The pin path is therefore lenient about what it
+# cannot verify — while the E338 half, which catches the common slip, still fires.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a pin survives an unresolved through-model foreign key (#377)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  # Singular binding, PLURAL model name — so `format_model_name("Driver") != "drivers"` and the
+  # string comparison cannot match. This is the precondition; without it the test is vacuous.
+  team = Models.Model("teams", id = Models.IDField(), name = Models.CharField())
+  driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
+  membership = Models.Model("membership",
+    id = Models.IDField(),
+    driver = Models.ForeignKey("Driver", on_delete = Models.CASCADE),
+    team = Models.ForeignKey("Team", on_delete = Models.CASCADE),
+  )
+  @test membership.fields["driver"].to isa String        # genuinely unresolved
+  @test Models.format_model_name("Driver") != driver.name # ...and unrecoverable by case fold
+
+  pinned = Models._relation_from_many_to_many(
+    driver, "Driver", "teams",
+    Models.ManyToManyField(team, through = membership, source_field = "driver", target_field = "team"),
+    team, "Team", settings)
+  @test pinned.owner_field == "driver"
+  @test pinned.related_field == "team"
+  @test pinned.owner_column == "driver"
+  @test pinned.related_column == "team"
+
+  # The leniency is scoped to the UNVERIFIABLE case. With the same models resolved, the per-end check
+  # is live again and a pin naming the wrong side is refused — so this is not a blanket opt-out.
+  resolved_through = Models.Model("membership_resolved",
+    id = Models.IDField(),
+    driver = Models.ForeignKey(driver, on_delete = Models.CASCADE),
+    team = Models.ForeignKey(team, on_delete = Models.CASCADE),
+  )
+  @test resolved_through.fields["driver"].to isa PormGModel
+  err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Driver", "teams",
+    Models.ManyToManyField(team, through = resolved_through,
+                           source_field = "team", target_field = "team"),
+    team, "Team", settings)
+  @test occursin("not a foreign key to drivers", err.value.msg)
+  # And the suggestion never contradicts the refusal: it lists the key that WOULD have worked rather
+  # than claiming there is none. Asserted as the WHOLE clause — a bare `occursin("driver", ...)` is
+  # vacuous here, because the owner model is itself named `drivers` and every branch of the message
+  # interpolates it, including the "no foreign key at all" branch this is meant to exclude.
+  @test occursin("Foreign keys to drivers: driver", err.value.msg)
+  @test !occursin("no foreign key to drivers at all", err.value.msg)
+
+  # ── The cost of the leniency, pinned so it is a decision rather than an accident. With `.to`
+  # unresolved the per-end check cannot be made, so a SWAPPED pin — the mistake E339 exists to catch
+  # — is accepted here. That is the same behavior as before #377 (the pin path never consulted `.to`
+  # at all), and refusing instead is exactly what broke a working pin during review. The guard
+  # resumes the moment the reference resolves, which the `err` case above proves.
+  #
+  # Whoever "hardens" this back into a fail-closed check should have to delete this assertion first.
+  swapped = Models._relation_from_many_to_many(
+    driver, "Driver", "teams",
+    Models.ManyToManyField(team, through = membership, source_field = "team", target_field = "driver"),
+    team, "Team", settings)
+  @test swapped.owner_field == "team"
+  @test swapped.related_field == "driver"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #377: two DISTINCT through fields that collide on one `db_column` are refused, with the remedy
+# that actually applies.
+#
+# The fail-closed guard on the resolved pair (#364) newly sees this case, because before #377 it
+# compared field names and two different fields never collided. Its original message — "set
+# source_field and target_field to distinct names" — is the wrong advice here: the NAMES are
+# distinct, the columns are not, and no pin can fix a `db_column` clash.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "two through fields colliding on one db_column are refused with the right remedy (#377)" begin
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+
+  marque = Models.Model("collide_marque", id = Models.IDField(), name = Models.CharField())
+  pilot = Models.Model("collide_pilot", id = Models.IDField(), surname = Models.CharField())
+  clash = Models.Model("collide_contract",
+    id = Models.IDField(),
+    pilot_id = Models.ForeignKey(pilot, db_column = "shared", on_delete = Models.CASCADE),
+    marque_id = Models.ForeignKey(marque, db_column = "shared", on_delete = Models.CASCADE),
+  )
+
+  err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    pilot, "Collide_pilot", "marques",
+    Models.ManyToManyField(marque, through = clash),
+    marque, "Collide_marque", settings)
+  @test occursin("shared", err.value.msg)
+  @test occursin("both map to that column", err.value.msg)
+  @test occursin("db_column", err.value.msg)
+  # NOT the pin advice — the two names are already distinct, so re-pinning cannot help.
+  @test !occursin("distinct names", err.value.msg)
+
+  # The original remedy is still the one given when the two ends really do name ONE field, which is
+  # what the #364 guard was written for.
+  same = Models.Model("collide_same", id = Models.IDField(), name = Models.CharField())
+  err_same = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    same, "Collide_same", "peers",
+    Models.ManyToManyField(same, source_field = "peer_id", target_field = "peer_id"),
+    same, "Collide_same", settings)
+  @test occursin("distinct names", err_same.value.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #363 did not disturb the AUTO-derived path.
 #
 # That path already stored a physical name (`_many_to_many_table_name` returns `field.db_table`
@@ -732,6 +1080,16 @@ end
   auto = Models.get_many_to_many_relation(M2M.Driver_championship, "drivers")
   @test auto.through_table == "driver_championships_drivers"
   @test auto.through_model_resolved === nothing          # the "no through model" tag
+
+  # #377 left this path byte-identical too, and the two axes COLLAPSE here rather than merely
+  # agreeing by luck: `synthesize_many_to_many_through_models` builds the join table from these
+  # strings, so the field name IS the column and there is no `db_column` to resolve. That matters for
+  # the same reason as the table name above — the unique index is derived from these slots, so a
+  # value that shifted would make `makemigrations` propose dropping a live index.
+  @test auto.owner_field == auto.owner_column
+  @test auto.related_field == auto.related_column
+  @test auto.owner_column == "driver_championships_id"
+  @test auto.related_column == "drivers_id"
 
   # A field-level `db_table` pin still wins on the auto path — it names the synthesized join table,
   # and it must NOT be confused with a through MODEL's `db_table` (#345, and the note in
@@ -950,19 +1308,43 @@ end
 
   # The guard sits AFTER the `through` block, so the explicit path is covered too — there
   # `source_field`/`target_field` bypass `_infer_through_field` entirely.
+  #
+  # A SELF-relation through model, so both ends are legitimately the same model. That is what makes
+  # this arm reach the guard at all: since #377 a pin must be a foreign key to the side it stands
+  # for, so pinning both ends to one key across DIFFERENT models is caught earlier and more
+  # precisely (asserted below). Here both keys point at `driver`, both pins are individually valid,
+  # and the collision is the only thing left to catch — a stricter version of what this arm always
+  # meant to test.
+  rivalry = Models.Model("rivalry",
+    id = Models.IDField(),
+    challenger = Models.ForeignKey(driver, on_delete=Models.CASCADE),
+    defender = Models.ForeignKey(driver, on_delete=Models.CASCADE),
+  )
+  through_collide = Models.ManyToManyField(driver, through=rivalry,
+                                           source_field="challenger", target_field="challenger")
+  through_err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Driver", "rivals", through_collide, driver, "Driver", settings)
+  @test occursin("cannot carry the same column twice", through_err.value.msg)
+  # WHICH remedy, not just the shared prefix: one field named twice is the "distinct names" branch,
+  # and asserting it here keeps this arm self-contained rather than leaning on the #377 testset.
+  @test occursin("distinct names", through_err.value.msg)
+
+  # The shape this arm used to use — one pin naming a foreign key to the OTHER side — is now refused
+  # before the guard is reached, by the per-end pin check (#377). Pinned here so the two rules stay
+  # distinguishable: a future change that collapsed them would leave the assertion above green while
+  # silently widening what the pin check accepts.
   target = Models.Model("team", id = Models.IDField())
   through_model = Models.Model("membership",
     id = Models.IDField(),
     driver = Models.ForeignKey(driver, on_delete=Models.CASCADE),
     team = Models.ForeignKey(target, on_delete=Models.CASCADE),
   )
-  # `through_model.fields["driver"]` exists, so nothing else on this path can throw — which is
-  # exactly why the cause is asserted: a DIFFERENT future error is what would masquerade here.
-  through_collide = Models.ManyToManyField(target, through=through_model,
-                                           source_field="driver", target_field="driver")
-  through_err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
-    driver, "Driver", "teams", through_collide, target, "Team", settings)
-  @test occursin("cannot carry the same column twice", through_err.value.msg)
+  wrong_side = Models.ManyToManyField(target, through=through_model,
+                                      source_field="driver", target_field="driver")
+  wrong_err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    driver, "Driver", "teams", wrong_side, target, "Team", settings)
+  @test occursin("not a foreign key to team", wrong_err.value.msg)
+  @test !occursin("cannot carry the same column twice", wrong_err.value.msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1110,7 +1492,9 @@ end
   @test occursin("multiple foreign keys", err.value.msg)
   @test occursin("source_field", err.value.msg)
 
-  # And pinning both ends resolves it — the through model's own FK field names become the columns.
+  # And pinning both ends resolves it. The pin names the through model's own FK FIELDS; each is then
+  # resolved to its physical column (#377), which is a no-op here because neither declares a
+  # `db_column` — the `db_column`-carrying case is covered by its own testset above.
   resolved = Models._relation_from_many_to_many(
     driver, "Racer", "rivals",
     Models.ManyToManyField(driver, through=rivalry, source_field="challenger", target_field="defender"),

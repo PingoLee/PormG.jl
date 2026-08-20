@@ -146,8 +146,11 @@ exactly as it always has, so no existing schema changes and nothing needs re-mig
     table **is** that model's table — its own `db_table` if it declares one — so the field-level
     `db_table` has nothing left to name and is ignored. Same rule as Django, and the same rule the
     Django importer already assumes when it declines to pin a `db_table` on a `through=` field. The
-    join columns are then the through model's own FK fields, so `source_field` / `target_field` is
-    again the pin to reach for when those field names differ from the physical columns.
+    join columns are then the through model's own foreign keys, resolved through their `db_column`
+    like any other field (#377) — so a through model written against a legacy schema needs no pin at
+    all. `source_field` / `target_field` remain the way to say **which** foreign key is which end,
+    for a through model that has two pointing at the same model; each takes the field name, and its
+    column is resolved from it. Same contract as Django's `through_fields`.
 
 ### Generated files: colliding bindings and names are disambiguated
 
@@ -427,12 +430,22 @@ Two consequences worth noting:
   not `pk_field` is spelled out — string targets are resolved to the model object once, up front
   ([#62](https://github.com/PingoLee/PormG.jl/issues/62)).
 
-  !!! note "Limitation: ManyToMany through-table column names"
+  !!! note "`db_column` and the ManyToMany join columns"
       `db_column` is honored across the whole stack — CRUD (create/get/update, bulk, sequence sync),
-      FK constraints and joins (model-instance or string targets, a renamed parent PK), **and**
-      ManyToMany / CTE join keys when a participating model's primary key uses `db_column`
-      ([#64](https://github.com/PingoLee/PormG.jl/issues/64)). The one surface that is **not**
-      configurable is the **auto-generated ManyToMany through-table column names** (`<model>_<pk>`).
+      FK constraints and joins (model-instance or string targets, a renamed parent PK), ManyToMany /
+      CTE join keys when a participating model's primary key uses `db_column`
+      ([#64](https://github.com/PingoLee/PormG.jl/issues/64)), **and** the join columns of an
+      explicit `through=` model, which are that model's own foreign keys and resolve their
+      `db_column` like any other field
+      ([#377](https://github.com/PingoLee/PormG.jl/issues/377)).
+
+      The **auto-generated** join columns are the one place `db_column` has nothing to say, because
+      there is no field to hang it on — PormG both creates that table and names its columns
+      `<model>_<pk>`. They are still overridable, by `source_field` / `target_field` on the
+      `ManyToManyField`, which name those columns **directly** on this path; that is how the Django
+      importer pins Django's `<class>_id` spelling (see above). With an explicit `through=` the same
+      two options name **fields** on the through model instead, and the column is resolved from the
+      field.
 
   !!! note "A CTE exposes aliases, not columns"
       A CTE (or any `values()`-projected subquery) is a **derived table**: its columns are the

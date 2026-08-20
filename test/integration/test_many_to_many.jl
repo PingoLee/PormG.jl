@@ -49,6 +49,11 @@ const _M2M_SCRATCH_TABLES = (
     # #364, self-referential M2M. Both the owner table and its auto-generated join table are listed.
     "m2m_teammate_scratch",
     "m2m_teammate_scratch_teammates",
+    # #377. Same rule as #363 above — the through model is listed by its PHYSICAL name, since that
+    # is what `table_exists` asks the database for.
+    "m2m_crew_dbcol_scratch",
+    "m2m_mechanic_dbcol_scratch",
+    "m2m_crewslot_join_tbl",
 )
 
 # Tables whose SHAPE also has to be checked, not just their existence.
@@ -61,6 +66,11 @@ const _M2M_SCRATCH_TABLES = (
 # missing-table case.
 const _M2M_SCRATCH_TABLE_COLUMNS = Dict(
     "m2m_teammate_scratch_teammates" => ["from_m2m_teammate_scratch_id", "to_m2m_teammate_scratch_id"],
+    # #377. Existence alone cannot see the failure mode here either: a database migrated against a
+    # pre-fix tree has `m2m_crewslot_join_tbl` — it just spells the two endpoint columns after the
+    # FIELD names (`mechanic_id`/`crew_id`) instead of their `db_column`. That table passes the
+    # existence sweep, so `makemigrations` never fires and the run dies later on "no such column".
+    "m2m_crewslot_join_tbl" => ["mech_ref", "crew_ref"],
 )
 
 function _m2m_scratch_table_exists(pool, table_name::String)::Bool
@@ -469,6 +479,78 @@ end
     M.M2m_enrolment_dbtable_scratch.objects.delete(allow_delete_all=true)
     M.M2m_tester_dbtable_scratch.objects.delete(allow_delete_all=true)
     M.M2m_squad_dbtable_scratch.objects.delete(allow_delete_all=true)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #377: an explicit `through=` model whose foreign keys declare a `db_column`.
+#
+# The relation used to record the through model's FIELD name and render it as a column, so every
+# join and every mutator addressed `mechanic_id`/`crew_id` while the real columns are
+# `mech_ref`/`crew_ref`. Both engines answer that with "no such column" — this is the layer that
+# proves the SQL reaches something real, which no rendered-string assertion can.
+#
+# Exercised here and nowhere else: the raw-SQL write path. `add`/`remove`/`clear`/`set` interpolate
+# the column names straight into INSERT/DELETE and never go through the join builder, and `set`
+# additionally reads the SELECTed column back out of the result frame by that same name — three
+# independent consumers of the slot the fix changed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Many-to-Many: explicit through model whose FKs declare db_column (#377)" begin
+    M.M2m_crewslot_dbcol_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_mechanic_dbcol_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_crew_dbcol_scratch.objects.delete(allow_delete_all=true)
+
+    # Preconditions. Without them every assertion below passes vacuously against a fixture whose
+    # field names and columns agree — the condition under which #377 is invisible.
+    @test PormG.Models.model_column(M.M2m_crewslot_dbcol_scratch, "mechanic_id") == "mech_ref"
+    @test PormG.Models.model_column(M.M2m_crewslot_dbcol_scratch, "crew_id") == "crew_ref"
+    # ...and the physical table really carries the renamed columns and not the field names, which is
+    # what makes the pre-fix SQL a hard database error rather than a silently different answer.
+    slot_cols = Base.invokelatest(column_names, PormG.config[PORMG_DB_FOLDER].connections,
+                                  "m2m_crewslot_join_tbl")
+    @test "mech_ref" in slot_cols
+    @test "crew_ref" in slot_cols
+    @test !("mechanic_id" in slot_cols)
+    @test !("crew_id" in slot_cols)
+
+    mech = M.M2m_mechanic_dbcol_scratch.objects.create("driverref" => "chapman")
+    crew_a = M.M2m_crew_dbcol_scratch.objects.create("name" => "Lotus")
+    crew_b = M.M2m_crew_dbcol_scratch.objects.create("name" => "March")
+
+    manager = M.M2m_mechanic_dbcol_scratch.crews(mech)
+
+    # WRITE path — INSERT naming the physical columns.
+    @test manager.add(crew_a, crew_b) === nothing
+    @test Set([row[:name] for row in manager.all().list()]) == Set(["Lotus", "March"])
+
+    # The rows really landed, queried through the through model in its own right. Note the filter
+    # names the FIELD (`mechanic_id`) while the stored column is `mech_ref` — the ordinary #50
+    # contract, here on the same model whose columns the m2m path also has to resolve.
+    @test M.M2m_crewslot_dbcol_scratch.objects.filter("mechanic_id" => mech[:id]).count() == 2
+
+    # WRITE path — DELETE, plus the read-back. `set` runs `_m2m_current_ids` (a `SELECT <related
+    # column>` whose result frame is then indexed BY that same column name) and then remove+add in
+    # one transaction, so a mismatch between the SELECT and the read-back surfaces as `removed == 0`.
+    diff = manager.set(crew_b)
+    @test diff.added == 0
+    @test diff.removed == 1
+    @test Set([row[:name] for row in manager.all().list()]) == Set(["March"])
+
+    # READ path — forward and reverse traversal both join on the physical columns.
+    fwd = M.M2m_mechanic_dbcol_scratch.objects.filter("crews__name" => "March").values("driverref").list()
+    @test length(fwd) == 1
+    @test fwd[1][:driverref] == "chapman"
+
+    rev = M.M2m_crew_dbcol_scratch.objects.filter("mechanics__driverref" => "chapman").values("name").list()
+    @test length(rev) == 1
+    @test rev[1][:name] == "March"
+
+    @test manager.clear() === nothing
+    @test isempty(manager.all().list())
+    @test M.M2m_crewslot_dbcol_scratch.objects.filter("mechanic_id" => mech[:id]).count() == 0
+
+    M.M2m_crewslot_dbcol_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_mechanic_dbcol_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_crew_dbcol_scratch.objects.delete(allow_delete_all=true)
 end
 
 @testset "Many-to-Many: query and API surface" begin

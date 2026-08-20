@@ -178,19 +178,18 @@ function _insert_many_to_many_joins(
   # its physical column via the owning model's db_column. `model_column` is a strict no-op when the
   # PK has no db_column.
   #
-  # The through-table columns (owner_column / related_column) go in as-is, and that is a narrower
-  # claim than it used to be. On the AUTO path they are names PormG generated for a table PormG
-  # created, so there is nothing to resolve. On an explicit `through=` they come from
-  # `Models._infer_through_field`, which returns the FIELD NAME on a user's model — equal to the
-  # physical column exactly when that field declares no `db_column`.
+  # The through-table columns (owner_column / related_column) go in as-is, and since #377 that is a
+  # claim about the SLOT, not a bet about the model. Both are resolved to physical columns once, at
+  # registration, exactly as `through_table` is one line below: on the AUTO path they are names PormG
+  # generated for a table PormG created, and on an explicit `through=` they are
+  # `Models.model_column(through_model, <the FK field name>)`.
   #
-  # Django's default convention satisfies that (`driver` imports as the field `driver_id`, which is
-  # also Django's column), which is why an ordinary import joins correctly. A `db_column=` written in
-  # the Django source does NOT: the importer splats it onto the field it builds
-  # (`process_class_fields!`), so the field is `driver_id` while the column is whatever was pinned.
-  # The shape is origin-independent — hand-written models reach it the same way. That column axis is
-  # the unfixed sibling of #363, which settled the TABLE axis only; `source_field` / `target_field`
-  # on the ManyToManyField bypass `_infer_through_field` and are the escape hatch today.
+  # Before that they were the through model's FIELD NAME, rendered raw — equal to the physical column
+  # exactly when the field declared no `db_column`. Django's default convention satisfies that
+  # (`driver` imports as the field `driver_id`, which is also Django's column), which is why an
+  # ordinary import joined correctly and the bug survived; a `db_column=` written in the Django source
+  # did not, because the importer splats it onto the field it builds (`process_class_fields!`). The
+  # shape was origin-independent — hand-written models reached it the same way.
   _module = instruct.object.model._module::Module
   owner_model = _resolve_m2m_side_model(_module, relation.owner_binding, relation.owner_model, relation.field_name)
   related_model = _resolve_m2m_side_model(_module, relation.related_binding, relation.related_model, relation.field_name)

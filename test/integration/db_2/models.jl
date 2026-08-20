@@ -371,6 +371,40 @@ M2m_enrolment_dbtable_scratch = Models.Model("m2m_enrolment_dbtable_scratch",
   squad = Models.ForeignKey(M2m_squad_dbtable_scratch, on_delete=Models.CASCADE),
 )
 
+# Explicit through whose foreign keys declare a `db_column` (#377) — the COLUMN-axis sibling of the
+# `db_table` fixture above. The relation rendered the through model's FIELD name as the join column,
+# which equals the physical column only while no `db_column` is declared; that was true of every
+# `through=` fixture in this file, which is why #377 outlived #363.
+#
+# `db_table` is pinned here TOO, on purpose: that is the shape a Django import of a legacy schema
+# produces (an app label AND `db_column=` on the FKs), and carrying both proves the two axes are
+# independent rather than one accidentally covering the other.
+#
+# The field names carry Django's `_id` suffix because that is what `process_class_fields!` emits, and
+# the columns are DIFFERENT STRINGS, not case variants — SQLite compares identifiers
+# case-insensitively, so a case-only difference could not tell a fixed tree from a broken one.
+#
+# FK-only on purpose: the mutators are then permitted, so the raw-SQL write path
+# (`INSERT`/`DELETE ... FROM <through table>`, plus the `SELECT <related column>` read-back behind
+# `set`) is exercised alongside the join path.
+M2m_crew_dbcol_scratch = Models.Model("m2m_crew_dbcol_scratch",
+  id = Models.IDField(),
+  name = Models.CharField(unique=true)
+)
+
+M2m_mechanic_dbcol_scratch = Models.Model("m2m_mechanic_dbcol_scratch",
+  id = Models.IDField(),
+  driverref = Models.CharField(unique=true),
+  crews = Models.ManyToManyField(M2m_crew_dbcol_scratch, through="M2m_crewslot_dbcol_scratch", related_name="mechanics")
+)
+
+M2m_crewslot_dbcol_scratch = Models.Model("m2m_crewslot_dbcol_scratch",
+  db_table = "m2m_crewslot_join_tbl",
+  id = Models.IDField(),
+  mechanic_id = Models.ForeignKey(M2m_mechanic_dbcol_scratch, db_column="mech_ref", on_delete=Models.CASCADE),
+  crew_id = Models.ForeignKey(M2m_crew_dbcol_scratch, db_column="crew_ref", on_delete=Models.CASCADE),
+)
+
 # Default reverse accessor (no related_name): target uses owner model name lowercase.
 M2m_brand_scratch = Models.Model("m2m_brand_scratch",
   id = Models.IDField(),

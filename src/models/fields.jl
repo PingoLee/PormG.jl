@@ -491,8 +491,12 @@ table with two foreign keys and a composite unique index.
 - `through::Union{String, PormGModel, Nothing} = nothing`: explicit through model; skips auto table synthesis.
 - `related_name::Union{String, Nothing} = nothing`: reverse accessor on the target model.
 - `db_table::Union{String, Nothing} = nothing`: auto-through table name override. Ignored when `through` is given — the join table is then the through model's own table (its `db_table` if it declares one).
-- `source_field::Union{String, Nothing} = nothing`: through-table column pointing to the source model.
-- `target_field::Union{String, Nothing} = nothing`: through-table column pointing to the target model.
+- `source_field::Union{String, Nothing} = nothing`: the join key pointing at the source model. With an explicit `through`, it names a **field** on that model and the physical column is resolved from the field's `db_column` (#377); on the auto-synthesized table it names the column directly, since PormG creates it.
+- `target_field::Union{String, Nothing} = nothing`: the same, for the target model.
+
+Both pins exist to disambiguate **which** foreign key is which end — required when the through model
+has two pointing at the same model, as on a self-relation. A `through` model whose foreign keys simply
+map to differently-named columns needs no pin: `db_column` is resolved on its own.
 """
 function ManyToManyField(to::Union{String, PormGModel}; kwargs...)
   accepted = Set([

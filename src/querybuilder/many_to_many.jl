@@ -103,8 +103,12 @@ function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
   through_model = manager.relation.through_model_resolved
   through_model === nothing && return false
 
-  owner_col = manager.relation.owner_column
-  related_col = manager.relation.related_column
+  # The FIELD names, not the columns (#377). This is the one reader of the pair that asks a question
+  # about the through MODEL's shape rather than about SQL, so it takes the field slot while the four
+  # mutators below take the column slot. Reading `*_column` here would report a through model whose
+  # foreign keys declare a `db_column` as carrying two extra fields, and lock its mutators.
+  owner_col = manager.relation.owner_field
+  related_col = manager.relation.related_field
 
   for field_name in keys(through_model.fields)
     clean_name = strip(field_name, '"')

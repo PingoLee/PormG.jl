@@ -2271,3 +2271,67 @@ end
         cleanup_import_test!(config_key, db_dir_existed)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#371): the label is what decides, not the arity
+#
+# A single-app import with a `django_prefix` HAS an app label — `django_prefix` *is* the Django app
+# label — so its markers are qualified on the same rule a multi-app import uses. That is not a new
+# behaviour so much as the end of an inconsistency: relation markers already went through
+# `_django_ref_label`, so one generated file used to carry `'dash.Legado'` from a degraded relation
+# and `'Legado'` from the `Meta.db_table` marker three lines away.
+#
+# Both halves are asserted from ONE source imported twice, because the claim is a difference: the
+# unlabelled arity must be unchanged, and only a paired assertion can show that the qualification
+# comes from the label rather than from the fix firing everywhere.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "markers are qualified under a django_prefix and bare without one (#371)" begin
+    source = """
+from django.db import models
+
+class Legado(models.Model):
+    nome = models.CharField(max_length=10)
+    tags = ArrayField(models.CharField(max_length=5))
+    situacao = models.CharField(max_length=5, default=Status.DRAFT)
+
+    class Meta:
+        db_table = TABELA_LEGADO
+        ordering = ['nome']
+        unique_together = CHAVE_EXTERNA
+        indexes = [models.Index(fields=['nao_existe'], name='ix_fantasma')]
+"""
+
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "dash",
+                                                                 output_file = "qualified_prefix.jl")
+    try
+        # One marker per producing mechanism: the field walker, the option parser, the inline
+        # `_import_django_apps` sites, and two of the Meta helpers.
+        @test occursin("# PormG: field 'tags' on 'dash.Legado'", generated)
+        @test occursin("# PormG: field 'situacao' on 'dash.Legado' references `Status`", generated)
+        @test occursin("# PormG: Meta.db_table on 'dash.Legado' is not a string literal", generated)
+        @test occursin("# PormG: Meta.ordering on 'dash.Legado'", generated)
+        @test occursin("# PormG: Meta.unique_together on 'dash.Legado' is not a tuple or list",
+                       generated)
+        @test occursin("# PormG: an index on 'dash.Legado' was dropped", generated)
+
+        # Not one site left behind. `on 'Legado'` cannot match `on 'dash.Legado'`.
+        @test !occursin("on 'Legado'", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # The unlabelled arity is untouched: one app, nothing to disambiguate against, and a prefix
+    # nobody typed would be a lie about which Django app the class came from.
+    bare, key2, existed2 = import_django_source(source; output_file = "unqualified_prefix.jl")
+    try
+        @test occursin("# PormG: field 'tags' on 'Legado'", bare)
+        @test occursin("# PormG: field 'situacao' on 'Legado' references `Status`", bare)
+        @test occursin("# PormG: Meta.db_table on 'Legado' is not a string literal", bare)
+        @test occursin("# PormG: Meta.ordering on 'Legado'", bare)
+        @test occursin("# PormG: Meta.unique_together on 'Legado' is not a tuple or list", bare)
+        @test occursin("# PormG: an index on 'Legado' was dropped", bare)
+        @test !occursin("dash.", bare)
+    finally
+        cleanup_import_test!(key2, existed2)
+    end
+end

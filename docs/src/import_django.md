@@ -358,7 +358,7 @@ DimIbge = Models.Model("dimibge", db_table = "dash_dimibge",
   ufs = Models.ManyToManyField("Dim_uf", db_table="dash_dimibge_ufs"))
 ```
 
-Three things to read off that output:
+Three things to read off that output, and a fourth that shows up only when something is reported:
 
 - **The positional name is `class.__name__.lower()`** — Django's own derivation. `DimIbge` becomes
   `"dimibge"`, with no underscore inserted, because that is what Django's table is called. Whichever
@@ -371,6 +371,9 @@ Three things to read off that output:
   PormG's own derivation is `<logical model>_<field>`, which addresses a table Django never created.
   A `db_table=` written on the field is left alone, and a field with `through=` is skipped entirely —
   Django ignores `db_table` there, because the join table *is* the through model's table.
+- **Anything the importer reports names the class `'dash.DimIbge'`**, not `'DimIbge'` — a
+  `django_prefix` *is* the Django app label, so there is a label to qualify with. See
+  [Meta Options](#Meta-Options).
 
 Without a `django_prefix` nothing is pinned: no app label is known, so the models import unprefixed
 and no `db_table` is emitted.
@@ -463,6 +466,18 @@ Django parameters are automatically converted to PormG equivalents:
 "Reported" means two things at once: a `@warn` at import time **and** a `# PormG:` comment on the
 line above the model in the generated file. The console warning scrolls away; the comment is still
 there when someone reads the file six months later.
+
+Both halves name the class **app-qualified** whenever an app label is known — `'imports.ImportBatch'`,
+the same `"<app_label>.<Class>"` spelling Django uses in a `Meta` reference. That is what lets a
+report be traced back to one model in a project where two apps declare a `Pessoa`: the generated file
+holds `Core_pessoa` and `Access_pessoa`, and nothing called `Pessoa`. An unlabelled single-app import
+— no `django_prefix` — has no label and nothing to disambiguate against, so it uses the bare class
+name.
+
+Two things that qualification does *not* touch. The report names the **Python class**, never the
+Julia binding, so a model renamed by a collision or by `binding_overrides` is still reported under
+the name its `models.py` actually uses. And a name quoted because the source *wrote* it — a base
+class, an enum, a field — stays verbatim: only the class a report is *about* is qualified.
 
 !!! warning "`Meta.constraints` acceptance is a whitelist"
     A `UniqueConstraint` is imported only when its arguments are within
@@ -573,12 +588,26 @@ the same way, and it emits nothing of its own to carry the marker:
 
 ```julia
 # PormG: model 'Relatorio' inherits 'TimeStampedModel', not defined in this file — any fields
-#   declared there are MISSING below. Add them by hand, or import the app that defines them
-#   together with this one.
+#   declared there are MISSING below. Add them by hand, or pass every app of the project as
+#   "<app_label>" => "<models.py>" pairs so a base in another app is merged.
 Relatorio = Models.Model("relatorio",
   id = Models.IDField(),
   titulo = Models.CharField(max_length=80))
 ```
+
+That is the **unlabelled** wording. Once the import carries an app label — a multi-app call, or a
+single-app one with a `django_prefix` — the same gap is reported as:
+
+```julia
+# PormG: model 'imports.Relatorio' inherits 'TimeStampedModel', not defined in any app of this
+#   import — any fields declared there are MISSING below. Add them by hand, or add the app that
+#   defines them to the pair list.
+```
+
+Two changes, and only the first is general: the class is app-qualified, and this particular marker
+also switches "this file" for "any app of this import", because with a label the advice is
+different. `'TimeStampedModel'` stays as written either way — it is quoted from the source, not the
+class being reported on.
 
 Importing the defining app alongside this one resolves it — provided this `models.py` really does
 `from core.models import TimeStampedModel`, which is what the lookup follows. See
@@ -750,7 +779,8 @@ field and its source line; it is never dropped silently.
 | **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
 
 Nothing in the middle two rows is dropped in silence: each one produces a `@warn` at import time and
-a `# PormG:` comment in the generated file. That is the contract this importer holds itself to — if
+a `# PormG:` comment in the generated file, naming the class app-qualified when a label is known
+(see [Meta Options](#Meta-Options)). That is the contract this importer holds itself to — if
 something did not survive, the artifact says so.
 
 

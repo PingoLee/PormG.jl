@@ -1701,7 +1701,8 @@ class Municipio(models.Model):
         # NO phantom `id`. `access_municipio` is keyed on `codigo` and has no `id` column.
         @test !occursin("Models.IDField()", generated)
         # ...and the artifact states the gap rather than shipping a silently key-less model.
-        @test occursin("# PormG: 'Municipio' declares its primary key on 'codigo'", generated)
+        # `access.`, not bare — the import carries an app label, so the marker is qualified (#371).
+        @test occursin("# PormG: 'access.Municipio' declares its primary key on 'codigo'", generated)
         @test occursin("This model therefore has NO primary key", generated)
 
         sandbox = Module()
@@ -2563,7 +2564,10 @@ class Real(models.Model):
     try
         @test occursin("Real = Models.Model(", generated)
         @test !occursin("Perfil = Models.Model", generated)
-        @test occursin("# PormG: class 'Perfil' inherits 'CustomUser'", generated)
+        # `app.`, not bare — this import carries an app label, so the marker names the class
+        # app-qualified like every other report (#371). The BASE stays verbatim: it is quoted from
+        # the source, not the class being reported on.
+        @test occursin("# PormG: class 'app.Perfil' inherits 'CustomUser'", generated)
         @test occursin("declares no field of its own", generated)
         # A `forms.Form` helper produces no noise — the namespace already settles what it is.
         @test !occursin("ContatoForm", generated)
@@ -2912,10 +2916,12 @@ class Real(models.Model):
     try
         @test occursin("Real = Models.Model(", generated)
         # Named, so a reader dismisses the library in one glance...
-        @test occursin("# PormG: class 'MeuManager' inherits 'InheritanceManager', imported from " *
-                       "'model_utils.managers', which nothing in this import defines", generated)
+        # App-qualified on both, because this arity has a label (#371); the imported base and its
+        # module are quoted from the source and stay exactly as written.
+        @test occursin("# PormG: class 'app.MeuManager' inherits 'InheritanceManager', imported " *
+                       "from 'model_utils.managers', which nothing in this import defines", generated)
         # ...and a base with no import line at all says exactly that instead.
-        @test occursin("# PormG: class 'Perfil' inherits 'CustomUser', which nothing in this " *
+        @test occursin("# PormG: class 'app.Perfil' inherits 'CustomUser', which nothing in this " *
                        "import defines and this models.py does not import", generated)
         @test !occursin("Perfil = Models.Model", generated)
     finally
@@ -2936,10 +2942,161 @@ class Outro(models.Model):
 """
     generated2, key2, existed2 = import_one_app(single; output_file = "single_ancestry_lost.jl")
     try
+        # Bare here, and that is the rule working rather than an exception to it: `import_one_app`
+        # passes no `django_prefix`, so there is no app label to qualify with (#371).
         @test occursin("# PormG: class 'Pedido' inherits 'TimeStampedModel', imported from " *
                        "'core.models', which nothing in this import defines", generated2)
         @test occursin("\"<app_label>\" => \"<models.py>\" pairs", generated2)
     finally
         cleanup_project_test!(key2, existed2)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#371): a report NAMES its class app-qualified
+#
+# `# PormG:` markers and the `@warn` beside them used to interpolate the bare Python class name.
+# In a multi-app project two apps may each declare `Pessoa` — the generated file then holds
+# `Core_pessoa` and `Access_pessoa`, and a marker reading `on 'Pessoa'` traces back to neither.
+#
+# The reports are built by four different mechanisms and only one of them was ever qualified, so
+# this testset deliberately triggers one marker from EACH:
+#
+#   - relation/binding markers, through `_django_ref_label(entry)`      — was already qualified
+#   - model- and Meta-level markers written inline in `_import_django_apps`
+#   - the Meta helpers (`parse_meta_unique_together` and friends)
+#   - the field path (`process_class_fields!` → `parse_field_args`)
+#
+# The last three are what #371 fixes. `class_name` had to stay bare underneath all of it: it is the
+# enum SCOPE KEY, and qualifying it would silently drop every `TextChoices` (#342).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "every marker names its class app-qualified in a multi-app import (#371)" begin
+    core = """
+from django.db import models
+
+class Pessoa(models.Model):
+    class Situacao(models.TextChoices):
+        RASCUNHO = "RA", "Rascunho"
+        ATIVO = "AT", "Ativo"
+
+    codigo = models.IntegerField(primary_key=True)
+    estado = models.CharField(max_length=2, choices=Situacao.choices, default=Situacao.RASCUNHO)
+    tags = ArrayField(models.CharField(max_length=10))
+
+    class Meta:
+        nao_existe_essa_opcao = True
+        unique_together = CHAVE_EXTERNA
+"""
+    access = """
+from django.db import models
+
+class Pessoa(models.Model):
+    nome = models.CharField(max_length=40)
+    situacao = models.CharField(max_length=20, default=Status.DRAFT)
+
+    class Meta:
+        db_table = TABELA_LEGADO
+        ordering = ['nome']
+"""
+    generated, config_key, db_dir_existed = import_project(["core" => core, "access" => access];
+                                                           output_file = "qualified_markers.jl")
+    try
+        # The field path — `process_class_fields!` and `parse_field_args`. The second is #371's own
+        # reproduction case, verbatim.
+        @test occursin("# PormG: field 'tags' on 'core.Pessoa'", generated)
+        @test occursin("# PormG: field 'situacao' on 'access.Pessoa' references `Status`, which " *
+                       "this file does not define", generated)
+
+        # Inline in `_import_django_apps` — a model-level report and two Meta-level ones.
+        @test occursin("# PormG: 'core.Pessoa' declares its primary key on 'codigo'", generated)
+        @test occursin("# PormG: Meta.nao_existe_essa_opcao on 'core.Pessoa' is not recognised",
+                       generated)
+        @test occursin("# PormG: Meta.db_table on 'access.Pessoa' is not a string literal", generated)
+        @test occursin("# PormG: Meta.ordering on 'access.Pessoa'", generated)
+
+        # A Meta helper, which owns its own copy of the label.
+        @test occursin("# PormG: Meta.unique_together on 'core.Pessoa' is not a tuple or list " *
+                       "literal", generated)
+
+        # The CLASS, never the HANDLE. The collision renamed both models, so `entry.name` and the
+        # Python class name have diverged here — a marker naming the handle would say
+        # 'Core_pessoa' and send the reader looking for a class no models.py declares.
+        @test occursin("Core_pessoa = Models.Model(", generated)
+        @test occursin("Access_pessoa = Models.Model(", generated)
+        @test !occursin("Core_pessoa'", generated)
+        @test !occursin("Access_pessoa'", generated)
+
+        # The blanket guard, over the marker lines only. `'Pessoa'` with its opening quote cannot
+        # match `'core.Pessoa'`, so this fails on any site the fix missed — including ones this
+        # fixture does not trigger, should a later change route them differently. The count is
+        # asserted so the negative cannot pass by matching an empty list.
+        marker_lines = filter(l -> startswith(strip(l), "# PormG:"), split(generated, '\n'))
+        @test length(marker_lines) == 7
+        @test all(l -> !occursin("'Pessoa'", l), marker_lines)
+
+        # ...and the enum machinery still RESOLVES, which is what qualifying `class_name` instead
+        # of adding `class_label` would have broken. This is the assertion that matters: `enums` is
+        # keyed by the bare Python class name, so an "app.Class" scope key makes `_lookup_enum`
+        # miss and `estado` comes back a plain `CharField(max_length=2)` with neither choices nor
+        # default. Assert the RESOLVED pair — a degraded field proves nothing here, because a
+        # reference the importer cannot see is dropped whether the scope key is right or wrong.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        core_pessoa = Core.eval(sandbox, :(qualified_markers.Core_pessoa))
+        @test core_pessoa.fields["estado"].choices == (("RA", "Rascunho"), ("AT", "Ativo"))
+        @test core_pessoa.fields["estado"].default == "RA"
+
+        # The other app declares no `Status` at all, so its reference degrades — the column is real,
+        # the enumeration is not. That is the marker asserted above, seen from the model side.
+        access_pessoa = Core.eval(sandbox, :(qualified_markers.Access_pessoa))
+        @test access_pessoa.fields["situacao"].default === nothing
+        @test access_pessoa.fields["situacao"].choices === nothing
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#371): the reports emitted BEFORE the index lookup
+#
+# Its own testset because these three are the reason the label is computed where it is. A duplicate
+# declaration, a proxy and a multi-table-inheritance child are all reported and then `continue`d
+# ABOVE `entry = get(index.by_ref, …)` — so a fix that read the label off `entry` would leave
+# exactly the reports a reader has least other context for still saying `'Pessoa'`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the reports emitted before the index lookup are app-qualified too (#371)" begin
+    source = """
+from django.db import models
+
+class Venda(models.Model):
+    total = models.IntegerField()
+
+class Pedido(Venda):
+    obs = models.CharField(max_length=40)
+
+class ServidorAtivo(Venda):
+    class Meta:
+        proxy = True
+
+class Dupla(models.Model):
+    a = models.IntegerField()
+
+class Dupla(models.Model):
+    b = models.IntegerField()
+"""
+    generated, config_key, db_dir_existed = import_project(["core" => source];
+                                                           output_file = "prelookup_markers.jl")
+    try
+        @test occursin("# PormG: model 'core.Pedido' inherits the concrete model 'Venda'", generated)
+        @test occursin("# PormG: model 'core.ServidorAtivo' is a Django proxy", generated)
+        @test occursin("# PormG: 'core.Dupla' is declared more than once", generated)
+
+        # The other half of the rule: a name quoted because the SOURCE wrote it stays verbatim.
+        # `Venda` above is the parent Django names in the inheritance, not the class the report is
+        # about — qualifying it would misquote the models.py.
+        @test occursin("concrete model 'Venda' (Django multi-table inheritance)", generated)
+        @test !occursin("'core.Venda' (Django multi-table", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
     end
 end

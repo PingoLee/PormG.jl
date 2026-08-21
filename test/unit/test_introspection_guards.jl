@@ -432,9 +432,12 @@ end
 # `Symbol` key never matches a `String` key, so `db_index` was a hard `false` for every plain
 # PostgreSQL column. Every `db_index=true` field therefore compared unequal to its own live table
 # forever, and `Dialect.alter_field` has no `db_index` branch, so the migration it triggered emitted
-# no DDL for it. The de-quoting half matters just as much: the CTE passes column names through
-# `quote_ident`, so a mixed-case column (#57) arrives wrapped in `"` and would miss even with the
-# key type fixed.
+# no DDL for it. The name half matters just as much: `index_map`'s key must equal the `fields_dict`
+# key, which is built from the `quote_ident`-ed `columns` aggregate and de-quoted on the way in.
+# `index_columns`, uniquely among the schema query's identifier aggregates, is `array_agg(a.attname)`
+# — RAW — so a mixed-case column (#57) arrives here ALREADY unquoted and the two sides meet in the
+# middle. This fixture used to spell it `"mixedCase"`, a shape production never emits, which meant
+# the mixed-case path was pinned against the wrong input (#389).
 #
 # The CTE's own filters (non-unique, non-partial, single-column) run against a live database in
 # test/integration/test_migration_bootstrap.jl — nothing here executes SQL.
@@ -444,14 +447,16 @@ end
     table_name    = "db_index_guard",
     columns       = "id bigint NOT NULL, slug character varying(120), plain text, \"mixedCase\" text",
     primary_keys  = "id",
-    # What the `indexes` CTE hands back: one entry per indexed column, `quote_ident`-ed, with the
-    # index names aligned positionally.
-    index_columns = "slug, \"mixedCase\"",
+    # What the `indexes` CTE hands back: one entry per indexed column, RAW (`array_agg(a.attname)`,
+    # no `quote_ident` — verified against a live catalog), with the `quote_ident`-ed index names
+    # aligned positionally.
+    index_columns = "slug, mixedCase",
     index_names   = "db_index_guard_slug_idx, db_index_guard_mixedcase_idx"))
 
   # THE mutation gate — all three are `false` on main.
   @test model.fields["slug"].db_index
-  @test model.fields["mixedCase"].db_index      # the de-quoting half (#57)
+  @test model.fields["mixedCase"].db_index      # the de-quoting half (#57) — of `col_name`,
+                                                # since the index side arrives raw
   @test !model.fields["plain"].db_index         # …and it did not over-mark
 
   # The index NAME is carried too, de-quoted, because the planner needs it to DROP the index when a
@@ -550,5 +555,214 @@ end
     @test model.fields["profile_id"] isa PormG.Models.sOneToOneField
     @test model.fields["profile_id"].to       == "Driver_profile"
     @test model.fields["profile_id"].to_table == "driver profile"
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #389: FK metadata arrives `quote_ident`-quoted, and every half must be de-quoted together
+#
+# The PostgreSQL schema query aggregates `fk_cols`, `fk_tables` and `referenced_primary_keys`
+# through `quote_ident`, so a mixed-case identifier arrives with the `"` characters as part of the
+# Julia string. #360 (PR #386) de-quoted the TABLE half; this is the rest of it.
+#
+# The one that bites is `referenced_primary_keys` → `pk_field`. Stored quoted, `fk_target_column`
+# returns it unchanged — an introspected field's `.to` is still a String binding, so the
+# resolve-through-the-parent branch never runs. Three things break on that one value:
+# `Dialect.add_foreign_key` emits `REFERENCES "parent"(""Id"")` (TWO quote pairs — the caller adds
+# one around a value that already carries one; the issue body's `"""Id"""` is wrong),
+# `_compare_field_foreign_key` reports the key as changed on every `makemigrations`, and the query
+# builder throws `InvalidValueError` because `SAFE_IDENTIFIER_PATTERN` forbids a `"`.
+#
+# `fk_cols` and `col_name` move in the SAME change on purpose: `fk_map`'s keys come from `fk_cols`
+# and are looked up with `col_name`, so normalizing one side alone would break FK detection for
+# every mixed-case column. Both are covered below — the second testset is that mutation gate.
+#
+# Fully hermetic: `convertSQLToModel(::DataFrameRow)` takes the metadata and nothing else.
+# The live-database half is test/integration/test_importers_introspection.jl.
+# ─────────────────────────────────────────────────────────────────────────────
+# `add_foreign_key` dispatches on the abstract backend marker and never touches connection state,
+# so a bare marker struct is a sufficient `conn`. Declared at top level, like every other mock in
+# test/unit/ (a struct inside a `@testset` body parses, but is not the house pattern).
+struct MockPg389 <: PormG.PormGPostgres end
+
+@testset "quote_ident-quoted FK metadata is de-quoted (#389)" begin
+  @testset "a mixed-case parent primary key lands unquoted on pk_field" begin
+    # Exactly what the production query emits for a parent keyed on `"Id"`: quote_ident quotes the
+    # mixed-case pk and the mixed-case table, and leaves the all-lowercase child column alone.
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "pit_stop",
+      columns                 = "id bigint NOT NULL, parent_id bigint",
+      primary_keys            = "id",
+      foreign_keys            = "parent_id",
+      foreign_tables          = "\"MixedParent\"",
+      referenced_primary_keys = "\"Id\"",
+      delete_rules            = "a"))
+
+    fk = model.fields["parent_id"]
+    @test fk isa PormG.Models.sForeignKey
+
+    # THE defect. Before the fix this was the four-character string `"Id"` — quote characters
+    # included — not the two-character `Id`.
+    @test fk.pk_field == "Id"
+
+    # …and the resolved form, which is what the planner and the DDL actually consume. For an
+    # INTROSPECTED field this equals `pk_field` by construction — `.to` is still a String binding,
+    # so `fk_target_column`'s resolve-through-the-parent branch cannot run and it returns the value
+    # verbatim. So this asserts propagation, not an independent fact; the genuinely separate
+    # consequence is pinned by the `_compare_field_foreign_key` testset below.
+    @test PormG.Models.fk_target_column(fk) == "Id"
+
+    # The #360 half still holds — this fix must not disturb it.
+    @test fk.to_table == "MixedParent"
+  end
+
+  @testset "the emitted ALTER references the parent column with ONE pair of quotes" begin
+    # The consequence the issue leads with. `add_foreign_key` interpolates its identifiers verbatim
+    # — every one is pre-quoted by the CALLER — so this reproduces `planner.jl`'s call shape exactly
+    # (`"\"$resolved_pk\""`). With a quoted `pk_field` the result was `REFERENCES ... (""Id"")`,
+    # which is a syntax error, not merely ugly. (The issue body says `"""Id"""`; the measured output
+    # is two pairs, because the caller adds ONE pair around a value that already carries one.)
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "pit_stop",
+      columns                 = "id bigint NOT NULL, parent_id bigint",
+      primary_keys            = "id",
+      foreign_keys            = "parent_id",
+      foreign_tables          = "\"MixedParent\"",
+      referenced_primary_keys = "\"Id\"",
+      delete_rules            = "a"))
+
+    resolved_pk = PormG.Models.fk_target_column(model.fields["parent_id"])
+    sql = PormG.Dialect.add_foreign_key(MockPg389(), "pit_stop", "\"pit_stop_parent_id_fk\"",
+                                        "\"parent_id\"", "\"MixedParent\"", "\"$resolved_pk\"")
+
+    @test occursin("(\"Id\")", sql)
+    @test !occursin("\"\"", sql)   # no doubled quote anywhere in the statement
+  end
+
+  @testset "a declared key compares EQUAL to the introspected one (no perpetual ALTER)" begin
+    # The consequence the issue leads with and the one a user actually notices, reached through a
+    # DIFFERENT path than the two above: `planner.jl` asks `_compare_field_foreign_key(declared,
+    # live)`, which compares `fk_target_column` on both sides. Declared `Id` vs live `"Id"` is
+    # `false`, so the planner pushes an alteration for that column on EVERY `makemigrations` —
+    # forever, and on SQLite as a full table rebuild. Nothing above constrains this: those pin the
+    # stored value, not the comparison that consumes it.
+    live = convertSQLToModel(_introspection_row(
+      table_name              = "pit_stop",
+      columns                 = "id bigint NOT NULL, parent_id bigint",
+      primary_keys            = "id",
+      foreign_keys            = "parent_id",
+      foreign_tables          = "\"MixedParent\"",
+      referenced_primary_keys = "\"Id\"",
+      delete_rules            = "a")).fields["parent_id"]
+
+    # What a hand-written or regenerated model file declares for that same column.
+    declared = PormG.Models.ForeignKey("MixedParent", pk_field = "Id")
+    declared.to_table = "MixedParent"
+
+    @test PormG.Models._compare_field_foreign_key(declared, live)
+    # Symmetric — the planner calls it (new, old) and nothing should depend on the order.
+    @test PormG.Models._compare_field_foreign_key(live, declared)
+  end
+
+  @testset "a mixed-case FK COLUMN is still detected as a foreign key" begin
+    # The mutation gate for moving `fk_cols` and `col_name` together. `fk_map`'s key comes from
+    # `fk_cols` and is probed with `col_name`; de-quoting either one alone makes this lookup miss,
+    # and the column silently degrades from a ForeignKey to a plain BigIntegerField — FK detection
+    # broken for every mixed-case column, which is strictly worse than the bug being fixed.
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "pit_stop",
+      columns                 = "id bigint NOT NULL, \"ParentId\" bigint",
+      primary_keys            = "id",
+      foreign_keys            = "\"ParentId\"",
+      foreign_tables          = "\"MixedParent\"",
+      referenced_primary_keys = "\"Id\"",
+      delete_rules            = "a"))
+
+    # `fields_dict` is keyed de-quoted, so this is the name the rest of PormG sees.
+    @test haskey(model.fields, "ParentId")
+    @test model.fields["ParentId"] isa PormG.Models.sForeignKey
+    @test model.fields["ParentId"].pk_field == "Id"
+    @test model.fields["ParentId"].to_table == "MixedParent"
+  end
+
+  @testset "a mixed-case PRIMARY KEY column is still detected as the key" begin
+    # `pk_set` comes from `quote_ident(a.attname)` too, and is compared against `col_name`. The two
+    # used to agree only because BOTH were quoted; normalizing `col_name` without normalizing
+    # `pk_set` would leave the table keyless, which no other assertion in this file would catch.
+    model = convertSQLToModel(_introspection_row(
+      table_name   = "mixed_key",
+      columns      = "\"Id\" bigint NOT NULL, label character varying(50)",
+      primary_keys = "\"Id\""))
+
+    @test haskey(model.fields, "Id")
+    @test model.fields["Id"] isa PormG.Models.sIDField
+    @test model.fields["Id"].primary_key
+  end
+
+  @testset "an embedded quote round-trips instead of being silently deleted" begin
+    # `quote_ident` DOUBLES an embedded `"`, so `Say"Hi` — a legal PostgreSQL column name — comes
+    # back as `"Say""Hi"`. The old `replace(s, "\"" => "")` deleted every quote and produced
+    # `SayHi`, a column that does not exist: `makemigrations` then proposed `ADD COLUMN "SayHi"`
+    # alongside a `DROP` of the real one, on every run, silently. `_unquote_ident` undoes the
+    # doubling instead, so the name survives: the existing table converges, and `Model_to_str`
+    # regenerates it as a legal binding plus `db_column="Say\"Hi"` — a rename of the BINDING, not
+    # of the column. It does NOT make such a name safe everywhere: `Dialect.create_table` still
+    # emits `"Say"Hi"` and closes the identifier early (the column-name twin of the `db_table`
+    # escaping in #388, and #394's family), and the query path raises `InvalidValueError` from
+    # `_validate_identifier`. Surviving intact and being universally usable are different claims;
+    # only the first is made here.
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "odd_names",
+      columns                 = "id bigint NOT NULL, \"Say\"\"Hi\" bigint",
+      primary_keys            = "id",
+      foreign_keys            = "\"Say\"\"Hi\"",
+      foreign_tables          = "\"Par\"\"ent\"",
+      referenced_primary_keys = "\"Sa\"\"y\"",
+      delete_rules            = "a"))
+
+    @test haskey(model.fields, "Say\"Hi")
+    @test model.fields["Say\"Hi"].pk_field == "Sa\"y"
+    @test model.fields["Say\"Hi"].to_table == "Par\"ent"
+  end
+
+  @testset "the RAW index aggregate is not run through the quote_ident inverse" begin
+    # The mutation gate for the one identifier aggregate that is NOT `quote_ident`-ed:
+    # `indexes.index_columns` is a bare `array_agg(a.attname)`. Undoing a doubling that was never
+    # applied corrupts exactly one name class — a column whose real name IS quoted.
+    #
+    # Real name `"x"` (three characters). `columns` carries `quote_ident("\"x\"")` = `"""x"""`,
+    # `index_columns` carries the raw `"x"`. De-quote both and they still agree; de-quote only the
+    # `columns` side, as it must be, and take the raw side verbatim, and they agree too. Run
+    # `_unquote_ident` on BOTH and the index key collapses to `x` while the field key stays `"x"`
+    # — the #325 db_index churn, reintroduced for that name class by the #389 fix itself.
+    model = convertSQLToModel(_introspection_row(
+      table_name    = "d1_probe",
+      columns       = "id bigint NOT NULL, \"\"\"x\"\"\" bigint",
+      primary_keys  = "id",
+      index_columns = "\"x\"",
+      index_names   = "d1_probe_x_idx"))
+
+    @test haskey(model.fields, "\"x\"")
+    @test model.fields["\"x\""].db_index
+    @test model.cache["index"]["\"x\""] == "d1_probe_x_idx"
+  end
+
+  @testset "the all-lowercase case is unchanged (control)" begin
+    # quote_ident leaves a legal lowercase identifier alone, so this is the shape every existing
+    # fixture exercises. It is a NO-REGRESSION CONTROL for the common path, not a mutation gate:
+    # a lowercase name carries no quotes, so no partial normalization can make it fail.
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "results",
+      columns                 = "id bigint NOT NULL, driverid bigint",
+      primary_keys            = "id",
+      foreign_keys            = "driverid",
+      foreign_tables          = "drivers",
+      referenced_primary_keys = "driverid",
+      delete_rules            = "c"))
+
+    @test model.fields["driverid"] isa PormG.Models.sForeignKey
+    @test model.fields["driverid"].pk_field == "driverid"
+    @test model.fields["driverid"].to_table == "drivers"
+    @test model.fields["driverid"].on_delete === PormG.Models.CASCADE
   end
 end

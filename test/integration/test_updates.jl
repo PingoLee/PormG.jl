@@ -2050,3 +2050,91 @@ end
             M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #379 — a match_on key reads the CALLER's column, not PormG's injected fill
+#
+# `bulk_update` resolved a merge key mapping-first, and since #335 PormG's own auto-populated
+# values also write that mapping. So a key naming a field `columns=` left out of scope — here
+# `updated_at`, which is `auto_now` — bound a timestamp minted microseconds earlier instead of
+# the caller's same-named column. The UPDATE matched ZERO rows and returned success: no warning,
+# no error, no rows changed. This is the user-visible half of that defect, and the only assertion
+# that can see it is one that reads the row back and finds it unchanged.
+#
+# `Django_contract_scratch` already carries `updated_at = DateTimeField(auto_now = true)` in BOTH
+# fixture modules, so this needs no schema change and no migration churn.
+#
+# The merge key is the value the database itself returned for the seeded row, fed back verbatim.
+# That is what keeps the test off the PG-microseconds-vs-SQLite-text fault line: the round-trip is
+# exact by construction rather than by a format assumption either backend has to honour.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#379: bulk_update match_on uses the caller's column, not the auto_now fill" begin
+    # Scoped to the "i379-" prefix so this cannot disturb any other file's rows. `filter`
+    # accumulates onto the handler, so build a fresh one per call (same reason as the #331 purge).
+    purge = () -> begin
+        q = M.Django_contract_scratch.objects
+        q.filter("label__@startswith" => "i379-")
+        q.exists() && q.delete()
+    end
+    # Backend-agnostic decimal read-back: PostgreSQL hands back a Decimal, SQLite text.
+    as_number = raw -> parse(Float64, string(raw))
+
+    purge()
+
+    try
+        # Two rows, so the merge key has to be SELECTIVE rather than merely non-empty. The sleep
+        # separates their auto_now stamps: the formatter carries milliseconds, and two creates in
+        # the same millisecond would give both rows the same key.
+        M.Django_contract_scratch.objects.create("label" => "i379-target", "price" => "10.00")
+        sleep(0.05)
+        M.Django_contract_scratch.objects.create("label" => "i379-bystander", "price" => "20.00")
+
+        seeded = M.Django_contract_scratch.objects.
+            filter("label__@startswith" => "i379-").
+            order_by("label").
+            values("label", "updated_at", "price").
+            list()
+        by_label = Dict(row[:label] => row for row in seeded)
+        target    = by_label["i379-target"]
+        bystander = by_label["i379-bystander"]
+
+        # A precondition, not a behavior assertion: if these ever collide the fixture needs a
+        # longer gap. Stated so a failure here is read as "the seed collided", not "the fix broke".
+        @test string(target[:updated_at]) != string(bystander[:updated_at])
+
+        # The merge key is EXACTLY what the database returned for the target row. `updated_at` is
+        # deliberately absent from `columns=`, which is what makes PormG inject a fill for it —
+        # the whole precondition of the bug.
+        update_df = DataFrame(
+            new_price  = ["77.25"],
+            updated_at = [target[:updated_at]],
+        )
+
+        bulk_update(
+            M.Django_contract_scratch.objects, update_df,
+            columns  = ["new_price" => "price"],
+            match_on = ["updated_at"],
+        )
+
+        after = M.Django_contract_scratch.objects.
+            filter("label__@startswith" => "i379-").
+            order_by("label").
+            values("label", "updated_at", "price").
+            list()
+        after_by_label = Dict(row[:label] => row for row in after)
+
+        # 1. The row actually changed. Pre-#379 this was still 10.00 — the silent no-op.
+        @test as_number(after_by_label["i379-target"][:price]) ≈ 77.25
+
+        # 2. A match key is matched, never SET: `deny_fields` keeps it out of the SET clause, so
+        #    the auto_now did NOT refresh on this call. (Also what makes the key stable enough to
+        #    match on at all — a key that rewrote itself would be unusable.)
+        @test string(after_by_label["i379-target"][:updated_at]) == string(target[:updated_at])
+
+        # 3. The other row is untouched — the key selected one row, it did not match everything.
+        @test as_number(after_by_label["i379-bystander"][:price]) ≈ 20.00
+        @test string(after_by_label["i379-bystander"][:updated_at]) == string(bystander[:updated_at])
+    finally
+        purge()
+    end
+end

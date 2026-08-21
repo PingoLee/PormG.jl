@@ -55,16 +55,26 @@ const _BULK_FILL_PREFIX = "__pormg:fill:"
 
 # True for a working-frame column PormG injected rather than the caller supplying it. Used by the
 # three places that would otherwise treat an internal name as the caller's own column:
-# `_resolve_match_column!`'s ignored-column warning and its not-found message, and
+# `_resolve_match_column!`'s SOURCE PRECEDENCE test (`declared`) and its not-found message, and
 # `_depuration_values_bulk_insert`'s error.
 #
 # Deliberately a bare prefix test, and deliberately asymmetric with the WRITE side: the injection
 # uniquifies against `names(df)` so a caller column named like the prefix is never overwritten,
-# while these readers would misread it — a swallowed warning, a column omitted from an error list,
-# or a caller's own column reported as a "PormG-supplied default/auto value".
-# Accepted — the consequence is cosmetic text, the name is one no caller writes by accident, and a
-# reader-side escape would have to thread the real injected-name set through three call sites to
-# buy nothing else.
+# while these readers would misread it.
+#
+# #379 CHANGED WHAT THAT MISREADING COSTS, so the old "it is only cosmetic text" note is gone
+# rather than edited. Two of the three readers still only shape a message — a column omitted from
+# an error list, or a caller's own column reported as a "PormG-supplied default/auto value". The
+# first is now BEHAVIORAL: `declared` decides whether a `columns=` mapping is honored at all, so a
+# caller who both supplies a column named `__pormg:fill:<field>` AND maps it in `columns=` has
+# that mapping silently ignored and is told PormG auto-populates the field. Pre-#379 the same
+# false positive only suppressed a warning while the mapping still won.
+#
+# Still accepted, on a narrower argument than before: the name is one no caller writes by accident
+# (the `:` makes it fail `SAFE_IDENTIFIER_PATTERN`, so it cannot even be a real column being
+# mirrored from a database), and the escape — threading the actual injected-name set out of
+# `_prepare_bulk_df!` and through three call sites — buys nothing for any reachable frame. If a
+# caller-facing feature ever makes such a name reachable, this is the assumption that breaks first.
 _is_injected_fill_column(name::AbstractString) = startswith(name, _BULK_FILL_PREFIX)
 
 # #107 "one border crossing": `columns=` is the ONLY place a DataFrame column is mapped
@@ -871,14 +881,72 @@ function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
   return nothing
 end
 
+# Name the fill kind for `_no_match_source_msg` below. Deliberately mirrors
+# `resolve_absent_column_fill`'s own default-first branch order and its TYPE-keyed dispatch, so
+# the two can never describe the same field differently — and type-keyed is not a stylistic
+# choice: `auto_now`/`auto_now_add` are fields of DateField/DateTimeField only and `auto_add` of
+# UUIDField only, so a bare `f_meta.auto_now` would be a `FieldError` on every other field type.
+# The final fallback is unreachable today (a fill exists only because that chain returned true)
+# and is here so a future fill kind degrades to vague text instead of throwing inside an error path.
+function _bulk_fill_kind_label(f_meta)
+  f_meta.default !== nothing && return "a static `default`"
+  f_meta.type in ("TIMESTAMPTZ", "DATE") && f_meta.auto_now && return "`auto_now`"
+  f_meta.type in ("TIMESTAMPTZ", "DATE") && f_meta.auto_now_add && return "`auto_now_add`"
+  f_meta.type == "UUID" && f_meta.auto_add && return "`auto_add`"
+  return "an ORM-supplied value"
+end
+
+# #379: a merge key that PormG would auto-populate but that the caller gave no source for.
+# `kind` is "match_on" or "primary key"; the closing advice differs by kind — see below.
+function _no_match_source_msg(kind::AbstractString, field::AbstractString, f_meta)
+  # The escape differs by kind, and BOTH forms name a replacement key rather than only a place to
+  # move the predicate to. Advising `filters=` alone would be a half-fix: dropping the field from
+  # `match_on=` empties it, the primary-key fallback takes over, and the caller lands on the same
+  # error for the pk instead. A pk fallback has no `filters=` route at all — a constant predicate
+  # on the pk still leaves no per-row key — so it is offered a different `match_on=` key only.
+  escape = kind == "match_on" ?
+    "move it to `filters=` as a constant predicate and name a real per-row key in `match_on=`" :
+    "name a different merge key in `match_on=`"
+  # "no columns= ENTRY supplies a source column", not "no columns= mapping targets it": a bare
+  # string in `columns=` naming a field the frame has no column for DOES target the field (it is
+  # the "may be auto-populated later" path), so the narrower wording reads as false to that caller.
+  return """
+  bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m has no source column — the DataFrame has no column of that name, and no columns= entry supplies one for it.
+  PormG auto-populates \e[4m\e[31m$(field)\e[0m ($(_bulk_fill_kind_label(f_meta))), but a merge key must come from your data: an auto-populated value is minted once per call, so it would match no rows.
+  Add a DataFrame column named \e[4m\e[32m$(field)\e[0m, map one in columns= (e.g. columns = [..., \"my_col\" => \"$(field)\"]), or $(escape).
+  """
+end
+
 # Map one match key (a bare MODEL FIELD name — #107) into mapping / fields_df /
 # dynamic_filters. Unlike the legacy `filters=` path, a missing source column is a hard
 # error rather than a silent fall-through to a static predicate.
 #
-# Source resolution is MAPPING-FIRST: a mapping declared in `columns=` is authoritative
-# for its field. Only when no mapping exists does a DataFrame column with the field's own
-# name serve as the source. (Pre-#107 the order was reversed — an exact df column won over
-# the mapping — which made a same-named column silently override the declared mapping.)
+# SOURCE PRECEDENCE (#379): a DECLARED `columns=` mapping → the caller's own same-named column
+# → raise.
+#
+# The first arm is mapping-first by design (#107): a `columns=` Pair is a caller instruction and
+# is authoritative for its field, so a same-named column loses to it. (Pre-#107 the order was
+# reversed — an exact df column won over the mapping — which made a same-named column silently
+# override the declared mapping.)
+#
+# An INJECTED FILL is not a caller instruction. It is PormG's own side effect for a field
+# `columns=` left out of scope, and #379 demotes it below the caller's column: it used to satisfy
+# a bare `haskey(mapping, field)` and win the first arm, binding a `now()` minted microseconds ago
+# as the merge key, so the UPDATE matched zero rows and reported success — silently, with no
+# warning and no error. A fill now loses to a caller column and, with no caller column at all,
+# raises rather than matching on a per-call constant.
+#
+# The fill is left in place rather than suppressed at the injection site (the issue's fix B),
+# because rebinding `mapping[field]` below ORPHANS it and nothing reads an orphan:
+#   - every VALUE read goes through `mapping` — `_ensure_unique_bulk_update_keys!`,
+#     `bulk_update`'s row loop, `_depuration_values_bulk_insert`;
+#   - every SQL column list comes from `fields_df`/`joined_columns` → `Models.model_column`,
+#     never from `names(df)`;
+#   - `deny_fields` already excludes match keys from the SET clause, so the fill is never written;
+#   - the working frame is a `copycols = false` wrapper (#132), so the stray column never reaches
+#     the caller's own DataFrame.
+# Suppressing it would instead mean threading `match_on`/the pk fallback into `_prepare_bulk_df!`,
+# which `bulk_insert` and `bulk_copy` share — a wider blast radius for no behavior change.
 function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   mapping::Dict{String, String}, fields_df::Vector{String},
   dynamic_filters::Vector{String}, field::String;
@@ -887,23 +955,27 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
   field in model.field_names ||
     throw(UnknownFieldError("bulk_update: $(kind) field \e[4m\e[31m$(field)\e[0m is not a field of model $(model.name)"))
 
-  resolved = if haskey(mapping, field)
+  # A mapping the CALLER declared in `columns=`, as opposed to one `_prepare_bulk_df!` injected.
+  declared = haskey(mapping, field) && !_is_injected_fill_column(mapping[field])
+
+  resolved = if declared
     # `columns=` mapping wins. If the df ALSO carries a column named exactly like the
     # field, it is ignored in favor of the declared mapping — surface that loudly.
     #
-    # #335: an INJECTED fill column is not a `columns=` mapping, so it must not trip this. Since
-    # #335 every injection points `mapping[field]` at a private name, which makes the first
-    # conjunct true for every auto-populated field — without the prefix test this would fire on
-    # e.g. `match_on = ["updated_at"]` for an auto_now `updated_at` and report a `mapped_source`
-    # the caller never wrote. Pre-#335 the identity mapping made it silently false instead.
-    if !_is_injected_fill_column(mapping[field]) && mapping[field] != field && field in names(df)
+    # #335 added `!_is_injected_fill_column(mapping[field])` to this condition, to keep the
+    # warning quiet for an auto-populated field whose `mapped_source` the caller never wrote.
+    # #379 moved that test up into `declared`, so an injected fill can no longer reach this arm
+    # at all and the condition reduces to what it always meant. Deliberately NO warning on the
+    # new fill-loses-to-caller-column path: that is the documented behavior (`write/bulk.md` →
+    # *Mapping-first match keys*), and a warning for behaving as documented is noise.
+    if mapping[field] != field && field in names(df)
       @warn "bulk_update: $(kind) resolved through the columns= mapping; the same-named DataFrame column is ignored" field=field mapped_source=mapping[field] ignored_column=field
     end
     mapping[field]
   elseif field in names(df)
-    field                                 # identity: df column named like the field
+    field                                 # identity: the caller's own column, over any fill
   else
-    # No mapping and no exact same-named column. A column differing only in case is a
+    # No declared mapping and no exact same-named column. A column differing only in case is a
     # loud error, not a silent fold (see the case-sensitive matching contract above).
     #
     # #335: this runs AFTER `_prepare_bulk_df!`, so the working frame also carries PormG's own
@@ -920,9 +992,24 @@ function _resolve_match_column!(df::DataFrames.DataFrame, model::PormGModel,
     # a model field name from starting with `_`, so it can never equal an injected name.
     caller_columns = filter(!_is_injected_fill_column, names(df))
     candidates = _case_fold_candidates(field, caller_columns)
+    # Case near-miss first: it is the more specific diagnosis and carries a paste-ready fix. A
+    # frame with a `Updated_At` column reads as a typo whether or not the field auto-populates,
+    # and the fill message below would send the caller looking for a column they already have.
     isempty(candidates) ||
       throw(UnknownFieldError(_bulk_case_mismatch_msg(:update, field, candidates,
         "columns = [..., \"$(candidates[1])\" => \"$(field)\"]")))
+    # #379: `haskey(mapping, field)` here means an INJECTED fill — `declared` already consumed
+    # every caller-declared mapping, and `inject_fill_column!` is the only other PormG writer of
+    # `mapping`. "PormG writer" is the honest form of the claim: a caller who supplies a column
+    # literally named `__pormg:fill:<field>` and maps it in `columns=` also lands here, because
+    # `declared` reads the fill prefix off the VALUE and cannot tell the two apart. That frame is
+    # unreachable in practice — see the note on `_is_injected_fill_column` — and the message it
+    # gets is wrong rather than the resolution being unsafe.
+    # Before #379 this arm was unreachable for such a field: the fill won the first arm and the
+    # call quietly matched on a per-call constant. Raising is the point — say why the value that
+    # exists is not usable as a key, instead of reporting the column as merely "not found".
+    haskey(mapping, field) &&
+      throw(UnknownFieldError(_no_match_source_msg(kind, field, model.fields[field])))
     throw(UnknownFieldError("bulk_update: $(kind) column \e[4m\e[31m$(field)\e[0m not found in the DataFrame (columns: \e[4m\e[32m$(caller_columns)\e[0m) and no columns= mapping targets that field"))
   end
 
@@ -1608,7 +1695,7 @@ Performs a bulk update operation on a database table using the provided `DataFra
 - `objct::SQLObjectHandler`: The database handler object.
 - `df::DataFrames.DataFrame`: The DataFrame containing the data to be used for the update.
 - `columns`: (Optional) The **participating fields and their mappings** — the single place a DataFrame column is mapped to a model field. Each entry is a `String` (DataFrame column == model field) or a `Pair{String, String}` of `"df_col" => "model_field"`. A `Vector` of these is accepted. If `nothing`, columns are auto-detected from the DataFrame. Fields selected by `match_on` are used for matching only and are **not** SET.
-- `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.col`). Bare **model field names** only — the source column is the `columns=` mapping for that field when declared, otherwise a DataFrame column with the field's own name. If omitted, the model primary key(s) are used and must be present in the DataFrame.
+- `match_on`: (Optional) The **per-row match keys** that identify which row each DataFrame row updates (the SQL merge condition `Tb.field = source.col`). Bare **model field names** only — the source column is the `columns=` mapping for that field **when you declared one**, otherwise a DataFrame column with the field's own name. A value PormG auto-populates for a field left out of `columns=` (`auto_now`, or a static `default` when `columns=` is omitted — an explicit `columns=` already suppresses static defaults on an update) is not a declared mapping: your same-named column outranks it, and with no caller source at all the call raises `UnknownFieldError` rather than matching every row against one per-call constant. If omitted, the model primary key(s) are used and must be present in the DataFrame, under the same precedence. A match key is **matched, never written** — it stays out of the `SET` clause, so using an `auto_now` field as a key does not refresh that timestamp.
 - `filters`: (Optional) **Constant** predicates AND'd onto the `WHERE` clause, applied to every row. Each entry is a `Pair{String, T}` of `"model_field" => value` (e.g. `"category_id" => 172100`, `"points__@in" => [18, 25]`). When `match_on` is provided, every `filters` entry must be such a constant predicate. A per-row match key in `filters` is rejected with a migration error — move it to `match_on`.
 - `show_query::Bool`: (Optional) If `true`, prints the generated SQL query. Defaults to `false`.
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.

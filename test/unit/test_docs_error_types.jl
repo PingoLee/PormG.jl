@@ -26,9 +26,9 @@ Claims that genuinely need live data — the unprojected-FK read, `create()` val
 
 using Test
 using PormG
-using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, JSONField, UniqueConstraint,
-                    Index, add_field!
-using PormG.QueryBuilder: bulk_insert
+using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField, ForeignKey, JSONField,
+                    UniqueConstraint, Index, add_field!
+using PormG.QueryBuilder: bulk_insert, bulk_update
 import DataFrames
 
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
@@ -70,6 +70,15 @@ const DOCERR_STATUS_SL, DOCERR_DRIVER_SL, DOCERR_RESULT_SL = _docerr_models("doc
 # there would silently change what every other case's model injects on a write.
 const DOCERR_STINT_PG = let m = Model("docerr_stint_docerr_pg",
         id = IDField(), driver = CharField(), laps = IntegerField(default = 0))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
+# #379 — its own model for the same reason, and one fill kind specifically: an explicit `columns=`
+# SUPPRESSES a static `default` on :update, so `auto_now` is the only fill that can still reach
+# `_resolve_match_column!` through `match_on=`.
+const DOCERR_LAP_PG = let m = Model("docerr_lap_docerr_pg",
+        id = IDField(), points = IntegerField(null = true),
+        updated_at = DateTimeField(auto_now = true, null = true))
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
@@ -232,6 +241,20 @@ const DOCERR_CASES = [
         "src/Models.jl — add_field! docstring: a leading-underscore field name raises (#317)",
         ModelDefinitionError,
         () -> add_field!(Model("docerr_addfield_probe", id = IDField()), :_end, CharField()),
+    ),
+    # #379 — `write/bulk.md` → Matching and Execution Rules ("Missing column errors") and
+    # `api.md` both promise that a `match_on` field PormG *would* auto-populate, but that the
+    # caller supplied no source column for, raises rather than binding the auto-populated value.
+    # The frame deliberately has NO `updated_at` column: with one, the caller's column wins and
+    # there is nothing to raise about — which is the other half of the same documented rule and
+    # is pinned by value in test_bulk_update_column_scope.jl.
+    (
+        "write/bulk.md + api.md — an auto-populated match_on field with no caller source raises (#379)",
+        UnknownFieldError,
+        () -> bulk_update(DOCERR_LAP_PG.objects,
+                          DataFrames.DataFrame(new_points = [9]),
+                          columns = ["new_points" => "points"],
+                          match_on = ["updated_at"], show_query = :dict),
     ),
     (
         "write/bulk.md — conflicting columns= target mappings raise QueryBuildError (#380)",

@@ -945,4 +945,207 @@ end
         end
     end
 
+    # ------------------------------------------------------------------
+    # #379 — SOURCE PRECEDENCE for a merge key.
+    #
+    #   declared `columns=` mapping  →  the caller's own same-named column  →  raise
+    #
+    # `Metric` above carries no auto-populated field, so it cannot express any of this:
+    # every one of these cases needs a field `_prepare_bulk_df!` will INJECT a fill for.
+    # `Scope_lap` mirrors `Bfcc_lap` from test_bulk_fill_column_collision.jl — an `auto_now`
+    # timestamp is the only fill kind that survives an explicit `columns=` on :update (a static
+    # `default` is suppressed there, so it cannot reach `_resolve_match_column!` at all).
+    #
+    # The defect: `_resolve_match_column!` was mapping-first on a bare `haskey(mapping, field)`,
+    # and since #335 an injected fill also writes `mapping[field]`. So a merge key naming an
+    # out-of-scope `auto_now` field bound a `now()` minted microseconds earlier instead of the
+    # caller's same-named column — the UPDATE matched zero rows and reported success. Silent.
+    # ------------------------------------------------------------------
+    Scope_lap = Model("scope_lap",
+        id         = IDField(),
+        points     = IntegerField(null = true),
+        note       = CharField(null = true),
+        updated_at = DateTimeField(auto_now = true, null = true),
+    )
+    Scope_lap.connect_key = "default"
+
+    # The issue's own reproduction. The assertion is on the VALUE, not on
+    # `!occursin(<this year>, ...)`: a negative assertion stays green if the binding breaks some
+    # other way (an empty parameter list, a `missing`, next year's clock), so it cannot tell
+    # "reads the caller's column" from "reads nothing at all".
+    #
+    # The bound form is the DateTimeField formatter's UTC normalization of the caller's string,
+    # not the string verbatim — which is exactly the round-trip a real caller gets. What pins the
+    # SOURCE is the 1999 date: `auto_now` can only ever mint `now()`.
+    @testset "match_on prefers the caller's column over an injected auto_now fill (#379)" begin
+        df_379 = DataFrames.DataFrame(new_points = [9], updated_at = ["1999-01-01T00:00:00"])
+        res = bulk_update(
+            Scope_lap.objects, df_379,
+            columns    = ["new_points" => "points"],   # updated_at is OUT of scope → fill injected
+            match_on   = ["updated_at"],               # ...and is also the merge key
+            show_query = :dict
+        )
+        @test res[:parameters] == Any[9, "1999-01-01T00:00:00.000+00:00"]
+        # The merge key is matched, never SET — `deny_fields` keeps it out of the SET clause, so
+        # the auto_now does NOT refresh on this call.
+        #
+        # Assert on the EXTRACTED SET clause, not on the whole statement. A bare
+        # `!occursin("\"updated_at\" = source.\"updated_at\"", sql)` is vacuous in both directions:
+        # that exact substring also occurs inside `WHERE "Tb"."updated_at" = source."updated_at"`,
+        # so it is true whether or not the field leaked into SET. Narrowing to the clause is what
+        # makes the negative assertion able to fail — the leak shape (same call with
+        # `match_on = ["id"]`, where `updated_at` IS set) renders
+        # `SET "points" = ..., "updated_at" = source."updated_at"::timestamptz`.
+        set_clause = match(r"SET (.*?)\nFROM"s, res[:sql_text]).captures[1]
+        @test occursin("\"points\" = source.\"points\"", set_clause)
+        @test !occursin("updated_at", set_clause)
+        # ENGINE-SPECIFIC, unlike the two lines above: these models run on a mock PostgreSQL, and
+        # only PostgreSQL renders the `"Tb".` alias here — `_bulk_update` rewrites it to the bare
+        # table name on SQLite (`WHERE "scope_lap"."updated_at" = ...`). The SET extraction above
+        # transfers to either engine; this line does not.
+        @test occursin("WHERE \"Tb\".\"updated_at\" = source.\"updated_at\"", res[:sql_text])
+    end
+
+    # The #107 contract must NOT regress: #379 demotes injected FILLS only. A Pair the caller
+    # declared still outranks a df column carrying the field's own name, and still says so.
+    # `stamp` (1999) vs `updated_at` (2050) makes the winner unambiguous from the value alone.
+    @testset "a declared columns= Pair still outranks a same-named column (#107 intact)" begin
+        df_pair = DataFrames.DataFrame(
+            new_points = [9],
+            stamp      = ["1999-01-01T00:00:00"],   # the DECLARED source
+            updated_at = ["2050-12-31T00:00:00"],   # same-named column: must lose, loudly
+        )
+        res = @test_logs (:warn, r"resolved through the columns= mapping") match_mode = :any begin
+            bulk_update(
+                Scope_lap.objects, df_pair,
+                columns    = ["new_points" => "points", "stamp" => "updated_at"],
+                match_on   = ["updated_at"],
+                show_query = :dict
+            )
+        end
+        @test res[:parameters] == Any[9, "1999-01-01T00:00:00.000+00:00"]
+    end
+
+    # No caller source at all: the fill is the ONLY value available, and binding it would mean
+    # matching every row against one per-call constant. #379 makes that a hard error instead of
+    # a silent no-op. The message must name the field AND say it is auto-populated — otherwise it
+    # is the generic "column not found", which sends the caller looking for the wrong bug.
+    @testset "an auto-populated match_on field with no caller source raises (#379)" begin
+        df_none = DataFrames.DataFrame(new_points = [9])   # no updated_at column at all
+        err = try
+            bulk_update(
+                Scope_lap.objects, df_none,
+                columns    = ["new_points" => "points"],
+                match_on   = ["updated_at"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.UnknownFieldError
+        msg = sprint(showerror, err)
+        # `\S*` tolerates the ANSI codes wrapped around the field name.
+        @test occursin(r"match_on field \S*updated_at\S* has no source column", msg)
+        @test occursin("auto-populates", msg)
+        @test occursin("auto_now", msg)          # names WHICH fill kind, not just "some default"
+        @test occursin("would match no rows", msg)
+        # The `match_on` branch of the escape advice, and the HALF THAT DISCRIMINATES. Its pair
+        # lives in the primary-key testset below, which asserts the negative. Without this line
+        # the pair is one-sided: a pk key wrongly given the match_on escape fails there, but a
+        # match_on key wrongly given the pk escape passes silently — the `filters=` pointer could
+        # vanish entirely and the suite would stay green.
+        @test occursin("filters=", msg)
+        # Distinguishes this from the neighbouring generic message, which is still correct for a
+        # field PormG does not fill (asserted in "match_on field without any source column raises").
+        @test !occursin("not found in the DataFrame", msg)
+    end
+
+    # Same arm, reached through the PRIMARY-KEY fallback rather than `match_on=` (issue task 5).
+    # Constructible only with `columns=` OMITTED: `inject_fill_column!` suppresses a static
+    # `default` on :update whenever `columns=` is non-empty, and the temporal/UUID fill kinds
+    # cannot sit on a pk (DateTimeField rejects `primary_key`; UUID `auto_add` fills on
+    # :insert/:copy only). So a defaulted CharField pk under auto-detect is the one live shape.
+    #
+    # Pre-#379 this bound the pk's own default as the merge key for every row: a one-row frame
+    # silently updated whatever row happened to carry that default, and a multi-row frame died in
+    # `_ensure_unique_bulk_update_keys!` on a duplicate key tuple.
+    @testset "an auto-populated PRIMARY KEY with no caller source raises (#379, task 5)" begin
+        Scope_pk = Model("scope_pk",
+            code   = CharField(primary_key = true, default = "X", max_length = 10),
+            points = IntegerField(null = true),
+        )
+        Scope_pk.connect_key = "default"
+
+        err = try
+            # No columns= (auto-detect) and no match_on= → the pk fallback resolves `code`.
+            bulk_update(Scope_pk.objects, DataFrames.DataFrame(points = [9]), show_query = :dict)
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.UnknownFieldError
+        msg = sprint(showerror, err)
+        @test occursin(r"primary key field \S*code\S* has no source column", msg)
+        @test occursin("auto-populates", msg)
+        @test occursin("default", msg)               # the fill kind for a pk is a static default
+        # `filters=` is advice only for a match_on key — a constant predicate on the pk still
+        # leaves no per-row key — so a pk fallback is escaped by naming a DIFFERENT key.
+        # `match_on=` is a presence check only: BOTH escapes name it (the match_on one ends
+        # "…and name a real per-row key in `match_on=`"), so it pins that the advice survives,
+        # not which branch produced it. The `!occursin` below is the half that discriminates,
+        # paired with the positive `occursin("filters=", msg)` in the match_on testset above.
+        @test occursin("match_on=", msg)
+        @test !occursin("filters=", msg)
+
+        # Control: the same model with the pk column PRESENT resolves normally and binds it.
+        res = bulk_update(Scope_pk.objects,
+            DataFrames.DataFrame(points = [9], code = ["Z"]), show_query = :dict)
+        @test res[:parameters] == Any[9, "Z"]
+    end
+
+    # A case-only near-miss stays the FIRST diagnosis, ahead of the new fill message. It is the
+    # more specific finding and carries a paste-ready fix; telling a caller who already has an
+    # `Updated_At` column to "supply an updated_at column" would be actively wrong advice.
+    @testset "a case-only near-miss outranks the auto-populated message (#379)" begin
+        df_case = DataFrames.DataFrame(new_points = [9], Updated_At = ["1999-01-01T00:00:00"])
+        err = try
+            bulk_update(
+                Scope_lap.objects, df_case,
+                columns    = ["new_points" => "points"],
+                match_on   = ["updated_at"],
+                show_query = :dict
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.UnknownFieldError
+        msg = sprint(showerror, err)
+        @test occursin("case-sensitive", msg)
+        @test occursin("Updated_At", msg)
+        @test !occursin("has no source column", msg)
+    end
+
+    # Overlap edge: ONE frame column is both a declared `columns=` source for another field and
+    # the same-named merge key. Exotic but reachable, and the fix changes what it does — the fill
+    # used to win the key. Pinned so a later edit cannot move it silently: the single caller
+    # column now feeds both, each through its own field's formatter (raw string into the
+    # CharField SET target, UTC-normalized into the timestamptz merge key), and the orphaned fill
+    # reaches neither the SQL nor the parameters.
+    @testset "one caller column feeding both a SET target and the merge key (#379)" begin
+        df_ov = DataFrames.DataFrame(updated_at = ["1999-01-01T00:00:00"])
+        res = bulk_update(
+            Scope_lap.objects, df_ov,
+            columns    = ["updated_at" => "note"],   # the frame column feeds `note`
+            match_on   = ["updated_at"],             # ...and the `updated_at` merge key
+            show_query = :dict
+        )
+        @test res[:parameters] == Any["1999-01-01T00:00:00", "1999-01-01T00:00:00.000+00:00"]
+        @test occursin("SET \"note\" = source.\"note\"", res[:sql_text])
+        @test occursin("WHERE \"Tb\".\"updated_at\" = source.\"updated_at\"", res[:sql_text])
+        # No private fill name escapes into the rendered SQL.
+        @test !occursin("__pormg:fill:", res[:sql_text])
+    end
+
 end

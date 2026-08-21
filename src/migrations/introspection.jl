@@ -5,6 +5,38 @@
 # ==============================================================================
 
 # ---
+# Shared identifier helpers
+# ---
+
+# The inverse of PostgreSQL's `quote_ident`, which is how the schema query emits every identifier
+# it aggregates. `quote_ident` wraps a name that needs quoting in `"` AND DOUBLES any `"` inside it,
+# so `Say"Hi` comes back as `"Say""Hi"`.
+#
+# `replace(s, "\"" => "")` — which this replaces at six call sites in `convertSQLToModel` — got the
+# common case right and the embedded-quote case silently WRONG: it rewrote `"Say""Hi"` to `SayHi`,
+# a name no column has, so `makemigrations` proposed `ADD COLUMN "SayHi"` plus a `DROP` of the real
+# one, forever, with no warning. Undoing the doubling makes the round trip exact instead.
+#
+# WHAT THAT DOES AND DOES NOT BUY, measured rather than assumed. The name now survives, so the
+# existing table converges and `Model_to_str` regenerates it faithfully — as a legal binding plus
+# `db_column="Say\"Hi"`, which is a rename of the BINDING, not of the column. What it does NOT do
+# is fail closed: `_validate_identifier` (querybuilder/sanitization.jl) guards the QUERY path only,
+# so a query naming that field still raises `InvalidValueError`, while `Dialect.create_table` will
+# happily emit `"Say"Hi"` and close the identifier early. That is the column-name half of the
+# `_quote_table_ddl` escaping #388/#59 applied to TABLE names, and it belongs with #394 — it is not
+# introduced here, but this function is what makes such a name reachable at all.
+#
+# A name with no surrounding pair is returned untouched — `quote_ident` leaves an already-legal
+# lowercase identifier bare. Note this is NOT a safe transform for a RAW producer: a column truly
+# named `"x"` reads back raw as `"x"` and would be stripped to `x`. The `indexes` CTE's
+# `index_columns` is the one raw identifier aggregate in the schema query, and it is deliberately
+# NOT passed through here (see its call site below).
+function _unquote_ident(name::AbstractString)::String
+  (length(name) >= 2 && startswith(name, '"') && endswith(name, '"')) || return String(name)
+  return replace(name[nextind(name, 1):prevind(name, lastindex(name))], "\"\"" => "\"")
+end
+
+# ---
 # Shared FK helpers (both backends)
 # ---
 
@@ -226,7 +258,10 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
   primary_key_regex = eachmatch(r"PRIMARY KEY\s*\((.+?)\)?\s*(AUTOINCREMENT)?\)", sql)
   for match in primary_key_regex
     primary_keys = match.captures[1]
-    primary_keys = replace(primary_keys, r"\"" => "") 
+    # Deliberately NOT `_unquote_ident`: this reader parses DDL PormG itself emitted, where an
+  # identifier is quoted but never contains a doubled `"`, so there is no doubling to undo and the
+  # blanket strip is exact here.
+  primary_keys = replace(primary_keys, r"\"" => "") 
     primary_keys = split(primary_keys, ",")
     auto_increment = isnothing(match.captures[2]) ? false : true
     # println(primary_keys)
@@ -1437,7 +1472,10 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
 
   # Extract primary key constraints
   # row[:primary_keys] is missing for keyless tables (e.g., Lap_times, Pit_stops that have no IDField)
-  pk_set = ismissing(row[:primary_keys]) ? Set{String}() : Set(split(row[:primary_keys], ", "))
+  # De-quoted (#389): the schema query aggregates these as `quote_ident(a.attname)`, and `col_name`
+  # — the only thing ever compared against this set — is normalized at parse time below.
+  pk_set = ismissing(row[:primary_keys]) ? Set{String}() :
+    Set(_unquote_ident(pk) for pk in split(row[:primary_keys], ", "))
     
   # Extract foreign key constraints
   # Widened past `(table, pk)` for #292 to carry the referential action, which the schema query
@@ -1454,27 +1492,51 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       split(row[:delete_rules], ", ") : fill("", length(fk_columns))
     for (i, (fk_col, fk_table, fk_pk)) in enumerate(zip(fk_columns, fk_tables, fk_pk_columns))
         rule = i <= length(delete_rules) ? delete_rules[i] : ""
-        # The parent table is DE-QUOTED (#360). The schema query aggregates it as
-        # `quote_ident(cf.relname)`, so any name that needs quoting — a space, punctuation, mixed
-        # case — arrives wrapped in `"`, while `table_name` comes from a bare `c.relname`. Stored
-        # quoted, `to_table` matched no imported model, so the pass-1 binding rewrite silently
-        # no-opped for exactly the names it exists to handle, and only on PostgreSQL. Same treatment
-        # (and same reason) as `index_map` below, which has de-quoted since #325.
-        fk_map[fk_col] = (table = replace(String(fk_table), "\"" => ""), pk = String(fk_pk),
-                          on_delete = _pg_confdeltype_to_on_delete(rule))
+        # ALL THREE halves are DE-QUOTED. The schema query aggregates each through
+        # `quote_ident`, so any name that needs quoting — a space, punctuation, mixed case —
+        # arrives wrapped in `"` as part of the Julia string. Same treatment (and same reason) as
+        # `index_map` below, which has de-quoted since #325.
+        #
+        #   * `table` since #360: stored quoted, `to_table` matched no imported model, so the
+        #     pass-1 binding rewrite silently no-opped for exactly the names it exists to handle.
+        #   * `pk` and the dict KEY since #389, which is the rest of that same fix. A quoted `pk`
+        #     lands verbatim on the field as `pk_field`, and `Models.fk_target_column` returns it
+        #     unchanged — an introspected field's `.to` is still a String binding, so the
+        #     resolve-through-the-parent branch never runs (and once `set_models` DOES resolve it,
+        #     the lookup misses anyway, because `fields_dict` is keyed de-quoted below). Three
+        #     things broke on that one value: `Dialect.add_foreign_key` emitted
+        #     `REFERENCES "parent"(""Id"")`, `_compare_field_foreign_key` reported the key as
+        #     changed on every `makemigrations`, and the query builder threw `InvalidValueError`
+        #     because `SAFE_IDENTIFIER_PATTERN` forbids a `"`. The KEY moves in the SAME change on
+        #     purpose: it is looked up with `col_name`, so normalizing one side alone would break
+        #     FK detection outright for every mixed-case column.
+        fk_map[_unquote_ident(fk_col)] =
+          (table = _unquote_ident(fk_table),
+           pk = _unquote_ident(fk_pk),
+           on_delete = _pg_confdeltype_to_on_delete(rule))
     end
   end
 
   # Extract index information — physical column ⇒ index name, for the single-column secondary
-  # indexes the `indexes` CTE keeps. Both halves are stored UNQUOTED (#325): the key has to match
-  # `fields_dict`, which is keyed by the de-quoted column name below, and the value is re-quoted by
-  # `_drop_index`. A mixed-case name (#57) arrived here wrapped in `"` and matched neither.
+  # indexes the `indexes` CTE keeps. Both halves end up UNQUOTED (#325), but they get there
+  # differently, and the asymmetry is in the SQL rather than here:
+  #
+  #   * the KEY comes from `array_agg(a.attname)` — RAW, the only identifier aggregate in the
+  #     schema query that is not wrapped in `quote_ident`. It is therefore already the physical
+  #     name and is taken verbatim. Running it through `_unquote_ident` would be actively wrong:
+  #     a column genuinely named `"x"` reads back raw as `"x"` and would be stripped to `x`, which
+  #     no longer matches the `fields_dict` key built from the `quote_ident`-ed `columns`
+  #     aggregate — reintroducing the #325 churn for that name class.
+  #   * the VALUE comes from `array_agg(quote_ident(c.relname))` and does need the inverse; it is
+  #     re-quoted by `_drop_index` on the way out.
+  #
+  # A mixed-case name (#57) used to arrive here and match neither half.
   index_map = Dict{String, String}()
   if !ismissing(row[:index_columns])
     indexes = split(row[:index_columns], ", ")
     index_names = split(row[:index_names], ", ")
     for (index, index_name) in zip(indexes, index_names)
-      index_map[replace(index, "\"" => "")] = replace(index_name, "\"" => "")
+      index_map[String(index)] = _unquote_ident(index_name)
     end
   end
    
@@ -1482,7 +1544,21 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
   for col in columns    
       col_parts = split(replace(col, "double precision" => "double_precision")
       , " ")
-      col_name = col_parts[1]
+      # De-quoted ONCE, here (#389). `columns` is aggregated as `quote_ident(a.attname)`, so a
+      # mixed-case name (or a reserved word) arrives wrapped in `"`. Every consumer below —
+      # `index_map`, `pk_set`, `fk_map`, `fields_dict` — is keyed on the de-quoted form, and
+      # normalizing at the single parse site is what keeps them agreeing. Before this the reader
+      # de-quoted at two of those four sites and left the other two quoted, which happened to work
+      # only because their counterparts were quoted too.
+      #
+      # NOT covered: an identifier containing a SPACE. `col_parts` splits the aggregate on `" "`
+      # one line up, so `"Parent Id"` is torn in half before any de-quoting can help, and the
+      # column is emitted under the phantom name `Parent`. `fk_map`'s key survives it (that
+      # aggregate splits on `", "`), so the two sides genuinely disagree for exactly that class of
+      # name — a live PG/SQLite divergence, since the SQLite reader takes `PRAGMA` output raw.
+      # Fixing it means changing the `columns` aggregate's format, not the de-quoting, so it is out
+      # of scope for #389. No issue filed yet — see this PR's body.
+      col_name = _unquote_ident(col_parts[1])
       col_type = lowercase(col_parts[2])
       generated::Bool = false
       max_length = nothing
@@ -1492,8 +1568,9 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # Detect if the column is indexed. #325: this probed a `Dict{String,String}` with a `Symbol`
       # key, which `haskey` never matches — so `db_index` was a hard `false` for every plain
       # PostgreSQL column, and every `db_index=true` field re-proposed its own CREATE INDEX on every
-      # `makemigrations`. `col_name` is de-quoted to match `index_map`'s keys.
-      db_index = haskey(index_map, replace(String(col_name), "\"" => ""))
+      # `makemigrations`. Both sides are de-quoted: `index_map`'s keys when it is built, and
+      # `col_name` at its single parse site above (#389).
+      db_index = haskey(index_map, col_name)
 
       @pormg_debug false
 
@@ -1662,7 +1739,7 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       end
       
       # Add field to fields dictionary
-      fields_dict[replace(col_name, "\"" => "")] = field
+      fields_dict[col_name] = field
   end
 
   # Construct and return the model

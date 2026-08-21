@@ -32,6 +32,7 @@
   # Child before parent: since #276 SQLite enforces foreign keys, so dropping the parent while the
   # child still references it raises instead of silently succeeding.
   fixtures = ("pormg_it_fk_child", "pormg_it_fk_parent",
+              "pormg_it_MixedChild", "pormg_it_MixedParent",
               "pormg_it_natural_key", "pormg_it_numeric_key", "pormg_it_ignored",
               "pormg_it_uniq")
   drop_fixtures() = for t in fixtures
@@ -78,6 +79,24 @@
          fk_o2o        INTEGER UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
        )"""
 
+  # #389 fixture: the ONLY mixed-case identifiers in this file. Every other fixture is lowercase,
+  # so PostgreSQL's `quote_ident` returns them unquoted and the whole quoting hazard is invisible —
+  # which is exactly why the bug survived here. A quoted mixed-case parent PK (`"Id"`) is what the
+  # `referenced_primary_keys` aggregate wraps in `"`, and the mixed-case CHILD column (`"ParentId"`)
+  # covers the `fk_cols` / `col_name` pairing that has to be normalized in the same change.
+  mixed_parent_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_MixedParent" ("Id" BIGINT PRIMARY KEY, "Label" VARCHAR(50))""" :
+    """CREATE TABLE "pormg_it_MixedParent" ("Id" INTEGER PRIMARY KEY, "Label" TEXT)"""
+  mixed_child_ddl = is_pg ?
+    """CREATE TABLE "pormg_it_MixedChild" (
+         id         BIGINT PRIMARY KEY,
+         "ParentId" BIGINT REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
+       )""" :
+    """CREATE TABLE "pormg_it_MixedChild" (
+         id         INTEGER PRIMARY KEY,
+         "ParentId" INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
+       )"""
+
   # #318: TWO separate single-column UNIQUEs on one table plus a composite. This is the ONLY place
   # PostgreSQL's `unique_constraints` CTE actually runs, and the two-uniques shape is precisely what
   # it got wrong (it merged both constraints' columns into one per-table array, then rejected both
@@ -98,6 +117,8 @@
   ddl(ignored_ddl)
   ddl(fk_parent_ddl)
   ddl(fk_child_ddl)
+  ddl(mixed_parent_ddl)
+  ddl(mixed_child_ddl)
   ddl(uniq_ddl)
   # #347: a composite NON-unique index on the same table, deliberately in the REVERSE column order
   # of the composite UNIQUE declared above. Both backends excluded every multi-column index from
@@ -248,6 +269,48 @@
     Core.eval(uniq_mod, :(import PormG.Models))
     uniq_reloaded = Core.eval(uniq_mod, Meta.parse(uniq_src))
     @test uniq_reloaded.cache["composite_indexes"]["indexes"][1].fields == ["b", "a"]
+
+    # ── 3d. Mixed-case FK/PK identifiers survive quote_ident (#389) ──────────
+    # PostgreSQL aggregates `fk_cols`, `fk_tables` and `referenced_primary_keys` through
+    # `quote_ident`, so a mixed-case name arrives with the `"` characters as part of the string.
+    # #360 de-quoted the table half; the referenced PK stayed quoted and landed verbatim on
+    # `pk_field` (an introspected field's `.to` is a String binding, so `fk_target_column` returns
+    # it unchanged). That one value made `Dialect.add_foreign_key` emit
+    # `REFERENCES "parent"(""Id"")` — two quote pairs, because the caller adds one around a value
+    # that already carries one — made `_compare_field_foreign_key` report the key as changed on
+    # every makemigrations, and made the query builder throw `InvalidValueError`
+    # (`SAFE_IDENTIFIER_PATTERN` forbids a `"`).
+    #
+    # This is the live half of test/unit/test_introspection_guards.jl's #389 block. It runs on both
+    # backends even though only PostgreSQL has the hazard: SQLite reads FK metadata from
+    # `PRAGMA foreign_key_list`, whose identifiers come back raw, so this pins that the two engines
+    # agree on the same schema rather than assuming it.
+    mixed_models = PormG.Migrations.convert_schema_to_models(pool;
+        include_table = ["pormg_it_MixedParent", "pormg_it_MixedChild"])
+    mixed_by_name = Dict(lowercase(string(m.name)) => m for m in mixed_models)
+
+    @test haskey(mixed_by_name, "pormg_it_mixedchild")
+    @test haskey(mixed_by_name, "pormg_it_mixedparent")
+    mixed_child  = mixed_by_name["pormg_it_mixedchild"]
+    mixed_parent = mixed_by_name["pormg_it_mixedparent"]
+
+    # The parent's mixed-case PRIMARY KEY is detected as the key. `pk_set` is `quote_ident`-ed too,
+    # and is compared against `col_name`; normalizing one without the other leaves the table keyless.
+    @test haskey(mixed_parent.fields, "Id")
+    @test mixed_parent.fields["Id"] isa PormG.Models.sIDField
+
+    # The mixed-case CHILD column is still recognised as a foreign key — the mutation gate for
+    # moving `fk_cols` and `col_name` together.
+    @test haskey(mixed_child.fields, "ParentId")
+    @test mixed_child.fields["ParentId"] isa PormG.Models.sForeignKey
+
+    # THE defect: the referenced parent column, unquoted, both raw and resolved.
+    @test mixed_child.fields["ParentId"].pk_field == "Id"
+    @test PormG.Models.fk_target_column(mixed_child.fields["ParentId"]) == "Id"
+
+    # The #360 half still holds for a mixed-case parent table.
+    @test mixed_child.fields["ParentId"].to_table == "pormg_it_MixedParent"
+    @test mixed_child.fields["ParentId"].on_delete === PormG.Models.CASCADE
 
     # ── 4. The regenerated module registers via set_models (#287/#291) ───────
     # THE regression assertion. Before #292 this threw ModelDefinitionError ("declares on_delete

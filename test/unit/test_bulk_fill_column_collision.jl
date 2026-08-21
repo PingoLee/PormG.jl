@@ -314,18 +314,30 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "private fill names do not escape into caller-facing output" begin
         # `updated_at` is auto_now and excluded by columns=, so it is injected; the frame also
-        # carries a column of that name. Without the prefix test in `_resolve_match_column!`,
-        # `mapping["updated_at"] != "updated_at"` is now true and the warning fires, telling the
-        # caller their column was "ignored in favor of the columns= mapping" — a mapping they
-        # never declared, naming a source column that does not exist for them.
+        # carries a column of that name. The warning must not fire: it would tell the caller their
+        # column was "ignored in favor of the columns= mapping" — a mapping they never declared,
+        # naming a source column that does not exist for them.
         # `id` is deliberately NOT mapped here: `match_on` names `updated_at`, so anything else
         # in `columns=` becomes a SET target, and a primary key may not be one.
+        #
+        # WHY IT STAYS QUIET CHANGED WITH #379, and the distinction matters when reading this.
+        # #335 kept it quiet by adding `!_is_injected_fill_column(...)` to the warning's own
+        # condition, while the fill still WON resolution. #379 moved that test up into the arm
+        # condition (`declared`), so an injected fill no longer reaches the warning at all — and
+        # no longer wins. Same silence, opposite outcome underneath, which is exactly why the
+        # value assertion below is not optional: this testset used to discard the result and so
+        # could not tell the two apart. It was green through the whole of #379's defect.
         df_warn = DataFrames.DataFrame(new_points = [9], updated_at = ["1999-01-01T00:00:00"])
         # An empty pattern list asserts NO log records are emitted.
-        @test_logs bulk_update(Bfcc_lap.objects, df_warn,
-                               columns  = ["new_points" => "points"],
-                               match_on = ["updated_at"],
-                               show_query = :dict)
+        res_warn = @test_logs bulk_update(Bfcc_lap.objects, df_warn,
+                                          columns  = ["new_points" => "points"],
+                                          match_on = ["updated_at"],
+                                          show_query = :dict)
+        # #379: the merge key binds the CALLER's 1999 column, not the auto_now stamp minted during
+        # this call. The 1999 date is what pins the source — `auto_now` can only mint `now()`.
+        # (Full precedence coverage lives in test_bulk_update_column_scope.jl; this is the one
+        # assertion that keeps THIS file honest about the value behind its silence.)
+        @test res_warn[:parameters] == Any[9, "1999-01-01T00:00:00.000+00:00"]
 
         # The not-found message lists the frame's columns as a "here is what you have" hint. It
         # must list what the CALLER has: a `columns:` entry reading `__pormg:fill:updated_at`

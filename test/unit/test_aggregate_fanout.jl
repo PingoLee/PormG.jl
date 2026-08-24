@@ -29,6 +29,8 @@ import PormG.QueryBuilder: _extract_leading_alias
     @test _extract_leading_alias(["a", "b"]) === nothing
 
     # Logic: an identifier containing escaped (doubled) quotes is unescaped in the returned alias.
-    # Why: quote_identifier escapes embedded quotes as "" — extraction must reverse that faithfully.
+    # Why: `safe_column_identifier` escapes embedded quotes as "" — extraction must reverse that
+    # faithfully. Reachable in practice since #394: the query path escapes a physical column rather
+    # than refusing it, so a `db_column` carrying a quote now reaches this extractor.
     @test _extract_leading_alias("\"we\"\"ird\".\"c\"") == "we\"ird"
 end

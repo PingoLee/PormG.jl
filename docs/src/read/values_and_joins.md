@@ -138,9 +138,25 @@ df = query |> DataFrame
 
 ### Naming Reverse Relations
 
-By default, the name used to traverse backwards is the **lowercase name of the source model** (e.g., `result` for `Result`). 
+By default, the name used to traverse backwards is the **lowercase name of the source model** (e.g., `result` for `Result`) — as long as that model declares exactly **one** relation to the target.
 
-If you have multiple `ForeignKey`s pointing to the same target model, or if you simply prefer a more descriptive name, define a `related_name` on the `ForeignKey`:
+When a model declares **two or more** relations to the same target, one name cannot address them all, so PormG suffixes **every** member of that group with its own field name: `<model>_<field>`. No member keeps the bare model name, and PormG logs each derived name at `@info` when the models are registered.
+
+```julia
+# Incident points at Driver twice, so neither reverse accessor is the bare `incident`:
+Incident = Models.Model("incident",
+  id = Models.IDField(),
+  causing_driver_id  = Models.ForeignKey(Driver, pk_field="id"),
+  affected_driver_id = Models.ForeignKey(Driver, pk_field="id"),
+)
+
+query = M.Driver.objects
+query.values("surname", "incident_causing_driver_id__lap")
+```
+
+The count spans relation kinds: a `ManyToManyField` to the same target counts toward the group too, which is why a model carrying both a self-`ForeignKey` and a self-`ManyToManyField` gets two distinct accessors instead of one collision.
+
+Whenever you would rather read a name than derive it — and always when the group is larger than a pair — define a `related_name` on the field. An explicit name always wins:
 
 ```julia
 # Model definition snippet

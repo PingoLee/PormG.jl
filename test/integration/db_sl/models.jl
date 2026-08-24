@@ -537,4 +537,29 @@ Db_table_col_scratch = Models.Model("db_table_col_scratch",
   sku = Models.CharField(db_column="product_sku", null=true),
 )
 
+
+# #394 — a physical TABLE name that PormG's DDL renders but its query builder used to REFUSE.
+# `db_table` is deliberately not shape-validated (#59), because naming what PormG's own conventions
+# could not produce is the point of the option — yet the query side ran every table through a
+# fail-closed identifier pattern that rejects a space. So `migrate` created this table and every
+# SELECT against it raised `InvalidValueError`. The same name also broke the generated
+# `pending_migrations.jl`, which writes each table as a Julia BINDING.
+#
+# A space rather than an embedded quote: it exercises the validator-versus-escaper split exactly,
+# without also stressing the introspection quote-doubling path (#389) inside the migration diff. No
+# index, no unique constraint and no foreign key, so the fixture stays clear of the index-name and
+# REFERENCES renderers, which Db_table_scratch above already covers.
+#
+# The COLUMN axis is deliberately absent here. A spaced `db_column` renders and queries correctly
+# (pinned in `test/unit/test_identifier_quoting.jl`), but PostgreSQL introspection tears it in half
+# on the `columns` aggregate — a pre-existing, separately-tracked defect (#414) whose fix is a change
+# to that aggregate's format, not to any quoting. Putting one here would make this fixture re-propose
+# `Add field / Remove field` on every `makemigrations` and fail the global no-drift assertion.
+Odd_identifier_scratch = Models.Model("odd_identifier_scratch",
+  db_table = "Odd Identifier Scratch",
+  id = Models.IDField(),
+  driverref = Models.CharField(max_length=30, null=true),
+  points = Models.IntegerField(null=true),
+)
+
 end

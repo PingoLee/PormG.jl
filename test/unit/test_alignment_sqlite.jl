@@ -2150,10 +2150,13 @@ end
 end
 
 @testset "Related Objects - Auto-generated related_name key format" begin
-    # Just_a_nested_roll_back has a single FK to Just_a_test_deletion with no
-    # explicit related_name. The auto-generated key should be the lowercased
-    # model name of Just_a_nested_roll_back.
+    # Just_a_nested_roll_back has a SINGLE relation to Just_a_test_deletion with no explicit
+    # related_name, so it takes the lone-relation arm of the derivation: the lowercased model name of
+    # Just_a_nested_roll_back, bare. #396 changed only the other arm — a model with two or more
+    # relations to one target now suffixes every one of them with the field name — so this key is
+    # deliberately unchanged and this testset is the negative control for that.
     @test haskey(M.Just_a_test_deletion.related_objects, "just_a_nested_roll_back")
+    @test !haskey(M.Just_a_test_deletion.related_objects, "just_a_nested_roll_back_test")
 
     # Verify the relation structure. This was a bare 4-tuple until #343; the 4th slot (the child's
     # own PK) is gone with it, unread by anything, and two slots were ADDED that no string function
@@ -2199,7 +2202,17 @@ end
     Core.eval(dup_mod, :(const DupChild = $DupChild))
 
     # set_models should reject the duplicate related_name
-    @test_throws PormG.ModelDefinitionError PormG.Models.set_models(dup_mod, "mock_sl_path")
+    dup_err = @test_throws PormG.ModelDefinitionError PormG.Models.set_models(dup_mod, "mock_sl_path")
+
+    # #396: the message names BOTH ends of the collision and the name they collide on. It used to
+    # name the model twice ("The related_name same_name in the model dup_child is already defined")
+    # and neither field, which on a self-relation read as the model colliding with itself. Which of
+    # fk1/fk2 registers first is `Dict` hash order, so both spellings are asserted rather than one.
+    dup_msg = dup_err.value.msg
+    @test occursin("same_name", dup_msg)
+    @test occursin("dup_child.fk1", dup_msg)
+    @test occursin("dup_child.fk2", dup_msg)
+    @test occursin("dup_parent", dup_msg)
 end
 
 @testset "Delete Graph - Circular dependency detection" begin

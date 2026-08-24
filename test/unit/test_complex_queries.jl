@@ -624,6 +624,12 @@ Race = Models.Model("fks_race",
 # there. PormG declares that FK as `circuit_id`, which `circuit` does not collide with. The clash is
 # only between the reverse name and the SHORT FORM the resolver would invent, which is exactly why
 # the resolver must defer rather than silently pick a side.
+#
+# #396 added a registration-time check that a reverse accessor does not shadow a field on the model
+# it lands on. That check is `haskey(related_model.fields, accessor)` VERBATIM and deliberately does
+# NOT go through `_resolve_fk_short_form` — widening it to the short form would outlaw this fixture.
+# If a future change makes this model set raise, the check has been over-widened, not this fixture
+# made wrong.
 Lap = Models.Model("fks_lap",
   id = Models.IDField(),
   name = Models.CharField(),

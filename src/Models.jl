@@ -207,9 +207,10 @@ end
   model_resolved::PormGModel  # the CHILD model itself
 end
 
-# Single constructor for the three `set_models` branches (>=2 FKs to one target, 1 FK with an
-# implicit accessor, 1 FK with an explicit `related_name`). They differ only in the Dict KEY they
-# store under; the relation itself is identical, and before #343 that identity was three copies of
+# Single constructor for every reverse FK/O2O relation. It served three `set_models` branches that
+# differed only in the Dict KEY they wrote under (>=2 relations to one target, one with an implicit
+# accessor, one with an explicit `related_name`); #396 collapsed those into `_register_reverse_accessor!`,
+# which derives the key first and writes once. Before #343 the relation itself was three copies of
 # one tuple literal. `Symbol(field.pk_field)` reproduces the old `field.pk_field |> Symbol` exactly,
 # including the `:nothing` degenerate for a pk_field `resolve_fk_target!` could not default.
 _reverse_relation(child::PormGModel, model_name::Symbol, binding::Symbol,
@@ -221,6 +222,165 @@ _reverse_relation(child::PormGModel, model_name::Symbol, binding::Symbol,
     binding        = binding,
     model_resolved = child,
   )
+
+# ── Reverse-accessor derivation and registration (#396) ────────────────────────────────────────
+# The accessor a relation installs on its TARGET when the declaration names none:
+#
+#   one relation to that target   →  the child's logical name        (`driver`)
+#   two or more                   →  `<child logical name>_<field>`  (`driver_mentor`, `driver_teammates`)
+#
+# The count is over EVERY relation this model declares to that target — ForeignKey, OneToOneField
+# AND ManyToManyField — and it is taken BEFORE anything is registered. Both halves are the fix.
+#
+# Before #396 the count accumulated as `pairs(model.fields)` was walked, so in a group of N the
+# field VISITED FIRST kept the bare name and the rest were suffixed. `fields` is an unordered
+# `Dict`, so which one that was is hash order — and adding an unrelated field to the model rehashed
+# it. Many-to-many never entered the count at all, so a self-`ForeignKey` and a self-`ManyToManyField`
+# on one model both derived the bare model name: whichever registered first won, and the other
+# either threw or (m2m-first) silently replaced a `ManyToManyRelation` with a `ReverseRelation`.
+#
+# SYMMETRIC on purpose: in a group of N, NO relation keeps the bare name. "The first one is special"
+# is only definable against an order, and there is none.
+#
+# `<model>_<field>` rather than a stem with a trailing `_id` trimmed. Field names are unique within a
+# model by construction, so this spelling is injective across the group for free; any trimming rule
+# can map two distinct fields (`mentor` + `mentor_id`) onto one string and turn a working schema into
+# a hard error. It is also the spelling PormG already used for the suffixed members of a multi-FK
+# group, which keeps the rename in a pure-foreign-key group down to the ONE member that used to win
+# the race. A group containing a `ManyToManyField` is different: many-to-many never entered the old
+# count at all, so its accessor was unconditionally the bare model name and every m2m in a group of
+# two or more is renamed. The `UPGRADING.md` entry states both halves.
+_derived_reverse_accessor(model_name::Symbol, field_name::AbstractString, count::Int)::String =
+  count > 1 ? lowercase(string(model_name, "_", field_name)) : String(model_name)
+
+# Lenient twin of `_resolve_model_reference` for the pre-scan's `strict = false` path (#396): a
+# many-to-many whose target cannot be resolved is skipped rather than aborting the scan. Narrowed to
+# `ModelDefinitionError` — the not-found case — so a genuine bug still surfaces, matching the
+# `UndefVarError` narrowing in `_resolve_target_model`.
+_try_resolve_model_reference(_module::Module, to)::Union{PormGModel, Nothing} =
+  try
+    _resolve_model_reference(_module, to)
+  catch e
+    e isa ModelDefinitionError ? nothing : rethrow()
+  end
+
+# One pass over `model.fields` that resolves every relation target and counts them per target, so the
+# registration pass can derive an accessor that does not depend on the order it walks in (#396).
+# Returns `(targets, counts)`: `targets` maps a FIELD NAME to its resolved target model; `counts` is
+# keyed on the target model's IDENTITY (`IdDict`), not its logical name — two models may share a
+# logical name, and they are two different reverse-accessor namespaces.
+#
+# `strict = true` (the `set_models` path) keeps the immediate throw of `resolve_fk_target!` on an
+# unresolvable target — see the comment at that call site for why that one is never collected into
+# the #303 contradiction list. It now fires before this model registers ANY of its relations rather
+# than part-way through, which is a state a successful run also produces; what changed is that it no
+# longer depends on hash order. `strict = false` (the `add_field!` path) resolves leniently and
+# simply does not count what it cannot resolve: adding one field must not abort on an unrelated
+# broken foreign key.
+function _collect_relation_targets(model::PormGModel, _module::Module; strict::Bool = true)
+  targets = Dict{String, PormGModel}()
+  counts  = IdDict{PormGModel, Int}()
+  for (field_name, field) in pairs(model.fields)
+    target = if field isa sForeignKey || field isa sOneToOneField
+      resolve_fk_target!(field, field_name, model.name, _module; strict = strict)
+    elseif is_many_to_many_field(field)
+      strict ? _resolve_model_reference(_module, field.to) :
+               _try_resolve_model_reference(_module, field.to)
+    else
+      nothing
+    end
+    target isa PormGModel || continue
+    targets[field_name] = target
+    counts[target] = get(counts, target, 0) + 1
+  end
+  return targets, counts
+end
+
+# Pick the accessor for one relation and announce it when PormG chose it out of a group (#396). An
+# explicit `related_name` always wins and is never logged — the user already knows that name. The
+# `@info` fires only for a DERIVED name in a group of two or more: a lone relation still gets the
+# bare model name, which is documented and stable, and logging that would be noise on every load.
+# Routed through `_emsg` so the highlight degrades off-TTY (log files, CI, structured sinks).
+function _reverse_accessor_for(model::PormGModel, model_name::Symbol, field_name::AbstractString,
+                               field, target::PormGModel, counts::IdDict{PormGModel, Int})::String
+  field.related_name === nothing || return String(field.related_name)
+  n = get(counts, target, 1)
+  accessor = _derived_reverse_accessor(model_name, field_name, n)
+  n > 1 && @info _emsg(
+    "$(model.name).$(field_name) declares no related_name and is one of $(n) relations to " *
+    "$(target.name); its reverse accessor is \e[31m$(accessor)\e[0m. " *
+    "Set \e[1mrelated_name\e[0m on the field to choose the name yourself.")
+  return accessor
+end
+
+# Who currently owns an accessor on a target model — for the collision message (#396). The three
+# pre-#396 messages named the model TWICE and neither field, which on a self-relation read as "the
+# model collided with itself"; naming the other end is the whole difference.
+#
+# A `ManyToManyRelation` reached through `related_objects` is always the REVERSED one, and
+# `_reverse_many_to_many_relation` swaps the sides — so the DECLARING model is its `related_model`
+# and the field that declared it is its `inverse_accessor`. The forward arm is defensive only.
+_accessor_holder(rel::ReverseRelation)::String = "$(rel.model_resolved.name).$(rel.fk_field)"
+_accessor_holder(rel::ManyToManyRelation)::String =
+  rel.reverse ? "$(rel.related_model).$(rel.inverse_accessor)" : "$(rel.owner_model).$(rel.field_name)"
+_accessor_holder(::Any)::String = "another relation"
+
+# Shared preamble for both collision messages (#396): which relation is asking, for which name, on
+# which model, and whether PormG or the user chose the name. A user who never wrote `related_name`
+# must not be sent looking for an option that is not in their own source.
+function _accessor_context(model::PormGModel, field_name::AbstractString,
+                           target::PormGModel, accessor::AbstractString, derived::Bool)::String
+  origin = derived ? " (derived — $(model.name).$(field_name) declares no related_name)" : ""
+  self   = _same_model_reference(target, model) ?
+    " The relation is self-referential, so both of its ends land on this one model." : ""
+  return "$(model.name).$(field_name) wants the reverse accessor \e[4m\e[31m$(accessor)\e[0m on " *
+         "\e[32m$(target.name)\e[0m$(origin).$(self)"
+end
+
+function _reverse_accessor_taken(model::PormGModel, field_name::AbstractString, target::PormGModel,
+                                 accessor::AbstractString, derived::Bool,
+                                 held_by::AbstractString)::ModelDefinitionError
+  return ModelDefinitionError(
+    _accessor_context(model, field_name, target, accessor, derived) *
+    " \e[32m$(held_by)\e[0m already holds that name there, and one accessor cannot address two " *
+    "relations — one of them would be unreachable. Give $(model.name).$(field_name) an explicit " *
+    "\e[1mrelated_name\e[0m.")
+end
+
+function _reverse_accessor_shadows_field(model::PormGModel, field_name::AbstractString,
+                                         target::PormGModel, accessor::AbstractString,
+                                         derived::Bool)::ModelDefinitionError
+  return ModelDefinitionError(
+    _accessor_context(model, field_name, target, accessor, derived) *
+    " But \e[32m$(target.name).$(accessor)\e[0m is a FIELD of that model, and the join builder " *
+    "resolves a field before a reverse accessor at every hop — so the relation would register " *
+    "cleanly and then be permanently unreachable. Give $(model.name).$(field_name) an explicit " *
+    "\e[1mrelated_name\e[0m.")
+end
+
+# The single guarded write for a reverse FK/O2O accessor (#396). All three pre-#396 branches did
+# exactly this and differed only in the key they wrote under; only two of them checked first, and the
+# unchecked one (a lone FK with no `related_name`) is how a many-to-many reverse relation got
+# silently overwritten by a `ReverseRelation`.
+#
+# The field check is `haskey(target.fields, accessor)` VERBATIM — deliberately NOT routed through
+# `_resolve_fk_short_form`. A `related_name` matching the SHORT FORM of a field (`circuit` against a
+# declared `circuit_id`) is legal and load-bearing (#345), and widening this check to the short form
+# would outlaw it. See `test/unit/test_complex_queries.jl` → "Short-form FK resolution defers to an
+# existing reverse accessor (#345)".
+function _register_reverse_accessor!(target::PormGModel, accessor::AbstractString,
+                                     model::PormGModel, model_name::Symbol, model_binding::Symbol,
+                                     field_name::AbstractString, field)::Nothing
+  derived = field.related_name === nothing
+  haskey(target.fields, accessor) &&
+    throw(_reverse_accessor_shadows_field(model, field_name, target, accessor, derived))
+  haskey(target.related_objects, accessor) &&
+    throw(_reverse_accessor_taken(model, field_name, target, accessor, derived,
+                                  _accessor_holder(target.related_objects[accessor])))
+  target.related_objects[accessor] =
+    _reverse_relation(model, model_name, model_binding, field_name, field)
+  return nothing
+end
 
 # A Model_Type is resolved schema state — its `fields`, `_module`, and `related_objects` are built once
 # by `set_models` and treated as an immutable, SHARED reference everywhere (the query builder copies query
@@ -501,7 +661,6 @@ function _render_contradictions(cs::Vector{ModelContradiction}, mod::Module)::St
                        "the schema contradicts itself. $(c.fix)" for c in ordered)
 end
 
-# TODO add related_name (like django validation) to check if the field is a ForeignKey and the related_name model is defined when models has more than one foreign key to the same model
 #
 # NOTE: keep this comment ABOVE the docstring. A comment between a docstring and the definition it
 # documents silently detaches it — `@doc` binds to the next expression, and the comment is not one,
@@ -530,8 +689,12 @@ Registration does four things:
    `MissingConfigurationError` from that implicit load if `path` holds no `connection.yml`.
 3. **Resolves relationships.** Each `ForeignKey`/`OneToOneField` target is resolved (a target given
    as a model-name `String` is replaced by the model object), `pk_field` defaults are applied, and
-   the reverse accessor is installed on the target. With two foreign keys to the same model, an
-   omitted `related_name` is auto-derived and logged. `ManyToManyField`s get their join-table
+   the reverse accessor is installed on the target. An omitted `related_name` is derived and logged:
+   the lowercase model name when it is the model's only relation to that target, `<model>_<field>`
+   for every member of a group of two or more — counting `ForeignKey`, `OneToOneField` and
+   `ManyToManyField` together (#396). A derived accessor is never written back onto the field. In
+   every case the accessor is checked against the target's field names and its already-registered
+   accessors; either clash raises `ModelDefinitionError`. `ManyToManyField`s get their join-table
    metadata built and cached.
 4. **Rejects contradictions.** `on_delete = SET_NULL` on a `null = false` field, or `SET_DEFAULT`
    with no `default`, raises `ModelDefinitionError` here — at declaration, rather than later as a
@@ -625,62 +788,38 @@ function set_models(_module::Module, path::String)::Nothing
   # field, then raised once below. See `_render_contradictions` for the ordering contract.
   contradictions = ModelContradiction[]
 
-  # Validate like django related_name, if the model has more than one foreign key to the same model the related_name must be defined
+  # #396: reverse-accessor wiring. Every relation a model declares to a given target is counted
+  # BEFORE any of them registers, so a derived accessor cannot depend on the order
+  # `pairs(model.fields)` happens to walk in. `_derived_reverse_accessor` carries the rule and why
+  # it is symmetric; `_register_reverse_accessor!` carries the guards.
   for model in models
-    dict_tables_c = Dict{String, Int}()
-    dict_tables_fiels = Dict{String, Vector{String}}()
     model.connect_key = connect_key
-    # Hoisted: both describe the CHILD (`model`) and are identical for every FK it declares. The
-    # logical name was recomputed per field before #343, inconsistently — sometimes inline, sometimes
-    # into a local of the same name.
+    # Hoisted: both describe the CHILD (`model`) and are identical for every relation it declares.
+    # The logical name was recomputed per field before #343, inconsistently — sometimes inline,
+    # sometimes into a local of the same name.
     model_name = get_model_name(model, settings)::Symbol
     model_binding = bindings[model]
-    # @pormg_debug model.name == "dash_tab_cvat"
-    # println(model.name)
+    # #65: single-sourced FK/O2O resolution + pk_field defaulting, shared with the migration prelude
+    # via `resolve_fk_target!`, with `strict=true` throwing on an unresolvable target. Since #396 it
+    # runs inside the pre-scan rather than mid-walk, so it fires before this model wires ANY of its
+    # relations instead of after however many happened to precede it in hash order. That is a state
+    # a successful run also produces, so nothing observable changed.
+    #
+    # The throw stays IMMEDIATE and out of #303's collector, permanently. Structurally, the resolved
+    # target drives every line of wiring below, so collecting would mean strict=false plus a
+    # `continue` that silently skips it — and it would change how the runtime path uses a helper
+    # SHARED with the migration prelude (`planner.jl` calls it strict=false). Semantically, a missing
+    # referent is not a contradiction between two settings on one field: the model graph cannot be
+    # built at all, so walking on produces cascading noise, not more signal.
+    targets, counts = _collect_relation_targets(model, _module)
+
     for (field_name, field) in pairs(model.fields)
       if field isa sForeignKey || field isa sOneToOneField
-        # #65: single-sourced FK/O2O resolution + pk_field defaulting, shared with the migration
-        # prelude via `resolve_fk_target!`. strict=true throws on an unresolvable target, so the
-        # returned value is always a resolved model here; it drives the reverse-relation wiring below.
-        #
-        # This one stays IMMEDIATE and out of #303's collector, permanently. Structurally, the
-        # return drives every line of wiring below it, so collecting would mean strict=false plus a
-        # `continue` that silently skips it — and it would change how the runtime path uses a helper
-        # SHARED with the migration prelude (`planner.jl` calls it strict=false). Semantically, a
-        # missing referent is not a contradiction between two settings on one field: the model graph
-        # cannot be built at all, so walking on produces cascading noise, not more signal.
-        field_to::PormGModel = resolve_fk_target!(field, field_name, model.name, _module; strict=true)
-        if haskey(dict_tables_c, field_to.name)
-          dict_tables_c[field_to.name] += 1
-          push!(dict_tables_fiels[field_to.name], field_name)
-        else
-          dict_tables_c[field_to.name] = 1
-          dict_tables_fiels[field_to.name] = [field_name]
-        end
-        if dict_tables_c[field_to.name] > 1
-          @pormg_debug false
-          if field.related_name === nothing
-            field.related_name = string(model_name, "_", field_name) |> lowercase
-            @info("The field $field_name in the model $(model.name) is a ForeignKey and the related_name is not defined, so the related_name was set to $(field.related_name)")
-          end
-          if haskey(field_to.related_objects, field.related_name)
-            throw(ModelDefinitionError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
-          else
-            field_to.related_objects[field.related_name] = _reverse_relation(model, model_name, model_binding, field_name, field)
-          end
-        elseif dict_tables_c[field_to.name] == 1
-          @pormg_debug false
-          if field.related_name === nothing
-            field_to.related_objects[model_name |> string] = _reverse_relation(model, model_name, model_binding, field_name, field)
-          else
-            if haskey(field_to.related_objects, field.related_name)
-              throw(ModelDefinitionError("The related_name $(field.related_name) in the model $(model.name) is already defined"))
-            else
-              field_to.related_objects[field.related_name] = _reverse_relation(model, model_name, model_binding, field_name, field)
-            end
-          end
-        end
-        
+        field_to::PormGModel = targets[field_name]
+        accessor = _reverse_accessor_for(model, model_name, field_name, field, field_to, counts)
+        _register_reverse_accessor!(field_to, accessor, model, model_name, model_binding,
+                                    field_name, field)
+
         # check on_delete — a schema that contradicts itself is rejected at registration (#287).
         # These were `@error` logs until #287: they named the problem and then let the broken model
         # through, so the contradiction resurfaced later as a mangled UPDATE or a database-level
@@ -694,7 +833,13 @@ function set_models(_module::Module, path::String)::Nothing
         _collect_field_contradictions!(contradictions, model, field_name, field)
 
       elseif is_many_to_many_field(field)
-        _register_many_to_many_relation!(_module, settings, model, field_name, field)
+        # #396: the accessor is computed HERE, from the group, and threaded in — never re-derived
+        # inside the registrar. `_m2m_query` filters on `relation.inverse_accessor`, so the slot the
+        # manager reads and the key that lands in `related_objects` have to be the same string.
+        related_model::PormGModel = targets[field_name]
+        accessor = _reverse_accessor_for(model, model_name, field_name, field, related_model, counts)
+        _register_many_to_many_relation!(_module, settings, model, field_name, field;
+                                         related_model = related_model, reverse_accessor = accessor)
       end
     end
   end
@@ -1872,7 +2017,21 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
       ))
     end
     model.fields[field_name] = field
-    _register_many_to_many_relation!(model._module, config[model.connect_key], model, field_name, field)
+    # #396: `add_field!` cannot see the group `set_models` pre-scans, so it counts what the model
+    # holds RIGHT NOW — the new field included, since it was inserted on the line above. Resolved
+    # leniently: an unrelated unresolvable foreign key must not abort adding a field.
+    #
+    # Accessors already installed for the siblings are NOT re-derived. A runtime addition cannot
+    # rename a name that is already in use somewhere, so a group may sit mixed — one member on the
+    # bare model name, the new one suffixed — until the next `set_models`, which rebuilds
+    # `related_objects` from scratch and normalizes the whole group.
+    settings = config[model.connect_key]
+    related_model = _resolve_model_reference(model._module, field.to)
+    _, counts = _collect_relation_targets(model, model._module; strict = false)
+    accessor = _reverse_accessor_for(model, get_model_name(model, settings)::Symbol, field_name,
+                                     field, related_model, counts)
+    _register_many_to_many_relation!(model._module, settings, model, field_name, field;
+                                     related_model = related_model, reverse_accessor = accessor)
     return nothing
   end
 
@@ -2994,6 +3153,7 @@ function _relation_from_many_to_many(
   settings::PormGSettings;
   _module::Union{Module, Nothing}=nothing,
   model_map::Union{Nothing, Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}}=nothing,
+  reverse_accessor::Union{Nothing, String}=nothing,
 )
   owner_pk_sym = get_model_pk_field(owner_model)
   related_pk_sym = get_model_pk_field(related_model)
@@ -3112,7 +3272,16 @@ function _relation_from_many_to_many(
       "Set source_field and target_field to distinct names." :
       "The fields $(owner_field) and $(related_field) both map to that column — give one of them a distinct db_column.")))
 
-  inverse_accessor = field.related_name === nothing ? get_model_name(owner_model, settings, false) : field.related_name
+  # #396: `set_models` computes this from the per-target relation group and threads it in, so the
+  # slot the many-to-many manager filters on (`_m2m_query` reads `relation.inverse_accessor`) is the
+  # SAME string that lands in the target's `related_objects`. Re-deriving it here instead would let
+  # the two disagree, and every `.all()` on the manager would traverse the join table backwards and
+  # silently answer the opposite question.
+  #
+  # The fallback is the lone-relation derivation — the only shape the callers that cannot see a group
+  # (`add_field!`, `synthesize_many_to_many_through_models`) can produce.
+  inverse_accessor = reverse_accessor !== nothing ? reverse_accessor :
+    (field.related_name === nothing ? get_model_name(owner_model, settings, false) : field.related_name)
   return ManyToManyRelation(
     field_name=field_name,
     through_table=through_table_name,
@@ -3172,8 +3341,14 @@ function _cache_many_to_many_relation!(model::PormGModel, accessor::String, rela
   return relation
 end
 
-function _register_many_to_many_relation!(_module::Module, settings::PormGSettings, model::PormGModel, field_name::String, field::sManyToManyField)::Nothing
-  related_model = _resolve_model_reference(_module, field.to)
+function _register_many_to_many_relation!(_module::Module, settings::PormGSettings, model::PormGModel,
+    field_name::String, field::sManyToManyField;
+    related_model::Union{Nothing, PormGModel}=nothing,
+    reverse_accessor::Union{Nothing, String}=nothing)::Nothing
+  # #396: `set_models` has already resolved the target and derived the accessor from the model's
+  # per-target relation group, and passes both in. The fallbacks serve `add_field!` and any caller
+  # that holds one field rather than a whole model.
+  related_model === nothing && (related_model = _resolve_model_reference(_module, field.to))
   relation = _relation_from_many_to_many(
     model,
     _find_model_binding_name(_module, model),
@@ -3183,35 +3358,36 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
     _find_model_binding_name(_module, related_model),
     settings,
     _module=_module,
+    reverse_accessor=reverse_accessor,
   )
   _cache_many_to_many_relation!(model, field_name, relation)
 
-  reverse_accessor = relation.inverse_accessor
-  # #364: on a SELF-relation both accessors land on the SAME model but in two DIFFERENT dicts — the
-  # forward one in `model.cache["many_to_many"]` (written just above), the reverse one in
-  # `related_objects` — so the `haskey` check below is blind to a collision between them. And the
-  # readers resolve the cache FIRST (`has_many_to_many_accessor` / `get_many_to_many_relation`), so
-  # an equal name leaves the reverse relation permanently shadowed by the forward one. That is not a
-  # dead accessor: the manager's `_m2m_query` filters on `inverse_accessor`, so every `.all()` would
-  # traverse the join table backwards and silently answer the opposite question.
+  accessor = relation.inverse_accessor
+  derived = field.related_name === nothing
+  # #364, widened by #396: the accessor is checked against the TARGET's field names ALWAYS, not only
+  # on a self-relation. `_build_row_join` resolves a field before a reverse accessor at every hop, so
+  # a name that is also a field on the model the accessor lands on registers cleanly and is then
+  # permanently unreachable — surfacing later as a raw internal error rather than a definition one.
   #
-  # Checked against `model.fields` rather than just `field_name` because the join builder resolves a
-  # field before a reverse accessor (`_build_row_join`), so ANY field name shadows it the same way.
-  # A non-self relation cannot reach this — its two accessors live on different models, which is why
-  # the `haskey` guard alone was sufficient before a self-relation could be built at all.
-  if _same_model_reference(related_model, model) && haskey(model.fields, reverse_accessor)
-    # The default accessor is the bare model name, so this fires on models that never wrote a
-    # `related_name` at all — say where the name came from rather than pointing at an option the
-    # user cannot find in their own source.
-    origin = field.related_name === nothing ? " (derived from the model name, because related_name is unset)" : ""
-    throw(ModelDefinitionError(
-      "ManyToManyField $(model.name).$(field_name) is self-referential, so its reverse accessor " *
-      "\e[31m$(reverse_accessor)\e[0m$(origin) collides with a field of the same name on that model " *
-      "and would be silently unreachable. Give the reverse end a distinct related_name."))
-  end
-  haskey(related_model.related_objects, reverse_accessor) && throw(ModelDefinitionError("The related_name $(reverse_accessor) in the model $(model.name) is already defined"))
-  related_model.related_objects[reverse_accessor] = _reverse_many_to_many_relation(relation, reverse_accessor)
-  field.related_name === nothing && (field.related_name = reverse_accessor)
+  # The self case is this same rule with `related_model === model`, and it was the only one #364
+  # could reach: a self-relation puts both accessors on ONE model but in two DIFFERENT dicts — the
+  # forward one in `model.cache["many_to_many"]` (written just above), the reverse one in
+  # `related_objects` — and the readers consult the cache FIRST
+  # (`has_many_to_many_accessor` / `get_many_to_many_relation`). That is not a merely dead accessor:
+  # the manager's `_m2m_query` filters on `inverse_accessor`, so every `.all()` would traverse the
+  # join table backwards and silently answer the opposite question.
+  haskey(related_model.fields, accessor) &&
+    throw(_reverse_accessor_shadows_field(model, field_name, related_model, accessor, derived))
+  haskey(related_model.related_objects, accessor) &&
+    throw(_reverse_accessor_taken(model, field_name, related_model, accessor, derived,
+                                  _accessor_holder(related_model.related_objects[accessor])))
+  related_model.related_objects[accessor] = _reverse_many_to_many_relation(relation, accessor)
+  # #396: NO write-back to `field.related_name`. It used to be the idempotency latch — a second
+  # `set_models` run saw an explicit name and took a different branch to the same key — but the
+  # derivation is a pure function of the model name, the field name and the group size now, so the
+  # latch is dead weight. Removing it keeps `related_name === nothing` meaning "the declaration named
+  # none", which is what stops `Model_to_str` baking a PormG-invented accessor into a regenerated
+  # source file.
   return nothing
 end
 

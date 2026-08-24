@@ -18,6 +18,11 @@ class Driver(models.Model):
     # Self-referential FK — Django's `"self"` literal. Emitted verbatim before #346, which made the
     # generated file throw at set_models. `related_name` because `teammates` below points at the same
     # model, and two relations to one target need distinct reverse accessors (Django: fields.E304).
+    #
+    # Django still REQUIRES this name, which is why it stays. PormG no longer does: since #396 it
+    # counts every relation to a target — many-to-many included — and derives `<model>_<field>` for
+    # each member of a group, so dropping `related_name` here would register two distinct accessors
+    # rather than colliding. Kept explicit so the fixture keeps mirroring a real Django project.
     mentor = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True,
                                related_name='mentees')
     # Self-referential M2M. Django names the two join columns from_driver_id / to_driver_id, because

@@ -78,15 +78,21 @@ For the unit-vs-integration split, see *Boundary With Public API Work* above and
 
 ### Identifier sanitization contract
 
-`sanitization.jl` uses a **fail-closed** model — never a silent-stripping one:
+`sanitization.jl` has **two rules, one per axis** (#394). Neither ever strips characters silently.
 
-- `_validate_identifier(id)` validates against `SAFE_IDENTIFIER_PATTERN` (`^[\p{L}_][\p{L}\p{M}\p{N}_]*$`) and throws `ArgumentError` on invalid input; it never silently removes characters.
-- `quote_identifier(id, conn)` calls `_validate_identifier` then wraps in double-quotes, preserving exact case and Unicode letters.
-- `sanitize_identifier(id, valid_ids)` checks the raw identifier against the whitelist (no pre-stripping), then delegates quoting to `quote_identifier`.
-- `safe_table_identifier(name, conn)` delegates directly to `quote_identifier` — no silent sanitize-and-warn fallback.
-- All SELECT aliases (`custom_as` and `_as`) are quoted via `quote_identifier` in `_query_select`, preserving mixed case and Unicode characters verbatim.
+| Kind of name | Function | Behavior |
+| --- | --- | --- |
+| Physical **table** — `model_table_name`, `relation.through_table`, a catalog row | `safe_table_identifier(name, conn)` | escape-only: `"` → `""`, then wrap |
+| Physical **column** — `field_db_column`, `model_column`, a `row_join` `key_a`/`key_b`\* | `safe_column_identifier(name, conn)` | the same |
 
-When adding any new identifier-quoting path, go through `quote_identifier` — never strip-and-quote.
+\* `key_b` is the one dual-natured slot: on a CTE join it holds the CTE's **projection alias**, not a physical column. `_with` validates that name fail-closed at declaration (`join_field.second`), which is why the render site can stay escape-only.
+| **Alias** / query-time name — `instruc.alias`, a `cjoin_on` alias, a `.with(...)` CTE name, a SELECT `_as`/`custom_as` | `quote_identifier(name, conn)` | fail-closed: `_validate_identifier` then wrap |
+
+- `_validate_identifier(id)` validates against `SAFE_IDENTIFIER_PATTERN` (`^[\p{L}_][\p{L}\p{M}\p{N}_]*$`) and throws **`InvalidValueError`** on invalid input; it never silently removes characters.
+- `_escape_identifier(name)` is the shared escape. `_quote_ident_raw` is the same thing without a `conn`, for a name interpolated into a SQL string literal that PostgreSQL re-parses as an identifier (`setval`'s `regclass`, `to_regclass`) — see `_table_ident_literal` in `execution.jl`.
+- `SAFE_JSON_KEY_PATTERN` is a **separate constant** with the same body, used only by `_validate_json_key_segments` (`build_joins.jl`). A JSON path segment is interpolated *unquoted* into a path literal, so the charset check is its entire guard; keeping the constants apart is what stops a relaxation of the identifier rules from widening it.
+
+**Do not unify these — the split is the fix.** A physical name is pinned by the model author via `db_table`/`db_column` (deliberately unvalidated, #59/#50) or read from the database catalog; validating it meant PormG refused to query a table its own DDL had just created. An alias is chosen at query-build time and names nothing that exists, so it stays strict. When adding a new identifier-quoting path, pick by which of the three it is — never strip-and-quote.
 
 ### Error message construction
 
@@ -282,6 +288,7 @@ julia -t auto --project=. test/integration/test_cte.jl
 - Do not fix SQL shape bugs only by changing test expectations without validating semantics
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
-- Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — the contract is fail-closed: validate via `_validate_identifier`, then quote; never silently rewrite an identifier
+- Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — an alias is fail-closed (`quote_identifier`), a physical table or column is escape-only (`safe_table_identifier` / `safe_column_identifier`), and neither ever silently rewrites an identifier
+- Do not route a physical table or column through `quote_identifier`, or an alias through `safe_*_identifier` — the partition above **is** the contract, and collapsing it re-opens #394
 - Do not embed raw ANSI (`\e[...`) in a `throw`/`error`/`@info`/`@warn`/`@error`/`print` message — throw a taxonomy subtype (its constructor applies `_emsg`) or wrap with `_emsg` / `_emsg(io, …)` inside `show` methods, so color degrades off-TTY
 - Do not reintroduce a funnel that only maps a message to a type (the deleted `_argerr`); name the subtype at the call site

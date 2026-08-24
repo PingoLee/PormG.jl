@@ -23,6 +23,19 @@ end
 function _with(q::SQLObject, name::String, query::SQLObjectHandler;
   join_field::Union{Pair{String,String},Nothing}=nothing,
   join_type::String="LEFT")
+  # #394: fail-closed on the CTE name HERE, at declaration. It is a query-time alias the caller typed,
+  # and it reaches SQL twice — as the `WITH <name> AS (...)` label and, when a `join_field` is given,
+  # as the JOIN target (`row_join["b"]`). Since #394 that second site quotes ESCAPE-ONLY, because
+  # every other thing landing in that slot is a physical table name; checking here removes the
+  # ordering dependency between the two renders entirely and puts the error on the call the user
+  # wrote. `build_cte_clause` still quotes fail-closed as defence in depth. Same rule as `_cjoin_on`.
+  _validate_identifier(name)
+  # ...and the CTE side of the join key, for the same reason. `_build_row_join` stores it as
+  # `row_join["key_b"]`, which since #394 is quoted escape-only because everything else in that slot
+  # is a physical column. This one is a CTE PROJECTION ALIAS, so it belongs to the fail-closed half
+  # of the contract. `join_field.first` is deliberately NOT checked: it names a field on the MAIN
+  # model and is resolved through `Models.model_column`, i.e. it is genuinely physical.
+  join_field !== nothing && _validate_identifier(join_field.second)
   cte_fields = _preset_cte_fields(name, query, join_field=join_field, join_type=join_type)
   if haskey(q.ctes, name)
     throw(QueryBuildError("CTE with name \"$(name)\" already exists in the query; please use a different name."))

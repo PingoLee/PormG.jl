@@ -144,8 +144,8 @@ function add(manager::ManyToManyManager, targets...)
   !settings.change_data && throw(_write_not_allowed("many-to-many add", conn_key))
 
   table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = quote_identifier(manager.relation.owner_column, connection)
-  related_column = quote_identifier(manager.relation.related_column, connection)
+  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+  related_column = safe_column_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
 
   if connection isa PormGPostgres
@@ -196,8 +196,8 @@ function remove(manager::ManyToManyManager, targets...)
   !settings.change_data && throw(_write_not_allowed("many-to-many remove", conn_key))
 
   table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = quote_identifier(manager.relation.owner_column, connection)
-  related_column = quote_identifier(manager.relation.related_column, connection)
+  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+  related_column = safe_column_identifier(manager.relation.related_column, connection)
   owner_value = _m2m_format_owner(manager)
 
   parameters = get_parameter(connection)
@@ -224,7 +224,7 @@ function clear(manager::ManyToManyManager)
   set_context!(parameters, :where)
   owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
   table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = quote_identifier(manager.relation.owner_column, connection)
+  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
   fetch(settings, "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder;", parameters)
   return nothing
 end
@@ -235,8 +235,8 @@ function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
   set_context!(parameters, :where)
   owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
   table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = quote_identifier(manager.relation.owner_column, connection)
-  related_column = quote_identifier(manager.relation.related_column, connection)
+  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+  related_column = safe_column_identifier(manager.relation.related_column, connection)
   sql = "SELECT $related_column FROM $table_name WHERE $owner_column = $owner_placeholder;"
   df = fetch(settings, sql, parameters) |> DataFrames.DataFrame
   DataFrames.nrow(df) == 0 && return Any[]

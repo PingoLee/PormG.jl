@@ -647,7 +647,10 @@ end
 # `Dialect.add_foreign_key` emits `REFERENCES "parent"(""Id"")` (TWO quote pairs — the caller adds
 # one around a value that already carries one; the issue body's `"""Id"""` is wrong),
 # `_compare_field_foreign_key` reports the key as changed on every `makemigrations`, and the query
-# builder throws `InvalidValueError` because `SAFE_IDENTIFIER_PATTERN` forbids a `"`.
+# builder addresses a column that does not exist. (It threw `InvalidValueError` when #389 was
+# written, because `SAFE_IDENTIFIER_PATTERN` forbade a `"`; since #394 a physical column is escaped
+# rather than validated, so the same bad value would now render as a column literally named `"Id"`.
+# Either way it is wrong — de-quoting at the source, which is what this testset pins, is the fix.)
 #
 # `fk_cols` and `col_name` move in the SAME change on purpose: `fk_map`'s keys come from `fk_cols`
 # and are looked up with `col_name`, so normalizing one side alone would break FK detection for
@@ -782,11 +785,11 @@ struct MockPg389 <: PormG.PormGPostgres end
     # alongside a `DROP` of the real one, on every run, silently. `_unquote_ident` undoes the
     # doubling instead, so the name survives: the existing table converges, and `Model_to_str`
     # regenerates it as a legal binding plus `db_column="Say\"Hi"` — a rename of the BINDING, not
-    # of the column. It does NOT make such a name safe everywhere: `Dialect.create_table` still
-    # emits `"Say"Hi"` and closes the identifier early (the column-name twin of the `db_table`
-    # escaping in #388, and #394's family), and the query path raises `InvalidValueError` from
-    # `_validate_identifier`. Surviving intact and being universally usable are different claims;
-    # only the first is made here.
+    # of the column. As of #394 the name is usable end to end as well: `Dialect.create_table`
+    # escapes a column identifier the same way it has escaped `db_table` since #388, and the query
+    # path escapes rather than validates it (`safe_column_identifier`). Both halves are asserted in
+    # `test/unit/test_identifier_quoting.jl`; what this testset pins is the narrower and still
+    # separate claim that introspection round-trips the spelling INTACT.
     model = convertSQLToModel(_introspection_row(
       table_name              = "odd_names",
       columns                 = "id bigint NOT NULL, \"Say\"\"Hi\" bigint",

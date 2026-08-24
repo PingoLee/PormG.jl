@@ -118,11 +118,12 @@ end
     # Pinned parent: db_table differs from the logical name, and must WIN. Before #388 the String
     # branch ignored db_table entirely, so a pinned parent was referenced by the wrong name even
     # when the lowercase guess would otherwise have inverted cleanly.
-    # NOTE (#394): this spaced name renders fine in DDL but the query builder would REFUSE it —
-    # `SAFE_IDENTIFIER_PATTERN` rejects spaces while `_quote_table_ddl` does not, so PormG will
-    # migrate a table it cannot then join. That split predates #388 and is tracked separately; the
-    # name is kept here deliberately, because the DDL half is what this testset asserts and a space
-    # is the sharpest proof that `db_table` reaches the `REFERENCES` clause verbatim.
+    # A space is deliberate: it is the sharpest proof that `db_table` reaches the `REFERENCES`
+    # clause verbatim. It used to be a one-sided proof — the DDL rendered it and the query builder
+    # then REFUSED it, because `SAFE_IDENTIFIER_PATTERN` rejected a space that `_quote_table_ddl`
+    # escaped happily, so PormG would migrate a table it could not join. #394 closed that: a
+    # physical name is escaped rather than validated on both layers, and this same spelling is
+    # exercised end-to-end in `test/unit/test_identifier_quoting.jl`.
     pinned_parent = Model("fku_pinned_scratch", db_table = "Fku Pinned Table",
                           id = IDField(), surname = CharField())
 
@@ -177,12 +178,11 @@ end
   #    off it, so `db_table` wins and a sanitized binding is not folded into a fictional table.
   # ───────────────────────────────────────────────────────────────────────────────────────────
   @testset "first-hop join resolves the binding instead of lowercasing it" begin
-    # Fixture shapes are constrained here in a way the DDL testset above is not: the query builder
-    # runs every table through `SAFE_IDENTIFIER_PATTERN` (`sanitization.jl`), which rejects a space
-    # outright — so `driver profile`, the sharpest illustration of the defect, cannot reach a JOIN
-    # at all and would test that guard rather than this fix. MIXED CASE is the legal-identifier
-    # shape with the same property: the fold is not an identity, so the old lowercase and the new
-    # resolution give DIFFERENT answers and the assertions below can tell them apart.
+    # MIXED CASE rather than a spaced name, and it stays that way after #394 made a spaced table
+    # queryable: the property this testset needs is that the lowercase fold is NOT an identity, so
+    # the old lowercase and the new resolution give DIFFERENT answers and the assertions can tell
+    # them apart. A space has that property too, but it also exercises the escape path, which would
+    # make a failure here ambiguous between the binding resolution (#388) and the quoting (#394).
     #
     # Pinned parent: binding `Fku_pinned` -> lowercase `fku_pinned`, but the table is
     # `Fku_Pinned_Physical`. The old branch ignored `db_table` entirely, so it joined a table that

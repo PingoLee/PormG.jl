@@ -471,7 +471,7 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
   safe_table = Models.model_table_name(model)
   safe_table_name = safe_table_identifier(safe_table, connection)
   safe_table_literal = replace(safe_table, "'" => "''")
-  safe_field = quote_identifier(Models.model_column(model, pk_field), connection)  # db_column (#50)
+  safe_field = safe_column_identifier(Models.model_column(model, pk_field), connection)  # db_column (#50)
   sql = """
   SELECT MAX(candidate) AS max_id
   FROM (
@@ -1423,7 +1423,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # Security: Quote table name and physical column names (db_column when set, #50).
   # The CSV is positional (HEADER FALSE), so the data order still matches.
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-  quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
+  quoted_fields = [safe_column_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
 
   # Construct the COPY command (CSV format for safety). NULL marker disambiguates ""
   # (quoted, an empty string) from missing (unquoted sentinel, NULL) — see _BULK_COPY_NULL (#86).
@@ -1584,7 +1584,7 @@ function _normalize_on_conflict(on_conflict, model::PormGModel, fields_df::Vecto
 
   # Explicit `String[...]` comprehensions (not `map`) so the element type is Vector{String}
   # even for an empty target/set, which the typed `on_conflict_clause` signature requires.
-  quoted(col) = quote_identifier(Models.model_column(model, col), connection)
+  quoted(col) = safe_column_identifier(Models.model_column(model, col), connection)
   return (action = action,
           target = String[quoted(col) for col in target],
           set = String[quoted(col) for col in set])
@@ -1610,7 +1610,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
   # Security: Quote table name and physical column names (db_column when set, #50).
   # VALUES rows are positional and built in `fields` order, so they still align.
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-  quoted_fields = [quote_identifier(Models.model_column(model, string(field)), connection) for field in fields]
+  quoted_fields = [safe_column_identifier(Models.model_column(model, string(field)), connection) for field in fields]
 
   # Construct the bulk insert SQL. The ON CONFLICT clause (#123) is rendered once by the caller
   # and binds no parameters, so the chunk-size math and the VALUES placeholders are untouched;
@@ -1792,9 +1792,11 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   for field in fields_df
     if !(field in deny_fields)
       # @pormg_debug
-      # SET target uses the physical column (db_column); the source.* reference and the
-      # VALUES/CTE source column list stay the field name (#50).
-      quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)
+      # SET target uses the physical column (db_column) and is quoted escape-only like any physical
+      # name; the source.* reference and the VALUES/CTE source column list stay the FIELD name (#50)
+      # and are therefore ALIASES — they name columns of a derived table PormG invents here, not
+      # anything that exists in the schema — so they keep the fail-closed `quote_identifier` (#394).
+      quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
       quoted_source_field = quote_identifier(field, connection)
       if connection isa PormGPostgres
         field_type = _pg_bulk_cast_type(model.fields[field], connection)
@@ -1895,16 +1897,18 @@ function _bulk_update(model::PormGModel,
     throw(QueryBuildError("bulk_update() does not allow joined field paths (\"__\") — restrict filters and update columns to the model's own fields."))
   end
 
-  # Security: Quote table name and field names
+  # Security: Quote table name and field names. `quoted_fields` is the column list of the `source`
+  # derived table (PostgreSQL) / CTE (SQLite) below — an alias position, so fail-closed (#394).
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
   quoted_fields = [quote_identifier(field, connection) for field in fields]
 
   # Security: Build safe WHERE conditions with quoted identifiers
   safe_where_conditions::Vector{String} = []
   for filter in dinanic_filters
-    # WHERE target (Tb.) uses the physical column (db_column); the source.* reference
-    # and the source column list stay the field name (#50).
-    quoted_tb_field = quote_identifier(Models.field_db_column(model.fields[filter], filter), connection)
+    # WHERE target (Tb.) uses the physical column (db_column), escape-only; the source.* reference
+    # and the source column list stay the field name (#50) and are ALIASES on a derived table, so
+    # they stay fail-closed (#394). All three must agree byte-for-byte with the list emitted below.
+    quoted_tb_field = safe_column_identifier(Models.field_db_column(model.fields[filter], filter), connection)
     quoted_source_field = quote_identifier(filter, connection)
     if connection isa PormGPostgres
       field_type = _pg_bulk_cast_type(model.fields[filter], connection)

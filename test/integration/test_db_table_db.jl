@@ -125,6 +125,48 @@ end
 # check would have reported a #59 regression that wasn't one. With that fixed, the plan must be
 # empty for EVERY fixture — which also catches the failure this test is really about (a db_table
 # model diffing as a CREATE plus a DROP) under any spelling, not only the five listed by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+# #394 — a physical TABLE name PormG's DDL renders but its query builder used to refuse.
+#
+# `Odd_identifier_scratch` pins `db_table = "Odd Identifier Scratch"`: a legal quoted identifier on
+# both backends and outside the query builder's fail-closed identifier pattern, so before #394
+# `migrate` created this table and the first SELECT against it raised `InvalidValueError`. The same
+# name also produced a `pending_migrations.jl` that could not be parsed, because the plan file writes
+# each table as a Julia binding. The unit layer pins the renderers agreeing on a string; only a live
+# database proves the statements they produce actually execute, and that the schema converges.
+#
+# The COLUMN axis is not exercised here — see the fixture comment in `models.jl`. It renders and
+# queries correctly, but PostgreSQL introspection tears a spaced column name in half (#414).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "db_table: a spaced table round-trips end to end (#394)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+
+    cols = column_names(pool, "Odd Identifier Scratch")
+    @test "driverref" in cols
+    @test "points" in cols
+
+    # The folded/underscored twin must not exist — a renderer that sanitized the name instead of
+    # quoting it would have created one. SQLite folds case but not spaces, so this holds on both.
+    @test isempty(column_names(pool, "odd_identifier_scratch"))
+
+    M.Odd_identifier_scratch.objects.delete(allow_delete_all=true)
+
+    created = M.Odd_identifier_scratch.objects.create("driverref" => "senna", "points" => 41)
+    @test created[:driverref] == "senna"
+
+    row = M.Odd_identifier_scratch.objects.
+        filter("driverref" => "senna").
+        values("driverref", "points").
+        first()
+    @test row.points == 41
+
+    M.Odd_identifier_scratch.objects.filter("driverref" => "senna").update("points" => 91)
+    @test M.Odd_identifier_scratch.objects.filter("points" => 91).count() == 1
+
+    M.Odd_identifier_scratch.objects.filter("driverref" => "senna").delete()
+    @test M.Odd_identifier_scratch.objects.count() == 0
+end
+
 @testset "db_table: a re-diff proposes nothing (global, #325)" begin
     settings = PormG.config[PORMG_DB_FOLDER]
     conn = settings.connections
@@ -142,7 +184,7 @@ end
     # the two sides were keyed differently). A future change that legitimately relaxes the global
     # assertion must still not relax these.
     for name in (:Db_Table_Scratch, :db_table_scratch, :Db_Table_Col_Scratch, :db_table_col_scratch,
-                 :db_table_child_scratch)
+                 :db_table_child_scratch, Symbol("Odd Identifier Scratch"), :odd_identifier_scratch)
         @test !haskey(plan, name)
     end
 end

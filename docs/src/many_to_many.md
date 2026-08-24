@@ -39,7 +39,17 @@ It tells PormG to create a link in **both** directions:
 1. **Forward Access**: From a fetched driver row, use the field name `sponsors` to get their sponsors (`driver.sponsors.all()`).
 2. **Reverse Access**: From a fetched sponsor row, use the `related_name` to get the drivers they sponsor (`sponsor.drivers.all()`).
 
-This is essential for multi-hop joins and reverse-lookups. Without it, PormG defaults to a less readable name (like `m2m_driver_endorsement_scratch_set`).
+This is essential for multi-hop joins and reverse-lookups. Without it, PormG derives one for you:
+
+- the **lowercase name of the declaring model** when it is that model's only relation to the target —
+  `m2m_driver_endorsement_scratch`;
+- **`<model>_<field>`** when the model declares two or more relations to the same target. Add a
+  `title_sponsor` foreign key alongside `sponsors`, both pointing at `M2m_sponsor_scratch`, and the
+  two reverse accessors become `m2m_driver_endorsement_scratch_title_sponsor` and
+  `m2m_driver_endorsement_scratch_sponsors`. Every member of such a group is suffixed, and PormG logs
+  each derived name at `@info` when it registers the models.
+
+There is no `_set` suffix; PormG is not Django here.
 
 ---
 
@@ -111,28 +121,40 @@ WHERE "Tb_2"."driverref" = $1
     the *same* model, so the default reverse name — the bare model name — reads like a foreign key
     rather than the other end of the link.
 
-    **It must differ from every field name on that model**, the relation's own field included.
-    `teammates = ManyToManyField("…", related_name="teammates")` is the tempting spelling for a link
-    you think of as symmetric, and it would leave the reverse end permanently shadowed by the
-    forward one. PormG rejects it with a `ModelDefinitionError` rather than letting the two collapse
-    into one accessor.
+    **A reverse accessor must differ from every field name on the model it lands on**, the relation's
+    own field included. `teammates = ManyToManyField("…", related_name="teammates")` is the tempting
+    spelling for a link you think of as symmetric, and it would leave the reverse end permanently
+    shadowed by the forward one. PormG rejects it with a `ModelDefinitionError` rather than letting
+    the two collapse into one accessor.
 
-!!! warning "A self-`ForeignKey` and a self-`ManyToManyField` on one model need an explicit `related_name`"
-    Both derive the *same* default reverse accessor — the model's own name — and the two
-    registration paths disagree about what to do when they collide: depending on the order the
-    model's fields happen to be iterated, you either get a `ModelDefinitionError` naming the model
-    twice and neither field, or the many-to-many reverse accessor is silently discarded
-    ([#396](https://github.com/PingoLee/PormG.jl/issues/396)).
+    That rule is not special to self-relations: the join builder resolves a *field* before a reverse
+    accessor at every hop, so any accessor equal to a field name on the target would register cleanly
+    and then be unreachable. PormG checks it on every relation, foreign key and many-to-many alike.
 
-    Give at least one of them an explicit `related_name` and the ambiguity disappears:
+!!! note "A self-`ForeignKey` and a self-`ManyToManyField` on one model get distinct accessors"
+    Both would derive the same bare model name, so PormG counts them as one group of two relations to
+    that target and suffixes each with its field name
+    ([#396](https://github.com/PingoLee/PormG.jl/issues/396)):
 
     ```julia
     M2m_teammate_scratch = Models.Model("m2m_teammate_scratch",
       id = Models.IDField(),
       driverref = Models.CharField(unique=true),
-      mentor = Models.ForeignKey("M2m_teammate_scratch", null=true, related_name="mentees"),
-      teammates = Models.ManyToManyField("M2m_teammate_scratch", related_name="teammate_of")
+      mentor = Models.ForeignKey("M2m_teammate_scratch", null=true),
+      teammates = Models.ManyToManyField("M2m_teammate_scratch")
     )
+
+    # Reverse accessors on M2m_teammate_scratch:
+    #   m2m_teammate_scratch_mentor      → the foreign key, in reverse
+    #   m2m_teammate_scratch_teammates   → the many-to-many, in reverse
+    ```
+
+    Naming them yourself still reads better, and it is what a Django-imported model carries anyway
+    (Django's `fields.E304` requires it):
+
+    ```julia
+    mentor    = Models.ForeignKey("M2m_teammate_scratch", null=true, related_name="mentees"),
+    teammates = Models.ManyToManyField("M2m_teammate_scratch", related_name="teammate_of")
     ```
 
 !!! note "An explicit `through=` needs its ends named"

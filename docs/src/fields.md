@@ -873,7 +873,8 @@ Order_line = Models.Model(
     unit_price = Models.DecimalField(max_digits=8, decimal_places=2)
 )
 
-# Multiple ForeignKeys to same model (requires related_name)
+# Multiple ForeignKeys to the same model — related_name is optional, but recommended.
+# Without it PormG derives one per field: `team_radio_sender` and `team_radio_recipient`.
 Team_radio = Models.Model(
     id = Models.IDField(),
     sender = Models.ForeignKey("Team_member", on_delete="CASCADE", related_name="sent_messages"),

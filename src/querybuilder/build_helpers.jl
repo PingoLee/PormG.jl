@@ -461,7 +461,7 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   # Resolve to the physical column (db_column when set, else the field name) and quote
   # it to prevent SQL injection (#50). SELECT auto-aliases back to the field name, so
   # rows stay keyed by the declared field name even when the column differs.
-  return quote_identifier(Models.field_db_column(model.fields[field], field), instruct.connection)
+  return safe_column_identifier(Models.field_db_column(model.fields[field], field), instruct.connection)
 end
 _solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct)
 _solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction) = _solve_field(field, _module, Symbol(model_name), instruct)
@@ -913,7 +913,7 @@ function _resolve_cjoin_on_alias_column(v::String, instruc::SQLInstruction)
   (col in target_model.field_names) || throw(UnknownFieldError(
     "cjoin_on: column '$(col)' not found on aliased model '$(target_model.name)' (alias '$(alias)')."))
   return string(quote_identifier(alias, instruc.connection), ".",
-                quote_identifier(Models.field_db_column(target_model.fields[col], col), instruc.connection))
+                safe_column_identifier(Models.field_db_column(target_model.fields[col], col), instruc.connection))
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   return _get_select_query(v, instruc) # Does this have any coletaral efect?
@@ -1152,7 +1152,7 @@ end
 # (correct, merely non-sargable) rendering instead of quietly ranging on some other column.
 # Fail-safe, never fail-loud: a mismatch is a PormG-internal invariant, not a user error.
 function _checked_bucket_column(f_meta, last_segment::String, column_sql::String, instruc::SQLInstruction)
-  expected = quote_identifier(Models.field_db_column(f_meta, last_segment), instruc.connection)
+  expected = safe_column_identifier(Models.field_db_column(f_meta, last_segment), instruc.connection)
   endswith(column_sql, string(".", expected)) || return (nothing, "")
   return (f_meta, column_sql)
 end

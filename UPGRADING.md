@@ -38,6 +38,176 @@ _Changes merged but not yet cut into a release. A consumer dev'ing PormG at HEAD
 and `PormG.upgrade_guide` surfaces them by default. When the maintainer next rolls changes into a
 consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates them, and tags it._
 
+## A CTE joined in a correlated `UPDATE … FROM` is refused instead of emitting broken SQL (#394)
+
+- **Version**: Unreleased
+- **PormG ref**: #394; `src/querybuilder/sanitization.jl`, `src/querybuilder/execution.jl`,
+  `src/Dialect.jl`, `src/Generator.jl`, `src/migrations/planner.jl`,
+  `docs/src/schema_conventions.md`
+- **Severity**: **behavior change (very narrow)** — one shape that was already failing now fails
+  earlier and with a message. Everything else in #394 is a widening and forces nothing. Part of the
+  `0.5.x` pre-publish wave.
+
+### What changed
+
+The bulk of #394 **removes** a restriction, and nothing about that needs migrating. A physical table
+or column identifier is now escaped rather than validated, so a `db_table` or `db_column` that
+PormG's DDL renders is one its queries can address and its migration plan can carry. A name that
+used to raise `InvalidValueError` on the first `SELECT` — a space, a leading digit, an embedded
+quote, anything the importers pin from a live catalog — simply works. Two adjacent gaps closed with
+it: `alter_field` on PostgreSQL emitted such a column name unescaped, and the generated
+`pending_migrations.jl` wrote each table as a bare Julia binding, so `makemigrations` could produce a
+plan file that `migrate` then failed to **parse**.
+
+The one thing that can now fail differently is a **CTE joined in a correlated `UPDATE … FROM`**.
+
+Two loops on that path wrapped their work in a `try`/`catch` that logged an `@error` and continued,
+so a failure dropped a table from the `FROM` list or an `ON` condition from the statement — and then
+issued it anyway. Those catches are gone: a join PormG cannot render is refused, not silently
+omitted.
+
+In practice only one shape reached them, and it was **already broken for an unrelated reason**:
+`update()` emits no `WITH` prefix (`build_cte_clause` is reached only from the read paths), so a
+`row_join` naming a CTE rendered `FROM "my_cte" AS "Tb_1"` against a relation the statement never
+declared. PostgreSQL and SQLite both rejected it. So this is not a case of apps having silently
+corrupted data — it is a backend error becoming a clear PormG one, raised before any SQL is built:
+
+> `A CTE cannot be joined in a correlated UPDATE ... FROM: the statement emits no WITH clause, so the
+> CTE it references is never declared. Scope the mutation with a filter or a subquery instead.`
+
+Both CTE shapes are covered — the CROSS-joined one (`.with(name, query)` with no `join_field`,
+correlated by an `F()` filter) and the keyed one. The sibling guard for an anchor-less `cjoin_on` has
+raised on this path since #45 and is unchanged.
+
+### How to find the calls to migrate
+
+There is nothing to grep for statically: the affected call is an `.update(...)` on a query that also
+declares a CTE **and** references it from a filter. It is easier to find in your logs — the old
+behavior always announced itself before failing:
+
+```bash
+# Anything matching either of these was a query that could not be built and was issued regardless.
+rg -n 'Error building FROM tables for join|Error building join condition for join' /path/to/logs
+```
+
+Expect no hits. If your app had one, it was raising a database error at that call already.
+
+### Migrate your app
+
+Scope the mutation with a filter or a subquery instead of correlating it against a CTE:
+
+```julia
+# ✗ BEFORE — the CTE is referenced from the filter, so it reaches the UPDATE's FROM list; the
+#            statement emits no WITH clause, so the database rejected the whole UPDATE.
+q = M.Result.objects
+q.with("fast_laps" => M.Lap_time.objects.filter("milliseconds__lt" => 90000).values("raceid"))
+q.filter("raceid" => F("fast_laps__raceid"))
+q.update("points" => 25)
+
+# ✓ AFTER — resolve the set first, then mutate against it.
+fast = M.Lap_time.objects.filter("milliseconds__lt" => 90000).values("raceid").list()
+M.Result.objects.
+    filter("raceid__@in" => unique(fast.raceid)).
+    update("points" => 25)
+```
+
+## Reverse accessors — every relation in a multi-relation group is disambiguated (#396)
+
+- **Version**: Unreleased
+- **PormG ref**: #396; `src/Models.jl`, `docs/src/many_to_many.md`,
+  `docs/src/read/values_and_joins.md`, `docs/src/fields.md`, `src/models/fields.jl`
+- **Severity**: **breaking (narrow, source-visible)** — a model declaring **two or more** relations to
+  the same target model, with `related_name` omitted on any of them, now installs different reverse
+  accessors on that target. A lookup path or a `related_objects[…]` read using the old key raises
+  `UnknownFieldError`. A model with one relation per target is untouched, and an explicit
+  `related_name` always wins. Part of the `0.5.x` pre-publish wave.
+
+### What changed
+
+The accessor a relation installs on its target was derived *while* `set_models` walked
+`pairs(model.fields)`, accumulating a per-target counter as it went. So in a group of N relations to
+one target, the field **visited first** kept the bare model name and the rest were suffixed
+`<model>_<field>`. `Model_Type.fields` is an unordered `Dict`, so which one that was is hash order —
+and adding an unrelated field to the model rehashed it.
+
+`ManyToManyField` never entered the counter at all. A model declaring both a self-`ForeignKey` and a
+self-`ManyToManyField` therefore derived the bare model name twice: a foreign-key-first walk raised
+`ModelDefinitionError`, and a many-to-many-first walk **silently replaced** the registered
+`ManyToManyRelation` with a `ReverseRelation` — the many-to-many reverse end disappeared with no
+error, and the manager filtering on it answered the opposite question.
+
+Three rules replace it:
+
+> **The count is taken before anything is registered, and it counts every relation — `ForeignKey`,
+> `OneToOneField` and `ManyToManyField` — that the model declares to that target.**
+>
+> **In a group of two or more, no relation keeps the bare model name.** Every member is
+> `<model>_<field>`, lowercased. A model with a single relation to a target is unchanged.
+>
+> **The accessor is checked against the target's field names and its existing accessors, on every
+> registration path.** A clash raises `ModelDefinitionError` naming both colliding ends and the name
+> they collide on — never a silent overwrite.
+
+The messages changed with it. They used to name the model twice and neither field ("The related_name
+X in the model Y is already defined"), which on a self-relation read as the model colliding with
+itself; they now name `Model.field` for both ends, say whether PormG or you chose the name, and end
+with the remedy.
+
+Also, and unlikely to force anything: PormG no longer writes a derived name back onto
+`field.related_name`. That write-back used to be the idempotency latch; the derivation is a pure
+function now, so it is dead weight. `related_name === nothing` again means *"the declaration named
+none"*, which is what stops `Models.Model_to_str` baking a PormG-invented accessor into a regenerated
+model file. If you read `field.related_name` expecting the derived string, read
+`target.related_objects` instead — that is where the accessor actually lives.
+
+### How to find the calls to migrate
+
+Only a model with **two or more relations to one target and at least one omitted `related_name`** is
+affected. Find the groups first, then the reads.
+
+```bash
+# 1. Candidate groups — the same target named twice inside one model. Read the hits: a group whose
+#    members all pin related_name explicitly is NOT affected.
+rg -n --glob '**/*models*.jl' 'ForeignKey\(|OneToOneField\(|ManyToManyField\('
+
+# 2. Then the reads of the OLD bare key, for each affected child model. Substitute its lowercase
+#    logical name (django_prefix stripped, as get_model_name derives it).
+rg -n --glob '**/*.jl' '"tb_cidadao__|related_objects\["tb_cidadao"\]'
+```
+
+You do not have to derive the new names by hand: `set_models` logs every one it derives at `@info` —
+`<model>.<field> declares no related_name and is one of N relations to <target>; its reverse accessor
+is <name>` — so loading the models once prints the complete list.
+
+### Migrate your app
+
+```julia
+# Tb_cidadao declares TWO foreign keys to Tb_localidade and names neither:
+#   co_localidade          = Models.ForeignKey(Tb_localidade, …)
+#   co_localidade_endereco = Models.ForeignKey(Tb_localidade, …)
+
+# ✗ BEFORE — one of the two answered to the bare model name, and which one was hash order.
+rows = eM.Tb_localidade.objects.
+    filter("tb_cidadao__no_cidadao" => "Senna").
+    values("no_localidade").
+    list()
+
+# ✓ AFTER — each is named after the field that carries it.
+rows = eM.Tb_localidade.objects.
+    filter("tb_cidadao_co_localidade__no_cidadao" => "Senna").
+    values("no_localidade").
+    list()
+```
+
+Or pin the names in the model and never think about it again — an explicit `related_name` is
+unaffected by any of this:
+
+```julia
+co_localidade          = Models.ForeignKey(Tb_localidade, …, related_name = "cidadaos"),
+co_localidade_endereco = Models.ForeignKey(Tb_localidade, …, related_name = "cidadaos_endereco"),
+```
+
+
 ## `AutoField` is retired, and introspection reports the real key type (#408, #409)
 
 - **Version**: Unreleased

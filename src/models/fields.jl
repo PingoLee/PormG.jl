@@ -326,7 +326,7 @@ Product = Models.Model(
 )
 ```
 
-Multiple foreign keys to same model (requires related_name):
+Multiple foreign keys to the same model — `related_name` is optional, but recommended:
 ```julia
 Message = Models.Model(
     id = IDField()
@@ -337,8 +337,13 @@ Message = Models.Model(
 ```
 
 # Related Names and Reverse Relations
-- If `related_name` is not specified, PormG automatically generates one
-- When multiple ForeignKeys point to the same model, `related_name` must be explicitly set
+- If `related_name` is not specified, PormG derives one and logs it at `@info`
+- The derivation counts **every** relation this model declares to that target — `ForeignKey`,
+  `OneToOneField` and `ManyToManyField` alike: the lowercase model name when it is the only one,
+  `<model>_<field>` for **every** member of a group of two or more (#396)
+- A derived name is never written back onto the field, so `related_name` stays `nothing` unless you set it
+- The reverse accessor must not match a field name on the model it lands on, or another accessor
+  already registered there; either raises `ModelDefinitionError` at `set_models`
 - The related name allows querying from the target model back to this model
 - If you can't remember the related name, you can type `your_query.objects.related_objects` or `your_model.related_objects` to see all related names
 
@@ -490,7 +495,7 @@ table with two foreign keys and a composite unique index.
 
 # Keyword Arguments
 - `through::Union{String, PormGModel, Nothing} = nothing`: explicit through model; skips auto table synthesis.
-- `related_name::Union{String, Nothing} = nothing`: reverse accessor on the target model.
+- `related_name::Union{String, Nothing} = nothing`: reverse accessor on the target model. Omitted, it is derived like a `ForeignKey`'s — the lowercase model name, or `<model>_<field>` when the model declares two or more relations to that target, many-to-many and foreign key counted together (#396).
 - `db_table::Union{String, Nothing} = nothing`: auto-through table name override. Ignored when `through` is given — the join table is then the through model's own table (its `db_table` if it declares one).
 - `source_field::Union{String, Nothing} = nothing`: the join key pointing at the source model. With an explicit `through`, it names a **field** on that model and the physical column is resolved from the field's `db_column` (#377); on the auto-synthesized table it names the column directly, since PormG creates it.
 - `target_field::Union{String, Nothing} = nothing`: the same, for the target model.

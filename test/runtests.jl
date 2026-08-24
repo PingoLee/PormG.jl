@@ -34,6 +34,7 @@ end
     @testset "Execution Returns (show_query)" include("unit/test_execution_show.jl")
     @testset "Complex Query Patterns" include("unit/test_complex_queries.jl")
     @testset "Many-to-Many Relationships" include("unit/test_many_to_many.jl")
+    @testset "Reverse-accessor Namespace (#396)" include("unit/test_reverse_accessor_namespace.jl")
     @testset "Composite Uniqueness (unique_together #19)" include("unit/test_unique_constraints.jl")
     @testset "Composite Indexes (Meta.indexes #347)" include("unit/test_indexes.jl")
     @testset "Shared-state Read/Copy Path (#43)" include("unit/test_shared_state_readpath.jl")

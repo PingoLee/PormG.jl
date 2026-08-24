@@ -1387,23 +1387,26 @@ end
   other_err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
     other_module, settings, other, "teammates", other.fields["teammates"])
   # This case covers the WIDENED half of the guard, so it is the one where a masquerading
-  # `ModelDefinitionError` from somewhere else would hide the most. Assert the cause.
-  @test occursin("collides with a field", other_err.value.msg)
+  # `ModelDefinitionError` from somewhere else would hide the most. Assert the cause, and that the
+  # message names BOTH ends of the collision (#396) rather than the model twice.
+  @test occursin("is a FIELD of that model", other_err.value.msg)
+  @test occursin("teammate_shadow2.teammates", other_err.value.msg)
+  @test occursin("teammate_shadow2.driverref", other_err.value.msg)
 
   # A DISTINCT related_name registers both ends, and they stay distinguishable. This is the
   # assertion that keeps the guard from being over-broad.
   @test Models.get_many_to_many_relation(M2MSELF.Teammate, "teammates").reverse == false
   @test M2MSELF.Teammate.related_objects["teammate_of"].reverse == true
 
-  # A NON-self relation is untouched: its two accessors land on DIFFERENT models, so a related_name
-  # matching a field on the OWNER is not a collision at all.
+  # A NON-self relation is untouched when the name does not exist ON THE TARGET: a `related_name`
+  # matching a field on the OWNER is not a collision at all, because the reverse accessor is
+  # installed on the target.
   #
-  # `chassis` exists on the owner and NOT on the target, deliberately. The reverse accessor is
-  # installed on the TARGET, so a name that also exists there would be a genuine shadow — the same
-  # failure this guard closes, one model over — and asserting success on it would pin a broken
-  # configuration as correct. That cross-model half is pre-existing and out of this issue's scope
-  # (the correct general check is `haskey(related_model.fields, …)`, equivalent to the shipped
-  # `haskey(model.fields, …)` only under the self gate); this fixture must not bless it either way.
+  # `chassis` exists on the owner and NOT on the target, deliberately — that is what makes this the
+  # negative control rather than a blessed shadow. #364 shipped the check gated behind
+  # `_same_model_reference`, so the cross-model half was pre-existing and out of its scope; #396
+  # replaced the gate with `haskey(related_model.fields, …)` on every registration path, and the
+  # positive cross-model case is asserted immediately below.
   sponsor = Models.Model("shadow_sponsor", id = Models.IDField(), name = Models.CharField())
   cross_module = Module(:M2MShadowCross)
   Core.eval(cross_module, :(import PormG; import PormG.Models))
@@ -1419,6 +1422,26 @@ end
     cross_module, settings, racer, "sponsors", racer.fields["sponsors"]) === nothing
   # And the reverse accessor it installed is genuinely reachable.
   @test sponsor.related_objects["chassis"] isa Models.ManyToManyRelation
+
+  # The positive cross-model case #364 deliberately left open and #396 closes: a `related_name` that
+  # names a field ON THE TARGET registers cleanly and is then permanently unreachable, because
+  # `_build_row_join` resolves a field before a reverse accessor at every hop. Now refused.
+  shadow_target = Models.Model("shadow_target", id = Models.IDField(), name = Models.CharField())
+  target_module = Module(:M2MShadowTarget)
+  Core.eval(target_module, :(import PormG; import PormG.Models))
+  Core.eval(target_module, :(Sponsor = $shadow_target))
+  Core.eval(target_module, :(Racer = Models.Model("shadow_racer2",
+    id = Models.IDField(),
+    sponsors = Models.ManyToManyField(Sponsor, related_name="name"),
+  )))
+  target_racer = Core.eval(target_module, :(Racer))
+  target_err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
+    target_module, settings, target_racer, "sponsors", target_racer.fields["sponsors"])
+  @test occursin("is a FIELD of that model", target_err.value.msg)
+  @test occursin("shadow_racer2.sponsors", target_err.value.msg)
+  @test occursin("shadow_target.name", target_err.value.msg)
+  # Not misreported as self-referential — the two ends are on different models.
+  @test !occursin("self-referential", target_err.value.msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

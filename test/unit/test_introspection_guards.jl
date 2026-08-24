@@ -2,15 +2,29 @@
 Unit coverage for the introspection primary-key attribute guards
 (`convertSQLToModel(row::DataFrameRow)`, the PostgreSQL path).
 
-A primary-key column is mapped to an `IDField`, which has **no** `max_length`/`max_digits`
-field. Before the guard, a natural primary key (`VARCHAR(n) PRIMARY KEY`) or a numeric primary
-key (`NUMERIC(p,s) PRIMARY KEY`) parsed a `max_length`/`max_digits` and then tried to assign it
-onto the `IDField`, raising a `FieldError` that crashed the whole schema import.
+The original guard (this file's reason for existing): a natural primary key
+(`VARCHAR(n) PRIMARY KEY`) or a numeric one (`NUMERIC(p,s) PRIMARY KEY`) parsed a
+`max_length`/`max_digits` and then tried to assign it onto a field that has no such slot, raising
+a `FieldError` that crashed the whole schema import. The fix added
+`&& hasfield(typeof(field), :max_length)` / `:max_digits`; the import must succeed either way.
+
+**What the primary key maps to changed in #409.** It used to be `IDField` for every non-UUID key,
+which is what made the crash possible in the first place — and which meant a model declaring any
+other key type could never equal what introspection reported, so `makemigrations` proposed the same
+`ALTER` on that column forever. Now:
+
+  * `varchar(n)` key ⇒ `CharField(primary_key=true, max_length=n)` — reconstructed
+  * a key that is ALSO a foreign key ⇒ the relation, carrying `primary_key=true`
+  * every integer width ⇒ `IDField`, which since #408 is the only integer key type PormG has, so
+    this is correct by construction rather than by flattening
+  * `numeric`, and a lengthless `text` key ⇒ still `IDField`, deliberately: `DecimalField` refuses
+    `primary_key` outright, and no field type both accepts `primary_key` and carries no length.
+
+So the max_length/max_digits guard is still load-bearing, but for the `numeric` fallback rather than
+for every key.
 
 `convertSQLToModel(row)` takes the introspected table metadata as a single `DataFrameRow`, so
-this is fully hermetic — no live database. The fix adds
-`&& hasfield(typeof(field), :max_length)` / `:max_digits`, so the import must succeed and the
-PK must map to an `IDField`, while a normal sized column still keeps its `max_length`.
+this is fully hermetic — no live database.
 """
 
 using Test
@@ -61,26 +75,65 @@ end
 @testset "Introspection PK attribute guards (convertSQLToModel)" begin
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 1. VARCHAR primary key + a normal sized column. Pre-fix: assigning max_length
-  #    onto the IDField threw FieldError. Post-fix: PK → IDField (no max_length),
-  #    while the normal column still keeps its max_length (guard didn't over-suppress).
+  # 1. VARCHAR primary key + a normal sized column. It must not crash (the original guard), and
+  #    since #409 it must come back as the CharField it actually is rather than as an IDField.
+  #    Flattened to IDField, a model declaring `code = CharField(primary_key=true, max_length=20)`
+  #    could never equal the live table: `describes_same_column` refuses to equate two field types
+  #    when either declares a key, so the planner pushed `:type` on every makemigrations — a full
+  #    table rebuild each time on SQLite.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "VARCHAR(n) PRIMARY KEY does not crash; PK maps to IDField" begin
+  @testset "VARCHAR(n) PRIMARY KEY reconstructs as a CharField key (#409)" begin
     row = _introspection_row(
       table_name   = "natural_key_tbl",
       columns      = "code varchar(20) NOT NULL, name varchar(100)",
       primary_keys = "code",
     )
-    model = convertSQLToModel(row)   # must not throw
+    model = convertSQLToModel(row)   # must not throw — the original guard
 
-    @test model.fields["code"] isa PormG.Models.sIDField
-    @test model.fields["code"].type == "BIGINT"
-    @test !hasfield(typeof(model.fields["code"]), :max_length)   # the attribute the old code tried to set
+    @test model.fields["code"] isa PormG.Models.sCharField
+    @test model.fields["code"].primary_key
+    # The length is REQUIRED, not decorative: `CharField()` invents `max_length = 250`, which would
+    # render `varchar(250)` and never match a live `varchar(20)` (the #325 trap).
+    @test model.fields["code"].max_length == 20
+    # `unique` is the COMPUTED column marker, not a hardcoded `true`. `CharField`'s constructor
+    # defaults it to `false` and `:unique` has no exemption in `_NON_SCHEMA_FIELD_ATTRS`, so
+    # hardcoding it here would keep declared and live unequal forever in a different way.
+    @test model.fields["code"].unique == false
     @test model.fields["name"].max_length == 100                 # normal column unaffected
   end
 
   # ───────────────────────────────────────────────────────────────────────────
+  # 1b. A key that is ALSO a foreign key keeps its relation (#409).
+  #    The `primary_key` arm used to precede the `fk_map` arm, so this column came back as a bare
+  #    `IDField` and the foreign key was DISCARDED — `inspectdb` regenerated the model with no
+  #    relation at all. That is loss, not drift, and no other test in this file covers the shape.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "a PRIMARY KEY that is also a FOREIGN KEY stays a relation (#409)" begin
+    model = convertSQLToModel(_introspection_row(
+      table_name              = "driver_profile",
+      columns                 = "driver_id bigint NOT NULL",
+      primary_keys            = "driver_id",
+      foreign_keys            = "driver_id",
+      foreign_tables          = "driver",
+      referenced_primary_keys = "id",
+      delete_rules            = "c"))
+
+    f = model.fields["driver_id"]
+    # A pk-fk is unique by the key constraint, so PostgreSQL records no separate UNIQUE marker —
+    # the reader treats the key itself as the one-to-one signal.
+    @test f isa PormG.Models.sOneToOneField
+    @test f.primary_key
+    @test f.to_table == "driver"
+    @test f.pk_field == "id"
+    @test f.on_delete === PormG.Models.CASCADE
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
   # 2. NUMERIC(p,s) primary key. Pre-fix: assigning max_digits onto the IDField threw.
+  #    #409 did NOT widen the reconstruction to this one, and that is deliberate: `DecimalField`
+  #    refuses `primary_key` outright ("DecimalField cannot be used as a Primary Key"), so there is
+  #    nothing to reconstruct it AS. The IDField fallback stays, and so does the max_digits guard
+  #    that keeps it from throwing.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "NUMERIC(p,s) PRIMARY KEY does not crash (max_digits guard)" begin
     row = _introspection_row(
@@ -92,6 +145,29 @@ end
 
     @test model.fields["id"] isa PormG.Models.sIDField
     @test !hasfield(typeof(model.fields["id"]), :max_digits)
+  end
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 3. The integer keys, and the lengthless text key that still falls back.
+  #    `IDField` for an integer key is no longer a flattening: #408 retired `AutoField`, so it is
+  #    the only integer key type PormG has and a declared key equals an introspected one. The three
+  #    widths are pinned together because reconstructing them separately is exactly the thing that
+  #    would reintroduce #409 — there is no `SmallAutoField`/`BigAutoField` to reconstruct INTO.
+  # ───────────────────────────────────────────────────────────────────────────
+  @testset "every integer key width still reads as IDField (#408/#409)" begin
+    for t in ("bigint", "integer", "smallint")
+      model = convertSQLToModel(_introspection_row(
+        table_name = "int_key_tbl", columns = "id $t NOT NULL", primary_keys = "id"))
+      @test model.fields["id"] isa PormG.Models.sIDField
+      @test model.fields["id"].primary_key
+    end
+
+    # A LENGTHLESS text key has no field type to become: `TextField` does not accept `primary_key`
+    # (its constructor passes a literal `false`), and a bare `CharField` would invent
+    # `max_length = 250`. It keeps the IDField fallback, deliberately and documented.
+    model = convertSQLToModel(_introspection_row(
+      table_name = "text_key_tbl", columns = "id text NOT NULL", primary_keys = "id"))
+    @test model.fields["id"] isa PormG.Models.sIDField
   end
 
 end

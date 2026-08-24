@@ -160,9 +160,38 @@
 
     @test haskey(by_name, "pormg_it_natural_key")
     @test haskey(by_name, "pormg_it_numeric_key")
-    # PKs map to IDField regardless of their underlying SQL type.
-    @test by_name["pormg_it_natural_key"].fields["code"] isa PormG.Models.sIDField
+
+    # #409: a sized textual key is reconstructed as the CharField it actually is, against a REAL
+    # engine. It used to flatten to IDField, which meant a model declaring
+    # `code = CharField(primary_key=true, max_length=20)` could never equal its own live table and
+    # `makemigrations` proposed the same ALTER on every run. This is the live half of
+    # test/unit/test_key_type_round_trip.jl.
+    #
+    # Both backends, deliberately: the PostgreSQL fixture is `VARCHAR(20)` and the SQLite one is
+    # `TEXT`, and the two readers reach the reconstruction by different routes (`col_type ==
+    # "varchar"` with a parsed `max_length` vs. `base_type == "TEXT"` with a `(n)` suffix). The
+    # SQLite fixture declares no length, so it exercises the documented LENGTHLESS fallback rather
+    # than the reconstruction — which is the behaviour that would otherwise be untested anywhere.
+    code_field = by_name["pormg_it_natural_key"].fields["code"]
+    if is_pg
+      @test code_field isa PormG.Models.sCharField
+      @test code_field.primary_key
+      @test code_field.max_length == 20
+      # The COMPUTED unique marker, not a hardcoded `true`: `CharField` defaults `unique=false` and
+      # `:unique` has no exemption in `_NON_SCHEMA_FIELD_ATTRS`, so hardcoding it here would keep a
+      # plain declaration permanently unequal — the #334 trap, in a new place.
+      @test code_field.unique == false
+    else
+      # `code TEXT PRIMARY KEY` — no declared length, so there is no CharField to reconstruct it as
+      # (`CharField()` would invent `max_length = 250` and never match the live bare `TEXT`), and it
+      # keeps the IDField fallback. Documented in `convertSQLToModel`, not an oversight.
+      @test code_field isa PormG.Models.sIDField
+    end
+
+    # NUMERIC keeps the IDField fallback on both backends: `DecimalField` refuses `primary_key`
+    # outright, so there is nothing to reconstruct it as. Not throwing is still the guard here.
     @test by_name["pormg_it_numeric_key"].fields["id"] isa PormG.Models.sIDField
+
     # A non-PK sized column keeps its max_length — the guard skipped only the PK.
     if is_pg
       @test by_name["pormg_it_natural_key"].fields["label"].max_length == 100

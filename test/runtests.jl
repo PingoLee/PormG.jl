@@ -102,6 +102,7 @@ end
     @testset "Sequence Resync as an Operation (#358)" include("unit/test_resync_sequences.jl")
     @testset "Introspection PK Guards" include("unit/test_introspection_guards.jl")
     @testset "Physical-column Identity (#325)" include("unit/test_column_equivalence.jl")
+    @testset "Key Type Round Trip (#408/#409)" include("unit/test_key_type_round_trip.jl")
     @testset "Self-Heal Key Inference" include("unit/test_self_heal_inference.jl")
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")

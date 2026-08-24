@@ -7,7 +7,6 @@ Supporting file for [`SKILL.md`](SKILL.md). Read this when **defining models** o
 | Field | DB Type (PG/SQLite) | Key Parameters |
 | :--- | :--- | :--- |
 | `IDField()` | `BIGINT IDENTITY` / `INTEGER PK` | `generated_always` |
-| `AutoField()` | `INTEGER SERIAL` / `INTEGER PK` | — |
 | `CharField(max_length)` | `VARCHAR(n)` | `max_length`, `choices`, `default` |
 | `TextField()` | `TEXT` | `null`, `blank` |
 | `EmailField()` | `VARCHAR` | `max_length=254` |

@@ -13,13 +13,14 @@ Why a frozen snapshot rather than hand-written assertions: #260 collapsed a kwar
 been copy-pasted into every constructor, and the one way that refactor could go wrong was *silently* —
 by changing a default. Four common keywords do **not** share a default across constructors:
 
-    unique       true in IDField, OneToOneField, AutoField                     (false elsewhere)
+    unique       true in IDField, OneToOneField                               (false elsewhere)
     db_index     true in IDField, OneToOneField, SlugField, ForeignKey         (false elsewhere)
     editable     true in CharField, PasswordField, FileField, UUIDField,
                  URLField, SlugField, JSONField                                (false elsewhere)
-    primary_key  true in IDField, AutoField                                    (false elsewhere)
+    primary_key  true in IDField                                               (false elsewhere)
 
-Eleven constructors deviate. A shared helper with hardcoded defaults would have flipped behavior at
+Ten constructors deviate. (`AutoField` was an eleventh until #408 retired it — it is no longer a
+constructor at all, only a stub that raises, so it has no default state to freeze.) A shared helper with hardcoded defaults would have flipped behavior at
 those sites with every existing test still green, because nothing else asserts a constructor's
 default state field-by-field. This file is that missing guard.
 
@@ -43,7 +44,6 @@ const FKE_FIXTURE = joinpath(@__DIR__, "fixtures", "field_kwargs_snapshot.txt")
 # The two relational fields take a positional target; everything else is kwargs-only.
 const FKE_CTORS = Dict{String,Function}(
     "IDField"                   => kw -> FKE_M.IDField(; kw...),
-    "AutoField"                 => kw -> FKE_M.AutoField(; kw...),
     "CharField"                 => kw -> FKE_M.CharField(; kw...),
     "IntegerField"              => kw -> FKE_M.IntegerField(; kw...),
     "PositiveSmallIntegerField" => kw -> FKE_M.PositiveSmallIntegerField(; kw...),
@@ -137,7 +137,8 @@ else
 
     # Guard the guard: an empty or truncated harness would pass a naive comparison.
     @test length(actual) == length(FKE_CTORS) * length(FKE_PROBES)
-    @test length(actual) >= 297
+    # 26 constructors x 11 probes. Was 297 until #408 retired AutoField, which took 11 rows with it.
+    @test length(actual) >= 286
     # No probe may error — every common keyword must remain accepted (or ignored with a warning) by
     # every constructor. An ERROR row would mean a keyword stopped being accepted, which breaks the
     # `Model_to_str` round-trip contract (generated model files reload through this kwargs form).

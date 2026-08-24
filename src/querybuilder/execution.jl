@@ -599,7 +599,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     model.fields[field].primary_key && (pk_exist = true; push!(pk_field, field))
 
      # Add safely quoted physical column (db_column when set) to columns list (#50)
-    push!(quoted_field_columns, quote_identifier(Models.field_db_column(model.fields[field], field), connection))
+    push!(quoted_field_columns, safe_column_identifier(Models.field_db_column(model.fields[field], field), connection))
 
     # Format and add value to parameters
     push!(param_values, add_parameter!(parameters, real_obj.insert[field] |> model.fields[field].formatter))
@@ -729,8 +729,8 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
   safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
 
   # Logical → quoted physical (db_column-aware), exactly as bulk_insert renders its clause.
-  qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
-  qset    = String[quote_identifier(Models.model_column(model, f), connection) for f in set_fields]
+  qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
+  qset    = String[safe_column_identifier(Models.model_column(model, f), connection) for f in set_fields]
   clause  = Dialect.on_conflict_clause(:update, qtarget, qset, connection)
 
   sql = """
@@ -768,7 +768,7 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
     # read-back each bind a FRESH parameter object (no cross-fetch reuse). The bound values are the
     # formatted lookup values — matching exactly what the INSERT bound.
     target_where = join(
-      ["$(quote_identifier(Models.model_column(model, f), connection)) = ?" for f in target_fields],
+      ["$(safe_column_identifier(Models.model_column(model, f), connection)) = ?" for f in target_fields],
       " AND ")
     precheck_sql = "SELECT 1 FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
     readback_sql = "SELECT * FROM $(safe_table_name) WHERE $(target_where) LIMIT 1;"
@@ -858,7 +858,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     quoted_field_columns, param_values, _, _ =
       _prepare_row_insert!(real_obj, model, settings, connection, parameters)
     safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-    qtarget = String[quote_identifier(Models.model_column(model, f), connection) for f in target_fields]
+    qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
     clause  = Dialect.on_conflict_clause(:nothing, qtarget, String[], connection)
     """
     INSERT INTO $(safe_table_name) (
@@ -938,17 +938,16 @@ end
 # literal early. A no-op for every name that does not contain one.
 _sql_literal(value::AbstractString)::String = replace(String(value), "'" => "''")
 
-# Quote an identifier WITHOUT charset validation (#59) — escape-only, unlike `quote_identifier`,
-# which also rejects anything outside SAFE_IDENTIFIER_PATTERN. For identifiers that come from the
-# database catalog (a `pg_class` row) or from a model's own `db_table`: neither is free-form user
-# input on this path, and validating them would newly reject legacy names that previously worked.
+# `_quote_ident_raw` moved to `sanitization.jl` with #394, where it now shares one definition of the
+# escape rule with `safe_table_identifier` / `safe_column_identifier`. It stays escape-only for the
+# reason it always was (#59): the identifiers reaching it come from the database catalog or from a
+# model's own `db_table`, neither of which is free-form user input.
 #
-# Load-bearing for the unowned-sequence fallback (#344): `setval`'s first argument is `regclass`,
-# so PostgreSQL re-parses it as an identifier and CASE-FOLDS any unquoted part. A catalog row
-# reading `public | Db_Table_id_seq` interpolated bare becomes `public.db_table_id_seq`, which does
-# not exist. `pg_get_serial_sequence` returns its answer already quoted, which is why the owned path
+# Load-bearing for the unowned-sequence fallback (#344): `setval`'s first argument is `regclass`, so
+# PostgreSQL re-parses it as an identifier and CASE-FOLDS any unquoted part. A catalog row reading
+# `public | Db_Table_id_seq` interpolated bare becomes `public.db_table_id_seq`, which does not
+# exist. `pg_get_serial_sequence` returns its answer already quoted, which is why the owned path
 # never needed this.
-_quote_ident_raw(name::AbstractString)::String = "\"$(replace(String(name), "\"" => "\"\""))\""
 
 # A model's physical table as a SQL *string literal* holding a *quoted identifier* — `'"Db_Table"'`.
 # The shape both `pg_get_serial_sequence` and `to_regclass` need: each takes TEXT that it re-parses
@@ -1060,7 +1059,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
                                _quote_ident_raw(seqs_df[1, :sequencename]))
       end
 
-      safe_field_name = quote_identifier(col, connection)
+      safe_field_name = safe_column_identifier(col, connection)
       safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
       fetch(
         connection,
@@ -1130,7 +1129,7 @@ end
 
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
   for field in pk_field
-    safe_field_name = quote_identifier(Models.model_column(model, field), connection)  # db_column (#50)
+    safe_field_name = safe_column_identifier(Models.model_column(model, field), connection)  # db_column (#50)
     safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
     # Matched against `sqlite_sequence.name`, which holds the table's ACTUAL name — so it must be
     # the resolved physical name (db_table when set, #59), not a fold of the logical one.
@@ -1412,13 +1411,14 @@ end
 function _build_from_tables(row_join::Vector{Dict{String, Union{String, Vector{FilterType}}}}, connection::Union{PormGPostgres, PormGSQLite})
   tables = String[]
   for join_dict in row_join
-    try
-      b = safe_table_identifier(join_dict["b"], connection)
-      alias_b = quote_identifier(join_dict["alias_b"], connection)
-      push!(tables, "$b AS $alias_b")
-    catch e
-      @error "Error building FROM tables for join: $join_dict" exception=(e, catch_backtrace())
-    end
+    # #394: no try/catch. This used to `@error` and CONTINUE, which dropped a table from a correlated
+    # FROM list and left the surviving aliases unconstrained — a wrong query emitted as a warning.
+    # Everything that can raise here is a defect, not a tolerable condition: a `KeyError` means the
+    # row_join is malformed, and an `InvalidValueError` means an INTERNALLY generated alias is not an
+    # identifier. Both have to surface.
+    b = safe_table_identifier(join_dict["b"], connection)
+    alias_b = quote_identifier(join_dict["alias_b"], connection)
+    push!(tables, "$b AS $alias_b")
   end
   return join(unique(tables), ", ")
 end
@@ -1433,18 +1433,32 @@ function _get_join_condition_list(row_join::Vector{Dict{String, Union{String, Ve
       throw(QueryBuildError("cjoin_on is not supported in a correlated UPDATE-FROM/DELETE-USING (setting a " *
                     "column from a joined table); scope the mutation with a filter/subquery instead."))
     end
+    # #394: the same rule, for a CTE. `update()` emits no `WITH` prefix — `build_cte_clause` is
+    # reached only from the three READ paths — so a row_join entry naming a CTE renders
+    # `FROM "<cte>" AS "Tb_N"` against a relation this statement never declares. That is as true of a
+    # KEYED CTE as of a CROSS-joined one, which is why the check is on the entry being a CTE rather
+    # than on the shape of its keys. The cross-joined case additionally carries SENTINEL empty key
+    # columns; those used to raise inside the loop below and be swallowed by a `catch` that dropped
+    # the ON condition entirely. Both fail here now, before any SQL is built.
+    if get(join_dict, "cte", nothing) !== nothing || get(join_dict, "cross", nothing) !== nothing
+      throw(QueryBuildError("A CTE cannot be joined in a correlated UPDATE ... FROM: the statement emits " *
+                    "no WITH clause, so the CTE it references is never declared. Scope the mutation with " *
+                    "a filter or a subquery instead."))
+    end
   end
   conditions = String[]
   for join_dict in row_join
-    try
-      alias_a = quote_identifier(join_dict["alias_a"], connection)
-      key_a = quote_identifier(join_dict["key_a"], connection)
-      alias_b = quote_identifier(join_dict["alias_b"], connection)
-      key_b = quote_identifier(join_dict["key_b"], connection)
-      push!(conditions, "$alias_a.$key_a = $alias_b.$key_b")
-    catch e
-      @error "Error building join condition for join: $join_dict" exception=(e, catch_backtrace())
-    end
+    # #394: no try/catch either — the guards above refuse to drop an ON clause, and until now the
+    # loop below dropped one anyway on any failure, with nothing but an `@error`. An UPDATE ... FROM
+    # or DELETE ... USING missing its ON condition matches every row of the joined table, so this is
+    # the one place a swallowed identifier error corrupts data rather than returning wrong rows.
+    # Everything reaching here is well-formed: both anchor-less shapes are refused above, and every
+    # `row_join` producer writes the alias/key set together with a PormG-generated `alias_b`.
+    alias_a = quote_identifier(join_dict["alias_a"], connection)
+    key_a = safe_column_identifier(join_dict["key_a"], connection)
+    alias_b = quote_identifier(join_dict["alias_b"], connection)
+    key_b = safe_column_identifier(join_dict["key_b"], connection)
+    push!(conditions, "$alias_a.$key_a = $alias_b.$key_b")
   end
   return conditions
 end
@@ -1469,7 +1483,7 @@ function _build_update_target_pk_subquery(instruction::SQLInstruction)::Union{St
 
   safe_table_name = safe_table_identifier(Models.model_table_name(instruction.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
-  quoted_pk = quote_identifier(Models.model_column(instruction.object.model, String(pk_field_sym)), instruction.connection)  # db_column (#50)
+  quoted_pk = safe_column_identifier(Models.model_column(instruction.object.model, String(pk_field_sym)), instruction.connection)  # db_column (#50)
 
   io = IOBuffer()
   print(io, "SELECT DISTINCT ", safe_alias, ".", quoted_pk)
@@ -1578,7 +1592,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     validate_field_data(model, field, objct.insert[field], "update"; allow_primary_key = false)
     Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
     
-    quoted_field = quote_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
+    quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
     if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction)
       f_value = _set_update_query(objct.insert[field], instruction)
@@ -1606,7 +1620,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       pk_subquery = (!set_uses_join_aliases && isempty(real_obj.ctes)) ? _build_update_target_pk_subquery(instruction) : nothing
 
       if pk_subquery !== nothing && pk_field_sym !== nothing
-        quoted_pk = quote_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
+        quoted_pk = safe_column_identifier(Models.model_column(model, String(pk_field_sym)), connection)  # db_column (#50)
         sql = """
         UPDATE $(safe_table_name) AS $(safe_alias)
         SET $(set_clause)

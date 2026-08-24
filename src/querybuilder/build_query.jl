@@ -369,8 +369,15 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       on_clause = join(extras, " AND ")
     else
       alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
-      key_a_quoted = quote_identifier(value["key_a"], instruc.connection)
-      key_b_quoted = quote_identifier(value["key_b"], instruc.connection)
+      # #394: escape-only, because on every model-join branch these are PHYSICAL columns
+      # (`Models.model_column`). The one exception is a CTE join, where `key_b` is the CTE's
+      # projection ALIAS (`build_joins.jl` sets `row_join["key_b"] = cte_table_key`). That name is
+      # not unguarded: `_build_row_join` raises `UnknownFieldError` unless it matches a field of
+      # the CTE model, and that field came from a `values()` alias, which `_query_select` renders
+      # through the fail-closed `quote_identifier`. So the strict check happens where the caller
+      # wrote the name, exactly as it does for the CTE name itself since #394.
+      key_a_quoted = safe_column_identifier(value["key_a"], instruc.connection)
+      key_b_quoted = safe_column_identifier(value["key_b"], instruc.connection)
 
       # Build base ON clause
       on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"

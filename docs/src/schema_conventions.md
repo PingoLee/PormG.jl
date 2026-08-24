@@ -116,6 +116,10 @@ validation. That is deliberate: the option exists to name a table PormG's own co
 produce. It is also **purely opt-in** — a model that does not set `db_table` derives its table name
 exactly as it always has, so no existing schema changes and nothing needs re-migrating.
 
+Every row of the table above holds for **any** spelling, including one PormG's own conventions would
+never produce — see [Identifier quoting and case](#Identifier-quoting-and-case) for the rule and why
+a physical name is escaped rather than validated.
+
 !!! note "Changing `db_table` on a migrated model is a table rename"
     The migration planner matches the live schema against your models by **physical** table name, so
     editing `db_table` on a model that is already migrated presents as "one table disappeared, another
@@ -503,30 +507,52 @@ Driver = Models.Model("driver",
 
 ## Identifier quoting and case
 
-**Column** identifiers are always emitted with **double quotes** (`"…"`) on **both** PostgreSQL and
-SQLite (no backticks, no backend-specific quoting), and they **preserve the declared field-name case**
-(#57) — so a field declared `driverId` becomes `"driverId"`.
+**Table and column** identifiers are emitted with **double quotes** (`"…"`) on **both** PostgreSQL
+and SQLite — no backticks, no backend-specific quoting — in DDL and in queries alike, and they
+**preserve the declared case** (#57), so a field declared `driverId` becomes `"driverId"`. An
+embedded `"` is escaped by doubling it, the standard SQL escape on both backends.
 
-The **table** identifier is *not* uniformly quoted. Some statements quote it (the
-SELECT/INSERT/UPDATE builder, `REFERENCES`) and others write it bare (`CREATE TABLE`, `CREATE INDEX`,
-the DELETE/cascade paths, PostgreSQL's `ADD CONSTRAINT`) — the split does not follow a
-DDL-versus-query line, so do not rely on one. What makes the mixture safe is that a model name is
-lowercase (see [Table names](#Table-names)): an unquoted lowercase identifier folds to itself on
-PostgreSQL, so the bare and quoted spellings address the same table either way.
+That uniformity is what makes a `db_table` or `db_column` outside PormG's own naming conventions
+usable. PormG used to apply two different rules to one name: the DDL renderer escaped and accepted
+anything, while the query builder validated against a strict pattern and rejected spaces, leading
+digits and punctuation — so a `db_table` outside that pattern migrated cleanly and then raised
+`InvalidValueError` on the first `SELECT`. PormG could create a table it was unable to address
+([#394]). The rule now depends on what kind of name it is:
 
-That is precisely what a mixed-case name used to break — one declaration migrating `driver_profile`
-and querying `"Driver_Profile"` — and why such a name is now rejected at declaration.
+| Kind of name | Rule | Why |
+| :--- | :--- | :--- |
+| A physical **table** — `db_table`, or the model name | escaped (`"` → `""`), then quoted | You pinned it, or PormG read it out of the database catalog. Either way it is a name that already exists. |
+| A physical **column** — `db_column`, or the field name | the same | `db_column` carries an arbitrary spelling for the same reason `db_table` does (#50). |
+| A query **alias** — a join alias, a `.with("name" => …)` CTE name, a `cjoin_on` alias, a `values("label" => …)` label | validated against `^[\p{L}_][\p{L}\p{M}\p{N}_]*$`, then quoted | Chosen while the query is built, frequently a literal you typed, and it names nothing that already exists — so there is nothing to be faithful to. |
+| A **JSON path** segment — the `a`/`b` in `payload__a__b` | validated against its own pattern | Interpolated *unquoted* into a path literal, so it has no quoting to fall back on. |
 
-!!! warning "Lowercase is necessary, not sufficient"
-    Because the table is written bare in `CREATE TABLE`, a model name must also be a valid unquoted
-    identifier. That part is **not** checked: `Models.Model("order", …)` (a reserved word) and
-    `Models.Model("driver profile", …)` (a space) are accepted and then emit invalid DDL. Stick to
-    lowercase `snake_case`.
+The invariant that follows is the one worth remembering:
 
-**Column** identifiers, by contrast, are quoted everywhere, so a column may be named anything the
-database accepts — including a SQL reserved word or a Julia keyword. Declare the field under a legal
-Julia identifier and name the column with `db_column`; that is the sanctioned way to address a column
-whose name is not a legal PormG field name (#317):
+> **Any name PormG's DDL will create, PormG's queries will address.**
+
+That guarantee is about the **physical** names — `db_table` and `db_column`. A model's own *field*
+names still have to be plain identifiers wherever PormG uses one as a query-time label: `bulk_update`
+builds a derived table whose column list is made of field names, and those go through the
+fail-closed rule like any other alias.
+
+Escaping is what makes that safe rather than merely permissive: a doubled `"` cannot terminate a
+quoted identifier, and a database interprets nothing else inside one. It is also, now, the *only*
+defence on a physical name — the query builder used to reject an odd spelling as a second layer and
+no longer does. That is the intended trade: `db_table` and `db_column` exist to carry names PormG did
+not choose, and a guard that refuses them is a guard against the feature.
+
+!!! note "The model name is still constrained — but by convention, not by the renderer"
+    A positional model name is validated **lowercase** (#300), so `Models.Model("Driver_Profile", …)`
+    is rejected and `db_table` is where a mixed-case physical name belongs. What is *not* checked is
+    everything else: `Models.Model("order", …)` (a reserved word) and `Models.Model("driver profile",
+    …)` (a space) are accepted, and since quoting is uniform they now migrate and query correctly
+    rather than emitting broken DDL. Stick to lowercase `snake_case` anyway — a model name is a
+    Julia-side identifier your own code reads, and `db_table` is the seam for anything else.
+
+Because column identifiers are quoted everywhere, a column may be named anything the database
+accepts — including a SQL reserved word or a Julia keyword. Declare the field under a legal Julia
+identifier and name the column with `db_column`; that is the sanctioned way to address a column whose
+name is not a legal PormG field name (#317):
 
 ```julia
 end_ = Models.DateTimeField(db_column = "end")   # field `end_` → column "end"
@@ -559,7 +585,9 @@ CREATE TABLE IF NOT EXISTS result (
 | `db_column` | authoritative: maps a field to a differently-named column (default: column == field name) |
 | Default `on_delete` | `NO ACTION` |
 | Timestamps | opt-in `auto_now` / `auto_now_add`; no implicit `created`/`modified` |
-| Quoting | columns always double-quoted on both backends (case-preserved); the table is quoted in some statements and bare in others — consistent only because the name is lowercase |
+| Quoting | every table and column identifier is double-quoted and `"`-escaped on both backends, in DDL and in queries alike (#394); aliases and CTE names are additionally validated |
 
 The migration *format* that records these schemas (file layout, checksum, tracking table) is a
 separate frozen contract — see [Migration Format Stability](migrations/stability.md).
+
+[#394]: https://github.com/PingoLee/PormG.jl/issues/394

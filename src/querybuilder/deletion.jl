@@ -548,7 +548,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     pk_field = key[:key]
     # Outer WHERE targets the physical column (db_column when set); the subquery already
     # projects/aliases the key, so only this identifier needs resolving (#50).
-    push!(_where, """"$(Models.model_column(model, pk_field))" IN ($(query(key[:objct], parameters=parameters)))""")
+    push!(_where, """$(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(query(key[:objct], parameters=parameters)))""")
   end
   sql::String = ""
   if size(keys, 1) == 1
@@ -571,7 +571,7 @@ function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::Po
     deleted_counter[model.name] = show_query === :execute ? (_query |> _count) : 0
     _query.values(pk_field) # Ensure the query is built
     @pormg_debug false
-    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
+    sql = "DELETE FROM $(safe_table_identifier(Models.model_table_name(model), connection)) WHERE $(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(query(_query, parameters=parameters)))"
   end
 
   sql == "" && error(_emsg("PormG internal error in delete(): the generated SQL is empty — this should not happen; please report it."))
@@ -593,7 +593,7 @@ function update_field(connection::Union{PormGPostgres, PormGSQLite}, model::Porm
   parameters = get_parameter(connection)
   value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
   # SET column and outer WHERE key both target the physical column (db_column) — #50.
-  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET \"$(Models.model_column(model, field))\" = $(value_sql) WHERE \"$(Models.model_column(model, pk_field))\" IN ($(query(_query, parameters=parameters)))"
+  sql = "UPDATE $(safe_table_identifier(Models.model_table_name(model), connection)) SET $(safe_column_identifier(Models.model_column(model, field), connection)) = $(value_sql) WHERE $(safe_column_identifier(Models.model_column(model, pk_field), connection)) IN ($(query(_query, parameters=parameters)))"
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end

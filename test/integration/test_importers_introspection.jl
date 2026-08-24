@@ -308,7 +308,7 @@
     # `REFERENCES "parent"(""Id"")` — two quote pairs, because the caller adds one around a value
     # that already carries one — made `_compare_field_foreign_key` report the key as changed on
     # every makemigrations, and made the query builder throw `InvalidValueError`
-    # (`SAFE_IDENTIFIER_PATTERN` forbids a `"`).
+    # (before #394; a physical column is escaped rather than validated now).
     #
     # This is the live half of test/unit/test_introspection_guards.jl's #389 block. It runs on both
     # backends even though only PostgreSQL has the hazard: SQLite reads FK metadata from

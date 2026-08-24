@@ -157,8 +157,9 @@ function _drop_index(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::Or
     # `model_name` is already the RESOLVED physical table name (db_table when set, #59) — every
     # producer of this Symbol keys on `model_table_name`. Do NOT re-normalize it through
     # `format_model_name`, which would lowercase a mixed-case db_table back into a different table.
+    # Escaped ONCE here; the interpolations below must NOT escape it again (#394).
     table_name = Dialect._quote_table_ddl(string(model_name))
-    drop_sql = """ALTER TABLE \"$table_name\" DROP CONSTRAINT IF EXISTS \"$index_name\";\nDROP INDEX IF EXISTS \"$index_name\";"""
+    drop_sql = """ALTER TABLE \"$table_name\" DROP CONSTRAINT IF EXISTS \"$(Dialect._quote_table_ddl(index_name))\";\nDROP INDEX IF EXISTS \"$(Dialect._quote_table_ddl(index_name))\";"""
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name", drop_sql)
   else
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove index on $field_name",
@@ -186,7 +187,7 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
     # `_quote_table_ddl` on the referenced table (#388): `add_foreign_key` interpolates
     # `ref_table_name` verbatim — every identifier it receives is pre-quoted HERE — so an embedded
     # `"` in a parent's `db_table` would close the identifier early and corrupt the ALTER.
-    Dialect.add_foreign_key(conn, model_name, "\"$constraint_name\"", "\"$local_col\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(new_field; column = field_name, model = model_name)))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+    Dialect.add_foreign_key(conn, model_name, "\"$(Dialect._quote_table_ddl(constraint_name))\"", "\"$(Dialect._quote_table_ddl(local_col))\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(new_field; column = field_name, model = model_name)))\"", "\"$(Dialect._quote_table_ddl(resolved_pk))\"", on_delete=on_delete_sql))
   end
   return nothing
 end
@@ -205,7 +206,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
       on_delete_sql = hasfield(typeof(field), :on_delete) ? Dialect._foreign_key_on_delete_sql(field.on_delete) : nothing
       _configure_order_dict_migration_plan(migration_plan, model_name, "New foreign key: $field_name",
       # Referenced table escaped as in `_add_fk_constraint_in_alteration` above (#388).
-      Dialect.add_foreign_key(conn, model_table_name(model), "\"$constraint_name\"", "\"$local_col\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"", "\"$resolved_pk\"", on_delete=on_delete_sql))
+      Dialect.add_foreign_key(conn, model_table_name(model), "\"$(Dialect._quote_table_ddl(constraint_name))\"", "\"$(Dialect._quote_table_ddl(local_col))\"",  "\"$(Dialect._quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"", "\"$(Dialect._quote_table_ddl(resolved_pk))\"", on_delete=on_delete_sql))
     # For SQLite, FKs are added in CREATE TABLE, so if we are adding a field to an existing table, 
     # we might need recreation if it's a FK.
     end
@@ -216,7 +217,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
     index_name = name * "_idx" |> lowercase
     index_col = Models.field_db_column(field, string(field_name))
     _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $field_name",
-    Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$index_col\""]))
+    Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(index_col))\""]))
   end
   nothing
 end
@@ -232,7 +233,7 @@ function _add_many_to_many_auto_constraints(conn::Union{PormGPostgres, PormGSQLi
     migration_plan,
     model_name,
     "Create many-to-many unique index",
-    Dialect.create_unique_index(conn, "\"$unique_index\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$owner_column\"", "\"$related_column\""])
+    Dialect.create_unique_index(conn, "\"$(Dialect._quote_table_ddl(unique_index))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(owner_column))\"", "\"$(Dialect._quote_table_ddl(related_column))\""])
   )
   return nothing
 end
@@ -266,7 +267,7 @@ function _add_unique_constraints(conn::Union{PormGPostgres, PormGSQLite}, migrat
       migration_plan,
       model_name,
       "Create unique constraint: $(index_name)",
-      Dialect.create_unique_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$col\"" for col in cols])
+      Dialect.create_unique_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$(Dialect._quote_table_ddl(col))\"" for col in cols])
     )
   end
   return nothing
@@ -298,7 +299,7 @@ function _add_indexes(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::O
       migration_plan,
       model_name,
       "Create index: $(index_name)",
-      Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$col\"" for col in cols])
+      Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(table))\"", ["\"$(Dialect._quote_table_ddl(col))\"" for col in cols])
     )
   end
   return nothing
@@ -521,7 +522,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
         if !(conn isa PormGSQLite && get_constraints_index(conn, model_name, col) !== nothing)
           index_name = "$(hashed)_idx"
           _configure_order_dict_migration_plan(migration_plan, model_name, "Create index on $col",
-          Dialect.create_index(conn, "\"$index_name\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$col\""]))
+          Dialect.create_index(conn, "\"$(Dialect._quote_table_ddl(index_name))\"", "\"$(Dialect._quote_table_ddl(model_table_name(model)))\"", ["\"$(Dialect._quote_table_ddl(col))\""]))
         end
       else
         _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name)

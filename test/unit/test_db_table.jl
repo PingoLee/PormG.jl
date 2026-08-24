@@ -234,6 +234,25 @@ DbtPlain.connect_key = "db_table_mock"
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # #394: whatever `create_table` renders, the query builder addresses. `db_table` is unvalidated by
+  # design (`_apply_db_table!` type-checks and nothing more), so the DDL side always accepted a name
+  # the query side then refused — PormG would migrate a table it could not select from. Comparing the
+  # two renderers is the only assertion that can catch that; each half looked correct alone.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a db_table create_table accepts is one the query builder addresses (#394)" begin
+    for physical in ["Odd Table Name", "2fast", "cost\$usd", "Ev\"il"]
+      odd = Model("dbt_odd_scratch", db_table = physical, id = IDField(), name = CharField())
+      odd.connect_key = "db_table_mock"
+      escaped = replace(physical, "\"" => "\"\"")
+
+      for conn in (MockPostgresDbTable(), MockSQLiteDbTable())
+        @test occursin("CREATE TABLE IF NOT EXISTS \"$(escaped)\"", PormG.Dialect.create_table(conn, odd))
+      end
+      @test occursin("FROM \"$(escaped)\"", inspect_query(odd.objects)[:sql_text])
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # Reads. The base table and any JOIN target both resolve through the same seam.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "SELECT and JOIN render db_table" begin

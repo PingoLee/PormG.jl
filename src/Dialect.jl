@@ -510,7 +510,7 @@ column actually held. `makemigrations` writes a reviewable plan before anything 
 where that substitution belongs.
 """
 function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
-  column_ref = "\"$(field_name)\""
+  column_ref = "\"$(_quote_table_ddl(field_name))\""
 
   if old_field isa Union{sCharField, sTextField, sImageField, sSlugField, sURLField}
     return "convert_to($(column_ref), 'UTF8')"
@@ -520,7 +520,7 @@ function _postgres_bytea_cast_expression(field_name::Union{String, Symbol}, old_
 end
 
 function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_field::Union{Nothing, PormGField})
-  column_ref = "\"$(field_name)\""
+  column_ref = "\"$(_quote_table_ddl(field_name))\""
 
   if old_field isa Union{sFloatField, sDecimalField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField}
     return "make_interval(secs => $(column_ref)::double precision)"
@@ -657,7 +657,7 @@ _requires_non_negative_check(field::PormGField)::Bool = field isa Union{sPositiv
 
 # The non-negative CHECK clause emitted both at CREATE TABLE and when a column's
 # type transitions into a positive integer field on ALTER.
-_non_negative_check_clause(col_name)::String = "CHECK (\"$(col_name)\" >= 0)"
+_non_negative_check_clause(col_name)::String = "CHECK (\"$(_quote_table_ddl(col_name))\" >= 0)"
 
 # BinaryField's `max_length` is a BYTE bound, and neither `bytea` nor `BLOB` accepts a length
 # parameter — so unlike CharField's `varchar(n)` it can only be expressed as a CHECK (#296).
@@ -670,9 +670,9 @@ _requires_byte_length_check(field::PormGField)::Bool =
 # `length()` returns BYTES for a BLOB (characters only for TEXT — which is why the SQLite table
 # rebuild casts legacy TEXT values to BLOB, see `alter_field`).
 _byte_length_check_clause(col_name, max_length::Int, ::PormGPostgres)::String =
-  "CHECK (octet_length(\"$(col_name)\") <= $(max_length))"
+  "CHECK (octet_length(\"$(_quote_table_ddl(col_name))\") <= $(max_length))"
 _byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
-  "CHECK (length(\"$(col_name)\") <= $(max_length))"
+  "CHECK (length(\"$(_quote_table_ddl(col_name))\") <= $(max_length))"
 
 # ── Physical-column identity (#325) ──────────────────────────────────────────────────────────────
 #
@@ -779,7 +779,7 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   _requires_byte_length_check(field) && push!(constraints, _byte_length_check_clause(col_name, field.max_length, conn))
 
   # Combine everything into a single string: "col_name base_type constraints..."
-  return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
+  return join(["\"$(_quote_table_ddl(col_name))\"", base_type, join(constraints, " ")], " ")
 end
 
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite; temporary_default::Any=nothing)::String
@@ -822,17 +822,23 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   _requires_byte_length_check(field) && push!(constraints, _byte_length_check_clause(col_name, field.max_length, conn))
 
   # Combine everything into a single string: "col_name base_type constraints..."
-  return join(["\"$(col_name)\"", base_type, join(constraints, " ")], " ")
+  return join(["\"$(_quote_table_ddl(col_name))\"", base_type, join(constraints, " ")], " ")
 end
 
 # ---
 # Functions to create migration queries
 #
 
-# Escape a table identifier for interpolation between double quotes (#59). `db_table` carries an
-# arbitrary user-supplied spelling and is deliberately not shape-validated (mirroring `db_column`), so
-# an embedded `"` would otherwise close the quoted identifier early. Doubling is the standard SQL
-# escape on both backends. A no-op for every name that does not contain a quote.
+# Escape an identifier for interpolation between double quotes (#59). `db_table` carries an arbitrary
+# user-supplied spelling and is deliberately not shape-validated (mirroring `db_column`), so an
+# embedded `"` would otherwise close the quoted identifier early. Doubling is the standard SQL escape
+# on both backends. A no-op for every name that does not contain a quote.
+#
+# #394 widened its USE, not its rule: it is now applied to COLUMN and constraint identifiers here too,
+# not only table names, because `db_column` is unvalidated for exactly the same reason `db_table` is
+# and the query side escapes both (`safe_table_identifier` / `safe_column_identifier` in
+# `querybuilder/sanitization.jl`). Escaping one axis and not the other just moves the DDL-vs-query
+# split rather than closing it. The name is kept for continuity — it is the DDL identifier escape.
 #
 # NOTE for anyone adding a DDL renderer: this is applied at the interpolation site, so a NEW statement
 # that writes `"$table_name"` without it is unescaped again. The functions that emit several
@@ -908,7 +914,7 @@ function create_table(conn::PormGSQLite, model::PormGModel)
       # the table being CREATED goes through `_quote_table_ddl` while the table being REFERENCED did
       # not, so a `db_table` holding a `"` closed the identifier early: a parent pinned to `Ev"il`
       # rendered `REFERENCES "Ev"il"("id")`, which is malformed SQL and a DDL-injection seam.
-      push!(columns, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(_quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"(\"$target_pk\") ON DELETE $on_delete_str")
+      push!(columns, "FOREIGN KEY (\"$(_quote_table_ddl(local_col))\") REFERENCES \"$(_quote_table_ddl(fk_target_table(field; column = field_name, model = model)))\"(\"$(_quote_table_ddl(target_pk))\") ON DELETE $on_delete_str")
     end
   end
 
@@ -998,7 +1004,14 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   field_name = field_db_column(new_field, string(field_name))
   # Escape ONCE here (#59) rather than at each of the ~20 `"$table_name"` interpolations below, so a
   # statement added later cannot forget it. A no-op for every name without an embedded quote.
-  table_name = _quote_table_ddl(string(table_name))
+  #
+  # `raw_table_name` exists because the escaped spelling must NOT reach the four `get_constraints_*`
+  # CATALOG lookups below (#394). Those query the catalog BY VALUE, so a table named `Ev"il` would be
+  # looked up as `Ev""il`, match nothing and return `nothing` — and the `DROP CONSTRAINT` that
+  # depends on the answer would simply never be emitted. Dropping a `unique` or a `primary_key` would
+  # silently do nothing, and `makemigrations` would re-propose the same no-op on every run.
+  raw_table_name = string(table_name)
+  table_name = _quote_table_ddl(raw_table_name)
   sql_statements = []
 
   # Non-negative CHECK constraint diffing on a type transition (Django-style).
@@ -1010,8 +1023,8 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   new_needs_check = _requires_non_negative_check(new_field)
   old_needs_check = old_field !== nothing && _requires_non_negative_check(old_field)
   if :type in colect_not_equal && old_needs_check && !new_needs_check
-    constraint = get_constraints_check(conn, string(table_name), string(field_name))
-    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(constraint)";""")
+    constraint = get_constraints_check(conn, raw_table_name, string(field_name))
+    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
   end
 
   # Byte-length CHECK diffing for BinaryField (#296), the `octet_length` analogue of the block
@@ -1023,19 +1036,19 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   old_byte_bound = (old_field !== nothing && _requires_byte_length_check(old_field)) ? old_field.max_length : nothing
   byte_bound_changed = any(attr -> attr in colect_not_equal, [:type, :max_length]) && new_byte_bound != old_byte_bound
   if byte_bound_changed && old_byte_bound !== nothing
-    constraint = get_constraints_byte_length_check(conn, string(table_name), string(field_name))
-    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(constraint)";""")
+    constraint = get_constraints_byte_length_check(conn, raw_table_name, string(field_name))
+    constraint !== nothing && push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(constraint))";""")
   end
 
   # Alter column type
   if any(attr -> attr in colect_not_equal, [:type, :max_length, :max_digits, :decimal_places])
     if new_field isa sCharField
       max_length = hasproperty(new_field, :max_length) ? new_field.max_length : 255
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE VARCHAR($max_length);""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE VARCHAR($max_length);""")
     elseif new_field isa sDecimalField
       max_digits = hasproperty(new_field, :max_digits) ? new_field.max_digits : 10
       decimal_places = hasproperty(new_field, :decimal_places) ? new_field.decimal_places : 2
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE DECIMAL($max_digits, $decimal_places);""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE DECIMAL($max_digits, $decimal_places);""")
       if old_field !== nothing
         old_max_digits = hasproperty(old_field, :max_digits) ? old_field.max_digits : nothing
         old_decimal_places = hasproperty(old_field, :decimal_places) ? old_field.decimal_places : nothing
@@ -1044,20 +1057,20 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
         end
       end
     elseif new_field isa sTimeField
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE TIME USING "$field_name"::time without time zone;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE TIME USING "$(_quote_table_ddl(field_name))"::time without time zone;""")
     elseif new_field isa sDurationField
       cast_expression = _postgres_interval_cast_expression(field_name, old_field)
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE INTERVAL USING $cast_expression;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE INTERVAL USING $cast_expression;""")
     elseif new_field isa sBinaryField
       # Only emit the TYPE change when the type actually moved. `max_length` alone lands in this
       # block too (it is in the trigger list above), and a redundant `TYPE bytea USING …` would
       # rewrite the whole table for nothing.
       if :type in colect_not_equal
         cast_expression = _postgres_bytea_cast_expression(field_name, old_field)
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE bytea USING $cast_expression;""")
+        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE bytea USING $cast_expression;""")
       end
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" TYPE $(_get_column_type(new_field, conn));""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" TYPE $(_get_column_type(new_field, conn));""")
     end
   end
 
@@ -1075,20 +1088,20 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # Set NOT NULL if specified
   if :null in colect_not_equal
     if !new_field.null
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" SET NOT NULL;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET NOT NULL;""")
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" DROP NOT NULL;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP NOT NULL;""")
     end
   end
 
   # Set unique if specified
   if :unique in colect_not_equal
     if new_field.unique
-      push!(sql_statements, """ALTER TABLE "$table_name" ADD UNIQUE ("$field_name");""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ADD UNIQUE ("$(_quote_table_ddl(field_name))");""")
     else
-      contrains = get_constraints_unique(conn, string(table_name), string(field_name))
+      contrains = get_constraints_unique(conn, raw_table_name, string(field_name))
       if contrains !== nothing
-        push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(contrains)";""")
+        push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(contrains))";""")
       end
     end
   end
@@ -1097,20 +1110,20 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   if :default in colect_not_equal
     if new_field.default !== nothing
       default_value = _format_default_sql_value(new_field.default, conn)
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" SET DEFAULT $default_value;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $default_value;""")
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" DROP DEFAULT;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP DEFAULT;""")
     end
   end
 
   # Set primary key if specified
   if :primary_key in colect_not_equal
     if new_field.primary_key
-      push!(sql_statements, """ALTER TABLE "$table_name" ADD PRIMARY KEY ("$field_name");""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ADD PRIMARY KEY ("$(_quote_table_ddl(field_name))");""")
     else
-      contrains = get_constraints_pk(conn, string(table_name), string(field_name))
+      contrains = get_constraints_pk(conn, raw_table_name, string(field_name))
       if contrains !== nothing
-        push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(contrains)";""")
+        push!(sql_statements, """ALTER TABLE "$table_name" DROP CONSTRAINT "$(_quote_table_ddl(contrains))";""")
       end
     end
   end
@@ -1119,12 +1132,12 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   if :generated in colect_not_equal || :generated_always in colect_not_equal
     if new_field.generated
       if new_field.generated_always
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" ADD GENERATED ALWAYS AS IDENTITY;""")
+        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED ALWAYS AS IDENTITY;""")
       else
-        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" ADD GENERATED BY DEFAULT AS IDENTITY;""")
+        push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" ADD GENERATED BY DEFAULT AS IDENTITY;""")
       end
     else
-      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$field_name" DROP IDENTITY;""")
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP IDENTITY;""")
     end
   end
 
@@ -1150,12 +1163,12 @@ function add_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_na
 end
 
 function drop_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$field_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$(_quote_table_ddl(field_name))";"""
 end
 
 function drop_field(conn::PormGSQLite, table_name::Union{String,Symbol}, field_name::Union{String,Symbol})
   # Modern SQLite supports DROP COLUMN. If not, we'd need recreation.
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$field_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP COLUMN "$(_quote_table_ddl(field_name))";"""
 end
 
 function alter_field(conn::PormGPostgres, model::PormGModel, field_name::Union{Symbol,String}, new_field::PormGField, old_field::Union{Nothing,PormGField}, colect_not_equal::Vector{Symbol})
@@ -1183,7 +1196,7 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
       target_pk = fk_target_column(f)
       # Referenced (parent) TABLE honors db_table (#59) via fk_target_table, escaped as in
       # `create_table` above (#388).
-      push!(columns_defs, "FOREIGN KEY (\"$local_col\") REFERENCES \"$(_quote_table_ddl(fk_target_table(f; column = f_name, model = model)))\"(\"$target_pk\") ON DELETE $on_delete_str")
+      push!(columns_defs, "FOREIGN KEY (\"$(_quote_table_ddl(local_col))\") REFERENCES \"$(_quote_table_ddl(fk_target_table(f; column = f_name, model = model)))\"(\"$(_quote_table_ddl(target_pk))\") ON DELETE $on_delete_str")
     end
   end
 
@@ -1220,8 +1233,8 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
   select_exprs = String[]
   for (k, f) in model.fields
     col = field_db_column(f, string(k))
-    push!(insert_cols, "\"$col\"")
-    push!(select_exprs, f isa sBinaryField ? "CAST(\"$col\" AS BLOB)" : "\"$col\"")
+    push!(insert_cols, "\"$(_quote_table_ddl(col))\"")
+    push!(select_exprs, f isa sBinaryField ? "CAST(\"$(_quote_table_ddl(col))\" AS BLOB)" : "\"$(_quote_table_ddl(col))\"")
   end
   cols_joined = join(insert_cols, ", ")
   select_joined = join(select_exprs, ", ")
@@ -1236,11 +1249,11 @@ ALTER TABLE "$new_table_name" RENAME TO "$table_name";"""
 end
 
 function rename_field(conn::Union{PormGSQLite,PormGPostgres}, table_name::Union{String,Symbol}, old_field_name::Union{String,Symbol}, new_field_name::Union{String,Symbol})
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME COLUMN "$old_field_name" TO "$new_field_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" RENAME COLUMN "$(_quote_table_ddl(old_field_name))" TO "$(_quote_table_ddl(new_field_name))";"""
 end
 
 function drop_foreign_key(conn::PormGPostgres, table_name::Symbol, constraint_name::String)
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT "$constraint_name";"""
+  return """ALTER TABLE "$(_quote_table_ddl(table_name))" DROP CONSTRAINT "$(_quote_table_ddl(constraint_name))";"""
 end
 
 # NOTE (#83): there is intentionally no `drop_foreign_key(::PormGSQLite, …)`. SQLite has no
@@ -1248,11 +1261,14 @@ end
 # (see `alter_field(::PormGSQLite, model, …)` + `_sqlite_rebuild_preserving_indexes`), which omits
 # the FK clause. The planner's `_drop_fk_constraint_in_alteration` is therefore a no-op on SQLite.
 
+# The CREATE side escapes the index name (`planner.jl` wraps it in `_quote_table_ddl` before handing
+# it to `create_index`), so the DROP side must too (#394) — otherwise an index whose declared name
+# carries a `"` is created under one spelling and dropped under another, and `IF EXISTS` hides it.
 function drop_index(conn::PormGPostgres, index_name::String)
-  return """DROP INDEX IF EXISTS "$index_name";"""
+  return """DROP INDEX IF EXISTS "$(_quote_table_ddl(index_name))";"""
 end
 function drop_index(conn::PormGSQLite, index_name::String)
-  return """DROP INDEX IF EXISTS "$index_name";"""
+  return """DROP INDEX IF EXISTS "$(_quote_table_ddl(index_name))";"""
 end
 
 function rename_table(conn::Union{PormGSQLite,PormGPostgres}, old_table_name::String, new_table_name::String)

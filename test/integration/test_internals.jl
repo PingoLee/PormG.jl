@@ -215,6 +215,11 @@ end
 
 @testset "SQL Injection Prevention Tests" begin
         
+  # Two rules, one per axis (#394). `quote_identifier` is the fail-closed ALIAS path; the
+  # `safe_*_identifier` pair is the escape-only PHYSICAL path, because a table or column name is
+  # pinned by the model author or read from the catalog, and validating it meant refusing names
+  # PormG's own DDL creates. The partition itself is covered exhaustively in
+  # `test/unit/test_identifier_quoting.jl`.
   @testset "Identifier Sanitization" begin
     # Test the SQLSanitizer module
     
@@ -229,6 +234,15 @@ end
     
     # Test table name sanitization
     @test safe_table_identifier("users", nothing) == "\"users\""
+
+    # A PHYSICAL name is escaped, not validated (#394) — the same strings refused above are legal
+    # as a `db_table`/`db_column`, and quote doubling is what makes them safe.
+    @test safe_table_identifier("driver profile", nothing) == "\"driver profile\""
+    @test safe_table_identifier("we\"ird", nothing) == "\"we\"\"ird\""
+    @test safe_column_identifier("Say\"Hi", nothing) == "\"Say\"\"Hi\""
+    # The doubled quote cannot terminate the identifier, which is the whole threat.
+    @test safe_table_identifier("x\"; DROP TABLE users; --", nothing) ==
+          "\"x\"\"; DROP TABLE users; --\""
     
     println("✅ All identifier sanitization tests passed!")
   end
@@ -321,6 +335,9 @@ end
     end
   end
 
+  # Every string below stays refused as an ALIAS after #394, and every one of them is legal as a
+  # physical `db_table`/`db_column`. That is the split, and it is deliberate: an alias is chosen at
+  # query-build time and names nothing that exists, so there is nothing to be faithful to.
   @testset "Advanced Sanitizer Unit Tests" begin
     # Test with Unicode and control characters
     # Sometimes 'latin1' or other encodings allow single-quote bypasses

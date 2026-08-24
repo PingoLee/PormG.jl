@@ -232,14 +232,57 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sequence Sync: only DATABASE failures are tolerated (#344)
-# The try covers the whole loop body, which means it also covers PormG's fail-closed
-# identifier guards (`quote_identifier` / `safe_table_identifier` → `_validate_identifier`).
-# Those raise `InvalidValueError` — a PormGError but NOT a DatabaseError — and relabelling
-# one as "sequence resync failed, check your GRANTs" would bury a real error and break the
-# fail-closed contract. The catch allowlists `DatabaseError` and `PoolError`; everything
-# else propagates.
+# The try covers the whole loop body, so it also covers every non-database way the body can fail.
+# Relabelling one of those as "sequence resync failed, check your GRANTs" would bury a real error.
+# The catch allowlists `DatabaseError` and `PoolError`; everything else propagates.
+#
+# The driver used to be a `db_table` that PormG's own identifier validator refused — an
+# `InvalidValueError` raised inside the try. #394 removed that producer: a physical table name is
+# escaped rather than validated now, so an odd `db_table` no longer raises anywhere. The ALLOWLIST is
+# unchanged and is still what this pins, so the error is injected through the mock instead. Picking
+# `InvalidValueError` keeps the original premise exactly — a PormGError that is not a DatabaseError.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "A non-database error during resync is not swallowed (#344)" begin
+  empty!(SEQUENCE_SYNC_SQL)
+
+  settings = PormG.Configuration.Settings(
+    connections = MockSetvalDenied(),
+    change_data = true,
+  )
+
+  original = SETVAL_DENIED[]
+  SETVAL_DENIED[] = PormG.InvalidValueError("not a database failure — must not be relabelled")
+  try
+    @test !(SETVAL_DENIED[] isa PormG.DatabaseError)   # the premise: outside the allowlist
+    @test !(SETVAL_DENIED[] isa PormG.PoolError)
+
+    # No transaction, so the warn path is the one being bypassed here — this raises because of the
+    # allowlist, not because of the transaction check.
+    #
+    # The message is checked, not just the type: `@test_throws InvalidValueError` alone cannot tell
+    # "the injected error propagated" from "some other InvalidValueError fired anywhere", and that
+    # distinction is the whole point of the assertion.
+    try
+      PormG.QueryBuilder._update_sequence(SequenceDriver, settings.connections, ["id"], settings)
+      @test false   # unreachable: the allowlist must let this through
+    catch e
+      @test e isa PormG.InvalidValueError
+      @test occursin("must not be relabelled", sprint(showerror, e))
+    end
+  finally
+    SETVAL_DENIED[] = original
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sequence Sync: a `db_table` the DDL accepts is one the resync can address (#394)
+# The inverse of what the testset above used to assert. `db_table` is deliberately NOT
+# shape-validated at declaration (#59) because naming a table PormG's conventions could not produce
+# is the point of the option — and until #394 the query side refused the very names it exists for, so
+# `_update_sequence` raised `InvalidValueError` on a table `create_table` had rendered happily.
+# Both spellings now agree: escape, do not validate.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A resync addresses an odd db_table instead of refusing it (#394)" begin
   empty!(SEQUENCE_SYNC_SQL)
 
   settings = PormG.Configuration.Settings(
@@ -247,24 +290,16 @@ end
     change_data = true,
   )
 
-  # `db_table` is deliberately NOT shape-validated at declaration (#59), so an illegal identifier
-  # survives to `safe_table_identifier` inside the try.
-  bad = Model("badseq", db_table = "no spaces allowed!", id = IDField(), forename = CharField())
-  bad.connect_key = "sequence_sync_default"
+  odd = Model("badseq", db_table = "no spaces allowed!", id = IDField(), forename = CharField())
+  odd.connect_key = "sequence_sync_default"
 
-  # No transaction, so the warn path is the one being bypassed here — this raises because of the
-  # allowlist, not because of the transaction check.
-  #
-  # The message is checked, not just the type: `@test_throws InvalidValueError` alone cannot tell
-  # "the table-identifier guard fired inside the try" from "some other InvalidValueError fired
-  # anywhere", and that distinction is the whole point of the assertion.
-  try
-    PormG.QueryBuilder._update_sequence(bad, settings.connections, ["id"], settings)
-    @test false   # unreachable: the guard must raise
-  catch e
-    @test e isa PormG.InvalidValueError
-    @test occursin("no spaces allowed!", sprint(showerror, e))
-  end
+  PormG.QueryBuilder._update_sequence(odd, settings.connections, ["id"], settings)
+
+  @test length(SEQUENCE_SYNC_SQL) == 2
+  # `pg_get_serial_sequence` takes TEXT it re-parses as an identifier, so the name is quoted INSIDE
+  # a string literal — an unquoted mixed-case or spaced name would fold and resolve to nothing.
+  @test occursin("pg_get_serial_sequence('\"no spaces allowed!\"'", SEQUENCE_SYNC_SQL[1])
+  @test occursin("FROM \"no spaces allowed!\"", SEQUENCE_SYNC_SQL[2])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

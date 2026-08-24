@@ -129,6 +129,34 @@ function dict_to_jl_str(d::OrderedDict{String, String})::String
   return "OrderedDict{String, String}(" * join(entries, ",\n ") * ")"
 end
 
+# A migration-plan key rendered as a Julia binding (#394). Plain when the physical table name is
+# already a legal identifier — which keeps every existing plan file byte-identical — and Julia's
+# `var"..."` raw-identifier form otherwise. Both escapes are needed inside `var"..."`: it follows
+# normal string rules, so a backslash or a quote in the table name would terminate it early.
+# Can this name be written as a BARE Julia binding? `Base.isidentifier` is necessary but not
+# sufficient: it accepts reserved words (`end`, `function`) that are a `ParseError` in assignment
+# position, and all-underscore names that parse and then discard. Parsing the assignment itself is
+# the only exact test, and it runs once per table during `makemigrations` (#394).
+function _plan_binds_bare(name::AbstractString)::Bool
+  Base.isidentifier(name) || return false
+  all(==('_'), name) && return false
+  ex = Meta.parse(string(name, " = 1"); raise = false)
+  return ex isa Expr && ex.head === :(=) && ex.args[1] === Symbol(name)
+end
+
+function _plan_binding(key)::String
+  name = String(key)
+  _plan_binds_bare(name) && return name
+  # An ALL-UNDERSCORE name (`_`, `___`) is the one case `var"..."` cannot rescue: Julia treats it as
+  # a DISCARD at any spelling, so the entry would parse and then hold nothing, and `get_all_dicts`
+  # would silently skip that table's migration. Prefixing is safe because the binding NAME is never
+  # read back — `get_all_dicts` collects every `OrderedDict` in the module regardless of what it is
+  # called, and the `# table:` comment written above each entry is what carries the real name for a
+  # human reading the plan.
+  stem = all(==('_'), name) ? "pormg_plan_" * name : name
+  return "var\"" * replace(replace(stem, "\\" => "\\\\"), "\"" => "\\\"") * "\""
+end
+
 function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbol,OrderedDict{String,String}}, path::String) :: Nothing
   open(joinpath(path, file), "w") do f
       module_name = replace(basename(file), ".jl" => "")
@@ -152,7 +180,13 @@ function generate_migration_plan(file::String, migration_plan::OrderedDict{Symbo
         if value isa OrderedDict{String, String}
           # Convert this dictionary into parseable Julia code
           jl_code_str = dict_to_jl_str(value)
-          write(f, "$key = $jl_code_str\n\n")
+          # #394: `key` is a PHYSICAL table name and is written here as a Julia BINDING, so a name
+          # that is not a legal Julia identifier — a space, a leading digit, a quote: exactly the
+          # spellings `db_table` exists to carry — produced a plan file that could not be PARSED.
+          # `makemigrations` succeeded and `migrate` then died on its own output. `var"..."` is
+          # Julia's raw-identifier syntax and accepts any string; the reader walks `names(mod)`
+          # and `getfield` (`Migrations.get_all_dicts`), so it never sees which spelling was used.
+          write(f, "$(_plan_binding(key)) = $jl_code_str\n\n")
         else
           # If it's not a Dict, just write it plainly (or handle differently)
           write(f, "# (Not a Dict) $value\n\n")

@@ -313,12 +313,18 @@ function _apply_many_to_many_branch(
 end
 
 # #27: validate JSON path key segments fail-closed. A segment is either a non-negative integer
-# (JSON array index) or a safe identifier (SAFE_IDENTIFIER_PATTERN — the same contract as SQL
-# identifiers). Anything else (spaces, dots, quotes, braces, empty) is rejected, so the validated
-# segments are safe to interpolate into the path literal. Returns the segments unchanged.
+# (JSON array index) or a safe key (`SAFE_JSON_KEY_PATTERN`). Anything else (spaces, dots, quotes,
+# braces, empty) is rejected, so the validated segments are safe to interpolate into the path
+# literal. Returns the segments unchanged.
+#
+# #394: this checks `SAFE_JSON_KEY_PATTERN`, NOT `SAFE_IDENTIFIER_PATTERN`, even though the two
+# bodies match today. A segment is interpolated UNQUOTED into a path literal inside a single-quoted
+# SQL string (PostgreSQL braces, SQLite `$.a.b`), so unlike a table or column name it has no quoting
+# to fall back on and this charset check is the entire guard. Keeping the constants separate is what
+# stops a future relaxation of the SQL-identifier rules from silently widening this one.
 function _validate_json_key_segments(segments::Vector{String})::Vector{String}
   for seg in segments
-    if occursin(r"^\d+$", seg) || occursin(SAFE_IDENTIFIER_PATTERN, seg)
+    if occursin(r"^\d+$", seg) || occursin(SAFE_JSON_KEY_PATTERN, seg)
       continue
     end
     throw(InvalidValueError("Invalid JSON key segment \e[31m$(seg)\e[0m in a JSON path lookup. Segments must be a non-negative integer (array index) or a simple key (letters, digits, underscore). Keys with spaces, dots, or quotes are not addressable via the `__` path syntax."))
@@ -334,7 +340,7 @@ function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field
     field_name::String, key_segments::Vector{String}, full_field::Vector{String})::String
   segs = _validate_json_key_segments(key_segments)
   col = string(quote_identifier(alias, instruct.connection), ".",
-               quote_identifier(Models.field_db_column(json_field, field_name), instruct.connection))
+               safe_column_identifier(Models.field_db_column(json_field, field_name), instruct.connection))
   path = join(full_field, "__")
   instruct.json_lookup_cache[path] = (json_field, segs)
   instruct.tab_field_cache[path] = json_field
@@ -400,6 +406,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["a"] = Models.model_table_name(instruct.object.model)
       row_join["alias_a"] = instruct.alias
       row_join["b"] = cte_name  # CTE name becomes the table name
+      # #394: mark it. A correlated UPDATE ... FROM emits no `WITH` prefix, so a row_join naming a
+      # CTE renders `FROM "<cte>" AS "Tb_N"` against a relation the statement never declares.
+      # `_get_join_condition_list` refuses the whole class on this marker.
+      row_join["cte"] = "1"
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
       # "how" is never emitted for a CROSS entry (build_row_join_sql_text short-circuits on the
       # "cross" marker), but the deep-path loop below reads `row_join["how"]` as `prev_how`; set
@@ -442,6 +452,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join["a"] = Models.model_table_name(instruct.object.model)
 
       row_join["b"] = cte_name  # CTE name becomes the table name
+      row_join["cte"] = "1"     # #394 — see the CROSS branch above
       row_join["alias_b"] = _get_alias_name(instruct.row_join, instruct.alias)
       row_join["how"] = cte_dict["join_type"]::String
 

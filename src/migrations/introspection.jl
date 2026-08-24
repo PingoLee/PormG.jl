@@ -318,6 +318,10 @@ function convertSQLToModel(sql::String; type_map::Dict{String, Symbol} = sqlite_
     end
     normalized_default = _normalize_sqlite_default(default_value, type_sym)
     # check if column_name is a primary key
+    # NOTE (#409): this reader still force-converts every key to `IDField`, and still checks
+    # `pk_map` BEFORE `fk_map` — both defects the live readers had fixed. It is off the live route
+    # (see this function's header), so it was left alone rather than fixed blind; anyone putting it
+    # back on that route must close these two as well as the #318 gap the header already names.
     if haskey(pk_map, column_name)
       field_instance = Models.IDField(null=(nullable === nothing), auto_increment=pk_map[column_name]["auto_increment"])
     elseif haskey(fk_map, column_name)
@@ -421,53 +425,120 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
     default_val = ismissing(col_row.dflt_value) ? nothing : col_row.dflt_value
     is_pk = col_row.pk > 0
     
-    if is_pk
-      if base_type == "UUID"
-        # #334: a UUID primary key is the ONE non-integer pk type this reader can safely
-        # reconstruct as its real field type, mirroring the same narrow carve-out in the
-        # PostgreSQL reader just above in this file (see its comment for why this is NOT
-        # generalized to "any non-integer pk" — `UUIDField` uniquely carries neither the
-        # max_length/max_digits hazard nor a construction-time refusal that other non-integer
-        # field types can hit when forced into `primary_key = true`).
-        #
-        # UNREACHABLE today for a table PormG itself created: `sqlite_type_map_reverse` (below,
-        # DDL-generation direction) renders every `UUIDField` column — pk or not — as bare `TEXT`,
-        # same as CharField/TextField/JSONField/ImageField (the collapse the `else` branch of the
-        # non-pk arm already documents), never as a literal `UUID` column type. This branch exists
-        # for a hand-written or foreign SQLite schema that DOES declare a column type as `UUID`
-        # (SQLite accepts any type name), and costs nothing to keep. It does NOT close the gap for
-        # PormG-generated schemas — `test/integration/db_2/models.jl`'s comment on
-        # `Bulk_uuid_pk_scratch` explains why that fixture has no SQLite counterpart instead.
-        field = Models.UUIDField(null=false, primary_key=true,
-            default=_normalize_sqlite_default(default_val, :UUIDField))
-      else
-        # In SQLite, INTEGER PRIMARY KEY often implies AUTOINCREMENT behavior
-        field = Models.IDField(null=false, primary_key=true, auto_increment=(base_type == "INTEGER"))
-      end
-    elseif haskey(fk_map, col_name)
+    # #409: the relational arm runs BEFORE the generic primary-key arms. It used to run after, so a
+    # column that is both a PRIMARY KEY and a FOREIGN KEY came back as a bare `IDField` with the
+    # relation silently DISCARDED — `inspectdb` regenerated such a model with no foreign key at all.
+    # `PRAGMA foreign_key_list` names the child column in `from`, which is what `fk_map` is keyed on.
+    #
+    # The arm ORDER mirrors the PostgreSQL reader exactly — uuid key, then relation, then sized
+    # textual key, then the `IDField` fallback — and that is not cosmetic. An earlier revision of
+    # this fix hoisted the FK check above the WHOLE `is_pk` block, which put it above the UUID arm
+    # too, so a `UUID PRIMARY KEY REFERENCES …` column read back as an integer `ForeignKey` here
+    # while PostgreSQL still read it as a `UUIDField`. Two readers disagreeing about one schema is
+    # the exact failure mode this issue exists to remove, so they are kept in lockstep.
+    fk_hit = haskey(fk_map, col_name)
+
+    if is_pk && base_type == "UUID"
+      # #334: a UUID primary key is the ONE non-integer pk type this reader could safely reconstruct
+      # before #409 widened the set, mirroring the same carve-out in the PostgreSQL reader.
+      #
+      # UNREACHABLE today for a table PormG itself created: `sqlite_type_map_reverse` renders every
+      # `UUIDField` column — pk or not — as bare `TEXT`, never as a literal `UUID` column type. This
+      # branch exists for a hand-written or foreign SQLite schema that DOES declare a column type as
+      # `UUID` (SQLite accepts any type name), and costs nothing to keep.
+      field = Models.UUIDField(null=false, primary_key=true,
+          default=_normalize_sqlite_default(default_val, :UUIDField))
+
+    elseif fk_hit
         fk_info = fk_map[col_name]
         # Same #292 gap as the DDL-regex path above: `default_val` was in scope and used two
         # branches down, but never passed to the FK. This is the path the live
         # `convert_schema_to_models(::PormGSQLite)` actually reaches. The FK column's declared type
         # drives normalization the same way a non-FK column's does.
         fk_type_sym = get(type_map, base_type, :TextField)
-        # A UNIQUE foreign key is conceptually a one-to-one, and PostgreSQL introspection returns
-        # `OneToOneField` for it — but SQLite deliberately does NOT follow suit here (#318). PormG
-        # cannot currently materialize a OneToOneField: `Dialect._get_column_type` has no branch for
-        # it, so it renders `TEXT` rather than the referenced key's type, and (on SQLite) the inline
-        # `FOREIGN KEY … REFERENCES` clause is gated on `isa sForeignKey`, so no constraint is emitted
-        # at all. Returning O2O here would therefore make the inspectdb round trip strictly WORSE:
-        # with the `unique` flag below, a live `INTEGER UNIQUE REFERENCES parent(id)` now regenerates
-        # LOSSLESSLY as `INTEGER UNIQUE` + the foreign key, where an O2O would regenerate as `TEXT`
-        # with no foreign key. The flag is what #318 is actually about; the field type is not.
-        # #360: `.to` is the target's BINDING and `to_table` the physical parent table — see the
-        # `convertSQLToModel(::String)` path above for why both are needed. `fk_info.to` on this line
-        # is the parent COLUMN from `PRAGMA foreign_key_list`, unrelated to a field's `.to`.
         fk_parent_table = String(fk_info.table)
-        field = Models.ForeignKey(Models._model_binding_name(fk_parent_table); pk_field=fk_info.to,
-            on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
-            default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
+        # #360: `.to` is the target's BINDING and `to_table` the physical parent table — see the
+        # `convertSQLToModel(::String)` path above for why both are needed. `fk_info.to` here is the
+        # parent COLUMN from `PRAGMA foreign_key_list`, unrelated to a field's `.to`.
+        fk_binding = Models._model_binding_name(fk_parent_table)
+
+        if is_pk
+          # A pk-fk reconstructs as a `OneToOneField`, the SAME type the PostgreSQL reader produces
+          # for it, and the two readers must agree or #409 simply moves rather than closes: whichever
+          # type a model DECLARES, the other backend's reader would report the other one, the planner
+          # would see two different structs, `describes_same_column` would short-circuit on
+          # `_is_relational_field`, and `:type` would be pushed on every `makemigrations` — a full
+          # table rebuild here, forever. That is the defect this issue is about, so a per-backend
+          # answer is not an option.
+          #
+          # This does NOT reopen #318, which is about a UNIQUE NON-key FK. Being precise about why,
+          # because the obvious reason is wrong: the uniqueness signal for that case IS available
+          # here — `_sqlite_single_column_unique_columns` runs before this loop and the same reader
+          # trusts it enough to set `field.unique` from it further down. #318 is a DECISION, not a
+          # limitation, and reversing it is a behavioural change that belongs in its own issue.
+          #
+          # A PRIMARY KEY needs no such decision: it is unique by definition, so `is_pk` is a
+          # signal #318 never had to weigh. And since #408 an `sOneToOneField` renders the
+          # referenced key's type and carries its constraint, so emitting one here is no longer
+          # worse than a plain `ForeignKey` — which was #318's actual objection.
+          #
+          # KNOWN RESIDUE: the non-key UNIQUE FK therefore remains the one shape the two readers
+          # classify differently (PostgreSQL `sOneToOneField`, here `sForeignKey`). It is latent
+          # rather than loud — `_compare_model_field` compares attribute-wise and the two structs
+          # have identical field-name sets, so the pair converges — but `describes_same_column`
+          # answers `false` for it, so if any OTHER column in the table changes, the detailed loop
+          # runs, `typeof` differs, and `:type` sweeps this column into a table rebuild. INTEGER to
+          # INTEGER, so churn rather than damage. Tracked separately.
+          #
+          # `null=false`: a PRIMARY KEY column is conceptually NOT NULL, and all three sibling key
+          # arms hardcode it. SQLite is the one engine that actually permits NULL in a non-INTEGER
+          # PRIMARY KEY, so for that (foreign-schema only) shape this reports a NOT NULL the column
+          # does not have. Accepted deliberately: the alternative is a
+          # `OneToOneField(primary_key=true, null=true)` that no sane declaration matches, which
+          # trades a silent divergence for permanent churn.
+          field = Models.OneToOneField(fk_binding; pk_field=fk_info.to,
+              primary_key=true, unique=true, null=false,
+              on_delete=_normalize_introspected_on_delete(fk_info.on_delete),
+              default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
+        else
+          # A UNIQUE foreign key is conceptually a one-to-one and PostgreSQL introspection returns
+          # `OneToOneField` for it, but SQLite deliberately does NOT follow suit (#318) — see above.
+          field = Models.ForeignKey(fk_binding; pk_field=fk_info.to,
+              on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
+              default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
+        end
         field.to_table = fk_parent_table
+
+    elseif is_pk && base_type in ("TEXT", "VARCHAR", "CHAR") && occursin("(", col_type)
+        # #409: a natural key declared with a length — what `CharField(primary_key=true,
+        # max_length=n)` renders as. Flattened to `IDField` it could never equal the model that
+        # declared it, so `makemigrations` proposed the same alteration forever, and on SQLite that
+        # alteration is the full CREATE-new/INSERT-SELECT/DROP/RENAME table rebuild.
+        #
+        # All three spellings, not just `TEXT`: `sqlite_type_map` accepts `TEXT`, `VARCHAR` and
+        # `CHAR` for exactly the foreign-schema population this branch serves (PormG's own DDL only
+        # ever emits `TEXT(n)`), and the non-pk arm below already honours all three. Gating on `TEXT`
+        # alone left a `VARCHAR(20) PRIMARY KEY` flattened here while PostgreSQL reconstructed it —
+        # the two-readers-disagree shape again.
+        #
+        # The `(n)` is REQUIRED, for the same #325 reason as the non-pk arm: `CharField()` invents
+        # `max_length = 250`, which renders `TEXT(250)` and can never match a live bare `TEXT`. A
+        # LENGTHLESS textual key therefore still falls through to `IDField` — not because that is
+        # right, but because no PormG field type both accepts `primary_key` and carries no length
+        # (`TextField` does not accept it at all, so reconstructing one would yield a model with no
+        # key). PormG never emits such a column itself; only a hand-written or foreign schema can.
+        m_pk = match(r"\((\d+)\)", col_type)
+        field = Models.CharField(primary_key=true, null=false,
+            max_length = m_pk !== nothing ? parse(Int, m_pk.captures[1]) : 250,
+            default=_normalize_sqlite_default(default_val, :CharField))
+
+    elseif is_pk
+        # In SQLite, INTEGER PRIMARY KEY often implies AUTOINCREMENT behavior. Correct BY
+        # CONSTRUCTION for the integer case since #408 retired `AutoField` — `IDField` is the only
+        # integer key type PormG has, so a declared key and an introspected one agree. Also the
+        # documented fallback for the shapes with nothing to reconstruct into: a lengthless textual
+        # key, and anything else a foreign schema declares.
+        field = Models.IDField(null=false, primary_key=true, auto_increment=(base_type == "INTEGER"))
     else
         type_sym = get(type_map, base_type, :TextField)
         # #325: a BARE textual column carries no length, but `CharField()` INVENTS `max_length = 250`
@@ -1490,6 +1561,11 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
     # rows some unit tests build), so degrade to "no action recorded" rather than throwing.
     delete_rules = (:delete_rules in propertynames(row) && !ismissing(row[:delete_rules])) ?
       split(row[:delete_rules], ", ") : fill("", length(fk_columns))
+    # #415: this positional pairing is only as good as the CTE's aggregates. That CTE derives the
+    # referenced column from the PARENT'S PRIMARY KEY INDEX rather than from `con.confkey`, so an FK
+    # pointing at a non-PK unique column reports the wrong column, and a composite parent key fans
+    # every aggregate out — the last entry silently wins the `fk_map[...]` assignment below, and the
+    # `delete_rules` alignment #292 established breaks with it. Not addressed here.
     for (i, (fk_col, fk_table, fk_pk)) in enumerate(zip(fk_columns, fk_tables, fk_pk_columns))
         rule = i <= length(delete_rules) ? delete_rules[i] : ""
         # ALL THREE halves are DE-QUOTED. The schema query aggregates each through
@@ -1551,13 +1627,15 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
       # de-quoted at two of those four sites and left the other two quoted, which happened to work
       # only because their counterparts were quoted too.
       #
-      # NOT covered: an identifier containing a SPACE. `col_parts` splits the aggregate on `" "`
-      # one line up, so `"Parent Id"` is torn in half before any de-quoting can help, and the
-      # column is emitted under the phantom name `Parent`. `fk_map`'s key survives it (that
-      # aggregate splits on `", "`), so the two sides genuinely disagree for exactly that class of
-      # name — a live PG/SQLite divergence, since the SQLite reader takes `PRAGMA` output raw.
-      # Fixing it means changing the `columns` aggregate's format, not the de-quoting, so it is out
-      # of scope for #389. No issue filed yet — see this PR's body.
+      # NOT covered: an identifier containing a SPACE (#414). `col_parts` splits the aggregate on
+      # `" "` one line up, so `"Parent Id"` is torn in half before any de-quoting can help: the
+      # column is emitted under the phantom name `"Parent` — the leading quote SURVIVES, because
+      # `_unquote_ident` correctly refuses to strip a lone unbalanced one — and `col_parts[2]` is
+      # `Id"` rather than a type, so it also degrades to `TextField`. `fk_map`'s key survives the
+      # space intact (that aggregate splits on `", "`), so the two sides genuinely disagree for
+      # exactly that class of name — a live PG/SQLite divergence, since the SQLite reader takes
+      # `PRAGMA` output raw. Fixing it means changing the `columns` aggregate's format, not the
+      # de-quoting.
       col_name = _unquote_ident(col_parts[1])
       col_type = lowercase(col_parts[2])
       generated::Bool = false
@@ -1677,9 +1755,13 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           # (`models/fields.jl`, "DecimalField cannot be used as a Primary Key"), and a VARCHAR pk
           # would try to assign `max_length` onto whatever field resulted. `UUIDField` carries
           # neither hazard: no `max_length`/`max_digits`, and `primary_key=true` is always legal.
-          # `db_index` is the literal `true`, not the `db_index` variable, matching the IDField
-          # branch: the `indexes` CTE above explicitly excludes primary-key indexes
-          # (`NOT i.indisprimary`), so `db_index` would read back `false` for any primary key.
+          # `db_index` takes the COMPUTED local, not a literal `true`. The `indexes` CTE excludes
+          # primary-key indexes (`NOT i.indisprimary`) so it reads back `false` — which is exactly
+          # what `UUIDField`'s own constructor defaults to, and therefore what a plain
+          # `UUIDField(primary_key=true)` declares. (The rule is "agree with the field type's own
+          # constructor default"; only `IDField` defaults `db_index=true`, so only its arm may pass
+          # the literal. Passing `true` here manufactured a permanent disagreement on PostgreSQL
+          # while the SQLite UUID arm, which passes nothing, converged — one schema, two answers.)
           #
           # `unique` is the COMPUTED local variable here, deliberately NOT the literal `true` the
           # IDField branch hardcodes. IDField's own constructor defaults `unique=true`, so hardcoding
@@ -1690,10 +1772,15 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           # `true` here — the primary-key branch of `_NON_SCHEMA_FIELD_ATTRS`'s comparison (above in
           # `planner.jl`) has no exception for `:unique`, so that mismatch alone would keep
           # `makemigrations` proposing an alteration regardless of the `:auto_add` exemption below.
-          Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=true, default=default_value)
-      elseif primary_key
-          Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
+          Models.UUIDField(primary_key=true, unique=unique, null=false, db_index=db_index, default=default_value)
       elseif haskey(fk_map, col_name)
+        # #409: this branch now runs BEFORE the generic `primary_key` fallback below. It used to run
+        # after, so a column that is both a PRIMARY KEY and a FOREIGN KEY — `OneToOneField(
+        # primary_key=true)`, the standard Django profile/extension-table shape, and legal per the
+        # importer's own list of key-capable types — was reconstructed as a bare `IDField` and the
+        # relation was DISCARDED. `inspectdb` regenerated such a model with no foreign key at all:
+        # not perpetual drift, actual loss. A key that is also a relation is a relation first; the
+        # `primary_key=` flag rides along.
         fk_info = fk_map[col_name]
         # #360: `.to` is the target's BINDING (via `_model_binding_name`, the single derivation
         # `_resolve_target_model` has to agree with) and `to_table` the physical parent table — see
@@ -1707,14 +1794,69 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
         # `OneToOneField` had the identical omission and is fixed with `ForeignKey`.
         fk_default = _fk_default_or_warn(default_value, table_name, col_name)
         fk_on_delete = _normalize_introspected_on_delete(fk_info.on_delete)
-        fk_field = if unique
-          Models.OneToOneField(fk_table, pk_field=fk_column, null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
+        # A PRIMARY KEY column is unique by construction, but PostgreSQL records that through the
+        # primary-key constraint rather than a separate UNIQUE one, so the `unique` local read off
+        # the column markers is `false` for it. Treat the key as the O2O signal in that case: a
+        # one-to-one IS "the FK is also unique", and a pk-fk is the strongest form of it.
+        fk_is_o2o = unique || primary_key
+        fk_field = if fk_is_o2o
+          Models.OneToOneField(fk_table, pk_field=fk_column, primary_key=primary_key, unique=true,
+              null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         else
-          Models.ForeignKey(fk_table, pk_field=fk_column, null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
+          # No `primary_key=` here: `fk_is_o2o` is `unique || primary_key`, so this branch is only
+          # reachable for a NON-key foreign key. Passing it would read as though a plain `ForeignKey`
+          # can be a key on PostgreSQL, which is precisely the per-backend divergence #409 is about.
+          Models.ForeignKey(fk_table, pk_field=fk_column,
+              null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         end
         # Set on BOTH branches — the PostgreSQL reader is the one path that emits `OneToOneField`.
         fk_field.to_table = fk_parent_table
         fk_field
+      elseif primary_key && col_type == "varchar" && max_length !== nothing
+          # #409: a natural VARCHAR key — `matricula = CharField(primary_key=true)` over a legacy
+          # table — reconstructed as its real type instead of being flattened to `IDField`. Flattened,
+          # the declared model could never equal what introspection reported: `describes_same_column`
+          # refuses to equate two field types when either declares a key (Dialect.jl), so the planner
+          # fell to its final `else` and pushed `:type` on EVERY `makemigrations` — a full table
+          # rebuild each time on SQLite.
+          #
+          # `max_length` is required, not defaulted: `CharField()` INVENTS `max_length = 250`
+          # (models/fields.jl), which would render `varchar(250)` and never match a `varchar(20)`
+          # column — the same #325 trap that made a bare `TEXT` read back as `CharField(250)`. The
+          # guard means a lengthless key falls through to the `IDField` fallback below rather than
+          # being reconstructed wrongly.
+          #
+          # Both `unique` and `db_index` take the COMPUTED locals here, deliberately — this branch
+          # must NOT copy the literal `true`s the `IDField` and `UUIDField` arms use. The rule is
+          # "agree with the field type's own constructor default", not "say true for every key":
+          #
+          #   * `IDField` defaults `unique=true, db_index=true`, so its literals always agree with a
+          #     plain `IDField()` declaration. It is the ONLY key arm that may pass them — the
+          #     `UUIDField` arm above passes the computed values for the same reason this one does.
+          #   * `CharField` defaults BOTH to `false`. The `indexes` CTE excludes primary-key indexes
+          #     (`NOT i.indisprimary`), so the computed `db_index` reads `false` — which is exactly
+          #     what a plain `CharField(primary_key=true, max_length=n)` declares. Writing `true`
+          #     here would manufacture the very disagreement this branch exists to remove, and bake
+          #     an untrue `db_index=true` into the file `Model_to_str` regenerates.
+          #
+          # `:unique` has no exemption in `_NON_SCHEMA_FIELD_ATTRS` so it would alter; `:db_index`
+          # does, so it would not — but it still costs the planner's fast-path early-out on every
+          # varchar-keyed model, and a generated file that lies is a defect on its own terms.
+          Models.CharField(primary_key=true, max_length=max_length, unique=unique, null=false,
+              db_index=db_index, default=default_value)
+      elseif primary_key
+          # The remaining keys: every integer width, and the types that are genuinely hazardous to
+          # reconstruct. `IDField` is now correct BY CONSTRUCTION for the integer case rather than by
+          # flattening — #408 retired `AutoField`, so it is the only integer key type PormG has, and
+          # a declared key and an introspected one agree.
+          #
+          # It stays a deliberate lie for the rest, and the reasons are unchanged from #334: a
+          # `NUMERIC` key parsed as `DecimalField(primary_key=true)` refuses construction outright
+          # ("DecimalField cannot be used as a Primary Key"), and there is no field type that both
+          # accepts `primary_key` and carries no length for a bare `text` key — `TextField` does not
+          # accept `primary_key` at all (its constructor passes a literal `false`), so reconstructing
+          # one would produce a model with no key.
+          Models.IDField(generated=generated, generated_always=generated_always, unique=true, null=false, db_index=true)
       else
         field_type(unique=unique, null=!not_null, default=default_value, db_index=db_index)
       end

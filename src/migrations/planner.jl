@@ -446,7 +446,12 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
           end
         else
           # check is db_constraint is false in field
-          if field |> typeof == Models.sForeignKey && !field.db_constraint &&  old_field |> typeof == Models.sBigIntegerField
+          # `sOneToOneField` is included since #408: it is NOT a subtype of `sForeignKey` (both are
+          # bare `PormGField`), and now that it renders `bigint` rather than `text`, a
+          # `db_constraint=false` one-to-one introspects as `sBigIntegerField` exactly like a
+          # `db_constraint=false` ForeignKey does — so without it here the pair lands in the `else`
+          # below and pushes `:type` on every makemigrations, forever.
+          if field |> typeof in (Models.sForeignKey, Models.sOneToOneField) && !field.db_constraint &&  old_field |> typeof == Models.sBigIntegerField
             continue
           else
             push!(colect_not_equal, :type)

@@ -123,7 +123,8 @@ Entry.connect_key = "default"
     # so it detects nothing except an arity change. `SQLOrder` in `querybuilder/types.jl` shows a
     # same-arity inner constructor is a shape this repo actually uses.
     concrete = filter(isconcretetype, subtypes(PormG.PormGField))
-    @test length(concrete) == 26                        # fails loudly when a field type is added —
+    @test length(concrete) == 25                        # fails loudly when a field type is added or
+                                                        # removed (26 until #408 retired sAutoField) —
     for T in concrete                                   # exactly when this helper wants re-reading
       @test length(methods(T)) == 2                     # no inner constructor in front of the rebuild
     end

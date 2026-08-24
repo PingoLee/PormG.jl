@@ -45,9 +45,10 @@ end
 # ── Common keyword handling (#260) ──────────────────────────────────────────
 # Every field constructor used to open with the same four blocks copy-pasted: an `accepted` Set, an
 # unexpected-keyword `@warn` loop, a `get(kwargs, :x, default)` per keyword, and a type guard per
-# keyword. Across 27 constructors that was 27 accepted-sets, 27 warn loops, 254 extractions and 187
-# guards — roughly a fifth of this file, and the reason a single wording fix had to be applied by hand
-# in 26 places (which is how three different messages for the same check arose).
+# keyword. Across the 27 constructors that existed then (26 now — #408 retired `AutoField`) that was
+# 27 accepted-sets, 27 warn loops, 254 extractions and 187 guards — roughly a fifth of this file, and
+# the reason a single wording fix had to be applied by hand in 26 places (which is how three
+# different messages for the same check arose).
 #
 # `_common_kwargs` does all four jobs once and returns the extracted values.
 #
@@ -56,10 +57,10 @@ end
 # Four keywords carry a different default in some constructors, so the helper takes overrides rather
 # than assuming the majority:
 #
-#     unique       true in IDField, OneToOneField, AutoField
-#     db_index     true in IDField, OneToOneField, SlugField
+#     unique       true in IDField, OneToOneField
+#     db_index     true in IDField, OneToOneField, SlugField, ForeignKey
 #     editable     true in CharField, PasswordField, FileField, UUIDField, URLField, SlugField, JSONField
-#     primary_key  true in IDField, AutoField      (`nothing` = the constructor does not accept it)
+#     primary_key  true in IDField                 (`nothing` = the constructor does not accept it)
 #
 # Passing them explicitly makes each deviation visible at the call site, where previously it hid
 # inside a `get(kwargs, …)` line identical to its neighbours. `test_field_kwargs_equivalence.jl`
@@ -763,82 +764,62 @@ function OneToOneField(to::Union{String, PormGModel}; kwargs...)
   )
 end
 
-mutable struct sAutoField <: PormGField
-  verbose_name::Union{String, Nothing}
-  primary_key::Bool
-  auto_increment::Bool
-  unique::Bool
-  blank::Bool
-  null::Bool
-  db_index::Bool
-  db_column::Union{String, Nothing}
-  default::Union{Int64, Nothing}
-  editable::Bool
-  type::String
-  formatter::Function
-end
-
 """
     AutoField(; kwargs...)
 
-A field type for auto-incrementing integer primary keys, equivalent to PostgreSQL's SERIAL columns.
+**Retired (#408). Use [`IDField`](@ref).** Calling this raises `FieldValidationError`.
 
-The `AutoField` is designed for auto-incrementing integer primary keys and automatically generates unique integer values for each record. Unlike `IDField` which uses BIGINT, `AutoField` uses INTEGER type and is suitable for applications that don't require the extended range of BIGINT values.
+`AutoField` was documented as a 32-bit auto-incrementing integer primary key — "INTEGER with SERIAL
+auto-increment". It never was one. `Dialect._get_column_type` had no `sAutoField` branch on either
+backend, so the field fell through to the `else` and emitted a **`TEXT`** column, on PostgreSQL and
+SQLite alike, with no sequence, identity, or `AUTOINCREMENT` behind it. A model keyed on it produced
+a text primary key that nothing could allocate, and `makemigrations` could never converge, because
+what the field declared and what introspection read back could not agree.
 
-# Keyword Arguments
-- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
-- `primary_key::Bool = true`: Whether this field is the primary key for the table
-- `auto_increment::Bool = true`: Whether the field should auto-increment (generate values automatically)
-- `unique::Bool = true`: Whether values in this field must be unique across all records
-- `blank::Bool = false`: Whether the field can be left blank in forms (not applicable for auto fields)
-- `null::Bool = false`: Whether the database column can store NULL values
-- `db_index::Bool = false`: Whether to create a database index on this field (primary keys are automatically indexed)
-- `default::Union{Int64, Nothing} = nothing`: Default value for the field (rarely used with auto-increment)
-- `editable::Bool = false`: Whether the field should be editable in forms (typically false for auto fields)
+It is retired rather than repaired because repairing it buys almost nothing and costs a whole class
+of defect (#409). `IDField` is the only integer key type PormG's introspection reads back, so any
+other one is condemned to a perpetual `ALTER` on every `makemigrations`. On SQLite the distinction is
+not even physical: `INTEGER PRIMARY KEY` is a 64-bit rowid alias, so an `AutoField` column and an
+`IDField` column are byte-identical. The saving was four bytes per row, on one backend, for a type
+that had never worked — and the Django importer had already been routed away from it for exactly
+these reasons (#399, `DJANGO_AUTO_KEY_TYPES`).
 
-# Database Mapping
-- **PostgreSQL Type**: INTEGER with SERIAL auto-increment
-- **Auto-increment**: Supported through PostgreSQL's SERIAL type (sequence-based)
-- **Index**: Automatically indexed as primary key
-- **Range**: 32-bit signed integers (-2,147,483,648 to 2,147,483,647)
+This stub exists so a consuming app fails at the declaration with an actionable message instead of an
+`UndefVarError` from a generated models file. It is a pre-publish migration aid and is removed before
+the first General-registry release; see `UPGRADING.md`.
 
-# AutoField vs IDField Comparison
-| Feature | AutoField | IDField |
-|---------|-----------|---------|
-| **Database Type** | INTEGER (SERIAL) | BIGINT (BIGSERIAL/IDENTITY) |
-| **Range** | 32-bit (-2B to 2B) | 64-bit (-9Q to 9Q) |
-| **Storage** | 4 bytes | 8 bytes |
-| **Generation** | Sequence-based | Identity columns or sequence |
-| **Use Case** | Small to medium apps | Large-scale applications |
+# Migration
 
+```julia
+# before
+Part_category = Models.Model(
+    id   = Models.AutoField(),
+    name = Models.CharField(max_length = 100)
+)
 
-# When to Use AutoField vs IDField
+# after
+Part_category = Models.Model(
+    id   = Models.IDField(),
+    name = Models.CharField(max_length = 100)
+)
+```
 
-**Use AutoField when:**
-- Building small to medium-sized applications
-- You don't expect more than ~2 billion records
-- Storage efficiency is important (4 bytes vs 8 bytes per ID)
-- Working with legacy systems that expect INTEGER primary keys
-- Building lookup tables, categories, or reference data
-
-**Use IDField when:**
-- Building large-scale applications with potential for massive growth
-- You need the extended range of 64-bit integers
-- Working with data warehouses or analytics platforms
-- Future-proofing against scale requirements
-- Using modern PostgreSQL features like identity columns
+`IDField` is BIGINT rather than INTEGER, but an existing PostgreSQL table whose key really is
+`integer` keeps that column: PormG compares the field's declared `type` slot, not the rendered width.
+Two caveats, both covered in `UPGRADING.md` — a key that is not an IDENTITY column still attracts an
+`ADD GENERATED BY DEFAULT AS IDENTITY` (a pre-existing `:generated` mismatch), and a column a real
+`AutoField` created is `text`. PostgreSQL refuses that as an identity column, so the migration
+errors; **SQLite does not refuse it** — it rebuilds the table into `INTEGER PRIMARY KEY
+AUTOINCREMENT`, which aborts on a non-numeric key and silently renumbers a zero-padded one
+(`'0042'` becomes `42`). Re-type such a column by hand.
 """
 function AutoField(; kwargs...)
-  (; verbose_name, unique, blank, null, db_index, db_column, editable, primary_key, auto_increment) =
-    _common_kwargs("AutoField", kwargs; primary_key = true, unique = true, bools = (auto_increment = true,))
-
-  default = get(kwargs, :default, nothing)
-
-  # Validate default
-  default = validate_default(default, Union{Int64, Nothing}, "AutoField", format2int64)
-  # Return the field instance
-
-  return sAutoField(verbose_name, primary_key, auto_increment, unique, blank, null, db_index, db_column, default, editable, "INTEGER", format_number_sql)
+  throw(_fielderr(
+    "AutoField was retired in #408 — use IDField() instead. It never rendered an INTEGER column: " *
+    "`Dialect._get_column_type` had no branch for it, so it emitted TEXT on both backends with no " *
+    "auto-increment, and a model keyed on it could never converge under `makemigrations`. " *
+    "IDField is BIGINT and is the only integer key type PormG's introspection reads back. " *
+    "See UPGRADING.md."))
 end
 
 mutable struct sCharField <: PormGField

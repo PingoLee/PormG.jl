@@ -326,7 +326,7 @@ All changes are automatically reloaded and available in the next REPL command.
 
 PormG provides comprehensive field types for all common database scenarios:
 
-- **Primary Key Fields**: `IDField`, `AutoField`
+- **Primary Key Fields**: `IDField` (`CharField`, `UUIDField`, `ForeignKey` and `OneToOneField` also accept `primary_key=true`)
 - **Text Fields**: `CharField`, `TextField`, `EmailField`
 - **Numeric Fields**: `IntegerField`, `BigIntegerField`, `FloatField`, `DecimalField`
 - **Date/Time Fields**: `DateField`, `DateTimeField`, `TimeField`, `DurationField`

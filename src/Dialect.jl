@@ -453,7 +453,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sOneToOneField, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
 
 """
     _format_default_sql_value(default_value, conn) -> String
@@ -571,6 +571,13 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa sForeignKey
     return type_map[field.type]
+  elseif field isa sOneToOneField
+    # A one-to-one IS a foreign key with a UNIQUE constraint; its column is the referenced key's
+    # type, exactly like `sForeignKey` (`.type` is `"BIGINT"` on both structs). Before #408 this
+    # had no branch at all and fell through to the `else` below, so every OneToOneField column
+    # rendered `text` — and, being neither `sForeignKey` nor a `db_constraint` the SQLite
+    # CREATE TABLE path recognised, carried no FOREIGN KEY clause either.
+    return type_map[field.type]
   elseif field isa sUUIDField
     return type_map[field.type]
   elseif field isa sJSONField
@@ -620,6 +627,8 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sForeignKey
     return sql_type
+  elseif field isa sOneToOneField
+    return sql_type   # see the PostgreSQL branch above (#408)
   elseif field isa sUUIDField
     return sql_type
   elseif field isa sJSONField
@@ -668,9 +677,11 @@ _byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
 # ── Physical-column identity (#325) ──────────────────────────────────────────────────────────────
 #
 # Several Julia field types materialize the SAME column. On PostgreSQL `CharField`, `URLField` and
-# `SlugField` all render `varchar(n)`, and `EmailField`/`PasswordField`/`ImageField`/`AutoField`/
-# `OneToOneField` all fall through `_get_column_type`'s `else` to `text`; on SQLite the collapse is
-# wider still — `UUIDField`, `JSONField`, `TextField` and `ImageField` are all bare `TEXT`.
+# `SlugField` all render `varchar(n)`, and `EmailField`/`PasswordField`/`ImageField` all fall through
+# `_get_column_type`'s `else` to `text`; on SQLite the collapse is wider still — `UUIDField`,
+# `JSONField`, `TextField` and `ImageField` are all bare `TEXT`.
+# (`AutoField` and `OneToOneField` used to be in that `else` list too. #408 gave `OneToOneField` its
+# own branch and retired `AutoField`, so neither is a text-renderer any more.)
 #
 # Introspection therefore CANNOT reproduce the declared Julia type: the information is not in the
 # schema to read. Making it reproducible would mean encoding the type into the DDL (extra CHECK
@@ -685,7 +696,7 @@ _byte_length_check_clause(col_name, max_length::Int, ::PormGSQLite)::String =
 #
 # Case-folded because SQL type names are case-insensitive and PormG's own rendering is not
 # self-consistent about it: the `else` fallthrough shared by ImageField/FileField/EmailField/
-# PasswordField/AutoField/OneToOneField returns the literal `"TEXT"`, while `TextField` goes through
+# PasswordField returns the literal `"TEXT"`, while `TextField` goes through
 # the map and returns `"text"` on PostgreSQL. Both produce the same `text` column — comparing the
 # strings verbatim would call them different and churn forever, which is the very bug being fixed.
 _column_signature(field::PormGField, conn::Union{PormGPostgres,PormGSQLite}) = (
@@ -885,7 +896,10 @@ function create_table(conn::PormGSQLite, model::PormGModel)
 
   # Add foreign key constraints for SQLite during CREATE TABLE
   for (field_name, field) in model.fields
-    if field isa sForeignKey && field.db_constraint
+    # #408: `sOneToOneField` is NOT a subtype of `sForeignKey` — both are bare `PormGField` — so an
+    # `isa sForeignKey` gate silently emitted no constraint for a one-to-one. The ALTER paths in
+    # `planner.jl` already gate on `hasfield(:to)` and so always covered both.
+    if field isa Union{sForeignKey, sOneToOneField} && field.db_constraint
       on_delete_str = _foreign_key_on_delete_sql(field.on_delete)
       # Local FK column and referenced parent column both honor db_column (#50).
       local_col = field_db_column(field, string(field_name))
@@ -1163,7 +1177,7 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
 
   # Add foreign key constraints (local + referenced columns honor db_column — #50)
   for (f_name, f) in model.fields
-    if f isa sForeignKey && f.db_constraint
+    if f isa Union{sForeignKey, sOneToOneField} && f.db_constraint   # #408, as in `create_table`
       on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
       local_col = field_db_column(f, string(f_name))
       target_pk = fk_target_column(f)

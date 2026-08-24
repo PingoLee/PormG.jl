@@ -147,7 +147,7 @@ ON CONFLICT ("statusid") DO UPDATE SET "status" = EXCLUDED."status"
 
 Do not prefill an auto-increment primary key with `max(id) + 1` before calling `bulk_insert()` or `bulk_copy()`.
 
-- If the model uses `IDField()` or `AutoField()` and the DataFrame omits the primary key column, PormG leaves that field out of the SQL and lets the database allocate ids through its native sequence, identity, or autoincrement mechanism.
+- If the model uses `IDField()` and the DataFrame omits the primary key column, PormG leaves that field out of the SQL and lets the database allocate ids through its native sequence, identity, or autoincrement mechanism.
 - If the DataFrame includes the primary key column but every value is blank (`missing`, `nothing`, or an empty string), PormG treats that column as omitted for bulk inserts and COPY as well.
 - If you want to load explicit primary key values, provide a value for every row. Mixed blank and explicit values are rejected because the bulk path cannot safely express a row-by-row mix of generated and manual ids.
 

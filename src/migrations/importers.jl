@@ -1724,7 +1724,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       #     most PormG field types refuse `primary_key` and construct with `false` — and injecting
       #     `id` there would name a column the Django table does not have;
       #   - the declaration alone misses `codigo = models.AutoField()`, which declares nothing but
-      #     builds a field that IS the key, because PormG's `AutoField` defaults `primary_key = true`.
+      #     builds a field that IS the key, because the `IDField` it maps to (DJANGO_AUTO_KEY_TYPES,
+      #     below) defaults `primary_key = true`.
       # `get_model_pk_field`, which reads this model downstream, sees only the first.
       built_pk = any(f -> f.primary_key, values(fields_dict))
       if !built_pk && isempty(declared_pk)
@@ -1742,8 +1743,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         @warn "import: a declared primary key is a field type PormG cannot key on; the column is imported without it" class=class_label fields=join(lost_pk, ", ") model_still_has_a_key=built_pk
         push!(markers, "# PormG: '$(class_label)' declares its primary key on " *
                        join(("'$(f)'" for f in lost_pk), ", ") *
-                       " — a field type PormG cannot make a primary key (only IDField, AutoField, " *
-                       "CharField, UUIDField, ForeignKey and OneToOneField can), so the column is " *
+                       " — a field type PormG cannot make a primary key (only IDField, CharField, " *
+                       "UUIDField, ForeignKey and OneToOneField can), so the column is " *
                        "imported WITHOUT it. " *
                        (built_pk ?
                           "Another field on this model is a primary key, so PormG keys it on that " *
@@ -3631,7 +3632,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     # again. `field_type` — the mapped name — exists for the CONSTRUCTOR lookup and nothing else.
     # They differ only for the names in `DJANGO_AUTO_KEY_TYPES`; for every other type the map is the
     # identity and the two are the same string. `AutoField` is why this separation is not academic:
-    # it is a name BOTH vocabularies use, for two different field types.
+    # it is a name Django uses for a type PormG deliberately no longer provides (#408), so the two
+    # vocabularies have to stay addressable apart.
     django_type = String(parsed.type)
     field_type = django_field_type(django_type)
     field_args_str = parsed.args
@@ -3779,11 +3781,12 @@ end
 #     `planner.jl` pushes `:type`, and `makemigrations` proposes the same ALTER on that column on
 #     every single run, forever.
 #
-# `AutoField` (#399) is the counter-intuitive entry: PormG HAS a field by that name, so mapping the
-# Django type onto it is the obvious move and it is the wrong one — `sAutoField` is not a fixed
-# point of the introspection above. The synthetic `id` this file injects has always used `IDField`
-# for the same reason; these mappings just stop a DECLARED key from being treated worse than an
-# undeclared one.
+# `AutoField` (#399) was the counter-intuitive entry while PormG still HAD a field by that name:
+# mapping the Django type onto it looked obvious and was wrong, because `sAutoField` was not a fixed
+# point of the introspection above. #408 retired that type outright — `Models.AutoField()` now
+# raises — so the temptation is gone and this is simply the only mapping available. The synthetic
+# `id` this file injects has always used `IDField` for the same reason; these mappings just stop a
+# DECLARED key from being treated worse than an undeclared one.
 #
 # `BigAutoField` and `SmallAutoField` had no PormG counterpart at all, and
 # `getfield(Models, :BigAutoField)` used to abort the import of the WHOLE file — every other model

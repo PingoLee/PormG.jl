@@ -6,6 +6,14 @@ using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue,
 struct WindowMockPostgres <: PormG.PormGPostgres end
 struct WindowMockSQLite <: PormG.PormGSQLite end
 
+# SQLite window support is gated behind a live version probe (`_assert_sqlite_window_support` →
+# `backend_sqlite_version`), which throws "requires SQLite" unless the extension is loaded. Under
+# `runtests.jl` it is, via `test/load_drivers.jl`; run this file on its own — as the issue workflow's
+# rung-2 slice does — and the LAG testset errored instead. Pinning a version here makes the file
+# self-contained on both paths, the same stub `test_cte_db_column.jl` and `test_order_by_joins.jl`
+# use for ORDER BY's NULL-placement probe. 3.28 is the floor window functions need.
+PormG.backend_sqlite_version(::WindowMockSQLite) = 3045000
+
 PormG.config["window_pg"] = PormG.Configuration.Settings(
   connections=WindowMockPostgres(),
   change_data=true

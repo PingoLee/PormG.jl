@@ -301,6 +301,41 @@ end
 # mutation gate. It uses the permanent `bulk_update_payload_scratch` fixture (nullable_int
 # column) with try/finally cleanup so the F1 tables are untouched.
 # ─────────────────────────────────────────────────────────────────────────────
+# Ordering: a join path named ONLY by order_by() — neither projected nor filtered (#404)
+# The pre-fix failure was at EXECUTION, not in the rendered string: `get_order_query` ran after
+# `build_row_join_sql_text`, so the join it discovered was never emitted and the ORDER BY named an
+# alias nothing declared — PostgreSQL `missing FROM-clause entry for table "tb_1"`, SQLite
+# `no such column`. Rendering coverage is in `test/unit/test_order_by_joins.jl`; this asserts the
+# query actually runs and orders correctly on a real database, on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "order_by on an unprojected, unfiltered join path executes (#404)" begin
+    # `driverid__surname` appears ONLY in order_by — not in values(), not in filter(). That is the
+    # exact trigger; adding either would take the `instruc.cache` branch and mask the defect.
+    # `resultid` is the tiebreaker, so the ordering is total and the two queries below are
+    # comparable even where surnames repeat.
+    ordered = M.Result.objects
+    ordered.values("resultid")
+    ordered.order_by("driverid__surname", "resultid")
+    ordered.limit(25)
+    ordered_df = ordered |> DataFrame
+
+    @test nrow(ordered_df) == 25
+
+    # Oracle: the SAME ordering with the path also projected — the shape that always worked, because
+    # `get_select_query` built and cached the join before ORDER BY ever looked. If the unprojected
+    # query joined correctly, the two must agree row for row. Comparing against a live query rather
+    # than hardcoded surnames also keeps this independent of backend collation.
+    projected = M.Result.objects
+    projected.values("resultid", "surname" => "driverid__surname")
+    projected.order_by("driverid__surname", "resultid")
+    projected.limit(25)
+    projected_df = projected |> DataFrame
+
+    @test ordered_df.resultid == projected_df.resultid
+    # The join really produced driver rows — a NULL-filled column would satisfy the equality above.
+    @test all(s -> s !== missing && !isempty(s), projected_df.surname)
+end
+
 @testset "ORDER BY NULL placement normalized across backends (#75)" begin
     # Scratch helpers are loaded in-suite by runtests.jl; load them for standalone runs too.
     if !isdefined(Main, :_clear_bulk_update_scratch_rows!)

@@ -158,10 +158,12 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
   # ORDER BY must resolve the CTE column FRESHLY, so the ordered column is deliberately neither
   # projected nor filtered: `get_order_query` reuses `instruc.cache` when the same path was already
   # resolved (build_query.jl:138), and `get_filter_query` runs first — so filtering `ev__seen` here
-  # would silently test the filter's selector instead. `ev__sku` is filtered only to emit the JOIN:
-  # a CTE column referenced ONLY by order_by registers the alias without emitting one, a separate
-  # pre-#376 defect that also hits plain FK paths (`order_by("fk__col")`) on models with no
-  # db_column at all — this file must not depend on it, so the join is asserted too.
+  # would silently test the filter's selector instead. `ev__sku` is filtered to keep the ordered and
+  # the resolved-elsewhere column distinct; it is NO LONGER needed to emit the JOIN. It once was: a
+  # CTE column referenced only by order_by registered the alias without emitting a join, a defect
+  # that also hit plain FK paths on models with no db_column, fixed in #404 by resolving ORDER BY
+  # before `build_row_join_sql_text` renders. The join is still asserted here, and the unfiltered
+  # shape this testset used to avoid is covered directly in `test_order_by_joins.jl`.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "order_by() sorts on the CTE alias" begin
     cte = CDC.Cdc_parent.objects

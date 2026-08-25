@@ -316,6 +316,14 @@ Notes:
 - **Cartesian-product guard.** Referencing a CTE column with *no* constraining filter is a
   Cartesian product; PormG emits a `@warn` naming the CTE. Add a correlating `filter(...)`, or
   pass `join_field`.
+- **Give a CTE a name that collides with nothing.** Two collisions bite. A **model field**: join
+  resolution consults the CTE registry *before* the model's own fields, so `.with("raceid" => …)` on
+  a model that *has* a `raceid` foreign key makes `raceid__*` mean the CTE, and the field's real join
+  is shadowed silently. A **join key**: a `cjoin` path, a `cjoin_on` alias, or an `on()` path spelled
+  the same way hands that join's predicates to the CTE. When an `ON` predicate ends up on an unkeyed
+  (CROSS-joined) CTE either way, PormG refuses the query rather than dropping the predicate and
+  matching every row (#424) — a `CROSS JOIN` has no `ON` clause to carry one. Rename the CTE, or give
+  it a `join_field` so it emits a real `ON` clause.
 
 ---
 

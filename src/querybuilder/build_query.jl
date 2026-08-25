@@ -281,6 +281,16 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   return nothing
 end
 
+# One resolved cjoin ON condition: the rendered SQL fragment and the positional parameter values it
+# bound. The two MUST travel together (#421). Phase 1b below can move a fragment onto a different
+# join, and on a positional backend a value's INDEX in the `:join` bucket IS its binding — so a
+# fragment whose text moved while its values stayed put bound its neighbour's value. Silently wrong
+# rows on SQLite; PostgreSQL was always correct, because `$N` numbering travels with the text.
+struct OnExtra
+  sql::String
+  params::Vector{Any}
+end
+
 function build_row_join_sql_text(instruc::SQLInstruction)
   @pormg_debug false
 
@@ -289,7 +299,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # create additional join entries in instruc.row_join via _build_row_join.
   # By pre-resolving with an index-based loop we process newly created entries
   # in order and store the generated SQL fragments for Phase 2.
-  on_clause_extras = Dict{Int, Vector{String}}()
+  on_clause_extras = Dict{Int, Vector{OnExtra}}()
   i = 1
   while i <= length(instruc.row_join)
     value = instruc.row_join[i]
@@ -299,17 +309,58 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       on_conditions = value["on_conditions"]::Vector{FilterType}
       alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
       original_alias = instruc.alias
-      extras = String[]
+      extras = OnExtra[]
 
       no_anchor = get(value, "no_anchor", "") == "1"
       for condition in on_conditions
+        # #421: lift the values this condition binds straight back out of the bucket. Phase 1b may
+        # still move the fragment, so nothing resolved here has a final clause position yet; Phase 2
+        # puts the values back at the point of emission.
+        #
+        # The mark/detach pair captures exactly this condition's run because the bucket it marks is
+        # the bucket every value lands in. Being precise about WHY, since the obvious phrasing —
+        # "nothing reachable from here switches context" — is false:
+        #
+        #   - The plain shapes (eq, @range, @contains, Q, Qor, F) never switch context at all. `@in`
+        #     does when its right side is a SUBQUERY that itself declares a `.with(...)`: that renders
+        #     through `build_cte_clause`, which switches to `:cte` and binds there. Both `?` end up in
+        #     the JOIN text while both values end up in `:cte`, so the mark (holding the `:join`
+        #     vector) correctly lifts NOTHING and the OnExtra carries markers with no params.
+        #     >> RESIDUAL #421 HOLE, not closed here. Those values do not travel with their text, so
+        #        relocating such a fragment desynchronizes them exactly as #421 did. It already
+        #        misbinds with no relocation at all: an ON list of
+        #        `["id__@gt" => 7, "parent__@in" => <subquery with a .with(...)>]` binds SQLite
+        #        ["CTEVAL","SUBVAL",7] against PostgreSQL's [7,"CTEVAL","SUBVAL"], because `:cte`
+        #        flattens before `:join` while the text order is the reverse. Different root cause
+        #        (bucket choice, not fragment movement); `OnExtra` neither causes nor repairs it.
+        #   - `Exists(...)` — which a `cjoin_on` ON expression DOES accept, though a keyed cjoin's
+        #     `filters` reject it — runs a NESTED build, and that build's own join render calls
+        #     `set_context!(:join)` UNGATED even under `set_contexts=false`. So context does move.
+        #     It is harmless here for a specific reason: the ambient context in this loop already IS
+        #     `:join`, and `_build_exists_query` restores the ambient one in a `finally` on both the
+        #     normal and the throwing exit. The invariant is therefore "the same bucket vector", not
+        #     "no switching happened" — which is exactly why the mark holds the bucket VECTOR rather
+        #     than the context symbol. A future shape that switched to a DIFFERENT bucket and failed
+        #     to restore it detaches nothing here instead of lifting an unrelated run.
+        #   - Nothing reachable from `_build_row_join` binds a parameter: `build_joins.jl` has no
+        #     `add_parameter!` at all, and `ctes.jl`'s only binding site is `build_cte_clause`, which
+        #     JOIN RESOLUTION never calls (its callers are in `execution.jl`, ahead of `build()`).
+        #     Note the careful scope — `build_cte_clause` IS reachable from `_get_filter_query`, just
+        #     not from join resolution: that is the `@in`-over-a-CTE-subquery case above.
+        #
+        # KNOWN LIMIT, neither caused nor repaired here: inside an `Exists(...)`, the nested query's
+        # own ON and WHERE parameters are already bound in the wrong order relative to its rendered
+        # text (same root cause — the ungated `:join` switch — but on the subquery's own values).
+        # `OnExtra` carries that run faithfully, preserving whatever order it arrived in.
+        mark = parameter_mark(instruc)
         condition_sql = _get_filter_query(condition, instruc)
+        condition_params = detach_parameters!(mark)
         # #45: anchor-less cjoin_on conditions already carry explicit aliases (bare F = base alias,
         # F("b2.col") = the joined copy), so skip the single-side base-alias remap the FK path needs.
         if !no_anchor
           condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
         end
-        push!(extras, condition_sql)
+        push!(extras, OnExtra(condition_sql, condition_params))
       end
 
       instruc.alias = original_alias
@@ -336,12 +387,12 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # ON condition onto the existing entry instead of creating one, so the old window was empty and
   # the extra stayed on the wrong join. Keying on index order covers every case uniformly.
   #
-  # KNOWN GAP, not closed here: relocation changes the order extras are EMITTED in, while Phase 1
-  # bound their parameters in row_join order. PostgreSQL is unaffected ($N travels with the text),
-  # but a positional backend flattens the :join bucket in binding order, so a relocated extra can
-  # bind its neighbour's value. Reproduce with two cjoin filters at different depths
-  # (`["grandparent__code" => "ZZZ", "sku" => "SSS"]`). This pre-dates the change above; the change
-  # widens which shapes relocate, so it widens the exposure. Tracked in #421.
+  # Relocation changes the order extras are EMITTED in, and on a positional backend that used to
+  # desynchronize the parameter bucket: Phase 1 bound in row_join order, Phase 2 emitted in
+  # relocated order, and nothing reconciled the two, so a relocated extra bound its neighbour's
+  # value (#421). Each extra now carries its own values and Phase 2 re-appends them as it emits,
+  # which makes binding order and emission order the same thing by construction. PostgreSQL never
+  # had the problem — `$N` numbering travels with the text.
   for idx in 1:length(instruc.row_join)
     haskey(on_clause_extras, idx) || continue
     extras = on_clause_extras[idx]
@@ -361,8 +412,8 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # alias that happens to share a column's name (`alias = "code"` against `"Tb_2"."code"`)
         # then drags an unrelated join's ON filter onto itself. That is valid SQL returning wrong
         # rows, silently. Phase 1 above already keys on the same `"alias".` form (:310).
-        if occursin("\"$(instruc.row_join[dep_idx]["alias_b"])\".", extra)
-          haskey(on_clause_extras, dep_idx) || (on_clause_extras[dep_idx] = String[])
+        if occursin("\"$(instruc.row_join[dep_idx]["alias_b"])\".", extra.sql)
+          haskey(on_clause_extras, dep_idx) || (on_clause_extras[dep_idx] = OnExtra[])
           push!(on_clause_extras[dep_idx], extra)
           relocated[ei] = true
           break
@@ -387,15 +438,47 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     # the correlation is supplied by the main query's F() filter(s) in WHERE. Emit it and move on
     # before touching key_a/key_b (empty strings would fail identifier validation).
     if get(value, "cross", nothing) !== nothing
+      # #424: ...and it is the ONE branch below with no ON clause to merge `on_clause_extras[idx]`
+      # into, so a predicate that lands here simply vanishes.
+      #
+      # Do NOT enumerate call shapes here. That list was written twice and was wrong twice — first
+      # "unreachable", then "two shapes", and both missed producers. State the INVARIANT instead:
+      # `on_clause_extras[idx]` reaches a CROSS entry either because Phase 1b relocated a fragment
+      # that names its alias, or because the entry carries its own `on_conditions` — and it carries
+      # those exactly when `custom_join[<cte name>]` exists with non-empty filters. `custom_join` is
+      # written at three unrelated sites, keyed by a `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()`
+      # PATH, so any of the three colliding with an unkeyed CTE's name produces this — with or
+      # without a model-field collision, and with or without any relocation. A fourth writer would
+      # inherit the same behavior, which is why the message below talks about name collision rather
+      # than about which method the caller used.
+      #
+      # Pre-fix every one of them emitted an unconstrained `CROSS JOIN` with the predicate gone — row
+      # multiplication, no error — while the orphaned value sat in the bucket with no `?` to consume
+      # it. #421 makes it worse before this makes it better: once values travel with the text, the
+      # orphan disappears too and the wrong query becomes perfectly well-formed. So fail closed, the
+      # same posture `_get_join_condition_list` takes on this marker (#394).
+      haskey(on_clause_extras, idx) && throw(QueryBuildError(
+        "An ON predicate resolved onto \e[4m\e[31m$(value["alias_b"])\e[0m, the CROSS-joined CTE " *
+        "\e[4m\e[31m$(value["b"])\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
+        "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
+        "would be dropped and the join would match every row.\n  A CROSS-joined CTE picks up an ON " *
+        "predicate when its NAME collides with a join key — a \e[4m\e[32mcjoin\e[0m path, a " *
+        "\e[4m\e[32mcjoin_on\e[0m alias, or an \e[4m\e[32mon()\e[0m path — or when a predicate " *
+        "naming its alias is relocated onto it.\n  Rename the CTE so it collides with nothing, give " *
+        "it a \e[4m\e[32mjoin_field\e[0m so it emits a real ON clause, or move the predicate to " *
+        "\e[4m\e[32m.filter(...)\e[0m (#44)."))
       push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
       continue
     end
 
     if get(value, "no_anchor", "") == "1"
       # #45: anchor-less join — the ON clause is entirely the user's resolved extras (no equi-anchor).
-      extras = get(on_clause_extras, idx, String[])
+      extras = get(on_clause_extras, idx, OnExtra[])
       isempty(extras) && throw(QueryBuildError("cjoin_on produced no ON conditions for alias '$(value["alias_b"])'."))
-      on_clause = join(extras, " AND ")
+      on_clause = join((e.sql for e in extras), " AND ")
+      for extra in extras
+        reattach_parameters!(instruc, extra.params)   # #421: bind in EMISSION order
+      end
     else
       alias_a_quoted = quote_identifier(value["alias_a"], instruc.connection)
       # #394: escape-only, because on every model-join branch these are PHYSICAL columns
@@ -411,10 +494,13 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       # Build base ON clause
       on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
 
-      # Append pre-resolved ON condition fragments
+      # Append pre-resolved ON condition fragments, re-binding each as it is emitted (#421). This
+      # loop runs in `row_join` order across joins and in vector order within one, which is exactly
+      # the order the rendered `?` markers appear in; nothing else in Phase 2 touches the bucket.
       if haskey(on_clause_extras, idx)
         for extra in on_clause_extras[idx]
-          on_clause *= " AND $extra"
+          on_clause *= " AND $(extra.sql)"
+          reattach_parameters!(instruc, extra.params)
         end
       end
     end

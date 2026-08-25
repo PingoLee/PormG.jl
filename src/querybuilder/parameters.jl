@@ -120,6 +120,50 @@ end
 set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== nothing ? set_context!(instruc.parameters, context) : nothing
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Detachable parameter runs (#421)
+#
+# A SQL fragment that is RENDERED in one order and EMITTED in another needs its positional values
+# to travel with it. `build_row_join_sql_text` is the case: Phase 1 resolves every cjoin ON
+# condition (binding as it goes), Phase 1b may relocate a fragment onto a later join, and Phase 2
+# emits in `row_join` order — so a value's INDEX in the `:join` bucket stopped matching its `?`,
+# and a relocated condition bound its neighbour's value.
+#
+# `parameter_mark` records the ACTIVE bucket and its length, `detach_parameters!` lifts everything
+# pushed since, and `reattach_parameters!` appends once the fragment's clause position is final.
+# The mark holds the bucket VECTOR, not the context symbol: a fragment whose resolution switched
+# context and failed to restore it then detaches nothing, rather than deleting an unrelated run.
+#
+# All no-ops on numbered backends. PostgreSQL's `$N` numbering already travels with the text, which
+# is exactly why #421 was SQLite-only.
+# ─────────────────────────────────────────────────────────────────────────────
+const ParameterMark = Tuple{Union{Nothing,Vector{Any}},Int}
+
+_positional_bucket(::PormGPostgresParam) = nothing
+_positional_bucket(sq::PormGSQLiteParam) = _current_bucket(sq)
+_positional_bucket(instruc::SQLInstruction) =
+  instruc.parameters === nothing ? nothing : _positional_bucket(instruc.parameters)
+
+function parameter_mark(instruc::SQLInstruction)::ParameterMark
+  bucket = _positional_bucket(instruc)
+  return (bucket, bucket === nothing ? 0 : length(bucket))
+end
+
+function detach_parameters!(mark::ParameterMark)::Vector{Any}
+  bucket, len = mark
+  (bucket === nothing || length(bucket) <= len) && return Any[]
+  values = bucket[len+1:end]
+  deleteat!(bucket, len+1:length(bucket))
+  return values
+end
+
+function reattach_parameters!(instruc::SQLInstruction, values::Vector{Any})
+  isempty(values) && return nothing
+  bucket = _positional_bucket(instruc)
+  bucket === nothing || append!(bucket, values)
+  return nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # add_parameter!  – push a value and return the placeholder string
 # ─────────────────────────────────────────────────────────────────────────────
 

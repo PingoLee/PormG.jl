@@ -329,7 +329,13 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     Reference the joined copy with `F("alias.col")`. Alias-qualified **operator pairs**
     (`"b2.col__@gte" => 3`) are not supported yet — express a joined-side comparison-to-literal by
     restructuring, or filter the base side with a bare pair (`"col__@gte" => 3`). Referencing a
-    *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now.
+    *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now — and
+    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it now
+    raises `QueryBuildError` instead of quietly dropping the predicate (#424) — a `CROSS JOIN` has
+    no `ON` clause to carry one, so the join would otherwise match every row. The same guard fires
+    when a `cjoin_on`'s **alias** happens to equal an unkeyed CTE's name: that collision hands the
+    CTE this join's predicates. Rename the CTE, give it a `join_field`, or move the predicate to
+    `.filter(...)` (#44).
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
     table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74

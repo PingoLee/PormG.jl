@@ -340,15 +340,19 @@ co_localidade_endereco = Models.ForeignKey(Tb_localidade, …, related_name = "c
 ```
 
 
-## `AutoField` is retired, and introspection reports the real key type (#408, #409)
+---
+
+## `AutoField` is retired, and introspection reports the real field type (#408, #409, #417)
 
 - **Version**: Unreleased
-- **PormG ref**: #408, #409; `src/models/fields.jl`, `src/Dialect.jl`,
+- **Recorded**: 2026-08-25
+- **PormG ref**: #408, #409, #417; `src/models/fields.jl`, `src/Dialect.jl`,
   `src/migrations/introspection.jl`, `src/migrations/importers.jl`, `docs/src/fields.md`,
   `docs/src/models.md`, `docs/src/import_django.md`, `docs/src/write/bulk.md`
 - **Severity**: **breaking (source)** for anyone declaring `Models.AutoField()`, and **breaking
   (schema)** for any app that has a `varchar` primary key, a primary key that is also a foreign key,
-  or a `OneToOneField` column created by an older PormG. Apps keyed entirely on `IDField` with no
+  or a `OneToOneField` column created by an older PormG — and **source-advisory** for a models file
+  that spells a one-to-one as `ForeignKey(…, unique=true)`. Apps keyed entirely on `IDField` with no
   one-to-one relations — the common case — need no change at all. Part of the `0.5.x` wave.
 
 ### What changed
@@ -391,6 +395,42 @@ outright without a `USING` clause, so the migration errors instead of applying.
 A one-to-one column created by an older PormG therefore belongs in the ⚠️ check below alongside the
 key shapes.
 
+**Both readers now report a UNIQUE non-key foreign key as `OneToOneField` (#417).** PostgreSQL
+always did; SQLite returned `ForeignKey` by a deliberate #318 decision, taken because PormG could
+not then materialize a one-to-one at all — the objection the `_get_column_type` fix above removes.
+
+| live column | before | after |
+|---|---|---|
+| SQLite: `INTEGER UNIQUE REFERENCES parent(id)` | `ForeignKey(unique=true)` | `OneToOneField` |
+| PostgreSQL: `bigint UNIQUE REFERENCES parent(id)` | `OneToOneField` | `OneToOneField` (unchanged) |
+
+This does not fail, it churns — which is what makes it advisory rather than breaking. The two structs
+carry identical field-name sets, so `Models._compare_model_field` calls them equal and the planner's
+fast path returns early. But that fast path only holds while **nothing else in the table changes**.
+As soon as any other column differs, the planner runs its detailed loop, compares struct types, and
+pushes `:type` on a column that did not change — an `ALTER` that re-renders it identically, and a
+full table rebuild on SQLite, on every `makemigrations`, forever. Cheap to avoid, tedious to live
+with.
+
+So: if a models file spells a one-to-one as `ForeignKey(..., unique=true)`, rewrite it. That was
+the exposed spelling on PostgreSQL already; #417 makes SQLite agree, which is the point — but it
+does mean SQLite-only apps meet it for the first time.
+
+```julia
+# before — introspection reports `OneToOneField`, this says `sForeignKey`
+driver = Models.ForeignKey("Driver", unique = true, on_delete = "CASCADE")
+
+# after
+driver = Models.OneToOneField("Driver", on_delete = "CASCADE")
+```
+
+Closing this so that **neither** spelling churns is tracked in #437, and it needs two changes
+rather than one: `Dialect.describes_same_column` must stop refusing a pair where both sides are
+relational, **and** the planner's cross-type comparison branch must gain the `:to` / `:pk_field`
+reconciliations its same-type branch already has. Without that second half the churn only moves —
+a declared `.to` is a resolved model where the introspected one is a binding string, so the branch
+pushes `:to` instead of `:type` and SQLite rebuilds the table just the same.
+
 ### How to find the calls to migrate
 
 ```bash
@@ -405,6 +445,13 @@ grep -rn "IDField(" --include="*.jl" db/ src/
 # 3. Schema risk — one-to-one columns created by an older PormG (shape 2 below). These will NOT
 #    turn up in a key-focused audit: a OneToOneField is not a primary key.
 grep -rn "OneToOneField(" --include="*.jl" .
+
+# 4. Source-advisory (#417) — a one-to-one spelled as a unique ForeignKey. Rewrite each hit as
+#    OneToOneField(...); that is what both readers now report.
+grep -rn "ForeignKey(.*unique *= *true" --include="*.jl" .
+
+#    …and again for declarations wrapped across lines, which the one-line form above cannot see:
+grep -rn -A3 "ForeignKey($" --include="*.jl" . | grep "unique"
 ```
 
 For (2), the reliable check is not a grep but a dry run — see below.

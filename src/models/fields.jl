@@ -572,10 +572,30 @@ mutable struct sOneToOneField <: PormGField
   db_constraint::Bool
   initially_deferred::Bool
   # See `sForeignKey.to_table` above for why this slot exists and why it is not declared API (#360).
-  # It must exist on BOTH structs: the PostgreSQL introspection reader emits a `OneToOneField`
-  # whenever the foreign key column is also UNIQUE.
+  # It must exist on BOTH structs: since #417 BOTH schema readers emit a `OneToOneField` whenever
+  # the foreign key column is also UNIQUE, or is itself the primary key (#409).
   to_table::Union{String, Nothing}
 end
+
+# The two field types that declare a physical relational column on their OWN table: a foreign key,
+# and a one-to-one (which IS a foreign key carrying a UNIQUE constraint). Neither subtypes the other
+# — `PormGField` is the only abstract type above them — so `isa sForeignKey` silently misses a
+# one-to-one, and `::sForeignKey` throws on one. That single defect was found once per subsystem:
+# #408 in the DDL renderer and the planner guard, #409 in the schema readers, #418 in the query
+# builder. Spelling the pair ONCE is what stops a fourth.
+#
+# NOT the same set as `Dialect._is_relational_field`, which is `hasfield(typeof(f), :to)` and so also
+# admits `sManyToManyField`. An M2M declares no column here — no `pk_field`, no `on_delete`, no
+# `null` — so widening one of these gates to that predicate instead would trade a `MethodError`
+# for a crash one field access later. When a gate genuinely wants "any relation, M2M included", the
+# existing spelling is `Models.foreign_keys_in_model`'s: `hasfield(typeof(f), :to)` paired with
+# `!is_many_to_many_field(f)`.
+#
+# The `s` prefix follows the field-struct family this aliases, but it is a `Union`, not a struct:
+# `subtypes(PormGField)` never yields it, and `Model_to_str`'s `nameof(typeof(f))[2:end]` constructor-
+# name recovery never sees it either. Nothing enumerates field types by prefix, so the parallel
+# spelling costs nothing — but do not reach for it where a concrete struct is required.
+const sRelationalColumn = Union{sForeignKey, sOneToOneField}
 
 """
     OneToOneField(to::Union{String, PormGModel}; kwargs...)
@@ -687,14 +707,19 @@ ProductDetails = Models.Model(
 ```
 
 # Database Constraints vs. Unique ForeignKey
-OneToOneField is equivalent to:
+The two spellings produce the same physical column:
 ```julia
-# These are functionally identical:
+# The same column: the referenced key's type, UNIQUE, plus the foreign-key constraint.
 user = OneToOneField("User")
 user = ForeignKey("User", unique=true)
 ```
 
-However, OneToOneField is more explicit about the intended relationship type and provides better semantic meaning.
+`OneToOneField` is nonetheless the spelling to declare, and not only for readability: it is what
+**introspection reports** for such a column, on both PostgreSQL and SQLite (#417). Declaring
+`ForeignKey(..., unique=true)` leaves the models file naming a different struct than the live
+schema reads back, and while the two compare equal attribute-for-attribute, the migration planner
+falls back to a struct-type comparison as soon as any other column in that table changes — which
+proposes an `ALTER` that re-renders the column unchanged (a full table rebuild on SQLite).
 
 # Validation
 - The `to` parameter must be a valid model name or PormGModel instance

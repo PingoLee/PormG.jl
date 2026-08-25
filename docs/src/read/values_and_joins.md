@@ -70,10 +70,10 @@ WHERE "Tb_3"."status" = $1
     PormG uses table aliases (`Tb`, `Tb_1`, `Tb_2`, …) automatically. You never need to manage aliases yourself. Each joined table gets a sequential alias.
 
 !!! warning "No lazy FK traversal — project related columns up front"
-    PormG never lazily loads a related row. Accessing a ForeignKey you did not
-    project (`row.driverid`, or traversing further with `row.driverid.forename`)
-    raises a `LazyTraversalError`. Project what you need up front with `values(...)`,
-    then read it off the row by its key:
+    PormG never lazily loads a related row. Accessing a `ForeignKey` or `OneToOneField`
+    you did not project (`row.driverid`, or traversing further with
+    `row.driverid.forename`) raises a `LazyTraversalError`. Project what you need up
+    front with `values(...)`, then read it off the row by its key:
 
     ```julia
     # ✗ raises: driverid was not projected, and PormG won't lazily load it

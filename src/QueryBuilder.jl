@@ -7,6 +7,10 @@ import DataFrames, Tables, JSON, CSV, OrderedCollections
 import DataFrames: DataFrame
 using Dates, TimeZones, Decimals, UUIDs
 
+# `sForeignKey` is imported for `src/precompile.jl`, which warms `_determine_join_type` through
+# `QB.sForeignKey`; nothing in this module or `src/querybuilder/` names it any more, since the
+# FK/one-to-one gates spell the pair `Models.sRelationalColumn` (#418). Do not drop it as unused
+# without moving that precompile hint to `PormG.Models.sForeignKey` first.
 import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, sManyToManyField, sBinaryField
 import PormG: Dialect, Models
 import PormG: config

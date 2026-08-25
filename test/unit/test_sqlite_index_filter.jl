@@ -216,21 +216,30 @@ end
       @test !m.fields["ic"].unique
       @test m.fields["id"] isa PormG.Models.sIDField   # PK branch untouched (and immutable)
 
-      # A UNIQUE foreign key gets the `unique` flag like any other column, but STAYS a ForeignKey —
-      # SQLite deliberately does not mirror PostgreSQL's OneToOneField here (#318). PormG cannot
-      # materialize an O2O (`Dialect._get_column_type` has no branch for it, and the FK clause is
-      # gated on `isa sForeignKey`), so returning one would make the inspectdb round trip strictly
-      # worse: `INTEGER` + a foreign key becomes `TEXT` + no foreign key. Pinned so a future
-      # "let's mirror PG" change has to confront that first.
+      # A UNIQUE foreign key gets the `unique` flag like any other column AND, since #417, comes back
+      # as a `OneToOneField` — the same type the PostgreSQL reader has always produced for it.
+      #
+      # This assertion is the inverse of what it pinned under #318, and deliberately so. #318
+      # withheld the O2O because PormG could not materialize one: `Dialect._get_column_type` had no
+      # branch for it and the inline FK clause was gated on `isa sForeignKey`, so returning one made
+      # the inspectdb round trip strictly WORSE — `INTEGER` + a foreign key regenerated as `TEXT` +
+      # no foreign key. #408 fixed both halves, which removed the objection, and #417 took the
+      # decision the #318 comment said belonged in its own issue. The cross-reader agreement itself
+      # is asserted in `test_key_type_round_trip.jl`; what is pinned HERE is that the uniqueness
+      # signal this file is about (`_sqlite_single_column_unique_columns`) is what drives it.
       fetch(pool, "CREATE TABLE parent318 (id INTEGER PRIMARY KEY, nome TEXT);")
       fetch(pool, """CREATE TABLE child318 (
         id INTEGER PRIMARY KEY,
         o2o INTEGER UNIQUE REFERENCES parent318(id),
         fk  INTEGER REFERENCES parent318(id));""")
       c = convertSQLToModel(pool, "child318")
-      @test c.fields["o2o"] isa PormG.Models.sForeignKey
-      @test c.fields["o2o"].unique        # …the uniqueness IS read, which is what #318 fixes
+      @test c.fields["o2o"] isa PormG.Models.sOneToOneField
+      @test c.fields["o2o"].unique        # …the uniqueness IS read, which is what #318 fixed
+      @test !c.fields["o2o"].primary_key  # a one-to-one, not the pk-fk shape #409 covers
+      # The control that keeps the promotion honest: a NON-unique foreign key in the same table
+      # must stay a plain ForeignKey. Without this, "always return OneToOneField" would pass.
       @test c.fields["fk"]  isa PormG.Models.sForeignKey
+      @test !(c.fields["fk"] isa PormG.Models.sOneToOneField)
       @test !c.fields["fk"].unique
     finally
       close_pool!(pool)

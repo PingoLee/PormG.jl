@@ -2072,7 +2072,7 @@ function _row_update_pairs(updates::Dict{String,Any})
   return [field => updates[field] for field in sort(collect(keys(updates)))]
 end
 
-function _row_related_model(model::PormGModel, fk_meta::Models.sForeignKey)::PormGModel
+function _row_related_model(model::PormGModel, fk_meta::Models.sRelationalColumn)::PormGModel
   fk_meta.to isa PormGModel && return fk_meta.to
 
   model._module !== nothing || throw(QueryBuildError("Cannot resolve related model $(fk_meta.to) for $(model.name); model module is not initialized."))
@@ -2124,7 +2124,7 @@ function save(row::PormGRow; show_query::Symbol = :execute)
 
     if separator === nothing
       own_updates[normalized_string] = data[normalized]
-      if haskey(model.fields, normalized_string) && model.fields[normalized_string] isa Models.sForeignKey
+      if haskey(model.fields, normalized_string) && model.fields[normalized_string] isa Models.sRelationalColumn
         push!(touched_fk_fields, normalized)
       end
     else
@@ -2152,7 +2152,7 @@ function save(row::PormGRow; show_query::Symbol = :execute)
     end
 
     for fk_sym in sort(collect(keys(fk_updates)); by=String)
-      fk_meta = model.fields[String(fk_sym)]::Models.sForeignKey
+      fk_meta = model.fields[String(fk_sym)]::Models.sRelationalColumn
       if fk_meta.pk_field === nothing
         throw(QueryBuildError(
           "save() cannot update projected fields under '$(fk_sym)' because the FK's " *

@@ -47,7 +47,7 @@ function _plan_inspectdb_bindings!(models_array)::Dict{String, String}
 
   for model in models_array
     for (field_name, field) in pairs(model.fields)
-      (field isa Models.sForeignKey || field isa Models.sOneToOneField) || continue
+      field isa Models.sRelationalColumn || continue
       target_table = field.to_table
       # A hand-built model reaching an importer, or a relation introspection could not attribute to a
       # physical table. Nothing to improve on — leave the derived `.to` exactly as it was.

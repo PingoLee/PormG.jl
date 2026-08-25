@@ -453,7 +453,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sForeignKey, sOneToOneField, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField
 
 """
     _format_default_sql_value(default_value, conn) -> String
@@ -569,14 +569,13 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa sDurationField
     return type_map[field.type]
-  elseif field isa sForeignKey
-    return type_map[field.type]
-  elseif field isa sOneToOneField
+  elseif field isa sRelationalColumn
     # A one-to-one IS a foreign key with a UNIQUE constraint; its column is the referenced key's
-    # type, exactly like `sForeignKey` (`.type` is `"BIGINT"` on both structs). Before #408 this
-    # had no branch at all and fell through to the `else` below, so every OneToOneField column
-    # rendered `text` — and, being neither `sForeignKey` nor a `db_constraint` the SQLite
-    # CREATE TABLE path recognised, carried no FOREIGN KEY clause either.
+    # type, exactly like `sForeignKey` (`.type` is `"BIGINT"` on both structs), which is why the two
+    # share this branch. Before #408 `sOneToOneField` had no branch at ALL and fell through to the
+    # `else` below, so every OneToOneField column rendered `text` — and, being neither
+    # `sForeignKey` nor a `db_constraint` the SQLite CREATE TABLE path recognised, carried no
+    # FOREIGN KEY clause either.
     return type_map[field.type]
   elseif field isa sUUIDField
     return type_map[field.type]
@@ -625,10 +624,8 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sDurationField
     return sql_type
-  elseif field isa sForeignKey
-    return sql_type
-  elseif field isa sOneToOneField
-    return sql_type   # see the PostgreSQL branch above (#408)
+  elseif field isa sRelationalColumn
+    return sql_type   # both relational types, for the reason the PostgreSQL branch above gives (#408)
   elseif field isa sUUIDField
     return sql_type
   elseif field isa sJSONField
@@ -905,7 +902,7 @@ function create_table(conn::PormGSQLite, model::PormGModel)
     # #408: `sOneToOneField` is NOT a subtype of `sForeignKey` — both are bare `PormGField` — so an
     # `isa sForeignKey` gate silently emitted no constraint for a one-to-one. The ALTER paths in
     # `planner.jl` already gate on `hasfield(:to)` and so always covered both.
-    if field isa Union{sForeignKey, sOneToOneField} && field.db_constraint
+    if field isa sRelationalColumn && field.db_constraint
       on_delete_str = _foreign_key_on_delete_sql(field.on_delete)
       # Local FK column and referenced parent column both honor db_column (#50).
       local_col = field_db_column(field, string(field_name))
@@ -1190,7 +1187,7 @@ function alter_field(conn::PormGSQLite, model::PormGModel, field_name::Union{Sym
 
   # Add foreign key constraints (local + referenced columns honor db_column — #50)
   for (f_name, f) in model.fields
-    if f isa Union{sForeignKey, sOneToOneField} && f.db_constraint   # #408, as in `create_table`
+    if f isa sRelationalColumn && f.db_constraint   # #408, as in `create_table`
       on_delete_str = _foreign_key_on_delete_sql(f.on_delete)
       local_col = field_db_column(f, string(f_name))
       target_pk = fk_target_column(f)

@@ -252,6 +252,117 @@ end
   @test pg_field.to_table == sl_field.to_table == "parent_t"
 end
 
+# ────────────────────────────────────────────────────────────────────────────────
+# The UNIQUE NON-key foreign key — the last shape the two readers classified differently (#417)
+#
+# #409 (above) closed the primary-key half. This is the remainder, and it is the COMMON half: a
+# plain Django `OneToOneField` with no `primary_key=True` is the ordinary profile/extension-table
+# pattern, and `docs/src/import_django.md` maps it straight through, so imported models declare it.
+#
+# PostgreSQL has always reported it as `sOneToOneField` (`fk_is_o2o = unique || primary_key`).
+# SQLite reported `sForeignKey`, by the deliberate #318 decision that #408 then invalidated — the
+# objection was that an O2O rendered `TEXT` with no constraint, and it now renders the referenced
+# key's type and carries the constraint on both backends.
+#
+# The divergence was latent rather than loud, which is exactly why it needed a test rather than a
+# bug report: `_compare_model_field` compares attribute-wise over two structs with identical
+# field-name sets, so a declared O2O against a live FK compared EQUAL and the planner's fast path
+# returned early. It only bit when some OTHER column in the table changed — then the detailed loop
+# ran, `typeof` differed, and `:type` swept this column into a full SQLite table rebuild.
+#
+# The convergence assertion at the end is the one that matters, and it is deliberately made on
+# `typeof`, not on `are_model_fields_equal`: the latter answered `true` BEFORE this fix as well, so
+# asserting it alone would pass either way. `typeof` is what the planner's first branch tests.
+# ────────────────────────────────────────────────────────────────────────────────
+@testset "both readers classify a UNIQUE non-key FK identically (#417)" begin
+  # `columns` is the `", "`-separated marker aggregate; `unique` is read as a space-separated
+  # `"UNIQUE"` TOKEN off it (`introspection.jl`, `unique = "UNIQUE" in col_parts`). `primary_keys`
+  # names a DIFFERENT column on purpose — the whole point of this shape is that the FK is not the
+  # key, which is what distinguishes it from the #409 case above.
+  pg_row = _key_row(
+    table_name              = "o2o_profile_t",
+    columns                 = "id bigint NOT NULL, parent_id bigint UNIQUE NOT NULL",
+    primary_keys            = "id",
+    foreign_keys            = "parent_id",
+    foreign_tables          = "o2o_parent_t",
+    referenced_primary_keys = "id",
+    delete_rules            = "c")
+  pg_model = PormG.Migrations.convertSQLToModel(pg_row)
+  pg_field = pg_model.fields["parent_id"]
+
+  sl_model = mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "agree417.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "o2o_parent_t" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL)""")
+      # `parent_id` is UNIQUE but is NOT the primary key — `id` is. On SQLite the uniqueness
+      # arrives through `_sqlite_single_column_unique_columns`, which reads
+      # `pragma_index_list.origin = 'u'`: a UNIQUE CONSTRAINT, matching PostgreSQL's `contype = 'u'`
+      # (a bare `CREATE UNIQUE INDEX` counts on neither engine, by design).
+      fetch(pool, """CREATE TABLE "o2o_profile_t" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                       "parent_id" INTEGER UNIQUE NOT NULL,
+                       FOREIGN KEY ("parent_id") REFERENCES "o2o_parent_t"("id") ON DELETE CASCADE)""")
+      models = convert_schema_to_models(pool; include_table = ["o2o_parent_t", "o2o_profile_t"])
+      only(m for m in models if lowercase(string(m.name)) == "o2o_profile_t")
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+  sl_field = sl_model.fields["parent_id"]
+
+  # THE assertion. Same physical column, same reconstructed type — SQLite returned
+  # `sForeignKey` here until #417.
+  @test typeof(pg_field) === typeof(sl_field)
+  @test pg_field isa Models.sOneToOneField
+  @test sl_field isa Models.sOneToOneField
+
+  # A one-to-one, not a KEY one-to-one: this must not have been swept into the #409 pk-fk arm.
+  @test !pg_field.primary_key && !sl_field.primary_key
+  @test pg_field.unique && sl_field.unique
+  @test pg_field.pk_field == sl_field.pk_field == "id"
+  @test pg_field.to_table == sl_field.to_table == "o2o_parent_t"
+  @test pg_field.on_delete === sl_field.on_delete === Models.CASCADE
+
+  # No collateral damage: the table's own integer primary key is still an IDField on both readers,
+  # and a plain non-unique FK in the same table must NOT be promoted.
+  @test pg_model.fields["id"] isa Models.sIDField
+  @test sl_model.fields["id"] isa Models.sIDField
+
+  plain_fk_row = _key_row(
+    table_name              = "o2o_plain_t",
+    columns                 = "id bigint NOT NULL, parent_id bigint NOT NULL",
+    primary_keys            = "id",
+    foreign_keys            = "parent_id",
+    foreign_tables          = "o2o_parent_t",
+    referenced_primary_keys = "id",
+    delete_rules            = "c")
+  plain_pg = PormG.Migrations.convertSQLToModel(plain_fk_row).fields["parent_id"]
+  plain_sl = mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "plain417.sqlite"); pool_size = 1)
+    try
+      fetch(pool, """CREATE TABLE "o2o_parent_t" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL)""")
+      fetch(pool, """CREATE TABLE "o2o_plain_t" ("id" INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                       "parent_id" INTEGER NOT NULL,
+                       FOREIGN KEY ("parent_id") REFERENCES "o2o_parent_t"("id") ON DELETE CASCADE)""")
+      models = convert_schema_to_models(pool; include_table = ["o2o_parent_t", "o2o_plain_t"])
+      only(m for m in models if lowercase(string(m.name)) == "o2o_plain_t").fields["parent_id"]
+    finally
+      PormG.ConnectionPool.close_pool!(pool)
+    end
+  end
+  @test plain_pg isa Models.sForeignKey && !(plain_pg isa Models.sOneToOneField)
+  @test plain_sl isa Models.sForeignKey && !(plain_sl isa Models.sOneToOneField)
+  @test !plain_pg.unique && !plain_sl.unique
+
+  # Convergence, which is what #417 is FOR. A model declaring the ordinary Django shape must reach
+  # the planner's first branch — `typeof(old_field) == typeof(field)`, the attribute-wise compare —
+  # on BOTH engines. Before this fix that branch failed on SQLite, the `describes_same_column`
+  # fallback answered `false` (it refuses any field carrying a `.to`), and `:type` was pushed.
+  declared = Models.OneToOneField("O2o_parent_t", pk_field = "id", on_delete = Models.CASCADE)
+  @test typeof(declared) === typeof(pg_field) === typeof(sl_field)
+  @test Models._compare_model_field(declared, pg_field)
+  @test Models._compare_model_field(declared, sl_field)
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite accepts three spellings for a textual key, and all three must reconstruct (#409)
 #

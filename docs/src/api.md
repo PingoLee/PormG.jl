@@ -709,7 +709,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | :--- | :--- |
 | `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures — `catch` it to get both cases below. |
 | `UnknownFieldError` | A field, alias, column, or `__` lookup path does not exist on the model or projected row. |
-| `LazyTraversalError` | An unprojected `ForeignKey` was read off a fetched row — project it in `values(...)` first. |
+| `LazyTraversalError` | An unprojected `ForeignKey` or `OneToOneField` was read off a fetched row — project it in `values(...)` first. |
 | `FilterError` | Invalid filter argument/shape, or an operator misused on a JSON/subquery column. |
 | `QueryBuildError` | Structural/API misuse while building a query (joins, CTEs, projection, ordering, window/bulk config). **The long-tail default** — it is the bucket for query-shape misuse that isn't one of the sharper categories, so `catch QueryBuildError` says little beyond "PormG rejected the query shape". Catch a sharper subtype when you need to branch on the cause. |
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter (or another unsafe shape). |

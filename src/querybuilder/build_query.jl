@@ -144,7 +144,15 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     orientation = _normalize_order_orientation(v.orientation)
     placement = _nulls_placement(orientation, v.nulls)
     push!(instruc.order, _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection))
-    instruc.cache[v_field_copy._as] = v_field_copy
+    # Cache the resolved selector, but NEVER overwrite one that is already there (#404). The
+    # `found_in_select` branch above deliberately degrades `field` to the bare SELECT alias — legal
+    # in ORDER BY, invalid anywhere else — and since #404 moved this call ahead of
+    # `build_row_join_sql_text`, that render reads this cache: Phase 1 resolves cjoin ON conditions
+    # through `_get_filter_query(::SQLTypeField)`, which returns `instruc.cache[_as].field`
+    # verbatim. Clobbering here put `"parent__sku"` (a projection alias) into an ON clause, which
+    # both backends reject. The existing entry is the fully-qualified selector and is strictly
+    # better for every reader; only a path resolved fresh at :140 has nothing to preserve.
+    haskey(instruc.cache, v_field_copy._as) || (instruc.cache[v_field_copy._as] = v_field_copy)
 
     if !found_in_select
       # #76: Under DISTINCT, an ORDER BY term that is not part of the projection is rejected by
@@ -281,7 +289,6 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # create additional join entries in instruc.row_join via _build_row_join.
   # By pre-resolving with an index-based loop we process newly created entries
   # in order and store the generated SQL fragments for Phase 2.
-  n_before = length(instruc.row_join)
   on_clause_extras = Dict{Int, Vector{String}}()
   i = 1
   while i <= length(instruc.row_join)
@@ -312,31 +319,53 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   end
 
   # --- Phase 1b: relocate forward-referencing ON extras ----------------------
-  # When ON extras for join `idx` reference the alias of a join `dep_idx` that
-  # was *created* during Phase 1 (i.e. dep_idx > n_before), it means the ON
-  # condition uses a deep path (e.g. raceid__circuitid__country) that chains
-  # through the current join's target table.  Emitting those extras on `idx`
-  # would forward-reference `dep_idx` (whose JOIN clause hasn't appeared yet).
+  # An ON extra on join `idx` that names the alias of a join emitted LATER is a forward reference:
+  # Phase 2 emits joins in `row_join` order, so `dep_idx`'s JOIN clause has not appeared yet and
+  # both backends reject the reference. This happens when the ON condition walks a deep path
+  # (e.g. raceid__circuitid__country) that chains through the current join's target table.
   #
-  # Fix: move such extras to `dep_idx`'s ON clause, which is the join whose
-  # alias is referenced.  The base ON of `dep_idx` already references `idx`'s
-  # alias_b (the parent), so ordering is satisfied: idx emits first, dep_idx
-  # emits second with the relocated extras.
-  for idx in 1:n_before
+  # Fix: move the extra onto the LAST join it references. That join is emitted after every alias
+  # the extra names, and its own base ON already references its parent, so the ordering holds.
+  #
+  # The window is `idx+1 : end`, i.e. actual emission order — NOT "created during Phase 1"
+  # (`dep_idx > n_before`), which is what it used to test. That snapshot only described *when* an
+  # entry was appended, and a forward reference does not care: a join that already existed at entry
+  # is just as unemitted when it sits at a higher index. Two ways to reach that case, one of them
+  # pre-dating #404 — projecting the deep path (`values("parent__grandparent__code")`) builds the
+  # deeper join up front, and since #404 ordering by it does the same. In both, Phase 1 dedups the
+  # ON condition onto the existing entry instead of creating one, so the old window was empty and
+  # the extra stayed on the wrong join. Keying on index order covers every case uniformly.
+  #
+  # KNOWN GAP, not closed here: relocation changes the order extras are EMITTED in, while Phase 1
+  # bound their parameters in row_join order. PostgreSQL is unaffected ($N travels with the text),
+  # but a positional backend flattens the :join bucket in binding order, so a relocated extra can
+  # bind its neighbour's value. Reproduce with two cjoin filters at different depths
+  # (`["grandparent__code" => "ZZZ", "sku" => "SSS"]`). This pre-dates the change above; the change
+  # widens which shapes relocate, so it widens the exposure. Tracked in #421.
+  for idx in 1:length(instruc.row_join)
     haskey(on_clause_extras, idx) || continue
     extras = on_clause_extras[idx]
     relocated = falses(length(extras))
 
-    for dep_idx in (n_before+1):length(instruc.row_join)
-      dep_alias = instruc.row_join[dep_idx]["alias_b"]
-      for (ei, extra) in enumerate(extras)
-        if !relocated[ei] && occursin("\"$(dep_alias)\"", extra)
-          # Move this extra to dep_idx's ON clause
-          if !haskey(on_clause_extras, dep_idx)
-            on_clause_extras[dep_idx] = String[]
-          end
+    for (ei, extra) in enumerate(extras)
+      # Search downwards, so the first hit is the LAST join this extra references and one move
+      # reaches the fixed point. Ascending is NOT wrong — the outer loop above revisits relocation
+      # targets, so an extra dropped on the nearest match would cascade the rest of the way one hop
+      # per visit — it is just O(hops) moves for the same result, and it makes termination an
+      # argument about convergence. Descending keeps that argument to one line: dep_idx is the
+      # MAXIMUM match, so when the outer loop later reaches dep_idx its search range is a subset
+      # already proven not to match, and no extra can move twice.
+      for dep_idx in length(instruc.row_join):-1:(idx + 1)
+        # The trailing dot is REQUIRED, not cosmetic. An extra renders every column reference as
+        # `"alias"."col"`, so a bare `"name"` test also matches the COLUMN half — and a cjoin_on
+        # alias that happens to share a column's name (`alias = "code"` against `"Tb_2"."code"`)
+        # then drags an unrelated join's ON filter onto itself. That is valid SQL returning wrong
+        # rows, silently. Phase 1 above already keys on the same `"alias".` form (:310).
+        if occursin("\"$(instruc.row_join[dep_idx]["alias_b"])\".", extra)
+          haskey(on_clause_extras, dep_idx) || (on_clause_extras[dep_idx] = String[])
           push!(on_clause_extras[dep_idx], extra)
           relocated[ei] = true
+          break
         end
       end
     end
@@ -430,6 +459,34 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :where)
   get_filter_query(object, instruct)
 
+  # #404: ORDER BY resolves HERE, before build_row_join_sql_text renders row_join into SQL. A path
+  # named ONLY by order_by() is resolved through _get_select_query → _build_row_join, which APPENDS
+  # to row_join; running after the render left that entry un-emitted, so the ORDER BY referenced an
+  # alias the query never joined — a loud failure on both backends ("missing FROM-clause entry" /
+  # "no such column"). Ordering a path that is also projected or filtered was always fine: it takes
+  # the instruc.cache branch and discovers nothing.
+  #
+  # Only the position relative to the RENDER matters for CORRECTNESS. Whether this sits before or
+  # after the cjoin loops below is immaterial there — build_row_join_sql_text keys its
+  # forward-reference relocation on row_join index order, not on when an entry was appended. It is
+  # placed before them so the three "resolve everything" steps (select, filter, order) read as one
+  # block. It is not free to move, though: the order joins are appended in decides ALIAS NUMBERING,
+  # and test/unit/test_order_by_joins.jl pins concrete Tb_1/Tb_2/Tb_3 names, so a reorder rewrites
+  # those expectations rather than passing silently.
+  #
+  # Context: :join is set explicitly and :where restored after, so in a TOP-LEVEL build an order
+  # term that parameterizes lands in the bucket it always did, and the cjoin loops keep running
+  # under :where. In a SUBQUERY (set_contexts=false) these two switches are skipped, and that is a
+  # real change: build_row_join_sql_text sets :join UNGATED in both its phase loops, so before this
+  # move a subquery carrying at least one join left the context on :join and the order term landed
+  # there; now it inherits the parent's bucket. Narrow — it needs a subquery with a join AND a
+  # parameterized order term — and arguably the better of the two, since the subquery's ORDER BY
+  # text renders inside the parent's WHERE. Untested either way, because ORDER BY has no bucket of
+  # its own (see parameters.jl); that gap pre-dates this change and is not closed here.
+  set_contexts && set_context!(instruct, :join)
+  get_order_query(object, instruct)
+  set_contexts && set_context!(instruct, :where)
+
   # Materialize explicit custom joins that weren't discovered by traversal.
   # This ensures cjoin filters are applied even in UPDATE/DELETE without explicit field paths.
   # We check against instruct.row_path to avoid redundant materialization (forcing them twice).
@@ -453,8 +510,6 @@ function build(object::SQLObject;
 
   set_contexts && set_context!(instruct, :join)
   build_row_join_sql_text(instruct)
-
-  get_order_query(object, instruct)  # ORDER BY has no parameters
 
   _check_aggregate_fanout(instruct)  # #74: refuse silently-inflated aggregates over to-many joins
 

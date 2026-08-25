@@ -1616,6 +1616,15 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   
   if has_joins
     if connection isa PormGPostgres || connection isa PormGSQLite
+      # The SET-clause loop above can reach _build_row_join (e.g. update("x" => F("fk__col"))), so
+      # row_join may have grown AFTER build() rendered instruction.join — the same late-discovery
+      # hazard #404 fixed in build(). Exactly one UPDATE branch reads the stale instruction.join:
+      # _build_update_target_pk_subquery, which prints it at :1492. This check is what excludes it —
+      # a SET-discovered join necessarily puts its alias in set_clause, so the check returns true,
+      # pk_subquery stays nothing, and the UPDATE … FROM branch below rebuilds FROM/ON from
+      # instruction.row_join instead. Do NOT drop this guard on the theory that the UPDATE path
+      # ignores instruction.join — it does not. (#404's own trigger cannot reach here regardless:
+      # update() refuses a query carrying order_by() at :1542.)
       set_uses_join_aliases = _set_clause_uses_join_aliases(set_clause, instruction.row_join, connection)
       pk_subquery = (!set_uses_join_aliases && isempty(real_obj.ctes)) ? _build_update_target_pk_subquery(instruction) : nothing
 

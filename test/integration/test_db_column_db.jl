@@ -377,10 +377,11 @@ end
         # order_by on a CTE-reached db_column field that is neither projected nor filtered, so it
         # is resolved here for the first time: `get_order_query` reuses `instruc.cache` when the
         # same path was already resolved, and the filter runs first — hence `name` (no db_column)
-        # is the filtered column and `sku` the ordered one. The filter also exists to emit the
-        # JOIN: a CTE column referenced ONLY by order_by registers the alias without emitting one
-        # (a separate, pre-#376 defect that also hits plain FK paths on models with no db_column),
-        # and this testset must not depend on it. Built as a FRESH CTE object: a `.with` source is
+        # is the filtered column and `sku` the ordered one. The filter is NO LONGER what emits the
+        # JOIN: a CTE column referenced only by order_by used to register the alias without emitting
+        # one (a defect that also hit plain FK paths on models with no db_column), fixed in #404 by
+        # resolving ORDER BY before the joins render — see `test_selection.jl` for the executed
+        # regression and `test_order_by_joins.jl` for the rendering. Built as a FRESH CTE object: a `.with` source is
         # shared state, and reusing one across queries is what the #43 coverage exists to police.
         cte2 = M.Db_column_scratch.objects
         cte2.values("id", "sku", "name")

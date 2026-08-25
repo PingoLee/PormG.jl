@@ -2707,3 +2707,53 @@ end
     @test insp[:parameters] == [1, 5]               # inner param once, outer param once
     @test count(==('?'), sql) == 2                  # marker count matches — no orphan placeholder
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# cjoin ON filters at two join depths bind in EMISSION order (#421)
+# `build_row_join_sql_text` resolves every ON condition in Phase 1 (binding as it goes), then
+# Phase 1b relocates a forward-referencing fragment onto the join it actually names — changing the
+# order the fragments are EMITTED in. The `:join` bucket had already been filled in binding order,
+# and nothing reconciled the two, so the first `?` took the relocated fragment's value.
+#
+# PostgreSQL was immune because `$N` numbering travels with the text; this file exists for exactly
+# the class of defect that only a positional backend can have. The two values are deliberately of
+# DIFFERENT TYPES — an Int year and a String country — so a swap is visible in the bucket rather
+# than hiding behind two interchangeable strings. On a live SQLite a swap does not even error
+# (SQLite is dynamically typed); it just returns nothing, which is why this shipped unnoticed.
+#
+# Rendering coverage for the same defect, on mock models and both backends, is in
+# `test/unit/test_order_by_joins.jl`; execution coverage is in `test/integration/test_cjoin.jl`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - cjoin ON filters across two join depths (#421)" begin
+    q = M.Result.objects
+    q.values("points")
+    # `circuitid__country` is one hop deeper than `year`, so its fragment forward-references the
+    # circuit join and Phase 1b relocates it. Listing it FIRST is what makes binding order differ
+    # from emission order — reversed, this same pair was always correct.
+    q.cjoin("raceid" => "Race",
+            filters = ["circuitid__country" => "Italy", "year" => 2009], warn = false)
+
+    insp = q |> inspect_query
+    sql = insp[:sql_text]
+
+    # Emission order: race's ON carries `year`, circuit's carries `country`, in that order.
+    @test occursin("\"Tb_1\".\"year\" = ?", sql)
+    @test occursin("\"Tb_2\".\"country\" = ?", sql)
+    @test first(findfirst("\"Tb_1\".\"year\" = ?", sql)) < first(findfirst("\"Tb_2\".\"country\" = ?", sql))
+
+    # ...so the bucket must read [year, country]. Pre-fix it was ["Italy", 2009]: the year marker
+    # bound "Italy" and the country marker bound 2009.
+    @test insp[:parameter_buckets][:join] == [2009, "Italy"]
+    @test count(==('?'), sql) == 2
+    @test insp[:parameter_buckets][:where] == []   # ON predicates stay in :join, never leak to WHERE
+
+    # Control: the same two filters listed the other way round. Binding order already matched
+    # emission order, so this was correct before the fix and must be identical after it.
+    rev = M.Result.objects
+    rev.values("points")
+    rev.cjoin("raceid" => "Race",
+              filters = ["year" => 2009, "circuitid__country" => "Italy"], warn = false)
+    rev_insp = rev |> inspect_query
+    @test rev_insp[:parameter_buckets][:join] == [2009, "Italy"]
+    @test rev_insp[:sql_text] == sql
+end

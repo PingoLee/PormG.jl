@@ -37,9 +37,24 @@ selector. Both are pinned below as controls, and both must stay byte-identical �
 by making every order term build its own join would satisfy the first three testsets here and
 quietly double-join the rest of the suite.
 
+The last four testsets cover two further defects in the same relocation machinery. Both are
+pre-existing and neither was caused by #404:
+
+  - #421 — relocation changes the order extras are EMITTED in, while Phase 1 had already bound
+    their parameters in `row_join` order. PostgreSQL is immune (`\$N` numbering travels with the
+    text); SQLite flattens the `:join` bucket in BINDING order, so a relocated extra bound its
+    neighbour's value. Valid SQL, wrong rows, no error, on one backend only.
+  - #424 — Phase 2's CROSS-join branch emits and `continue`s without consulting
+    `on_clause_extras`, so a predicate that landed there was silently dropped and the join stopped
+    filtering. A CROSS-joined CTE acquires one when its NAME collides with a join key (a `cjoin`
+    path, a `cjoin_on` alias, or an `on()` path) or when Phase 1b relocates a fragment naming its
+    alias. Four producers are pinned; the testset explains why it pins that invariant rather than a
+    list of call shapes.
+
 All assertions render through mock PostgreSQL/SQLite connections — no live database. The execution
 half (the query actually returning rows on both backends) lives in
-`test/integration/test_selection.jl`, because the pre-fix failure was at execution time.
+`test/integration/test_selection.jl` and `test/integration/test_cjoin.jl`, because the pre-fix
+failures were at execution time.
 
 Sibling coverage:
   - `test_order_by_nulls.jl`        -> #75 NULL placement on the rendered term.
@@ -361,4 +376,225 @@ end
   # would also rewrite the like-named COLUMN, which is the very ambiguity under test.)
   @test _obj_joins(control) == _obj_joins(colliding) == 3
   @test count("= \$1", control) == count("= \$1", colliding) == 1
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A relocated ON extra binds its OWN value (#421)
+# Phase 1 walks `row_join` in index order and binds as it resolves; Phase 1b then moves a fragment
+# onto a later join, changing EMISSION order. Nothing reconciled the two. PostgreSQL never noticed —
+# `$N` numbering travels with the text — but SQLite flattens the `:join` bucket in BINDING order, so
+# the first `?` took the relocated fragment's value and the two conditions swapped. Valid SQL, wrong
+# rows, no error, and on one backend only.
+#
+# The control pair is what earns this testset its length: the SAME two filters, only their order in
+# the `filters` vector swapped. The deep one relocates and the shallow one does not, so pre-fix (a)
+# was wrong while (b) was already right — a "fix" that reversed the bucket wholesale would trade one
+# failure for the other and still pass a single-case test.
+# ─────────────────────────────────────────────────────────────────────────────
+_cj_two_depth(filters) = begin
+  q = OBJ.Cj_child.objects
+  q.values("note")
+  q.cjoin("parent" => "Cj_parent", filters = filters, warn = false)
+  q
+end
+
+@testset "a relocated ON extra binds its own value (#421)" begin
+  # (a) the issue's shape — the deep filter is listed FIRST, so it binds first and emits last.
+  sl = inspect_query(_cj_two_depth(["grandparent__code" => "ZZZ", "sku" => "SSS"]); connection = _OBJ_SL)
+  sql = sl[:sql_text]
+
+  # Pin the emission order the bucket has to match rather than trusting it: cj_parent's ON carries
+  # `sku` and is emitted first, cj_grand's carries `code` and is emitted second.
+  @test occursin("\"Tb_1\".\"sku\" = ?", sql)
+  @test occursin("\"Tb_2\".\"code\" = ?", sql)
+  @test first(findfirst("\"Tb_1\".\"sku\" = ?", sql)) < first(findfirst("\"Tb_2\".\"code\" = ?", sql))
+
+  # ...so the bucket must read the sku value first. Pre-fix it was ["ZZZ", "SSS"] — swapped.
+  @test sl[:parameter_buckets][:join] == ["SSS", "ZZZ"]
+  @test count(==('?'), sql) == 2                     # no orphan marker, no orphan value
+
+  # (b) control: the same two filters the other way round. Binding order already matched emission
+  # order here, so this was correct BEFORE the fix and must be byte-identical after it.
+  rev = inspect_query(_cj_two_depth(["sku" => "SSS", "grandparent__code" => "ZZZ"]); connection = _OBJ_SL)
+  @test rev[:parameter_buckets][:join] == ["SSS", "ZZZ"]
+  @test rev[:sql_text] == sql        # the rendered text never depended on the filter order
+
+  # (c) PostgreSQL is the oracle: it was always right and must not move. The values stay in BIND
+  # order and the explicit numbering carries the mapping — which is why $2 lands on sku, not $1.
+  pg = inspect_query(_cj_two_depth(["grandparent__code" => "ZZZ", "sku" => "SSS"]); connection = _OBJ_PG)
+  @test occursin("\"Tb_1\".\"sku\" = \$2", pg[:sql_text])
+  @test occursin("\"Tb_2\".\"code\" = \$1", pg[:sql_text])
+  @test pg[:parameters] == ["ZZZ", "SSS"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A relocated ON extra carries ALL of its values, in order (#421)
+# One fragment can bind more than one value, so "move the fragment's parameter" is not the same
+# invariant as "move the fragment's parameter RUN". `@in` over three codes beside a single-valued
+# `sku` makes the split 3-and-1: pre-fix the bucket read [Z,Y,X,SSS] against markers emitted
+# sku-first, so all four misbound. A fix that relocated only the first value of a run would still
+# satisfy the one-value-each testset above.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a relocated ON extra carries its whole parameter run (#421)" begin
+  r = inspect_query(_cj_two_depth(["grandparent__code__@in" => ["Z", "Y", "X"], "sku" => "SSS"]);
+                    connection = _OBJ_SL)
+  @test r[:parameter_buckets][:join] == ["SSS", "Z", "Y", "X"]
+  @test count(==('?'), r[:sql_text]) == 4
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The fix reorders BETWEEN fragments, never WITHIN one (#421 control)
+# A single `Q(...)` spanning two depths is ONE fragment: Phase 1b relocates it whole, so its two
+# values were always adjacent and in the right order. Splitting the same predicates into two `Q`s
+# makes them two fragments, and only then does one relocate past the other. Both are pinned because
+# they are the pair that tells "reordered the runs" apart from "reordered the values".
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "relocation reorders fragments, not values within one (#421 control)" begin
+  one_q = inspect_query(_cj_two_depth([Q("grandparent__code" => "Z", "sku" => "S")]); connection = _OBJ_SL)
+  @test one_q[:parameter_buckets][:join] == ["Z", "S"]      # unchanged by the fix
+
+  two_q = inspect_query(_cj_two_depth([Q("grandparent__code" => "Z"), Q("sku" => "S")]); connection = _OBJ_SL)
+  @test two_q[:parameter_buckets][:join] == ["S", "Z"]      # two fragments, so the deep one moves
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An ON predicate that lands on a CROSS-joined CTE is refused, not dropped (#424)
+# Phase 2's CROSS branch has no ON clause to merge `on_clause_extras[idx]` into, and it `continue`d
+# without consulting the dict — so the predicate vanished, the join stopped filtering, and the query
+# returned row-multiplied results with no error.
+#
+# This testset deliberately pins the INVARIANT rather than a list of call shapes. That list was
+# written twice and wrong twice: first "unreachable by any query shape", then "two shapes" — each
+# time an independent reviewer produced a shape it had missed. The invariant is:
+#
+#     a CROSS-joined CTE acquires an ON predicate when its NAME collides with a join key, or when
+#     Phase 1b relocates a fragment that names its alias.
+#
+# "Join key" means a `custom_join` key, and `custom_join` is written at three unrelated sites —
+# keyed by a `cjoin` PATH, a `cjoin_on` ALIAS, and an `on()` PATH. So a collision with any of them
+# produces this, with or without a model-field collision and with or without any relocation at all.
+# The producers below cover all four routes; a fifth `custom_join` writer would inherit the same
+# behavior, and that is exactly why the emitted message names the collision rather than the method.
+#
+# Measured pre-fix (route A), this rendered:
+#     INNER JOIN "cj_parent" AS "b2" ON ("b2"."sku" = "R1"."note")
+#     CROSS JOIN "ev" AS "R1_1"
+# — the predicate gone from the SQL while its value stayed orphaned in the `:join` bucket. #421
+# makes that strictly worse before this guard makes it better: once values travel with their
+# fragment the orphan disappears too, so the wrong query becomes perfectly well-formed. That is why
+# the two land together.
+# ─────────────────────────────────────────────────────────────────────────────
+_ob_cte() = begin
+  c = OBJ.Cj_grand.objects
+  c.values("id", "code")
+  c
+end
+
+_ob_parent_cte() = begin
+  c = OBJ.Cj_parent.objects
+  c.values("id", "sku")
+  c
+end
+
+# (label, the CTE name the message must report, builder). Each must reach the SAME guard.
+const _OB_424_PRODUCERS = [
+  (
+    "A: cjoin_on `on` names a CTE path (via Phase 1b relocation)", "ev",
+    () -> begin
+      q = OBJ.Cj_child.objects
+      q.with("ev" => _ob_cte())                       # no join_field => CROSS JOIN (#44)
+      q.values("note")
+      # Two predicates on purpose: with only one, relocating it away empties the join's extras and
+      # `cjoin_on` raises "produced no ON conditions" first — a different, separately misleading
+      # error that would mask what is under test.
+      q.cjoin_on("Cj_parent", alias = "b2",
+                 on = [F("b2.sku") == F("note"), "ev__code" => "Z"])
+      q
+    end,
+  ),
+  (
+    "B: CTE name collides with a cjoin PATH (a model field; no relocation)", "parent",
+    () -> begin
+      q = OBJ.Cj_child.objects
+      # "parent" is a ForeignKey field of Cj_child. Join resolution consults the CTE registry BEFORE
+      # the model-field branch, so the CTE shadows the field's join entirely, and the cjoin then
+      # hangs its filters on the CROSS entry as its own `on_conditions` — one row_join entry, empty
+      # relocation window, `on_clause_extras` filled in Phase 1.
+      q.with("parent" => _ob_parent_cte())
+      q.values("note")
+      q.cjoin("parent" => "Cj_parent", filters = ["sku" => "S"], warn = false)
+      q
+    end,
+  ),
+  (
+    "C: CTE name collides with a cjoin_on ALIAS (no model field involved)", "b2",
+    () -> begin
+      q = OBJ.Cj_child.objects
+      # "b2" is NOT a field of Cj_child — nothing is shadowed. The collision is with the cjoin_on
+      # ALIAS, which is what `_cjoin_on` uses as its `custom_join` key. This is the producer that
+      # proved a message blaming "a CTE named after a model FIELD" asserts something false.
+      q.with("b2" => _ob_cte())
+      q.values("note")
+      q.cjoin_on("Cj_parent", alias = "b2", on = [F("b2.sku") == F("note")])
+      q.filter("b2__code" => "X")                     # forces the CTE join to be built first
+      q
+    end,
+  ),
+  (
+    "D: CTE name collides with an on() PATH declared BEFORE the .with()", "parent",
+    () -> begin
+      q = OBJ.Cj_child.objects
+      # Order matters: `.with()` then `.on()` is refused earlier by `_resolve_join_target_model`,
+      # which only sees CTEs declared so far. Reversed, that check never fires.
+      q.on("parent", "sku" => "S")
+      q.with("parent" => _ob_parent_cte())
+      q.values("note", "parent__sku")
+      q
+    end,
+  ),
+]
+
+@testset "an ON predicate landing on a CROSS-joined CTE is refused, not dropped (#424)" begin
+  for (label, cte_name, build_q) in _OB_424_PRODUCERS
+    @testset "$label" begin
+      for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
+        err = try
+          inspect_query(build_q(); connection = conn)
+          nothing
+        catch e
+          e
+        end
+        @test err isa PormG.QueryBuildError
+        msg = sprint(showerror, err)
+
+        # The message must describe the COLLISION, which is true of every producer — not the call
+        # method, which is true of at most one. An earlier draft asserted "shadows a field"; that
+        # passed here and was false for producer C.
+        @test occursin("CROSS", msg)
+        @test occursin("collides", msg)
+        @test occursin("#44", msg)                # points at where the correlation belongs
+        @test occursin(".filter(", msg)           # ...and at one of the three remedies
+        # Names the offending CTE by the name the caller wrote, so they can find the
+        # `.with(...)` to rename. This is per-producer on purpose: a message that named the CTE's
+        # TABLE instead would be useless for renaming, and a hardcoded name would not notice.
+        @test occursin(cte_name, msg)
+        # Never blames the caller for a PormG bug: these are user-writable shapes, and the first
+        # draft of this guard said "internal: ... please report" (review finding).
+        @test !occursin("internal", lowercase(msg))
+        @test !occursin("report", lowercase(msg))
+      end
+    end
+  end
+
+  # Control: a CROSS-joined CTE that never acquired a predicate must still render. Without this, a
+  # guard written as an unconditional `throw` would satisfy every assertion above while breaking
+  # every #44 query. (`test/unit/test_cte_ergonomics.jl` owns the full #44 coverage; this is the
+  # local tripwire that the new `haskey` check did not turn every CROSS join into an error.)
+  ok = OBJ.Cj_child.objects
+  ok.with("ev" => _ob_cte())
+  ok.values("note")
+  ok.filter(F("note") == F("ev__code"))
+  ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
+  @test occursin("CROSS JOIN \"ev\"", ok_sql)
+  @test !occursin(r"CROSS JOIN[^\n]*ON", ok_sql)
 end

@@ -109,6 +109,24 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("bad alias!" => "points").list(show_query = :dict),
     ),
     (
+        # #424. `cjoin_on`'s `on` is the whole ON clause and is NOT path-prefixed, so a bare
+        # `"ev__col" => v` resolves against a `join_field`-less (CROSS-joined) CTE — which has no ON
+        # clause to carry it. Two predicates: with only one, the "produced no ON conditions" guard
+        # fires first and the case would pin the wrong error.
+        "read/custom_joins.md — a cjoin_on ON predicate on a CROSS-joined CTE is refused",
+        QueryBuildError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev)                       # no join_field => CROSS JOIN (#44)
+            q.values("resultid")
+            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d",
+                       on = [F("d.driverid") == F("driverid"), "ev__status" => "Finished"])
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         "write/update.md — UPDATE cannot carry LIMIT/OFFSET/ORDER BY",
         UnsafeMutationError,
         () -> DOCERR_RESULT_PG.objects.filter("resultid" => 1).limit(5).

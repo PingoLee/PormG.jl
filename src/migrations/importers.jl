@@ -1561,6 +1561,31 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # by grepping the module.
   append!(Instructions, index.rename_notes)
 
+  # #402: give every graph the IMPORT-GATED module scope of every OTHER app.
+  #
+  # `_django_graph_from_scopes` builds one graph per app and rewrites only `(self, "")` into the
+  # gated `mod_scope` — own declarations plus whatever that models.py actually imports, aliases,
+  # star-imports and re-export façades included (#370). Every other `(i, "")` it holds is the RAW
+  # per-file collection: classes literally declared in that file, and nothing it imported.
+  #
+  # That distinction was cosmetic while a merged statement resolved under the CHILD's scopes. Now
+  # that it resolves under its OWNER's, `(origin, "")` is the only module scope it sees — so leaving
+  # it raw makes an ancestor that IMPORTS the enum it uses report "not defined in this file" about a
+  # name that is plainly defined and imported. Each app's own graph already computed the gated view;
+  # copy it across so every graph agrees on what each app's module scope contains.
+  # Keyed on `other.graph.self`, NOT on the position in `apps` — they agree at both call sites
+  # today, but nothing here enforces it, and a future "skip apps that contribute nothing" filter
+  # would desynchronize them and silently copy raw entries back over gated ones.
+  for other in apps
+    a = other.graph.self
+    gated = get(other.graph.enums, (a, ""), nothing)
+    gated === nothing && continue
+    for app in apps
+      app.graph.self == a && continue          # its own entry is already the gated one
+      app.graph.enums[(a, "")] = gated
+    end
+  end
+
   for app in apps
     graph = app.graph
     # An app that contributes no table gets a line in the ARTIFACT, not just a console warning
@@ -1698,8 +1723,19 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       end
 
       # Abstract bases merge by CONCATENATION, ancestors first: process_class_fields! writes into a
-      # Dict, so the last write wins and the child overrides its parents for free.
-      class_content = vcat(_inherited_statements(graph, class), class.body)
+      # Dict, so the last write wins and the child overrides its parents for free. Each statement
+      # carries the `(app, class)` it was WRITTEN in (#402) — the child's own body is tagged with
+      # this app and this class; a merged one keeps its ancestor's.
+      class_content = vcat(_inherited_statements(graph, class),
+                           [((graph.self, class_name), s) for s in class.body])
+
+      # One scope list per distinct owner, not per statement: `_enum_scopes` walks the ancestor
+      # graph, and a class's statements come from a handful of owners at most.
+      enum_scope_map = Dict{Tuple{Int, String}, Vector{Tuple{Int, String}}}()
+      for (owner, _) in class_content
+        haskey(enum_scope_map, owner) ||
+          (enum_scope_map[owner] = _enum_scopes(graph, owner[1], owner[2]))
+      end
 
       # Initialize fields_dict
       fields_dict = Dict{Symbol, Any}()
@@ -1711,7 +1747,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         process_class_fields!(fields_dict, class_content, class_name,
                               _inherits_auth_user(graph, class), autofields_ignore,
                               parameters_ignore, markers, graph.enums,
-                              _enum_scopes(graph, class); class_label = class_label,
+                              enum_scope_map; class_label = class_label,
                               strict_fields = strict_fields)
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
@@ -3189,42 +3225,62 @@ function _collect_nested_enums!(into::Dict{String, _PyEnum}, cls::PyClass, prefi
 end
 
 """
-    _enum_scopes(graph, cls) -> Vector{Tuple{Int, String}}
+    _enum_scopes(graph, app, class_name) -> Vector{Tuple{Int, String}}
 
-The scopes an enum reference inside `cls` may name, as `(app, scope)` in precedence order: the class
-itself, then its ABSTRACT BASES (nearest first), then module level — this app's first, then that of
-each app an ancestor came from.
+The scopes an enum reference written inside `(app, class_name)` may name, as `(app, scope)` in
+precedence order: the class itself, then that class's OWN module, then its ABSTRACT BASES (ancestors
+first, depth-first — so a deeper base can outrank a nearer one, unlike Python's C3 order; that only
+ever matters inside the leniency described below, where every shape is a `NameError` in Python
+anyway).
 
-The abstract-base step is not optional. `_inherited_statements` merges a base's field statements
-into the child and processes them under the CHILD's name, so a base declaring both
-`class Status(TextChoices)` and a field using it hands the child a reference that is nowhere in the
-child's own scope — which this importer then reported as "not defined in this file" while it sat
-three lines above. An abstract base with an enumerated status column is mainstream Django.
+**Bases rank BELOW the module on purpose.** Python's class body resolves a bare name against the
+enclosing module, never against a base class — `class C(B): x = Status` is a `NameError` unless
+`Status` is module-level, because base attributes are not in the class body's namespace. So a
+module-level `Status` has to win over a base-nested one of the same name; ranking bases first
+silently imported the wrong enumeration, in a single app, with no marker (#402).
 
-The ancestor's module scope is in the list for the same reason one step further out: a base in
-`core` may reference a MODULE-level `Status` that `core` declares, and once that statement has been
-merged into a child in another app, nothing in the child's own scopes can see it.
+The base entries stay in the list for two narrower jobs. One is legitimate: `_lookup_enum`'s
+qualified fallback resolves `Base.Status` by looking up `Status` inside the scope named `Base` —
+`Base.Status.choices` IS valid Python, since attribute access on the base is not name lookup. That
+fallback scans this list for its **app** half only, so what it needs is the base's APP to appear
+here, not the base's own entry; the two coincide except when the base lives in another app, which is
+exactly when it matters. The other is a deliberate leniency: a bare name
+that matches nothing in the owner's class or module still falls through to a base's nested enum,
+where Python would raise `NameError`. That is narrower than what it replaced (before, bases outranked
+the module outright) and it fails toward resolving rather than toward a wrong-value silent import,
+but it is not Python's rule and a stricter pass would drop it.
+
+The owner is a parameter, not `graph.self`, because a class's field statements do not all come from
+one module. `_inherited_statements` merges an abstract base's statements into the child, and that
+base may live in another app — so the list is built per STATEMENT, keyed by where the statement was
+written, and `process_class_fields!` resolves each one under its own list. Python binds a name in
+the module the statement appears in; this mirrors that (#402).
+
+A base declaring both `class Status(TextChoices)` and a field using it — mainstream Django — is no
+longer what the base entries are for. That case is served by the owner tag: the merged statement's
+list *starts* at `(base_app, base_name)`, so the enum is found in the base's own class scope without
+consulting any ancestor entry. Before the tag existed the child had to borrow its ancestors' scopes
+to see it, and the importer otherwise reported "not defined in this file" about an enum three lines
+above the field.
+
+There is no tail of other apps' MODULE scopes, and that omission is deliberate. A merged statement
+arrives with `app` already set to the module it came from, so `(app, "")` IS its module scope; and a
+statement written in the CHILD must not see an ancestor's module at all — Python raises `NameError`
+there, since the child never imported the name (#402, case (e)).
 
 Every entry carries the app it belongs to. Two apps may each declare a `Base` with a nested
-`Situacao`, and a scope list of bare names cannot say which one a merged statement meant.
+`Situacao`, and a scope list of bare names could not say which one a merged statement meant.
 
-!!! warning "Known imprecision — the list is per CLASS, not per statement"
-    `_inherited_statements` merges an ancestor's statements into the child and they are all
-    processed under one scope list, so the ancestor-module tail is reachable from the child's OWN
-    statements too, and this app's module scope outranks the ancestor's even for a statement that
-    came out of the ancestor's body — where Python would resolve in the ancestor's module.
-
-    Both are narrower than what preceded them: the enum table used to be one flat, app-blind
-    dictionary, so every app's module scope was reachable from everywhere. Closing them properly
-    means tagging each merged statement with the app it came from and resolving per statement, which
-    is a change to the field pipeline rather than to this list.
+Cheap to call but not free — it walks the ancestor graph — and a class's statements come from only a
+handful of owners, so `_import_django_apps` builds one list per distinct owner and hands
+`process_class_fields!` the map to read per statement.
 """
-function _enum_scopes(graph, cls::PyClass)::Vector{Tuple{Int, String}}
-  out = Tuple{Int, String}[(graph.self, cls.name)]
-  ancestor_apps = Int[]
+function _enum_scopes(graph, app::Int, class_name::AbstractString)::Vector{Tuple{Int, String}}
+  out = Tuple{Int, String}[(app, String(class_name))]
+  ancestors = Tuple{Int, String}[]
   seen = Set{Tuple{Int, String}}()
-  function walk(a::Int, c::PyClass)
-    key = (a, c.name)
+  function walk(a::Int, cname::String)
+    key = (a, cname)
     key in seen && return
     push!(seen, key)
     ci = get(graph.byapp, key, nothing)
@@ -3237,17 +3293,14 @@ function _enum_scopes(graph, cls::PyClass)::Vector{Tuple{Int, String}}
       # The scope key is the ancestor's OWN name, because that is how `_collect_enums` keys a class
       # scope — not the token the child referred to it by, which an `as` alias makes a different
       # string entirely.
-      push!(out, (pa, pc.name))
-      pa == graph.self || pa in ancestor_apps || push!(ancestor_apps, pa)
-      walk(pa, pc)
+      push!(ancestors, (pa, pc.name))
+      walk(pa, pc.name)
     end
     return
   end
-  walk(graph.self, cls)
-  push!(out, (graph.self, ""))                 # this app's module scope outranks any borrowed one
-  for a in ancestor_apps
-    push!(out, (a, ""))
-  end
+  walk(app, String(class_name))
+  push!(out, (app, ""))                        # the owner's own module outranks any base's scope
+  append!(out, ancestors)                      # bases last — see below
   return out
 end
 
@@ -3283,11 +3336,18 @@ function _lookup_enum(enums, scopes::Vector{Tuple{Int, String}},
 end
 
 """
-    _inherited_statements(graph, cls) -> Vector{PyStmt}
+    _inherited_statements(graph, cls) -> Vector{Tuple{Tuple{Int, String}, PyStmt}}
 
-The field statements `cls` inherits from its abstract bases, ancestors first. Concatenating these
-before the class's own body is the whole merge: `process_class_fields!` writes into a `Dict`, so
-**last write wins** gives child-overrides-parent for free.
+The field statements `cls` inherits from its abstract bases, ancestors first, each **tagged with the
+`(app, class)` it was written in**. Concatenating these before the class's own body is the whole
+merge: `process_class_fields!` writes into a `Dict`, so **last write wins** gives
+child-overrides-parent for free.
+
+The owner tag is what makes enum references resolve in the right module (#402). A base in `core` and
+the child inheriting it in `shop` are two different namespaces, and Python binds a name in the module
+the statement appears in — so the merged statement has to carry `core` with it rather than adopt the
+child's scopes. The origin was always available here (`graph.resolved` hands back the owning app);
+it used to be discarded one line later.
 
 Bases are walked in **reverse** declaration order, because Python resolves `class C(A, B)` left to
 right — A must win, so A's statements have to be written last.
@@ -3299,8 +3359,8 @@ right — A must win, so A's statements have to be written last.
 # class's own name. So they read `graph.resolved[(app, token)]` — the edge classification actually
 # took — and `graph.byapp[(app, name)]`, which covers every class the walk reached, in any app.
 
-function _inherited_statements(graph, cls::PyClass)::Vector{PyStmt}
-  out = PyStmt[]
+function _inherited_statements(graph, cls::PyClass)::Vector{Tuple{Tuple{Int, String}, PyStmt}}
+  out = Tuple{Tuple{Int, String}, PyStmt}[]
   seen = Set{Tuple{Int, String}}()
   function walk(a::Int, c::PyClass)
     ci = get(graph.byapp, (a, c.name), nothing)
@@ -3312,7 +3372,11 @@ function _inherited_statements(graph, cls::PyClass)::Vector{PyStmt}
       (pa, pc.name) in seen && continue
       push!(seen, (pa, pc.name))
       walk(pa, pc)
-      append!(out, pc.body)
+      # `(pa, pc.name)` is the ancestor's OWN app and name — the module its statements were written
+      # in, and the scope key `_collect_enums` used for its nested enums.
+      for s in pc.body
+        push!(out, ((pa, pc.name), s))
+      end
     end
     return
   end
@@ -3642,15 +3706,23 @@ end
 # They coincide exactly when the import carries no app label, which is why the default is safe.
 #
 # (`enum_scopes` looks droppable — the sole production caller passes it explicitly, so its default
-# is dead on the real path. Leave it: it is the only thing documenting how the vector is built, and
+# is dead on the real path. Leave it: it is the only thing documenting how the map is built, and
 # removing it turns this comment into the next reader's silent enum regression.)
-function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Vector{PyStmt},
+#
+# #402: `class_content` entries are `(owner, stmt)` and `enum_scopes` is keyed BY that owner, because
+# a class's statements do not all come from one module — `_inherited_statements` merges an abstract
+# base's body in, and that base may live in another app. Resolving every statement under one list
+# made a `core` statement bind names in `shop`. The owner travels with the statement; the scope list
+# is looked up per statement from it.
+function process_class_fields!(fields_dict::Dict{Symbol, Any},
+                               class_content::Vector{Tuple{Tuple{Int, String}, PyStmt}},
                                class_name::AbstractString, is_auth_user::Bool,
                                autofields_ignore::Vector{String}, parameters_ignore::Vector{String},
                                markers::Vector{String} = String[],
                                enums = Dict{Tuple{Int, String}, Dict{String, _PyEnum}}(),
-                               enum_scopes::Vector{Tuple{Int, String}} =
-                                 Tuple{Int, String}[(1, String(class_name)), (1, "")];
+                               enum_scopes::Dict{Tuple{Int, String}, Vector{Tuple{Int, String}}} =
+                                 Dict((1, String(class_name)) =>
+                                        Tuple{Int, String}[(1, String(class_name)), (1, "")]);
                                class_label::AbstractString = class_name,
                                strict_fields::Bool = false)
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
@@ -3703,9 +3775,21 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
 
   # Iterate over the fields in the class content. Each entry is a LOGICAL statement (#340), so a
   # field wrapped across physical lines is matched like any other.
-  for stmt in class_content
+  for (stmt_owner, stmt) in class_content
     parsed = _match_field_statement(stmt.text)
     parsed === nothing && continue
+
+    # The scopes THIS statement resolves enum references under — its owner's, not the class's
+    # (#402). A statement merged in from an abstract base in another app binds names in that base's
+    # module, exactly as Python does.
+    #
+    # The fallback derives a list from the OWNER, never from `class_name`. It is dead on the
+    # production path (`_import_django_apps` precomputes one entry per owner in `class_content`),
+    # but "borrow the child's list when the owner is missing" would reintroduce exactly the defect
+    # this change removes — quietly, and only for whatever shape made the lookup miss.
+    stmt_scopes = get(enum_scopes, stmt_owner) do
+      Tuple{Int, String}[(stmt_owner[1], stmt_owner[2]), (stmt_owner[1], "")]
+    end
 
     if parsed.type === nothing
       # #340's actual requirement: never drop a FIELD in silence. An assignment whose right-hand
@@ -3766,7 +3850,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any}, class_content::Ve
     # Parse field arguments
     parse_args() = parse_field_args(field_args_str, django_type, parameters_ignore;
                                     enums = enums, class_name = class_name,
-                                    enum_scopes = enum_scopes, class_label = class_label,
+                                    enum_scopes = stmt_scopes, class_label = class_label,
                                     field_name = field_name,
                                     markers = unsupported_type ? String[] : markers)
     options, related_model = unsupported_type ? with_logger(parse_args, NullLogger()) : parse_args()

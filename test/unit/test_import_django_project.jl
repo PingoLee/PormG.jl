@@ -3314,3 +3314,600 @@ class PlainAutoThing(models.Model):
     end
 end
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#400): the implicit `id` is an ADDITION, never a replacement
+#
+# `fields_dict` is a `Dict` and the synthetic key used to be a plain assignment into it, so a class
+# declaring its own field named `id` had that column overwritten — the declared type gone from the
+# artifact, no `@warn`, no `# PormG:` marker. It was the last silent column loss left in a file whose
+# entire contract is that nothing it cannot represent is dropped quietly.
+#
+# Django rejects the shape itself (`models.E004`), which is precisely why the importer has to handle
+# it: it reads hand-edited, legacy and partially-migrated `models.py` files that never passed
+# `manage.py check`, and it cannot validate them.
+#
+# The declared column wins, matching #369's rule for a declared key PormG cannot express: report the
+# gap, never destroy a column to paper over it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a declared field named id is preserved, not overwritten by the implicit key (#400)" begin
+    declared_id = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.UUIDField()
+    nome = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["access" => declared_id];
+                                                           output_file = "declared_id.jl")
+    try
+        # THE assertion, and it is a PAIR on purpose. The positive alone would pass on a build that
+        # emitted both columns; the negative alone would pass on one that dropped the field outright.
+        # Together they pin "the declared column survived AND nothing was substituted for it".
+        @test occursin("id = Models.UUIDField()", generated)
+        @test !occursin("Models.IDField()", generated)
+        # ...and the consequence is stated in the ARTIFACT, not only in a console warning that
+        # scrolls away before anyone opens the generated file.
+        @test occursin("# PormG: 'access.Thing' declares a field named 'id' that is NOT its primary key",
+                       generated)
+        @test occursin("has NO primary key", generated)
+
+        # The model loads, and it really is keyless. Asserted on the BUILT model: the rendered text
+        # cannot distinguish "no primary key" from "a key PormG renders without the kwarg".
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(declared_id.Thing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) === nothing
+        @test length(thing.fields) == 2
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # Identical for an `AbstractUser` subclass — the issue's second acceptance box. Before #369 this
+    # path was accidentally CORRECT (the auth branch set the old class-wide `has_primary_key` flag
+    # unconditionally, so the fallback never ran); removing that flag made the two paths consistently
+    # wrong. They have to stay consistent now that they are right.
+    auth_declared_id = """
+from django.db import models
+from django.contrib.auth.models import AbstractUser
+
+class User(AbstractUser):
+    id = models.UUIDField()
+"""
+    gen_auth, key_auth, existed_auth = import_project(["access" => auth_declared_id];
+                                                       output_file = "declared_id_auth.jl")
+    try
+        @test occursin("id = Models.UUIDField()", gen_auth)
+        @test !occursin("Models.IDField()", gen_auth)
+        @test occursin("# PormG: 'access.User' declares a field named 'id' that is NOT its primary key",
+                       gen_auth)
+        # The `AbstractUser` columns still land — the fix guards ONE key, it does not disable the
+        # auth branch.
+        @test occursin("password = Models.CharField()", gen_auth)
+        @test occursin("date_joined = Models.DateTimeField()", gen_auth)
+
+        sandbox_auth = Module()
+        Core.eval(sandbox_auth, Meta.parse(gen_auth))
+        user = Core.eval(sandbox_auth, :(declared_id_auth.User))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, user) === nothing
+    finally
+        cleanup_project_test!(key_auth, existed_auth)
+    end
+
+    # The CONTROL, and the reason the guard is `haskey` rather than "a field named id exists": the
+    # legal shape must be untouched. `id = models.UUIDField(primary_key=True)` is a real Django model
+    # and has always imported correctly — it must not acquire a marker announcing a problem it does
+    # not have. Without this, a guard that fired on every declared `id` would still pass everything
+    # above.
+    keyed_id = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.UUIDField(primary_key=True)
+    nome = models.CharField(max_length=10)
+"""
+    gen_keyed, key_keyed, existed_keyed = import_project(["access" => keyed_id];
+                                                          output_file = "declared_id_keyed.jl")
+    try
+        @test occursin("id = Models.UUIDField(", gen_keyed)
+        @test !occursin("declares a field named 'id'", gen_keyed)
+        @test !occursin("has NO primary key", gen_keyed)
+        sandbox_keyed = Module()
+        Core.eval(sandbox_keyed, Meta.parse(gen_keyed))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox_keyed, :(declared_id_keyed.Thing))) == :id
+    finally
+        cleanup_project_test!(key_keyed, existed_keyed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#410): an unimplemented field type costs its COLUMN, not the file
+#
+# `process_class_fields!` resolves the constructor by name, and #342's retry cannot help an unknown
+# TYPE — so one `models.GenericIPAddressField` raised out of `_import_django_apps` and every model in
+# every app of the call was lost. Django ships plenty of types PormG does not implement
+# (`SmallIntegerField`, `PositiveBigIntegerField`, `FilePathField`, `GeneratedField`, …), and #268,
+# #342 and #399 each closed this blast radius for one specific cause before the next unmapped type
+# walked straight back into it.
+#
+# The column is now skipped and reported; `strict_fields = true` restores the raise for callers who
+# would rather fail than receive a model with a column missing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an unimplemented Django field type skips its column, not the import (#410)" begin
+    # The issue's own reproduction, plus a second app: the blast radius was per-CALL, not per-file.
+    unknown_type = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    ip = models.GenericIPAddressField()
+    nome = models.CharField(max_length=10)
+
+class EverythingElse(models.Model):
+    nome = models.CharField(max_length=40)
+"""
+    untouched_app = """
+from django.db import models
+
+class Untouched(models.Model):
+    nome = models.CharField(max_length=5)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => unknown_type,
+                                                            "access" => untouched_app];
+                                                           output_file = "unknown_field_type.jl")
+    try
+        # The rest of the DECLARING class survives...
+        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        # ...its SIBLING class in the same file survives...
+        @test occursin("EverythingElse = Models.Model(", generated)
+        # ...and so does the other app, which the old failure took down with it.
+        @test occursin("Untouched = Models.Model(", generated)
+        # The column itself is gone, and that is what the marker exists to say.
+        @test !occursin("ip = Models.", generated)
+
+        # The report names the field, the class AND the models.py line — a reader with the generated
+        # file open has to be able to find the declaration in the Django source.
+        @test occursin("# PormG: field 'ip' on 'racing.Thing' (models.py line 5) is a " *
+                       "models.GenericIPAddressField", generated)
+        @test occursin("NOT imported", generated)
+        # The hazard the skip creates: the live column is now invisible to the model, so the planner
+        # reads it as drift. Saying so in the artifact is the difference between a documented gap and
+        # a surprise `DROP COLUMN` in someone's next migration plan.
+        @test occursin("proposes DROPPING it", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(unknown_field_type.Thing))
+        @test !haskey(thing.fields, "ip")
+        @test haskey(thing.fields, "nome")
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :id
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # `strict_fields = true` — the opt-out, mirroring `strict_relations`. Asserted on the MESSAGE and
+    # not just the type: this importer raises `InvalidMigrationError` for a dozen reasons, so the type
+    # alone would let the guard be deleted and the test still pass on someone else's error.
+    strict_src = """
+from django.db import models
+
+class Thing(models.Model):
+    ip = models.GenericIPAddressField()
+    nome = models.CharField(max_length=10)
+"""
+    key_strict, existed_strict = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django(["racing" => strict_src]; db = key_strict,
+                                      file = "strict_fields.jl", force_replace = true,
+                                      strict_fields = true)
+        catch e
+            err = e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test occursin("field 'ip' in class 'racing.Thing'", msg)
+        @test occursin("models.GenericIPAddressField", msg)
+        @test occursin("strict_fields = true", msg)
+        # ...and it really did abort: nothing was written.
+        @test !isfile(joinpath(key_strict, "strict_fields.jl"))
+    finally
+        cleanup_project_test!(key_strict, existed_strict)
+    end
+
+    # #410 × #369. The skipped field DECLARED the primary key, so the two-reading test that decides
+    # the implicit `id` needs a THIRD reading: nothing was built, and nothing survives in `declared_pk`
+    # to look at, yet Django's table is keyed on that column. Substituting an `id` here would name a
+    # column that table has not got — #369's defect, reached from the new skip path.
+    unknown_pk = """
+from django.db import models
+
+class Thing(models.Model):
+    codigo = models.SmallIntegerField(primary_key=True)
+    nome = models.CharField(max_length=10)
+"""
+    gen_pk, key_pk, existed_pk = import_project(["racing" => unknown_pk];
+                                                 output_file = "unknown_pk_type.jl")
+    try
+        # NO phantom key. This is the assertion the whole `unsupported_pk` set exists for.
+        @test !occursin("Models.IDField()", gen_pk)
+        @test occursin("nome = Models.CharField(max_length=10)", gen_pk)
+        # The marker carries the key consequence too, so one report covers the whole outcome.
+        @test occursin("# PormG: field 'codigo' on 'racing.Thing'", gen_pk)
+        @test occursin("It is also this model's PRIMARY KEY in Django", gen_pk)
+        # ...and NOT through the `lost_pk` report, whose wording ("imported WITHOUT it") would
+        # describe a column this file does not contain.
+        @test !occursin("declares its primary key on", gen_pk)
+
+        sandbox_pk = Module()
+        Core.eval(sandbox_pk, Meta.parse(gen_pk))
+        thing_pk = Core.eval(sandbox_pk, :(unknown_pk_type.Thing))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing_pk) === nothing
+        @test length(thing_pk.fields) == 1
+    finally
+        cleanup_project_test!(key_pk, existed_pk)
+    end
+
+    # A model whose ONLY column is an unimplemented type declared `primary_key=True` has nothing left
+    # to emit — the skip removes the column and the declared key suppresses the implicit `id` that
+    # would otherwise have saved it. That still aborts (there is no honest degrade for a table with no
+    # columns, and pass 1 already handed this class a binding every relation was rewritten to), but it
+    # must not accuse PormG of an internal bug: this is the caller's models.py, and the old message
+    # sent the reader hunting in the wrong repository.
+    no_column = """
+from django.db import models
+
+class Thing(models.Model):
+    codigo = models.SmallIntegerField(primary_key=True)
+"""
+    key_empty, existed_empty = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django(["racing" => no_column]; db = key_empty,
+                                      file = "no_column.jl", force_replace = true)
+        catch e
+            err = e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test occursin("'racing.Thing' has no column left to emit", msg)
+        @test !occursin("This is a PormG bug", msg)
+    finally
+        cleanup_project_test!(key_empty, existed_empty)
+    end
+
+    # ORDERING, and both halves of it are load-bearing.
+    #
+    # 1. `autofields_ignore` still wins. A type the CALLER asked to drop must not be reported as an
+    #    unimplemented one — the option is their deliberate choice, and a marker would be noise.
+    # 2. The option-level reports are suppressed for a skipped field. `parse_field_args` would
+    #    otherwise push "…has no choices slot… The column is unaffected" for this very field, one line
+    #    from "…NOT imported" — an artifact contradicting itself about the same column.
+    ordering_src = """
+from django.db import models
+
+class Thing(models.Model):
+    ip = models.GenericIPAddressField(choices=[('a', 'A')])
+    porta = models.SmallIntegerField()
+    nome = models.CharField(max_length=10)
+"""
+    gen_ord, key_ord, existed_ord = import_project(["racing" => ordering_src];
+                                                    output_file = "unknown_ordering.jl",
+                                                    autofields_ignore = ["Manager",
+                                                                         "SmallIntegerField"])
+    try
+        # `porta` was dropped by the caller: no column, and no report either.
+        @test !occursin("porta", gen_ord)
+        # `ip` was dropped by PormG: reported once, as a TYPE problem...
+        @test occursin("field 'ip' on 'racing.Thing'", gen_ord)
+        # ...and not a second time as an option problem on a column that does not exist.
+        @test !occursin("has no choices slot", gen_ord)
+        @test occursin("nome = Models.CharField(max_length=10)", gen_ord)
+    finally
+        cleanup_project_test!(key_ord, existed_ord)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#400 × #410): a SKIPPED field named `id` claims the name too
+#
+# The #400 guard asks "is the name `id` taken". `fields_dict` is the wrong place to ask, because
+# #410 introduced a way for a declaration to claim a name and leave no entry there: a field whose
+# Django type PormG cannot build is skipped. A `haskey` test alone called that name free and wrote
+# `id = Models.IDField()` over it — the #400 clobber again, one skip path along, and worse than the
+# original, because the file then carried BOTH the marker saying that column was not imported and a
+# rendered `IDField` claiming it is a BIGINT auto-increment primary key.
+#
+# Found by review, not by the first draft of the fix. The guard now consults the set of skipped keys.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an id skipped as an unimplemented type still suppresses the implicit key (#400, #410)" begin
+    skipped_id = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.SmallIntegerField()
+    nome = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => skipped_id];
+                                                           output_file = "skipped_id.jl")
+    try
+        # THE assertion: no phantom key over a name the class already claimed.
+        @test !occursin("Models.IDField()", generated)
+        @test occursin("nome = Models.CharField(max_length=10)", generated)
+
+        # Both reports are present and they AGREE — the artifact must not say a column was skipped
+        # and then render one at the same key.
+        @test occursin("field 'id' on 'racing.Thing' (models.py line 4) is a models.SmallIntegerField",
+                       generated)
+        @test occursin("# PormG: 'racing.Thing' declares a field named 'id' that is NOT its primary key",
+                       generated)
+        # The second marker explains the SKIP, not the clobber — the two branches of that message
+        # are not interchangeable, and only this one is true here.
+        @test occursin("that column is not imported at all", generated)
+        @test !occursin("would silently destroy the declared column below", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(skipped_id.Thing))
+        @test !haskey(thing.fields, "id")
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) === nothing
+        @test length(thing.fields) == 1
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # The same class with NOTHING else to emit. `fields_dict` comes out empty, which reaches the
+    # tripwire — and that has to report the caller's models.py, not accuse PormG of an internal bug.
+    # This shape leaves `unsupported_pk` empty (no `primary_key=True` anywhere), which is why the
+    # tripwire forks on the wider "any skipped field" set.
+    only_skipped_id = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.SmallIntegerField()
+"""
+    key_only, existed_only = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django(["racing" => only_skipped_id]; db = key_only,
+                                      file = "only_skipped_id.jl", force_replace = true)
+        catch e
+            err = e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test occursin("'racing.Thing' has no column left to emit", msg)
+        @test !occursin("This is a PormG bug", msg)
+    finally
+        cleanup_project_test!(key_only, existed_only)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#410): a skip DELETES the key, so an inherited column cannot survive it
+#
+# Abstract bases merge by concatenation and the last write wins — that is how a child overriding an
+# inherited field works at all (`class_content = vcat(_inherited_statements(...), class.body)`). A
+# skip that only `continue`s therefore does not skip: the BASE's field stays at that key, and the
+# model renders the base's type while the marker beside it says the column was not imported.
+#
+# The concrete failure: a child overriding `codigo = CharField(max_length=10, primary_key=True)` with
+# an unimplemented type emitted a VARCHAR(10) primary key over a SMALLINT column. A silent fallback to
+# the wrong type is strictly worse than the missing column the marker promises.
+#
+# Found by review. The same mechanism covers an `AbstractUser` column overridden by an unimplemented
+# type, since those are seeded into the same dict before the loop runs.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an unimplemented type overriding an inherited field removes it, not just itself (#410)" begin
+    overridden = """
+from django.db import models
+
+class Base(models.Model):
+    codigo = models.CharField(max_length=10, primary_key=True)
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    codigo = models.SmallIntegerField(primary_key=True)
+    nome = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => overridden];
+                                                           output_file = "overridden_skip.jl")
+    try
+        # The base's field must NOT survive its own override.
+        @test !occursin("codigo = Models.CharField", generated)
+        @test !occursin("primary_key=true", generated)
+        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        # ...and no implicit `id` either: Django keys this table on `codigo`.
+        @test !occursin("Models.IDField()", generated)
+        # The marker is now TRUE about the column it names.
+        @test occursin("field 'codigo' on 'racing.Thing'", generated)
+        @test occursin("It is also this model's PRIMARY KEY in Django", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(overridden_skip.Thing))
+        @test !haskey(thing.fields, "codigo")
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) === nothing
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # The MIRROR direction, which the first draft already handled and which must stay handled: an
+    # inherited field of an unimplemented type overridden by one PormG CAN build. The child's field
+    # wins outright — no lingering skip claim suppressing the key or the implicit `id`.
+    reverse_override = """
+from django.db import models
+
+class Base(models.Model):
+    codigo = models.SmallIntegerField(primary_key=True)
+
+    class Meta:
+        abstract = True
+
+class Thing(Base):
+    codigo = models.CharField(max_length=10, primary_key=True)
+"""
+    gen_rev, key_rev, existed_rev = import_project(["racing" => reverse_override];
+                                                    output_file = "reverse_override.jl")
+    try
+        @test occursin("codigo = Models.CharField(", gen_rev)
+        @test !occursin("Models.IDField()", gen_rev)
+        sandbox_rev = Module()
+        Core.eval(sandbox_rev, Meta.parse(gen_rev))
+        @test Base.invokelatest(PormG.Models.get_model_pk_field,
+                                Core.eval(sandbox_rev, :(reverse_override.Thing))) == :codigo
+    finally
+        cleanup_project_test!(key_rev, existed_rev)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#410): `_is_pormg_field_type` needs BOTH halves, and this pins the second
+#
+# The predicate is `endswith(t, "Field"|"Key") && isdefined(Models, Symbol(t))`. The `isdefined` half
+# is what the whole issue is about and every other testset exercises it. The SUFFIX half is invisible
+# until you delete it: `Models.Index` and `Models.UniqueConstraint` both resolve, so without it a
+# `models.Index(...)` assignment in a class body would be handed to `getfield(Models, :Index)` and
+# constructed as though it were a column — putting a non-field into `fields_dict`, where the very next
+# line reads `.primary_key` off it and takes the whole import down. That is the exact blast radius
+# #410 exists to remove, reintroduced through the back door.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a models.X call that is not a column is skipped, not constructed (#410)" begin
+    not_a_field = """
+from django.db import models
+
+class Thing(models.Model):
+    nome = models.CharField(max_length=10)
+    idx = models.Index(fields=['nome'])
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => not_a_field];
+                                                           output_file = "not_a_field.jl")
+    try
+        # The import survives — which is the property under test. `Models.Index` exists, so the
+        # `isdefined` half alone would have let it through to the constructor.
+        @test occursin("Thing = Models.Model(", generated)
+        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test !occursin("idx = Models.", generated)
+        @test occursin("field 'idx' on 'racing.Thing'", generated)
+        @test occursin("models.Index", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(not_a_field.Thing))
+        @test !haskey(thing.fields, "idx")
+        # The implicit key is still added: nothing here claimed `id` or the primary key.
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :id
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # `strict_fields = true` must not over-fire. A models.py using only types PormG implements
+    # imports unchanged under it — the guard is a report about the TYPE, not a stricter parser.
+    clean_src = """
+from django.db import models
+
+class Thing(models.Model):
+    nome = models.CharField(max_length=10)
+    quando = models.DateTimeField(null=True)
+    quanto = models.DecimalField(max_digits=6, decimal_places=2)
+"""
+    gen_clean, key_clean, existed_clean = import_project(["racing" => clean_src];
+                                                          output_file = "strict_clean.jl",
+                                                          strict_fields = true)
+    try
+        @test occursin("nome = Models.CharField(max_length=10)", gen_clean)
+        @test occursin("quando = Models.DateTimeField(", gen_clean)
+        @test occursin("quanto = Models.DecimalField(", gen_clean)
+        @test occursin("id = Models.IDField()", gen_clean)
+        @test !occursin("does not implement", gen_clean)
+    finally
+        cleanup_project_test!(key_clean, existed_clean)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#410): the two edges of the skip that a review pass, not a
+# first draft, is what finds
+#
+# Both come from the same property: the skip DELETES its key, and the tripwire that reports an empty
+# model forks on "was anything skipped". Neither shape is exotic enough to leave unpinned, and
+# neither is covered by the testsets above.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the skip deletes per KEY, and the empty-model report stays true (#410)" begin
+    # A. The delete crosses statements, because `owner = ForeignKey(...)` and `owner_id = <unsupported>`
+    #    write the SAME key. The FK goes, and that is the intended answer: it is exactly what a
+    #    buildable `owner_id = models.IntegerField()` already does to that FK, and leaving the FK
+    #    standing would make the marker claim a column that is rendered right below it. Django rejects
+    #    the pair itself (models.E007, a column-name clash), so no project that passes
+    #    `manage.py check` can reach this — it is pinned so the behavior is a decision, not an
+    #    accident of statement order.
+    fk_clash = """
+from django.db import models
+
+class Other(models.Model):
+    nome = models.CharField(max_length=5)
+
+class Thing(models.Model):
+    owner = models.ForeignKey(Other, on_delete=models.CASCADE)
+    owner_id = models.SmallIntegerField()
+    nome = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => fk_clash];
+                                                           output_file = "fk_key_clash.jl")
+    try
+        # The later declaration wins the key outright — no half-imported relation left behind.
+        @test !occursin("owner_id = Models.ForeignKey", generated)
+        @test occursin("field 'owner_id' on 'racing.Thing'", generated)
+        # Everything else on the class, and the FK's target model, are untouched.
+        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test occursin("Other = Models.Model(", generated)
+        # The model still gets its implicit key: nothing here claimed `id` or the primary key.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        thing = Core.eval(sandbox, :(fk_key_clash.Thing))
+        @test !haskey(thing.fields, "owner_id")
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :id
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # B. `fields_dict` can be emptied by TWO different mechanisms at once: this class loses `id` to
+    #    the unimplemented-type skip and `tags` to the relation degrade (a ManyToManyField has no
+    #    column, so an unresolvable target drops it entirely). The tripwire fires on the first, so its
+    #    message must not blame the unimplemented type for the second — a reader sent after the wrong
+    #    cause is worse served than one sent after none.
+    two_causes = """
+from django.db import models
+
+class Thing(models.Model):
+    id = models.SmallIntegerField()
+    tags = models.ManyToManyField('outside.NotImported')
+"""
+    key_two, existed_two = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django(["racing" => two_causes]; db = key_two,
+                                      file = "two_causes.jl", force_replace = true)
+        catch e
+            err = e
+        end
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        @test occursin("'racing.Thing' has no column left to emit", msg)
+        @test !occursin("This is a PormG bug", msg)
+        # "At least one", not "the field(s) it declares" — the latter was false here, because `tags`
+        # is a type PormG implements perfectly well and was dropped for its target, not its type.
+        @test occursin("At least one of its fields uses a Django field type PormG does not implement",
+                       msg)
+        @test occursin("dropped for reasons of their own", msg)
+    finally
+        cleanup_project_test!(key_two, existed_two)
+    end
+end

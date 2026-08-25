@@ -679,10 +679,52 @@ or declared on an **abstract base** the model inherits. Lookup is scoped in that
 may each nest a `Status` with different members and each resolves to its own. A nested enum can also
 be addressed through its owner (`ImportBatch.Status.choices`), as Django allows.
 
-A module-level enum in **another app** follows the same rule as a base: it resolves only when this
-`models.py` imports it — alias, star import and re-export included, exactly as for a base. Matching
-by name alone handed a model another app's enumeration with no marker anywhere — the wrong `choices`
-and `default` in the schema and nothing in the file to show it (#370).
+Scoping is **per statement, in the module the statement was written in** — the rule Python itself
+uses. This matters once an abstract base lives in a different app from the model inheriting it,
+because such a model's fields come from two `models.py` files at once:
+
+```python
+# core/models.py
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+
+class Base(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+    class Meta:
+        abstract = True
+
+# shop/models.py
+from core.models import Base
+
+class Status(models.TextChoices):      # a DIFFERENT Status
+    OPEN = "o", "Open"
+
+class Pedido(Base):                    # inherits `situacao`
+    total = models.IntegerField()
+```
+
+`Pedido.situacao` imports as `choices=(("d", "Draft"),)` — **core's** enumeration, because that is
+the module the statement was written in. `shop`'s `Status` is a different name in a different
+namespace and never applies to it (#402).
+
+The rule runs the other way too: a field `shop` declares **itself** cannot reach into `core`'s module
+just because it inherits a base from there. Python would raise `NameError` — `shop` never imported
+the name — so the importer drops the option and marks it, rather than borrowing an enumeration the
+source never referenced.
+
+Within one module the same ordering applies: a **module-level** enum outranks one nested on an
+abstract base, because a class body resolves a bare name against the module and never against a base
+class. Reach a base's enum deliberately with the qualified `Base.Status.choices`, which is attribute
+access and valid Python — addressed by the base's **own class name**, not by an `as` alias it was
+imported under, which is dropped and reported. (A bare name matching *only* a base's nested enum is
+still resolved, as a convenience — Python would raise `NameError` there.)
+
+A module-level enum in **another app** follows the same rule as a base: it resolves only when the
+`models.py` that *uses* it imports it — alias, star import and re-export included, exactly as for a
+base. That gate is applied per app, so an abstract base whose own module imports its enum resolves
+normally when its statements are merged into a child elsewhere. Matching by name alone handed a
+model another app's enumeration with no marker anywhere — the wrong `choices` and `default` in the
+schema and nothing in the file to show it (#370).
 
 A **nested** enum belongs to its owning class in its own app, so two apps may each declare a `Base`
 with its own nested `Status` and a child of either resolves to the right one.

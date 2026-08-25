@@ -2815,6 +2815,351 @@ class Pedido(CoreBase):
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Enum scope is per STATEMENT, not per class (#402): a merged base statement resolves in the module
+# it was WRITTEN in.
+#
+# `_inherited_statements` merges an abstract base's body into the child, and that base may live in
+# another app. Resolving the whole merged body under one scope list made a statement written in
+# `core` bind names in `shop` — the child's module scope outranked the ancestor's, and the
+# ancestor's was reachable from the child's own statements too. Both halves were silent: a wrong
+# `choices`/`default` reached the schema with no `# PormG:` marker anywhere.
+#
+# Python binds a name in the module the statement appears in. These three testsets pin that rule
+# from both directions plus the import gate, and all three fail on the pre-#402 importer.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a merged base statement resolves in its OWN app's module (#402)" begin
+    # `core` declares a module-level `Status` and an abstract `Base` whose field uses it. `shop`
+    # declares a DIFFERENT `Status` and inherits `Base`. The merged statement was written in core,
+    # so Python gives core's DRAFT; pre-#402 it took shop's OPEN, because `(self, "")` — the child's
+    # module — outranked the ancestor's in the one scope list the whole class shared.
+    core = """
+from django.db import models
+
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+
+class Base(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Status(models.TextChoices):
+    OPEN = "o", "Open"
+
+class Pedido(Base):
+    total = models.IntegerField()
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_stmt_origin.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
+                       generated)
+        # shop's enumeration must not appear at all — its `Status` is a different name in a
+        # different module, and nothing in this file was written against it.
+        @test !occursin("\"Open\"", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a child's own statement does not reach an ancestor's module (#402)" begin
+    # The mirror case. `core` declares `Status` and an abstract `Base` that does NOT use it; `shop`
+    # never imports `Status` but its own field references it. Python raises NameError here — the
+    # name is not in shop's module — so the importer must drop the option and say so. Pre-#402 the
+    # scope list carried an `(ancestor_app, "")` tail that made core's module reachable from a
+    # statement shop wrote, and the wrong enumeration landed in the schema silently. #370's shape
+    # one level down: a definition borrowed across apps without an import.
+    core = """
+from django.db import models
+
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+
+class Base(models.Model):
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Pedido(Base):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_stmt_no_reach.jl")
+    try
+        # The enumeration must NOT be borrowed...
+        @test !occursin("\"Draft\"", generated)
+        # ...the column stays real, with `choices` dropped...
+        @test occursin("situacao = Models.CharField(max_length=1)", generated)
+        # ...and the drop is reported in the file, not just on the console (#341).
+        @test occursin("references `Status`, which this file does not define", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "an ancestor's module scope is the IMPORT-GATED one (#402)" begin
+    # Resolving a merged statement under its owner's module makes `(origin, "")` the only module
+    # scope it sees — so that entry has to be the owner app's gated view (own declarations plus what
+    # its models.py imports), not the raw per-file collection every graph holds for the other apps.
+    # Here `core` does not declare `Status`; it IMPORTS it from `enums` and its abstract base uses
+    # it. Without the overlay, `(core, "")` is raw, the lookup misses, and the importer reports "not
+    # defined in this file" about an enum that is plainly defined and imported.
+    enums_app = """
+from django.db import models
+
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+"""
+    core = """
+from django.db import models
+from enums.models import Status
+
+class Base(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Pedido(Base):
+    total = models.IntegerField()
+"""
+    generated, key, existed = import_project(["enums" => enums_app, "core" => core, "shop" => shop];
+                                             output_file = "enum_stmt_gated.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
+                       generated)
+        # The false-negative marker this overlay exists to prevent.
+        @test !occursin("references `Status`, which this file does not define", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a module-level enum outranks a base-nested one of the same name (#402)" begin
+    # Python's class body resolves a bare name against the enclosing MODULE, never against a base
+    # class: `class C(B): x = Status` is a NameError unless `Status` is module-level, because base
+    # attributes are not in the class body's namespace. So when both exist, module wins.
+    #
+    # Pre-#402 the scope list put abstract bases ABOVE the owner's module, so the child silently
+    # imported the base's nested enumeration — the same wrong-choices-with-no-marker failure as the
+    # cross-app cases above, but reachable in a SINGLE app with no inheritance across apps at all.
+    src = """
+from django.db import models
+
+class Status(models.TextChoices):
+    MODULE = "m", "Module"
+
+class Base(models.Model):
+    class Status(models.TextChoices):
+        NESTED = "n", "Nested"
+
+    class Meta:
+        abstract = True
+
+class Child(Base):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+"""
+    generated, key, existed = import_project(["app" => src]; output_file = "enum_module_wins.jl")
+    try
+        @test occursin("choices=((\"m\", \"Module\"),)", generated)
+        @test !occursin("\"Nested\"", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a base's own statement still sees its nested enum (#402)" begin
+    # The shape the ordering above must NOT break: `situacao` is written in Base's body, where
+    # `Status` IS the nested one. Base's own class scope leads its statement's list, so ranking bases
+    # below the module cannot reach it — this fails if the reorder is ever taken further and drops
+    # the owner's own class scope rather than just demoting its ancestors.
+    src = """
+from django.db import models
+
+class Status(models.TextChoices):
+    MODULE = "m", "Module"
+
+class Base(models.Model):
+    class Status(models.TextChoices):
+        NESTED = "n", "Nested"
+
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+
+    class Meta:
+        abstract = True
+
+class Child(Base):
+    total = models.IntegerField()
+"""
+    generated, key, existed = import_project(["app" => src]; output_file = "enum_base_still.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+        @test !occursin("\"Module\"", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "the base entries carry the qualified Base.Status form across apps (#402)" begin
+    # Why the ancestor entries stay in the scope list at all, now that the owner tag resolves a
+    # merged statement without them. `Base.Status.choices` is attribute access, not name lookup, and
+    # is valid Python from the child — `_lookup_enum` serves it with a dotted fallback that splits
+    # `Base.Status` and looks `Status` up inside a scope named `Base`.
+    #
+    # That fallback iterates the scope list for its APP half only, so this must be a CROSS-APP
+    # fixture to gate anything: in a single-app project the owning app is already present via the
+    # child's own entries, and deleting every base entry changes nothing. With `Base` in `core` and
+    # the reference in `shop`, `core` reaches the list ONLY as an ancestor — drop the ancestor
+    # entries and the choices are dropped with a marker instead.
+    core = """
+from django.db import models
+
+class Base(models.Model):
+    class Status(models.TextChoices):
+        NESTED = "n", "Nested"
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Pedido(Base):
+    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_qualified_xapp.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+        @test !occursin("references `Base.Status`", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "a bare name is still resolved through a base's nested enum, cross-app (#402)" begin
+    # The documented LENIENCY, pinned so it cannot vanish unnoticed. Python raises NameError here —
+    # a class body does not see base attributes as bare names — but the importer resolves it rather
+    # than dropping a column's enumeration, and `_enum_scopes`' docstring says so explicitly. It is
+    # the other property the ancestor entries provide, and the only reason a stricter future pass
+    # would be a deliberate behaviour change rather than a silent one.
+    core = """
+from django.db import models
+
+class Base(models.Model):
+    class Status(models.TextChoices):
+        NESTED = "n", "Nested"
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Pedido(Base):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_leniency.jl")
+    try
+        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+                       generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
+@testset "the gated overlay does not depend on the order apps are listed (#402)" begin
+    # The overlay is the one cross-graph mutation in this file: it writes each app's import-gated
+    # module scope into every OTHER app's graph. A source entry is never a write target, so no
+    # iteration order can clobber one — but that is a property of the loop, not of the data, and it
+    # is worth a test rather than a comment. Same three apps, listed both ways, same result.
+    enums_app = """
+from django.db import models
+
+class Status(models.TextChoices):
+    DRAFT = "d", "Draft"
+"""
+    core = """
+from django.db import models
+from enums.models import Status
+
+class Base(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Pedido(Base):
+    total = models.IntegerField()
+"""
+    for (label, pairs) in (("enums-first", ["enums" => enums_app, "core" => core, "shop" => shop]),
+                           ("shop-first",  ["shop" => shop, "core" => core, "enums" => enums_app]))
+        generated, key, existed = import_project(pairs; output_file = "enum_order_$(label).jl")
+        try
+            @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
+                           generated)
+        finally
+            cleanup_project_test!(key, existed)
+        end
+    end
+end
+
+@testset "the gated overlay does not let a base borrow an enum it never imported (#402)" begin
+    # The overlay's failure direction. It must widen `(core, "")` to what core's models.py actually
+    # imports — and no further. Here `shop` declares `Status`; `core` does not, and does not import
+    # it. A statement written in core's base must NOT pick it up just because both apps are in the
+    # same import call: that is #370's defect, which this overlay could have quietly reopened.
+    core = """
+from django.db import models
+
+class Base(models.Model):
+    situacao = models.CharField(max_length=1, choices=Status.choices)
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+class Status(models.TextChoices):
+    OPEN = "o", "Open"
+
+class Pedido(Base):
+    total = models.IntegerField()
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "enum_no_leak.jl")
+    try
+        @test !occursin("\"Open\"", generated)
+        @test occursin("references `Status`, which this file does not define", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end
+
 @testset "a module-level enum resolves through a re-export, as a base does (#370)" begin
     # Base resolution followed a re-export façade from the start; enum resolution did not, so an
     # identically-shaped project resolved the base and dropped the enumeration — with a marker

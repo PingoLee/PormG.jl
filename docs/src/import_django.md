@@ -27,6 +27,7 @@ import_models_from_django(
     django_prefix::Union{Nothing, String, Missing} = missing,
     auth_user_model::Union{Nothing, String} = nothing,
     strict_relations::Bool = false,
+    strict_fields::Bool = false,
     binding_overrides::AbstractDict = Dict{String, String}(),
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
@@ -41,6 +42,7 @@ import_models_from_django(
     output_path::Union{Nothing, String} = nothing,
     auth_user_model::Union{Nothing, String} = nothing,
     strict_relations::Bool = false,
+    strict_fields::Bool = false,
     binding_overrides::AbstractDict = Dict{String, String}(),
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
@@ -146,6 +148,12 @@ import_models_from_django("/path/to/your/models.py")
 - **`strict_relations::Bool`**: `false` (the default) imports a relation whose target is not in this
   import as a plain column, with a `# PormG:` marker. `true` raises `InvalidMigrationError` instead.
   See [Relation targets](@ref).
+
+- **`strict_fields::Bool`**: `false` (the default) **skips** a field whose Django type PormG does not
+  implement, with a `@warn` and a `# PormG:` marker naming the field, its class and its `models.py`
+  line. `true` raises `InvalidMigrationError` instead. The lenient default is not about tolerating one
+  bad column — before it, a single unimplemented type aborted the import of *every* model in *every*
+  app of the call. See the note under [Supported Django Fields](#Supported-Django-Fields).
 
 - **`binding_overrides::AbstractDict`**: spell a generated Julia binding differently from the derived
   one. See [Choosing your own binding](@ref).
@@ -400,15 +408,22 @@ and no `db_table` is emitted.
 
 ## Supported Django Fields
 
-The function supports conversion of the following Django field types:
+Every Django field type PormG implements is listed below, and the list is **exhaustive**: a
+`models.X` that is not on it has no PormG counterpart, and the note at the end of this section says
+what happens to it. Every entry except the three auto-key types maps by identity — same name, same
+column.
 
 ### Text Fields
 - `CharField` → `CharField`
 - `TextField` → `TextField`
 - `EmailField` → `EmailField`
+- `SlugField` → `SlugField`
+- `URLField` → `URLField`
 
 ### Numeric Fields
 - `IntegerField` → `IntegerField`
+- `PositiveIntegerField` → `PositiveIntegerField`
+- `PositiveSmallIntegerField` → `PositiveSmallIntegerField`
 - `BigIntegerField` → `BigIntegerField`
 - `FloatField` → `FloatField`
 - `DecimalField` → `DecimalField`
@@ -417,6 +432,7 @@ The function supports conversion of the following Django field types:
 - `DateField` → `DateField`
 - `DateTimeField` → `DateTimeField`
 - `TimeField` → `TimeField`
+- `DurationField` → `DurationField`
 
 ### Boolean Fields
 - `BooleanField` → `BooleanField`
@@ -424,12 +440,17 @@ The function supports conversion of the following Django field types:
 ### Relationship Fields
 - `ForeignKey` → `ForeignKey`
 - `OneToOneField` → `OneToOneField`
+- `ManyToManyField` → `ManyToManyField`
 
 ### Special Fields
 - `AutoField` → `IDField` (reported — see below)
 - `BigAutoField` → `IDField`
 - `SmallAutoField` → `IDField` (reported — see below)
   (PormG has no `AutoField` of its own — it was retired; see [Field Types](fields.md).)
+- `UUIDField` → `UUIDField`
+- `JSONField` → `JSONField`
+- `BinaryField` → `BinaryField`
+- `FileField` → `FileField`
 - `ImageField` → `ImageField`
 
 !!! note "Every Django auto key imports as `IDField`"
@@ -444,6 +465,18 @@ The function supports conversion of the following Django field types:
     Both are annotated in the generated file, so the substitution is visible. Your existing column
     is **not** re-typed — but a table PormG *creates* from these models gets BIGINT rather than
     INTEGER or SMALLINT.
+
+!!! note "A field type PormG does not implement costs its column, not the file"
+    Django ships plenty of types PormG has no counterpart for — `GenericIPAddressField`,
+    `SmallIntegerField`, `PositiveBigIntegerField`, `FilePathField`, `GeneratedField`. Each one costs
+    **its own column and nothing else**: every other field, every other class and every other app in
+    the same call still import. The skip is reported both ways, with a `@warn` and a `# PormG:` marker
+    naming the field, its class and its `models.py` line.
+
+    Mind the consequence: the skipped column is still in the database and now absent from the model,
+    so `makemigrations` reads it as drift and proposes **dropping** it. Declare that column by hand
+    before you migrate — or pass `strict_fields = true` to fail the import instead of receiving a
+    model with a column missing.
 
 
 ## Field Mapping
@@ -783,7 +816,11 @@ field and its source line; it is never dropped silently.
 
 - **Primary Key**: If no primary key is defined, `id = Models.IDField()` is automatically added.
   Declaring any field `primary_key=True` **suppresses** it, as in Django — including a field named
-  `id` itself, which then keeps its declared type
+  `id` itself, which then keeps its declared type. The addition is never a *replacement*: a class that
+  declares a field named `id` which is **not** the primary key keeps that column, and no implicit `id`
+  is written over it. Django rejects that shape itself (`models.E004`), so it can only arrive from a
+  `models.py` that never passed `manage.py check` — the model then comes out with **no** primary key,
+  reported by a `@warn` and a `# PormG:` marker, with the consequences in the warning below
 - **AbstractUser**: For models inheriting from `AbstractUser`, additional fields like `date_joined` are added.
   `id` is **not** one of them: `AbstractUser` inherits Django's implicit `id` from `models.Model`
   rather than owning it, so a user model keyed on its own field — `matricula = CharField(primary_key=True)`
@@ -832,9 +869,9 @@ field and its source line; it is never dropped silently.
 | | |
 |---|---|
 | **Imported** | Fields (including definitions wrapped across lines; Django's `BigAutoField` maps to `IDField`, an exact match), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above) |
-| **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`) |
-| **Not supported** | Field types PormG does not implement — these raise, naming the field and class, rather than importing something wrong. Model methods, managers, signals and validators are Python and have no PormG counterpart |
+| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one |
+| **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`); a field whose Django type PormG does not implement (`GenericIPAddressField`, `SmallIntegerField`, …) — the field, its class and its `models.py` line are named, and every other field, class and app in the call still imports, with `strict_fields = true` raising instead. Both leave the live column addressable by nothing in the model, so `makemigrations` reads it as drift |
+| **Not supported** | Model methods, managers, signals and validators are Python and have no PormG counterpart |
 
 Nothing in the middle two rows is dropped in silence: each one produces a `@warn` at import time and
 a `# PormG:` comment in the generated file, naming the class app-qualified when a label is known

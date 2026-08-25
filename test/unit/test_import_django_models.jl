@@ -187,35 +187,73 @@ class SupportedThing(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Django Importer: unsupported field types fail with field context
-# This locks the current explicit-failure behavior for valid Django models that
-# contain field classes PormG does not implement.
+# Django Importer: an unsupported field type costs its column, not the file (#410)
+#
+# This testset used to lock the OPPOSITE contract — "unsupported field types fail with field
+# context" — and #410 retired it deliberately. The failure context was never the problem; the blast
+# radius was. `getfield(Models, :ArrayField)` raised out of `_import_django_apps`, so one column PormG
+# cannot represent cost every model in every app of the call, and #268, #342 and #399 each closed that
+# for one specific cause before the next unmapped type walked back into it.
+#
+# Run through the SINGLE-APP arity on purpose: the multi-app coverage lives in
+# `test_import_django_project.jl`, and `strict_fields` has to reach both entry points.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Django importer reports unsupported field types" begin
+@testset "Django importer reports and skips unsupported field types (#410)" begin
     django_text = """
 from django.db import models
 
 class UnsupportedFieldModel(models.Model):
     tags = models.ArrayField(null=True)
+    label = models.CharField(max_length=50)
 """
     config_key, db_dir_existed = temp_import_config!()
 
     try
-        # #268 audit: importer failures are typed; a wrapped PormG error rethrows as itself,
-        # anything foreign (here: the unsupported-field UndefVarError) wraps as InvalidMigrationError.
-        err = @test_throws PormG.InvalidMigrationError import_models_from_django(
+        import_models_from_django(
             django_text;
             db = config_key,
             file = "unsupported_field_unit.jl",
             force_replace = true,
+        )
+        generated = read(joinpath(config_key, "unsupported_field_unit.jl"), String)
+
+        # The model is emitted, and the readable column with it — the assertion the old contract
+        # could not make, because nothing was emitted at all.
+        @test occursin("UnsupportedFieldModel = Models.Model(", generated)
+        @test occursin("label = Models.CharField(max_length=50)", generated)
+        # The unreadable one is gone...
+        @test !occursin("tags = Models.", generated)
+        # ...and reported with the same three facts the old exception carried: the field, the class
+        # and the type. Plus the models.py line, which the exception never gave.
+        @test occursin("# PormG: field 'tags' on 'UnsupportedFieldModel' (models.py line 4) is a " *
+                       "models.ArrayField", generated)
+        @test occursin("NOT imported", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # `strict_fields = true` restores the raise for a caller who would rather fail than receive a
+    # model with a column missing — through the single-app arity, which threads the keyword
+    # independently of the pairs one.
+    config_key2, db_dir_existed2 = temp_import_config!()
+    try
+        # #268 audit: importer failures are typed. The old `UndefVarError` wrapped as an
+        # `InvalidMigrationError`; the guard raises one of its own, so the type is unchanged.
+        err = @test_throws PormG.InvalidMigrationError import_models_from_django(
+            django_text;
+            db = config_key2,
+            file = "unsupported_field_strict_unit.jl",
+            force_replace = true,
+            strict_fields = true,
         )
 
         message = sprint(showerror, err.value)
         @test occursin("tags", message)
         @test occursin("UnsupportedFieldModel", message)
         @test occursin("ArrayField", message)
+        @test occursin("strict_fields = true", message)
     finally
-        cleanup_import_test!(config_key, db_dir_existed)
+        cleanup_import_test!(config_key2, db_dir_existed2)
     end
 end
 

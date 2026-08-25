@@ -1535,6 +1535,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
                              model_path::String,
                              auth_user_model::Union{Nothing, String},
                              strict_relations::Bool,
+                             strict_fields::Bool,
                              binding_overrides::Dict{String, String},
                              autofields_ignore::Vector{String},
                              parameters_ignore::Vector{String})
@@ -1742,10 +1743,12 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # Process fields separately
       # `class_name` and `class_label` both go down, and they are not interchangeable: the first is
       # the enum scope key, the second is what the reports NAME (#371). See `process_class_fields!`.
-      declared_pk = process_class_fields!(fields_dict, class_content, class_name,
-                                          _inherits_auth_user(graph, class), autofields_ignore,
-                                          parameters_ignore, markers, graph.enums,
-                                          enum_scope_map; class_label = class_label)
+      declared_pk, unsupported_pk, unsupported_fields =
+        process_class_fields!(fields_dict, class_content, class_name,
+                              _inherits_auth_user(graph, class), autofields_ignore,
+                              parameters_ignore, markers, graph.enums,
+                              enum_scope_map; class_label = class_label,
+                              strict_fields = strict_fields)
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -1763,9 +1766,56 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       #     builds a field that IS the key, because the `IDField` it maps to (DJANGO_AUTO_KEY_TYPES,
       #     below) defaults `primary_key = true`.
       # `get_model_pk_field`, which reads this model downstream, sees only the first.
+      #
+      # `unsupported_pk` is a THIRD reading, and it disagrees with both of the above in the same
+      # direction: a `codigo = models.GenericIPAddressField(primary_key=True)` builds nothing and
+      # declares nothing this function can see, yet Django's table is keyed on that column all the
+      # same. Substituting `id` there would name a column that table has not got — the very defect
+      # the two readings above exist to prevent, reached through #410's new skip path.
       built_pk = any(f -> f.primary_key, values(fields_dict))
-      if !built_pk && isempty(declared_pk)
-          fields_dict[:id] = Models.IDField()
+      if !built_pk && isempty(declared_pk) && isempty(unsupported_pk)
+          # #400: the implicit `id` is an ADDITION, never a replacement. `fields_dict` is a Dict, so
+          # the plain assignment this used to be clobbered a column the class had declared under that
+          # name — silently, with the declared type gone from the artifact and nothing saying so. It
+          # was the last silent column loss left in this importer, and it broke the one promise the
+          # whole file is built on.
+          #
+          # Django rejects the shape itself (`models.E004`: "'id' can only be used as a field name if
+          # the field also sets 'primary_key=True'"), so it cannot come from a project that passes
+          # `manage.py check` — but hand-edited, legacy and partially-migrated `models.py` files are
+          # exactly the input this importer exists to read, and it cannot validate them.
+          #
+          # The declared column WINS, consistent with #369's rule for a declared key PormG cannot
+          # express: report the gap, never destroy a column to paper over it. That leaves the model
+          # with no primary key, which is not a soft outcome — hence the same consequences spelled
+          # out in the `lost_pk` marker below.
+          #
+          # "Is the name taken" is asked of the CLASS, not of `fields_dict`. The two answers differ:
+          # #410 skips a column whose type PormG cannot build, so `id = models.SmallIntegerField()`
+          # CLAIMS the name and leaves the dict untouched. A `haskey` test alone called that free and
+          # wrote an `IDField` over it — this very clobber, one skip path along, and with the field's
+          # own marker already in the file saying that column was not imported.
+          skipped_id = :id in unsupported_fields
+          if haskey(fields_dict, :id) || skipped_id
+            @warn "import: a class-declared field named 'id' is not the primary key; no implicit id was substituted and this model has none" class=class_label declared_id_imported=!skipped_id
+            push!(markers, "# PormG: '$(class_label)' declares a field named 'id' that is NOT its " *
+                           "primary key. Django's implicit `id` was NOT substituted for it — " *
+                           (skipped_id ?
+                              "that column is not imported at all (its Django type has no PormG " *
+                              "counterpart; see the marker above), and claiming a BIGINT " *
+                              "auto-increment key in its place would mis-type the one column " *
+                              "every query reads. " :
+                              "that would silently destroy the declared column below. ") *
+                           "This model therefore has NO primary key, which leaves it unusable by " *
+                           "anything that needs one: a ManyToManyField pointing at it makes the " *
+                           "WHOLE generated file fail to load, and a ForeignKey pointing at it " *
+                           "loads and is silently wrong. Declare the real key by hand — mark this " *
+                           "column `primary_key = true` if that is what the table does. (Django " *
+                           "rejects this shape itself, models.E004, so it can only reach here " *
+                           "from a models.py that never passed `manage.py check`.)")
+          else
+            fields_dict[:id] = Models.IDField()
+          end
       end
 
       # Declared keys that did NOT survive into a built one — the field type refused `primary_key`
@@ -1812,10 +1862,34 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # time (inherited statements, synthetic keys, degraded relations) — any of which could empty it
       # again. A hard error rather than a marker: there is no such thing as a table with no columns,
       # so reaching this means the two passes disagree, and that has to be loud.
-      isempty(fields_dict) && throw(InvalidMigrationError(
-        "import: internal — '$(_django_ref_label(entry))' was indexed but has no field to emit, so " *
-        "any relation pointing at it would name a binding this file does not define. This is a " *
-        "PormG bug; please report it with the models.py that triggered it."))
+      #
+      # #410 gave it reachable, non-internal paths, so the message forks. A class can now empty
+      # `fields_dict` two ways, and both are the caller's models.py rather than a PormG bug: its only
+      # field is an unimplemented type that declared `primary_key=True`, or its only field is an
+      # unimplemented type NAMED `id` — either way the column is skipped and the implicit `id` that
+      # would have saved the model is correctly suppressed. Accusing PormG of an internal bug there
+      # sends the reader hunting in the wrong repository.
+      #
+      # Forked on `unsupported_fields`, not `unsupported_pk`: the second shape leaves the latter
+      # empty and would otherwise land on the "PormG bug" text.
+      #
+      # It still aborts: there is no honest degrade for a model with zero addressable columns, and
+      # every relation pointing at it was already rewritten to a binding this file would not define.
+      if isempty(fields_dict)
+        throw(isempty(unsupported_fields) ?
+          InvalidMigrationError(
+            "import: internal — '$(_django_ref_label(entry))' was indexed but has no field to " *
+            "emit, so any relation pointing at it would name a binding this file does not define. " *
+            "This is a PormG bug; please report it with the models.py that triggered it.") :
+          InvalidMigrationError(
+            "import: '$(_django_ref_label(entry))' has no column left to emit. At least one of " *
+            "its fields uses a Django field type PormG does not implement, and no implicit `id` " *
+            "could be substituted for the gap: the class either keys its table on one of those " *
+            "columns or declares `id` as one of them. If it declares other fields, they were " *
+            "dropped for reasons of their own — the warnings above name every one that did not " *
+            "survive. A model with no column cannot be emitted, and any relation pointing at it " *
+            "would name a binding this file does not define. Declare the missing columns by hand."))
+      end
       # `entry.name`, not `class_name`: a cross-app collision or a `binding_overrides` entry may
       # have renamed this model. `class_name` stays the source of every DJANGO-derived name below
       # (the table, the join columns), because those follow the Python class, not our handle.
@@ -2077,7 +2151,7 @@ function _django_source_text(model_py_string::String)::String
 end
 
 """
-  import_models_from_django(model_py_string::String; db::String = DB_PATH, force_replace::Bool = false, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, django_prefix::Union{Nothing, String, Missing} = missing, auth_user_model::Union{Nothing, String} = nothing, strict_relations::Bool = false, binding_overrides::AbstractDict = Dict{String, String}(), autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
+  import_models_from_django(model_py_string::String; db::String = DB_PATH, force_replace::Bool = false, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, django_prefix::Union{Nothing, String, Missing} = missing, auth_user_model::Union{Nothing, String} = nothing, strict_relations::Bool = false, strict_fields::Bool = false, binding_overrides::AbstractDict = Dict{String, String}(), autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
 
 Imports Django models from a given `model.py` file content string and generates corresponding Julia models.
 
@@ -2104,6 +2178,7 @@ pairs instead — see the [`Vector{Pair}` method](@ref import_models_from_django
   `through=`, is left alone.
 - `auth_user_model::Union{Nothing, String}`: which model `settings.AUTH_USER_MODEL` refers to, spelled as Django spells it (`"access.User"`, or a bare `"User"` when unambiguous). Defaults to `nothing`, which auto-detects the single class inheriting `AbstractUser`. If a relation names `settings.AUTH_USER_MODEL` and there is not exactly one candidate, the import raises `InvalidMigrationError` naming them — deliberately hard, since one omitted keyword would otherwise turn every user relation in the project into a plain integer column.
 - `strict_relations::Bool`: when `false` (the default), a relation whose target is not in this import keeps its column and loses only the relation metadata, with a `# PormG:` marker saying so. `true` raises `InvalidMigrationError` instead. The lenient default is what makes the importer usable on a project that touches `django.contrib`.
+- `strict_fields::Bool`: when `false` (the default), a field whose Django type PormG does not implement (`GenericIPAddressField`, `SmallIntegerField`, …) is skipped — the column is not imported, and a `@warn` plus a `# PormG:` marker name the field, its class and its `models.py` line. `true` raises `InvalidMigrationError` instead. The lenient default exists because the alternative is not "one bad column": before it, a single unimplemented type aborted the import of every model in every app of the call. Note the skipped column still exists in the database, so `makemigrations` reads it as drift and proposes dropping it until you declare it by hand — which is the case `true` is for.
 - `binding_overrides::AbstractDict`: `"<app_label>.<ClassName>" => "<JuliaBinding>"` (or a bare class name when unambiguous), to spell a generated binding differently from the derived one. The value must be a legal, capitalized Julia identifier that no other model claims; every violation is an error rather than a silent fallback.
 - `autofields_ignore::Vector{String}`: Fields to ignore automatically. Defaults to `["Manager"]`.
 - `parameters_ignore::Vector{String}`: Parameters to ignore during field processing. Defaults to `["help_text"]`.
@@ -2134,6 +2209,7 @@ function import_models_from_django(
     django_prefix::Union{Nothing, String, Missing} = missing,
     auth_user_model::Union{Nothing, String} = nothing,
     strict_relations::Bool = false,
+    strict_fields::Bool = false,
     binding_overrides::AbstractDict = Dict{String, String}(),
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
@@ -2165,13 +2241,14 @@ function import_models_from_django(
                       file = file, model_path = model_path,
                       auth_user_model = auth_user_model,
                       strict_relations = strict_relations,
+                      strict_fields = strict_fields,
                       binding_overrides = Dict{String, String}(String(k) => String(v) for (k, v) in binding_overrides),
                       autofields_ignore = autofields_ignore,
                       parameters_ignore = parameters_ignore)
 end
 
 """
-  import_models_from_django(apps::AbstractVector{<:Pair}; db::String = DB_PATH, force_replace::Bool = false, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, auth_user_model::Union{Nothing, String} = nothing, strict_relations::Bool = false, binding_overrides::AbstractDict = Dict{String, String}(), autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
+  import_models_from_django(apps::AbstractVector{<:Pair}; db::String = DB_PATH, force_replace::Bool = false, file::String = "automatic_models.jl", output_path::Union{Nothing, String} = nothing, auth_user_model::Union{Nothing, String} = nothing, strict_relations::Bool = false, strict_fields::Bool = false, binding_overrides::AbstractDict = Dict{String, String}(), autofields_ignore::Vector{String} = ["Manager"], parameters_ignore::Vector{String} = ["help_text"])
 
 Import a **multi-app** Django project — `"<app_label>" => "<models.py path or source>"` pairs — into
 one generated module.
@@ -2228,6 +2305,7 @@ function import_models_from_django(
     output_path::Union{Nothing, String} = nothing,
     auth_user_model::Union{Nothing, String} = nothing,
     strict_relations::Bool = false,
+    strict_fields::Bool = false,
     binding_overrides::AbstractDict = Dict{String, String}(),
     autofields_ignore::Vector{String} = ["Manager"],
     parameters_ignore::Vector{String} = ["help_text"]
@@ -2319,6 +2397,7 @@ function import_models_from_django(
                       file = file, model_path = model_path,
                       auth_user_model = auth_user_model,
                       strict_relations = strict_relations,
+                      strict_fields = strict_fields,
                       binding_overrides = Dict{String, String}(String(k) => String(v) for (k, v) in binding_overrides),
                       autofields_ignore = autofields_ignore,
                       parameters_ignore = parameters_ignore)
@@ -3644,7 +3723,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                enum_scopes::Dict{Tuple{Int, String}, Vector{Tuple{Int, String}}} =
                                  Dict((1, String(class_name)) =>
                                         Tuple{Int, String}[(1, String(class_name)), (1, "")]);
-                               class_label::AbstractString = class_name)
+                               class_label::AbstractString = class_name,
+                               strict_fields::Bool = false)
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -3657,8 +3737,28 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   # legacy user table keyed on `matricula` came out with TWO primary keys and could never load.
   # Do not re-add it.
   #
-  # Returns the field keys whose surviving declaration said `primary_key=True` — see the loop.
+  # Returns `(declared_pk, unsupported_pk, unsupported_fields)`. Each answers a different question the
+  # caller has to ask, and none of the three can be derived from `fields_dict` after the fact —
+  # which is the whole reason they exist:
+  #
+  #   - `declared_pk` — keys whose declaration said `primary_key=True` and whose field this function
+  #     actually BUILT. The caller reports the ones that did not survive as a built key (`lost_pk`),
+  #     with wording that names the reason: a field type PormG cannot make a primary key.
+  #   - `unsupported_pk` — the same claim from a field whose TYPE PormG does not implement (#410).
+  #     There is no column to report a lost key on, so it is kept OUT of `declared_pk`, whose report
+  #     would otherwise name a column the generated file does not contain; the field's own marker
+  #     carries the consequence instead. It still suppresses the implicit `id`: a key of an
+  #     unimplemented type is a key the Django table HAS, and substituting `id` for it would name a
+  #     column that table has not got (#369).
+  #   - `unsupported_fields` — EVERY key skipped as an unimplemented type, key or not. This is what
+  #     answers "did the class claim this name", which is not the same question as "is there a field
+  #     at this key" and must not be approximated by it: `id = models.SmallIntegerField()` claims
+  #     `id` and leaves `fields_dict` untouched, so a `haskey` test answered "free" and wrote an
+  #     `IDField` over it — the #400 clobber again, one skip path further along, with the field's own
+  #     marker already in the file saying that column was not imported.
   declared_pk = Set{Symbol}()
+  unsupported_pk = Set{Symbol}()
+  unsupported_fields = Set{Symbol}()
 
   if is_auth_user
       fields_dict[:password] = Models.CharField()
@@ -3703,7 +3803,9 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         # scrolls away; whoever opens the generated file months later needs to see the gap there.
         push!(markers, "# PormG: field '$(parsed.name)' on '$(class_label)' (models.py line " *
                        "$(stmt.lineno)) is a field-shaped call the importer cannot read — NOT " *
-                       "imported. Declare it in PormG by hand.")
+                       "imported. Declare it in PormG by hand; until you do, the column is still " *
+                       "in the database and absent from this model, so makemigrations reads it as " *
+                       "drift and proposes DROPPING it.")
       end
       continue
     end
@@ -3722,11 +3824,36 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     field_type = django_field_type(django_type)
     field_args_str = parsed.args
 
+    # A Django field type PormG does not implement (#410). DECIDED here, ACTED on below — the two
+    # cannot be one statement, and the gap between them is the whole design:
+    #
+    #   * deciding here mutes the option-level reports for a column that will not exist.
+    #     `parse_field_args` says things like "…has no choices slot… The column is unaffected", and
+    #     for a skipped field every one of them describes a column that is about to not exist. BOTH
+    #     of its channels have to go: the markers into a throwaway vector, and the `@warn`s into a
+    #     `NullLogger`. Muting only one leaves the console contradicting the artifact.
+    #   * acting below — after `autofields_ignore` and after the primary-key bookkeeping — is what
+    #     makes the skip safe. A type the CALLER dropped must not be reported as unimplemented, and a
+    #     `primary_key=True` on an unimplemented type has to be SEEN, or the caller substitutes an
+    #     `id` for a key the Django table really has (#369's defect, reached from a new direction).
+    #
+    # The options are still parsed in full rather than scanned for `primary_key` by hand: a second,
+    # simpler reader of Django's argument syntax is a second thing to keep in step with the first.
+    #
+    # `NullLogger` silences EVERY level, `@error` included. That is safe only because every log site
+    # reachable from `parse_field_args` is a field-OPTION report on the column being skipped — the
+    # helpers below it (`parse_value`, `parse_choices`, `split_field_options`) emit nothing at all. If
+    # you ever add an `@error` in there for something structural, exempt it from this scope or it
+    # will vanish without trace for exactly the fields already in trouble.
+    unsupported_type = !_is_pormg_field_type(field_type)
+
     # Parse field arguments
-    options, related_model = parse_field_args(field_args_str, django_type, parameters_ignore;
-                                              enums = enums, class_name = class_name,
-                                              enum_scopes = stmt_scopes, class_label = class_label,
-                                              field_name = field_name, markers = markers)
+    parse_args() = parse_field_args(field_args_str, django_type, parameters_ignore;
+                                    enums = enums, class_name = class_name,
+                                    enum_scopes = stmt_scopes, class_label = class_label,
+                                    field_name = field_name,
+                                    markers = unsupported_type ? String[] : markers)
+    options, related_model = unsupported_type ? with_logger(parse_args, NullLogger()) : parse_args()
 
     # An IGNORED field type contributes no column, so it cannot be the primary key either. Tested
     # BEFORE the primary-key bookkeeping below for that reason (#346): the other order let
@@ -3774,6 +3901,68 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     else
       delete!(declared_pk, field_key)
     end
+    # The same last-write-wins, for #410's sets: a child overriding an inherited field of an
+    # unimplemented type with one this importer CAN build drops the old claim along with it. Both are
+    # re-added a few lines below if this statement is itself unimplemented.
+    delete!(unsupported_pk, field_key)
+    delete!(unsupported_fields, field_key)
+
+    # #410: a field type PormG does not implement. Skip the COLUMN, not the file. Before this, one
+    # `models.GenericIPAddressField` aborted `_import_django_apps` outright and every model in every
+    # app of the call was lost — the same blast radius #268, #342 and #399 each closed for one
+    # specific CAUSE, walked back into by the next unmapped type. Degrading is the general fix;
+    # mapping names one at a time is a treadmill.
+    #
+    # `strict_fields` mirrors `strict_relations` for the caller who would rather fail the import than
+    # receive a model with a column missing — the two failure modes are not ranked, they are a choice
+    # (a missing column reads as drift to `makemigrations`, and that is not always the cheaper one).
+    if unsupported_type
+      strict_fields && throw(InvalidMigrationError(
+        "import: field '$(field_name)' in class '$(class_label)' (models.py line $(stmt.lineno)) is " *
+        "a models.$(django_type), a field type PormG does not implement, and strict_fields = true. " *
+        "Declare that column by hand, add \"$(django_type)\" to autofields_ignore to drop it " *
+        "deliberately, or set strict_fields = false to import the model without it."))
+      # The declaration WINS over whatever sits at this key, exactly as a buildable one would.
+      # `class_content` merges abstract bases by concatenation and lets the last write win, so an
+      # inherited `codigo = CharField(primary_key=True)` overridden by an unimplemented type used to
+      # leave the BASE's field standing — the model rendered a VARCHAR(10) primary key over a
+      # SMALLINT column while the marker beside it said that column was not imported. A skip that
+      # does not delete is not a skip; it is a silent fallback to the wrong type.
+      #
+      # The reach is per-KEY, not per-declaration, so it also crosses statements: `owner_id =
+      # models.SmallIntegerField()` removes the column an earlier `owner = models.ForeignKey(...)`
+      # built, because both write `:owner_id`. That is deliberate — it is precisely what a BUILDABLE
+      # `owner_id = models.IntegerField()` already does — and Django rejects the pair itself
+      # (models.E007, a column-name clash), so no valid project can reach it. The alternative,
+      # leaving the FK standing, is worse: the marker would then claim a column that is right there.
+      delete!(fields_dict, field_key)
+      push!(unsupported_fields, field_key)
+
+      # A DECLARED key of a type that never became a column. Moved out of `declared_pk` so the
+      # caller's `lost_pk` report — which names a column it says was "imported WITHOUT" its key —
+      # does not describe a column the generated file has not got; the marker below carries the
+      # consequence instead. It still suppresses the implicit `id`: see the note on the sets above.
+      declared_key = field_key in declared_pk
+      if declared_key
+        delete!(declared_pk, field_key)
+        push!(unsupported_pk, field_key)
+      end
+      @warn "import: field type PormG does not implement; the column is NOT imported" class=class_label field=field_name django_type=django_type line=stmt.lineno primary_key=declared_key
+      push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' (models.py line " *
+                     "$(stmt.lineno)) is a models.$(django_type), a field type PormG does not " *
+                     "implement — NOT imported. Declare it by hand; until you do, the column is " *
+                     "still in the database and absent from this model, so makemigrations reads " *
+                     "it as drift and proposes DROPPING it." *
+                     (declared_key ?
+                        " It is also this model's PRIMARY KEY in Django, so the model below has " *
+                        "NO key. No `id` was substituted, because Django's table has no such " *
+                        "column — but that leaves the model unusable by anything that needs a " *
+                        "key: a ManyToManyField pointing at it makes the WHOLE generated file " *
+                        "fail to load, and a ForeignKey pointing at it loads and is silently " *
+                        "wrong." : "") *
+                     " Pass strict_fields = true to fail the import instead of skipping a column.")
+      continue
+    end
 
     # Instantiate the field
     try
@@ -3802,8 +3991,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       # The retry SUCCEEDING is the whole safety property, and no inspection of the error is needed
       # to get it. Removing exactly these two kwargs changes nothing else, so a construction that
       # starts working without them failed because of them; one that still fails falls through to
-      # the normal path untouched. An unsupported field TYPE (#268) never reaches a different
-      # outcome for the same reason — the retry fails identically and rethrows.
+      # the normal path untouched. An unsupported field TYPE (#268) no longer reaches this block at
+      # all: #410 skips it before the `try`, so `getfield(Models, …)` here can no longer raise
+      # `UndefVarError`. What still lands here is a type PormG HAS whose arguments it refuses —
+      # `DecimalField(primary_key=True)` is the standing example, and it rethrows below.
       #
       # The `haskey` test below is an OPTIMIZATION, not a guard: with neither kwarg present the
       # filter removes nothing and the retry would simply repeat the same failing call. Do not read
@@ -3848,7 +4039,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     end
   end
 
-  return declared_pk
+  return (declared_pk = declared_pk, unsupported_pk = unsupported_pk,
+          unsupported_fields = unsupported_fields)
 
 end
 
@@ -3897,6 +4089,30 @@ function django_field_type(field_type::AbstractString)::String
   haskey(DJANGO_AUTO_KEY_TYPES, field_type) && return "IDField"
   return String(field_type)
 end
+
+"""
+    _is_pormg_field_type(t) -> Bool
+
+True when `t` — a type name ALREADY mapped through [`django_field_type`](@ref) — is one this importer
+can hand to `getfield(Models, …)` and call.
+
+Both halves are load-bearing, and neither is a stand-in for the other:
+
+  * `isdefined` is the real question. `getfield(Models, :GenericIPAddressField)` is the `UndefVarError`
+    that used to abort the import of the whole project (#410), and Django ships plenty of types PormG
+    has no counterpart for — `SmallIntegerField`, `PositiveBigIntegerField`, `FilePathField`,
+    `GenericIPAddressField`, `GeneratedField`.
+  * the suffix test stops a `models.X(...)` call that is NOT a column from being constructed merely
+    because `Models` happens to define the same name. `models.UniqueConstraint(...)` and
+    `models.Index(...)` are the live examples: both resolve in `Models`, neither is a field, and both
+    are legal Python outside a `Meta` block. Reusing `_FIELD_NAME_SUFFIXES` keeps that judgement in
+    ONE place — it is the same "does this name a column" test `_looks_like_a_field_call` applies.
+
+Deliberately NOT a check that the constructed value `isa PormGField`: finding that out means calling
+the constructor, which is the throw this exists to avoid.
+"""
+_is_pormg_field_type(t::AbstractString)::Bool =
+  any(sfx -> endswith(t, sfx), _FIELD_NAME_SUFFIXES) && isdefined(Models, Symbol(t))
 
 # `class_name` seeds `enum_scopes` — the key vector into `enums`, which is keyed by `(app_index,
 # BARE Python class name)` — so it must not be app-qualified; the app is already the `Int`.

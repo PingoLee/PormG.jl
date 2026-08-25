@@ -341,7 +341,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   # but a positional backend flattens the :join bucket in binding order, so a relocated extra can
   # bind its neighbour's value. Reproduce with two cjoin filters at different depths
   # (`["grandparent__code" => "ZZZ", "sku" => "SSS"]`). This pre-dates the change above; the change
-  # widens which shapes relocate, so it widens the exposure. Tracked separately.
+  # widens which shapes relocate, so it widens the exposure. Tracked in #421.
   for idx in 1:length(instruc.row_join)
     haskey(on_clause_extras, idx) || continue
     extras = on_clause_extras[idx]

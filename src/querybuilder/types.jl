@@ -1063,9 +1063,14 @@ function Base.getproperty(row::PormGRow, sym::Symbol)
     return descriptor(data)
   end
 
-  if haskey(model.fields, String(normalized)) && model.fields[String(normalized)] isa Models.sForeignKey
+  if haskey(model.fields, String(normalized)) && model.fields[String(normalized)] isa Models.sRelationalColumn
+    # Name the DECLARED type rather than hardcoding "ForeignKey" (#418): this branch now also serves
+    # `OneToOneField`, and a message that names the wrong field type sends the reader looking for a
+    # declaration that isn't there. `x[2:end]` strips the struct's `s` prefix to recover the
+    # constructor name the user actually typed — the same idiom as `Models._model_to_str`.
+    declared_type = nameof(typeof(model.fields[String(normalized)])) |> string |> x -> x[2:end]
     throw(LazyTraversalError(
-      "$(model.name).$(normalized) is a ForeignKey that this row didn't project; " *
+      "$(model.name).$(normalized) is a $(declared_type) that this row didn't project; " *
       "PormG does not support lazy FK access (`row.$(normalized)`). " *
       "Project it up front in `values(...)`: add `\"$(normalized)\"` for the raw key value, " *
       "or `\"$(normalized)__<field>\"` for a column from the related table — " *
@@ -1085,8 +1090,8 @@ function Base.setproperty!(row::PormGRow, sym::Symbol, value)
 
   if occursin("__", normalized_string)
     fk_name = first(split(normalized_string, "__", limit=2)) |> String
-    if !(haskey(model.fields, fk_name) && model.fields[fk_name] isa Models.sForeignKey)
-      throw(QueryBuildError("Cannot assign to '$(sym)': '$(fk_name)' is not a ForeignKey field on $(model.name)."))
+    if !(haskey(model.fields, fk_name) && model.fields[fk_name] isa Models.sRelationalColumn)
+      throw(QueryBuildError("Cannot assign to '$(sym)': '$(fk_name)' is not a ForeignKey or OneToOneField field on $(model.name)."))
     end
   else
     if !haskey(model.fields, normalized_string)

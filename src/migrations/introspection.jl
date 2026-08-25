@@ -471,24 +471,16 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
           # table rebuild here, forever. That is the defect this issue is about, so a per-backend
           # answer is not an option.
           #
-          # This does NOT reopen #318, which is about a UNIQUE NON-key FK. Being precise about why,
-          # because the obvious reason is wrong: the uniqueness signal for that case IS available
-          # here — `_sqlite_single_column_unique_columns` runs before this loop and the same reader
-          # trusts it enough to set `field.unique` from it further down. #318 is a DECISION, not a
-          # limitation, and reversing it is a behavioural change that belongs in its own issue.
-          #
-          # A PRIMARY KEY needs no such decision: it is unique by definition, so `is_pk` is a
+          # A PRIMARY KEY needs no uniqueness lookup: it is unique by definition, so `is_pk` is a
           # signal #318 never had to weigh. And since #408 an `sOneToOneField` renders the
           # referenced key's type and carries its constraint, so emitting one here is no longer
           # worse than a plain `ForeignKey` — which was #318's actual objection.
           #
-          # KNOWN RESIDUE: the non-key UNIQUE FK therefore remains the one shape the two readers
-          # classify differently (PostgreSQL `sOneToOneField`, here `sForeignKey`). It is latent
-          # rather than loud — `_compare_model_field` compares attribute-wise and the two structs
-          # have identical field-name sets, so the pair converges — but `describes_same_column`
-          # answers `false` for it, so if any OTHER column in the table changes, the detailed loop
-          # runs, `typeof` differs, and `:type` sweeps this column into a table rebuild. INTEGER to
-          # INTEGER, so churn rather than damage. Tracked separately.
+          # The UNIQUE non-key FK is the `elseif` below, and it is the SAME decision taken for the
+          # same reason (#417). #318 deferred it on the grounds that an `sOneToOneField` could not
+          # be materialized; #408 removed that objection, and leaving the divergence in place cost
+          # exactly what the arm below now documents. Both arms must keep agreeing with the
+          # PostgreSQL reader's `fk_is_o2o = unique || primary_key`, or #409 merely relocates.
           #
           # `null=false`: a PRIMARY KEY column is conceptually NOT NULL, and all three sibling key
           # arms hardcode it. SQLite is the one engine that actually permits NULL in a non-INTEGER
@@ -500,9 +492,35 @@ function convertSQLToModel(db::PormGSQLite, table_name::String; type_map::Dict{S
               primary_key=true, unique=true, null=false,
               on_delete=_normalize_introspected_on_delete(fk_info.on_delete),
               default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
+        elseif col_name in unique_cols
+          # #417: a UNIQUE non-key foreign key IS a one-to-one, and the PostgreSQL reader has always
+          # reported it as one (`fk_is_o2o = unique || primary_key`). SQLite withheld it under #318
+          # because `Dialect._get_column_type` had no `sOneToOneField` branch and the inline
+          # `FOREIGN KEY … REFERENCES` clause was gated on `isa sForeignKey`, so returning one made
+          # the round trip strictly WORSE: `INTEGER` + a constraint became `TEXT` + none. #408 fixed
+          # both halves, which is what makes this reversible.
+          #
+          # Leaving it diverged was not free. `Models._compare_model_field` compares attribute-wise
+          # and the two structs have identical field-name sets, so a declared `OneToOneField` against
+          # a live `ForeignKey` compared EQUAL and the planner's fast path returned early — but
+          # `Dialect.describes_same_column` answers `false` for any relational field, so the moment
+          # any OTHER column in the table changed, the detailed loop ran, `typeof` differed, and
+          # `:type` swept this column into a full SQLite table rebuild it had nothing to do with.
+          #
+          # No `primary_key=` here: the `is_pk` arm above already claimed that case, so this arm is
+          # reachable only for a NON-key foreign key — the same reasoning the PostgreSQL reader
+          # records on its own `ForeignKey` branch.
+          #
+          # `unique_cols` comes from `_sqlite_single_column_unique_columns`, computed before this
+          # loop; it counts only single-column UNIQUE CONSTRAINTS (`pragma_index_list.origin = 'u'`),
+          # matching the PostgreSQL side's `contype = 'u' AND array_length(conkey, 1) = 1`. Passing
+          # `unique=true` explicitly (rather than leaning on the constructor default) makes this arm
+          # readable next to the `is_pk` one, and turns the post-loop `field.unique` fixup below into
+          # a no-op for this field.
+          field = Models.OneToOneField(fk_binding; pk_field=fk_info.to, unique=true, null=nullable,
+              on_delete=_normalize_introspected_on_delete(fk_info.on_delete),
+              default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
         else
-          # A UNIQUE foreign key is conceptually a one-to-one and PostgreSQL introspection returns
-          # `OneToOneField` for it, but SQLite deliberately does NOT follow suit (#318) — see above.
           field = Models.ForeignKey(fk_binding; pk_field=fk_info.to,
               on_delete=_normalize_introspected_on_delete(fk_info.on_delete), null=nullable,
               default=_fk_default_or_warn(_normalize_sqlite_default(default_val, fk_type_sym), table_name, col_name))
@@ -1809,7 +1827,9 @@ function convertSQLToModel(row::DataFrameRow{DataFrame, DataFrames.Index}; type_
           Models.ForeignKey(fk_table, pk_field=fk_column,
               null=!not_null, default=fk_default, on_delete=fk_on_delete, db_index=true)
         end
-        # Set on BOTH branches — the PostgreSQL reader is the one path that emits `OneToOneField`.
+        # Set on BOTH branches — a plain `ForeignKey` needs `to_table` just as much as an
+        # `OneToOneField` does. (The SQLite reader emits `OneToOneField` for the same two shapes
+        # as this one since #409 and #417, so the slot is not PostgreSQL-only either.)
         fk_field.to_table = fk_parent_table
         fk_field
       elseif primary_key && col_type == "varchar" && max_length !== nothing

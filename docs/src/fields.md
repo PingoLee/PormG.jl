@@ -939,6 +939,16 @@ Team_member_settings = Models.Model(
 )
 ```
 
+!!! note "On a fetched row, a one-to-one behaves exactly like a `ForeignKey`"
+    A `OneToOneField` **is** a foreign key carrying a `UNIQUE` constraint, and every row-level
+    rule is the same one (#418). It must be projected up front — reading an unprojected
+    `row.team_member` raises `LazyTraversalError`, not a lazy load.
+    `values("team_member__username")` traverses it like any other relation,
+    `row.team_member__username = "senna"` is assignable, and `save()` writes that change to the
+    **`Team_member`** table. Changing the key itself and a projected `team_member__*` column in the
+    *same* `save()` is refused, because the projected update would filter on the key value already
+    on the row — save the key change first.
+
 ### ManyToManyField(to_model)
 
 **Purpose**: Many-to-many relationships through a join table, without adding a column to either related model table.

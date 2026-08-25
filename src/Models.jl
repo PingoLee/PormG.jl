@@ -281,7 +281,7 @@ function _collect_relation_targets(model::PormGModel, _module::Module; strict::B
   targets = Dict{String, PormGModel}()
   counts  = IdDict{PormGModel, Int}()
   for (field_name, field) in pairs(model.fields)
-    target = if field isa sForeignKey || field isa sOneToOneField
+    target = if field isa sRelationalColumn
       resolve_fk_target!(field, field_name, model.name, _module; strict = strict)
     elseif is_many_to_many_field(field)
       strict ? _resolve_model_reference(_module, field.to) :
@@ -596,8 +596,9 @@ end
 # future rule family can add a second entry for the same field without changing this signature.
 #
 # `field` is left untyped for the same reason `resolve_fk_target!`'s is: `sForeignKey` and
-# `sOneToOneField` are defined later in the load order (`models/fields.jl`). The only call site
-# already guards with `field isa sForeignKey || field isa sOneToOneField`.
+# `sOneToOneField` — and so the `sRelationalColumn` alias over them — are defined later in the
+# load order (`models/fields.jl`). The only call site already guards with
+# `field isa sRelationalColumn`.
 #
 # `src/querybuilder/deletion.jl` keeps its own copies of both rules, for models that never pass
 # through registration. Those stay per-field and IMMEDIATE on purpose — read the comment there
@@ -814,7 +815,7 @@ function set_models(_module::Module, path::String)::Nothing
     targets, counts = _collect_relation_targets(model, _module)
 
     for (field_name, field) in pairs(model.fields)
-      if field isa sForeignKey || field isa sOneToOneField
+      if field isa sRelationalColumn
         field_to::PormGModel = targets[field_name]
         accessor = _reverse_accessor_for(model, model_name, field_name, field, field_to, counts)
         _register_reverse_accessor!(field_to, accessor, model, model_name, model_binding,
@@ -1386,9 +1387,10 @@ catch it: the function is not `public`, so `api.md` never renders this docstring
 An unresolved `.to` is no longer usable downstream: `fk_target_table` refuses to derive a physical table
 from a binding (#388), so `strict=false` defers the failure to the point of use rather than suppressing it.
 
-`field` is left untyped because `sForeignKey`/`sOneToOneField` are defined later in the load order (in
-`models/fields.jl`); both call sites already guard with `field isa sForeignKey || field isa sOneToOneField`,
-so only FK/O2O fields (which carry `.to`/`.pk_field`) ever reach here.
+`field` is left untyped because `sForeignKey`/`sOneToOneField` — and the `sRelationalColumn` alias
+over them — are defined later in the load order (in `models/fields.jl`); both call sites already
+guard with `field isa sRelationalColumn`, so only FK/O2O fields (which carry `.to`/`.pk_field`)
+ever reach here.
 """
 function resolve_fk_target!(field, field_name::AbstractString,
                             model_name::AbstractString, lookup::Module; strict::Bool)::Union{PormGModel, Nothing}
@@ -3082,7 +3084,7 @@ end
 # So verify what can be verified and take the human's word otherwise. The E338 half still fires, and
 # it is the half that catches the common slip — a `db_column` written where a field name belongs.
 _through_fk_for(f, target_model::PormGModel)::Bool =
-  (f isa sForeignKey || f isa sOneToOneField) &&
+  f isa sRelationalColumn &&
   (!(f.to isa PormGModel) || _same_model_reference(f.to, target_model))
 
 # Is `pin` a usable `source_field` / `target_field` for the end that points at `target_model` (#377)?
@@ -3133,7 +3135,7 @@ end
 function _infer_through_field(through_model::PormGModel, target_model::PormGModel, role::String)::String
   matches = String[]
   for (field_name, field) in through_model.fields
-    if (field isa sForeignKey || field isa sOneToOneField) && _same_model_reference(field.to, target_model)
+    if field isa sRelationalColumn && _same_model_reference(field.to, target_model)
       push!(matches, field_name)
     end
   end

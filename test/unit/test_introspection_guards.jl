@@ -615,9 +615,11 @@ end
     @test model.fields["spaced_id"].to_table == "driver profile"
   end
 
-  # This reader is the ONLY one that emits a `OneToOneField` (when the FK column is also UNIQUE), so
-  # the slot has to exist on `sOneToOneField` too — a fix applied to `sForeignKey` alone would leave
-  # every one-to-one relation on PostgreSQL unrewritable, and `to_table` would be a MethodError.
+  # Both readers emit a `OneToOneField` when the FK column is also UNIQUE — PostgreSQL always did,
+  # SQLite since #417 — so the slot has to exist on `sOneToOneField` too: a fix applied to
+  # `sForeignKey` alone would leave every one-to-one relation unrewritable, and `to_table` would be
+  # a MethodError. This testset covers the PostgreSQL reader; its SQLite twin, and the cross-reader
+  # agreement itself, are in `test_key_type_round_trip.jl`.
   @testset "a UNIQUE foreign key becomes a OneToOneField and still carries both" begin
     model = convertSQLToModel(_introspection_row(
       table_name              = "driver_seat",

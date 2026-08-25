@@ -452,7 +452,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
           # `db_constraint=false` one-to-one introspects as `sBigIntegerField` exactly like a
           # `db_constraint=false` ForeignKey does — so without it here the pair lands in the `else`
           # below and pushes `:type` on every makemigrations, forever.
-          if field |> typeof in (Models.sForeignKey, Models.sOneToOneField) && !field.db_constraint &&  old_field |> typeof == Models.sBigIntegerField
+          if field isa Models.sRelationalColumn && !field.db_constraint &&  old_field |> typeof == Models.sBigIntegerField
             continue
           else
             push!(colect_not_equal, :type)
@@ -1030,7 +1030,7 @@ function _resolve_fk_targets_and_pk!(current_models::Dict{Symbol, Dict{Symbol, U
     model = entry[:model]
     model isa PormGModel || continue
     for (field_name, field) in pairs(model.fields)
-      (field isa Models.sForeignKey || field isa Models.sOneToOneField) || continue
+      field isa Models.sRelationalColumn || continue
       # #65: delegate to the single shared resolver. Best-effort (strict=false): an unresolvable
       # string target is left as-is with a @debug (its verbatim db-column fallback stays correct),
       # and the pk_field default is skipped — identical to the pre-#65 migration behavior.

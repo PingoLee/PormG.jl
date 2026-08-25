@@ -54,8 +54,8 @@
 
   # #292 fixture: one parent plus a child carrying one FK per referential action. The SET DEFAULT
   # column has a REAL column default, which is the combination #287 made a hard failure and #291
-  # documented a hand-edit remedy for. `fk_o2o` is UNIQUE so the PostgreSQL path builds an
-  # OneToOneField — it had the identical on_delete omission as ForeignKey.
+  # documented a hand-edit remedy for. `fk_o2o` is UNIQUE so both readers build an OneToOneField
+  # for it (#417) — it had the identical on_delete omission as ForeignKey.
   fk_parent_ddl = is_pg ?
     """CREATE TABLE "pormg_it_fk_parent" (id BIGINT PRIMARY KEY, label VARCHAR(50))""" :
     """CREATE TABLE "pormg_it_fk_parent" (id INTEGER PRIMARY KEY, label TEXT)"""
@@ -234,18 +234,23 @@
     # self-consistent enough to register.
     @test child.fields["fk_setdefault"].default == 1
 
-    # OneToOneField had the identical omission and is fixed with ForeignKey. PostgreSQL-only, and
-    # deliberately so as of #318: SQLite introspection now reads single-column UNIQUE, but it still
-    # returns a ForeignKey for a UNIQUE foreign key rather than a OneToOneField. PormG cannot
-    # materialize an O2O — `Dialect._get_column_type` has no branch for it and the FK clause is gated
-    # on `isa sForeignKey` — so returning one would regenerate `TEXT` with no foreign key where a
-    # plain ForeignKey regenerates `INTEGER` + the constraint. See the note in convertSQLToModel.
-    if is_pg
-      @test child.fields["fk_o2o"] isa PormG.Models.sOneToOneField
-      @test child.fields["fk_o2o"].on_delete === PormG.Models.CASCADE
-    end
-    # Both backends DO read the uniqueness itself, which is what #318 fixes.
+    # OneToOneField had the identical omission and is fixed with ForeignKey.
+    #
+    # Asserted on BOTH backends since #417. It was PostgreSQL-only under #318, which withheld the
+    # O2O on SQLite because PormG could not materialize one (`Dialect._get_column_type` had no
+    # branch for it and the inline FK clause was gated on `isa sForeignKey`), so returning one
+    # regenerated `TEXT` with no foreign key where a plain ForeignKey regenerated `INTEGER` + the
+    # constraint. #408 fixed both halves; #417 took the decision. Dropping the `is_pg` guard here IS
+    # the cross-engine assertion — the fixture DDL above creates the identical column on each.
+    @test child.fields["fk_o2o"] isa PormG.Models.sOneToOneField
+    @test child.fields["fk_o2o"].on_delete === PormG.Models.CASCADE
+    # A one-to-one, not the pk-fk shape #409 covers — `fk_o2o` is UNIQUE but the table's key is `id`.
+    @test !child.fields["fk_o2o"].primary_key
+    # The uniqueness itself is read on both backends, which is what #318 fixed.
     @test child.fields["fk_o2o"].unique
+    # Control: the non-unique foreign keys in the same table must NOT have been promoted.
+    @test child.fields["fk_plain"] isa PormG.Models.sForeignKey
+    @test !(child.fields["fk_plain"] isa PormG.Models.sOneToOneField)
 
     # ── 3b. Single-column UNIQUE round-trips; composite does not (#318) ──────
     # Introspection never read UNIQUE back, so every `unique=true` field diffed as changed on every

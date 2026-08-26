@@ -1364,7 +1364,7 @@ end
 
 @testset "Alignment Verification - Saturation Test (All Query Buckets)" begin
     # Logic: Construct a complex query combining CTE, Custom Joins, WHERE, and HAVING contexts simultaneously.
-    # Why: This acts as a saturation test to ensure PormGPositionalParam correctly concatenates 
+    # Why: This acts as a saturation test to ensure PormGSQLiteParam correctly concatenates 
     # vcat(cte, select, update, join, where, having) in precision alignment matching the generated SQL string.
 
     races_91 = M.Race.objects.filter("year" => 1991).values("raceid")
@@ -1422,11 +1422,14 @@ end
     # CTE-internal SELECT: only the condition value is parameterized (round > ?),
     # `then=2` and `default=3` are rendered as SQL literals (THEN 2, ELSE 3).
     races_91.values("raceid", "points_avg" => Avg("round"), "cat" => Case([When("round__@gt" => 1, then=2)], default=3))
-    # CTE-internal JOIN: param "Monza" → goes to PARENT's :join bucket
+    # CTE-internal JOIN: param "Monza". #432 — its `?` renders inside the WITH, between the CTE's
+    # SELECT list and its WHERE, so it belongs in :cte at that position. It used to leak into the
+    # PARENT's :join bucket, which flattens after :select, putting it four values too late.
     races_91.cjoin("circuitid" => "Circuit", filters=["name" => "Monza"], warn=false)
-    # CTE-internal WHERE: param 1991 → stays in :cte bucket
+    # CTE-internal WHERE: param 1991 → :cte bucket
     races_91.filter("year" => 1991)
-    # CTE-internal HAVING: param 5 → goes to PARENT's :having bucket
+    # CTE-internal HAVING: param 5. Same story as "Monza" — it used to leak to the parent's :having,
+    # which flattens LAST, so it landed at the very end of the statement's values.
     races_91.filter("points_avg__@gt" => 5)
 
     drivers_br = M.Driver.objects.filter("nationality" => "Brazilian").values("driverid")
@@ -1465,21 +1468,32 @@ end
     # STRICT ORDER VERIFICATION:
     # vcat(cte, select, update, join, where, having)
     #
+    # #432 CORRECTED THIS EXPECTATION. The previous vector asserted the misbind as if it were the
+    # design: a CTE body's JOIN and HAVING values leaked into the PARENT's :join and :having
+    # buckets, so "Monza" flattened after the outer SELECT's five CASE values and the CTE's
+    # HAVING(5) flattened dead last — while both of their `?` markers render inside the leading
+    # WITH. The order below is derived from PostgreSQL's `$N` positions, which are authoritative
+    # for text order, and SQLite now matches it exactly (modulo `@in`, which PostgreSQL binds as one
+    # array parameter and SQLite expands to two `?` — a dialect split, not a misalignment).
+    #
     # Bucket distribution:
-    #   :cte    = [1, 2, 3, 1991, "Brazilian"]  — races_91 SELECT(condition=1, then=2, default=3) + WHERE(1991) + drivers_br
+    #   :cte    = [1, 2, 3, "Monza", 1991, 5, "Brazilian"]
+    #             races_91's WHOLE body in text order — SELECT CASE(cond=1, then=2, default=3),
+    #             JOIN ON("Monza"), WHERE(1991), HAVING(5) — then drivers_br's WHERE.
     #   :select = [20, 3, 10, 2, 1]             — outer CASE WHEN (condition, then, condition, then, default)
-    #   :join   = ["Monza", "Italian", "VET", "MSC"]  — races_91 cjoin + outer cjoin
+    #   :join   = ["Italian", "VET", "MSC"]     — outer cjoin only
     #   :where  = [10, 20, 5, 5]                — outer WHERE filters
-    #   :having = [5, 8]                         — races_91 HAVING(5) + outer HAVING(8)
+    #   :having = [8]                            — outer HAVING only
     #
     # Within each CASE/WHEN, parameter order follows SQL text:
     #   WHEN condition THEN then_val ... ELSE else_val END
     expected_order = [
-        1, 2, 3, 1991, "Brazilian",            # CTE: races_91 SELECT(cond=1, then=2, default=3) + WHERE(1991), drivers_br WHERE
+        1, 2, 3, "Monza", 1991, 5,             # CTE r91, in text order: SELECT CASE, JOIN ON, WHERE, HAVING
+        "Brazilian",                            # CTE drivers_br WHERE
         20, 3, 10, 2, 1,                       # Outer SELECT: When(>20, then=3), When(>10, then=2), default=1
-        "Monza", "Italian", "VET", "MSC",       # JOIN: races_91 cjoin("Monza") + outer cjoin
+        "Italian", "VET", "MSC",                # Outer JOIN
         10, 20, 5, 5,                           # Outer WHERE (points range, grid, positionorder)
-        5, 8                                    # HAVING: races_91 HAVING(5) + outer HAVING(8)
+        8                                       # Outer HAVING
     ]
 
     @test insp[:parameters] == expected_order

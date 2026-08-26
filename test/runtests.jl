@@ -60,6 +60,8 @@ end
     @testset "Identifier Quoting Partition (#394)" include("unit/test_identifier_quoting.jl")
     @testset "Unresolved ForeignKey Target Is Never Guessed (#388)" include("unit/test_fk_unresolved_target.jl")
     @testset "SQLite Alignment Verification" include("unit/test_alignment_sqlite.jl")
+    @testset "Nested-render Parameter Alignment (#432)" include("unit/test_parameter_alignment_nested.jl")
+    @testset "Projection Name Collapse and Refusal (#441)" include("unit/test_projection_names.jl")
     @testset "CTE Ergonomics F() Reference (#44)" include("unit/test_cte_ergonomics.jl")
     @testset "CTE Columns Are Projection Aliases (#376)" include("unit/test_cte_db_column.jl")
     @testset "Nested CTE Guard (#433)" include("unit/test_nested_cte_guard.jl")

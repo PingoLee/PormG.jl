@@ -181,9 +181,23 @@ characterizations worth stating plainly.
 - **Positional-parameter buckets (deliberate, contained)** — for SQLite the positional `?` markers
   are collected into per-clause buckets and flattened in SQL-clause order
   (`:cte → :select → :update → :join → :where → :having`). The flatten order is single-sourced in
-  `get_final_parameters` and guarded by `test_alignment_sqlite.jl` / `test_parameters.jl`; the only
-  cost is that *adding a new bucket* is a documented multi-site edit (see the QueryBuilder skill's
-  maintenance checklist). Noted here so it is not mistaken for accidental coupling.
+  `_BUCKET_ORDER` (which `get_final_parameters` and the nested-run machinery both read) and guarded by `test_alignment_sqlite.jl` / `test_parameters.jl`. Noted here
+  so it is not mistaken for accidental coupling.
+
+  Two costs, not one. *Adding a new bucket* is a documented multi-site edit (see the QueryBuilder
+  skill's maintenance checklist). The subtler one: a bucket is chosen by the builder phase that binds
+  a value, while correctness depends on where that value's `?` is **emitted** — and those diverge
+  whenever a fragment renders somewhere other than its own clause. Three bugs came out of that gap —
+  #421 a relocated fragment and #432 a nested render, both SQLite-only, plus #441 a discarded
+  projection, whose *parameter* desync was SQLite-only but which dropped the column itself on **both**
+  backends. All three were silent. A nested render now re-emits its values as one clause-ordered run at its own marker
+  position (`nested_parameter_mark` / `detach_nested_run!`). All four such sites in the **read**
+  builder go through it — `Exists`, a projected `Subquery`, an `__@in` subquery, and a CTE body.
+
+  `deletion.jl` splices subqueries into hand-built `DELETE`/`UPDATE` clauses without it, and is
+  correct today only by coincidence: it builds a fresh collector per statement, and a lone
+  subquery's own text order *is* `_BUCKET_ORDER`, so the flatten happens to agree. That is a
+  narrower claim than "contained", and deliberately so.
 
 !!! note "\"Async-first\" is backend-specific"
     For **PostgreSQL** the async path is genuine: the pool lock is released before the round-trip and

@@ -164,6 +164,99 @@ function reattach_parameters!(instruc::SQLInstruction, values::Vector{Any})
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Nested-render runs (#432)
+#
+# #421's mark above watches ONE bucket. That is right for a fragment that stays inside a single
+# clause, and wrong for a NESTED RENDER — an `Exists(...)`, a projected `Subquery(...)`, an `__@in`
+# subquery — whose inner build walks its own clauses and therefore pushes into SEVERAL buckets while
+# its text is spliced into ONE of the parent's.
+#
+# Two independent things go wrong there, and both are fixed by the same move:
+#
+#   1. **Wrong bucket.** The inner build's ON values land in the OUTER `:join` bucket (its
+#      `build_row_join_sql_text` switches to `:join` unconditionally, defeating `build()`'s own
+#      `set_contexts` gate), while their `?` renders inside the outer WHERE. `:join` flattens before
+#      `:where`, so they overtake values whose text precedes them.
+#   2. **Wrong ORDER, even within one bucket.** A build BINDS in phase order (select → where → …
+#      → joins last) but RENDERS in clause order (joins before where). At top level the buckets
+#      absorb that difference — that is what they are for. A nested run has no such reordering
+#      unless we give it one: simply restoring the ambient bucket yields binding order, which for
+#      `Exists(inner-with-ON)` is `WHEREVAL, ONVAL` against a text order of `ONVAL, WHEREVAL`.
+#
+# So: mark every bucket, let the inner build scatter, then lift everything it added and re-emit it
+# as ONE contiguous run in the parent's active bucket, concatenated in CLAUSE order. That gives the
+# fragment the same phase→clause reordering a top-level statement gets, and pins the whole run at
+# the parent's marker position.
+#
+# All no-ops on numbered backends: PostgreSQL's `$N` travels with the text, which is why every bug
+# in this family has been SQLite-only.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Clause order. `get_final_parameters` flattens from this same tuple, so there is ONE list to edit
+# when a bucket is added — the maintenance checklist in the QueryBuilder skill points here.
+const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :having)
+
+# Deliberately mirrors `_current_bucket`'s fallback rather than defining its own: an unrecognized
+# context must land in the same bucket and warn the same way from both helpers, or a future bucket
+# added to one and not the other diverges silently.
+function _bucket_for(sq::PormGSQLiteParam, ctx::Symbol)::Vector{Any}
+  ctx === :cte && return sq.cte_params
+  ctx === :select && return sq.select_params
+  ctx === :update && return sq.update_params
+  ctx === :join && return sq.join_params
+  ctx === :where && return sq.where_params
+  ctx === :having && return sq.having_params
+  @warn "Unknown parameter context $(repr(ctx)), falling back to :where" ctx
+  return sq.where_params
+end
+
+const _N_BUCKETS = length(_BUCKET_ORDER)
+const NestedMark = Union{Nothing,NTuple{_N_BUCKETS,Int}}
+
+"""
+    nested_parameter_mark(instruc) -> NestedMark
+
+Record the length of every positional bucket. `nothing` on a numbered backend.
+"""
+function nested_parameter_mark(sq)::NestedMark
+  sq isa PormGSQLiteParam || return nothing
+  return ntuple(i -> length(_bucket_for(sq, _BUCKET_ORDER[i])), _N_BUCKETS)
+end
+nested_parameter_mark(instruc::SQLInstruction)::NestedMark = nested_parameter_mark(instruc.parameters)
+
+"""
+    detach_nested_run!(instruc, mark) -> Vector{Any}
+
+Lift everything bound since `mark` out of every bucket, returning it concatenated in clause order —
+the order those values' markers actually render in.
+"""
+function detach_nested_run!(sq, mark::NestedMark)::Vector{Any}
+  mark === nothing && return Any[]
+  sq isa PormGSQLiteParam || return Any[]
+  run = Any[]
+  for (i, ctx) in enumerate(_BUCKET_ORDER)
+    bucket = _bucket_for(sq, ctx)
+    len = mark[i]
+    length(bucket) <= len && continue
+    append!(run, bucket[len+1:end])
+    deleteat!(bucket, len+1:length(bucket))
+  end
+  return run
+end
+detach_nested_run!(instruc::SQLInstruction, mark::NestedMark)::Vector{Any} =
+  detach_nested_run!(instruc.parameters, mark)
+
+# Append a lifted run to whatever bucket is active on `sq`. The `SQLInstruction` form below is the
+# common one; this bare-collector form exists because `build_cte_clause` holds only the parameter
+# object — it renders a CTE body before any instruction for the outer statement exists.
+function reattach_parameters!(sq::AbstractPormGParam, values::Vector{Any})
+  isempty(values) && return nothing
+  sq isa PormGSQLiteParam || return nothing
+  append!(_current_bucket(sq), values)
+  return nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # add_parameter!  – push a value and return the placeholder string
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -240,21 +333,39 @@ add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operat
 Return all collected parameter values in the order expected by the final SQL string.
 
 - **PostgreSQL**: returns the single linear vector (order already matches `\$N` numbering).
-- **SQLite**: concatenates buckets in standard SQL clause order:
-  `cte → select → join → where → having`
+- **SQLite**: concatenates buckets in standard SQL clause order, single-sourced from
+  `_BUCKET_ORDER`: `cte → select → update → join → where → having`
   so that each positional `?` aligns with its value.
 """
 get_final_parameters(p::PormGPostgresParam)::Vector{Any} = p.parameters isa Vector{Any} ? p.parameters : collect(p.parameters)
 
 function get_final_parameters(p::PormGSQLiteParam)::Vector{Any}
-  return vcat(
-    p.cte_params,
-    p.select_params,
-    p.update_params,
-    p.join_params,
-    p.where_params,
-    p.having_params
-  )
+  # Driven from `_BUCKET_ORDER` rather than a second hand-written list. #432 added a consumer of
+  # that same order (`detach_nested_run!`, which sorts a nested render's values into the order their
+  # markers appear), and two copies of a clause order that must agree is exactly the drift a new
+  # bucket would introduce silently.
+  #
+  # `sizehint!` then `append!`, NOT `reduce(vcat, …)` and not a bare `append!` loop. Both of those
+  # re-copy while the result grows — reduce once per bucket, the bare loop on each geometric
+  # reallocation. This is a property getter (`Base.getproperty(…, :parameters)`) read on every
+  # execution path, so the cost lands per query.
+  #
+  # Measured warm — cold, every variant reads as ~200ms and the differences vanish into compilation
+  # noise, which is how a bogus "44x" figure was produced once. At 50_000 bound parameters
+  # (reachable: `filter("id__@in" => 1:50_000)` binds exactly that), 50 calls: this ~6.8ms,
+  # hardcoded vcat ~7.7ms, reduce(vcat) ~16ms, bare append! loop ~33ms. At a REALISTIC 17 params
+  # over 200_000 calls it is ~0.30µs/call against hardcoded's ~0.14µs — about 2x worse per call, and
+  # 0.15µs next to a database round trip is not worth a second copy of the clause order.
+  total = 0
+  for ctx in _BUCKET_ORDER
+    total += length(_bucket_for(p, ctx))
+  end
+  out = Any[]
+  sizehint!(out, total)
+  for ctx in _BUCKET_ORDER
+    append!(out, _bucket_for(p, ctx))
+  end
+  return out
 end
 
 # Legacy compatibility: `.parameters` property access for SQLite

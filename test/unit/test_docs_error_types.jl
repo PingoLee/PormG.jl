@@ -109,18 +109,27 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("bad alias!" => "points").list(show_query = :dict),
     ),
     (
-        # #423. Making a values() alias resolve in ORDER BY means a name shared by two projections
-        # would emit an ambiguous `ORDER BY "x"` — PostgreSQL rejects it at execution, SQLite picks
-        # one. Refused at build time so the backends stay aligned.
+        # #441 moved this refusal upstream. It was #423's ORDER BY ambiguity guard — a name shared by
+        # two projections emitted an ambiguous `ORDER BY "x"` that PostgreSQL rejects and SQLite
+        # resolves arbitrarily. `values()` now refuses the DECLARATION, so `order_by` can never see a
+        # shared alias and that guard is retired as unreachable. Same type, earlier site; the
+        # `order_by` call is kept in the shape so this still covers the doc sentence's full example.
         #
         # The doc sentence uses `grid`/`points` (F1); this model has no `grid` and adding one would
         # change what every other case's model injects on a write (#331). Same shape, different
-        # column pair — what is pinned is the error TYPE for a duplicated alias, which is what the
-        # doc names.
-        "read/values_and_joins.md — two projections sharing an alias cannot be ordered by it",
+        # column pair — what is pinned is the error TYPE for a duplicated output name.
+        "read/values_and_joins.md — two projections may not share an output name",
         QueryBuildError,
         () -> DOCERR_RESULT_PG.objects.values("x" => "points", "x" => "resultid").
             order_by("x").list(show_query = :dict),
+    ),
+    (
+        # #441. The star is compared as the PHYSICAL columns the database expands it to, which the
+        # doc states explicitly. `statusid` is a real column of this model, so `values("*", …)` under
+        # that name collides with the star's own contribution.
+        "read/values_and_joins.md — a values() name colliding with a star-expanded column",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("*", "statusid" => "points").list(show_query = :dict),
     ),
     (
         # #424. `cjoin_on`'s `on` is the whole ON clause and is NOT path-prefixed, so a bare

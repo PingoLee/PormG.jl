@@ -10,6 +10,12 @@
   - `object::SQLObject`: The object containing the values to be selected.
   - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
 """
+# #441: the name a projection is RENDERED under. `custom_as` holds it for an aliased field path
+# (`"s" => "parent__sku"`); `_as` holds it for everything else. Same expression `_query_select` and
+# `get_order_query` use to decide a slot's alias, so the three agree by construction.
+_projection_output_name(v::SQLTypeField) = v.custom_as !== nothing ? v.custom_as : v._as
+_projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as : v._as
+
 function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
   for i in eachindex(values) # linear indexing
     v_copy = deepcopy(values[i])
@@ -45,8 +51,19 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       push!(instruc.group, i |> string)
     end
 
-    if haskey(instruc.cache, v_copy._as)
-      instruc.select[i] = instruc.cache[v_copy._as]  # TODO That is necessary in get_select_query
+    # #441: the memo is keyed on `_as`, which for a field-path projection is the PATH, not the name
+    # the column is rendered under (that lives in `custom_as`). So a bare `haskey` hit collapsed
+    # projections that share an expression but declare DIFFERENT names — `values("gg" => "note",
+    # "hh" => "note")` rendered `as "gg"` twice and dropped `hh` entirely, silently. `_cache_join`
+    # (`build_joins.jl`) writes into this same dict keyed by join path, so a projection can also hit
+    # an entry that was never a projection at all.
+    #
+    # Reuse is only correct when the cached entry renders under the SAME output name. Otherwise
+    # resolve independently, and leave the memo to whichever entry claimed the key first — the point
+    # of the memo is to avoid re-resolving one expression, not to make two projections one.
+    cached = get(instruc.cache, v_copy._as, nothing)
+    if cached !== nothing && _projection_output_name(cached) == _projection_output_name(v_copy)
+      instruc.select[i] = cached
     else
       @pormg_debug false
       v_copy.field = _get_select_query(v_copy.field, instruc, _as=v_copy._as)
@@ -54,7 +71,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       if v_copy._as === nothing
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
       end
-      instruc.cache[v_copy._as] = instruc.select[i]
+      cached === nothing && (instruc.cache[v_copy._as] = instruc.select[i])
     end
   end
 
@@ -118,19 +135,21 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # entries must reuse their resolved SQL selector instead of quoting the raw lookup string.
     #
     # Scan `instruc.select` — the RENDERED projections — not `object.values`, the declared ones.
-    # The two are NOT the same set, and trusting the declared list is a silent-wrong-answer bug
-    # (#423): `get_select_query` collapses a projection whose `_as` is already cached onto the
-    # cached SQLField and DISCARDS its `custom_as`, so a name the caller declared can fail to reach
-    # the SQL at all.
     #
-    #     values("note", "gg" => "note")   ->   SELECT "Tb"."note" as "note", "Tb"."note" as "note"
+    # #441 changed WHY this matters, and the old reason is worth recording as retired rather than
+    # left standing. Before it, `get_select_query` collapsed a projection whose `_as` was already
+    # cached onto the cached `SQLField` and discarded its `custom_as`, so a declared name could fail
+    # to reach the SQL at all — `values("note", "gg" => "note")` rendered `as "note"` twice and `gg`
+    # never appeared. Emitting `ORDER BY "gg"` from the declared list then named neither an output
+    # nor an input column: PostgreSQL raises, while SQLite degrades the unresolvable identifier to
+    # the literal 'gg' — a constant sort key — and returns the rows UNSORTED with no error.
     #
-    # `gg` is declared and never rendered. Emitting `ORDER BY "gg"` from the declared list names
-    # neither an output nor an input column: PostgreSQL raises `column "gg" does not exist`, and
-    # SQLite's double-quoted-string fallback degrades the unresolvable identifier to the literal
-    # 'gg' — a constant sort key — so the rows come back UNSORTED with no error at all. Scanning
-    # what will actually be rendered keeps that shape on the loud, backend-aligned path it was on
-    # before (an `UnknownFieldError` from the resolution branch below).
+    # That collapse is gone: the memo is now reused only when the cached entry renders under the
+    # SAME output name, so every declared name IS rendered and the two sets agree. Scanning
+    # `instruc.select` is still the right choice — it is what the SQL will actually contain, which
+    # is the thing `order_by` must resolve against — but it is no longer load-bearing against a
+    # silent-wrong-answer bug. Do not "simplify" it back to `object.values` on that basis; the sets
+    # agreeing is a property of `get_select_query`, not of this function.
     #
     # `instruc.select` is authoritative and fully populated here: `build` calls `get_select_query`
     # before `get_order_query`, and that is its only writer, assigning contiguously over
@@ -139,54 +158,24 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # behavior: that one `return`s at the first gap, this one `continue`s. Equivalent only because
     # assignment is contiguous; `continue` is the safer of the two if that ever stops being true.
     #
-    # The scan also runs to completion rather than breaking on the first hit, so a name carried by
-    # TWO RENDERED columns over different expressions can be refused. `.values()` permits that —
-    # `values("x" => "note", "x" => "qty")` renders `as "x"` twice — and `ORDER BY "x"` is then
-    # ambiguous: PostgreSQL rejects it, SQLite picks one arbitrarily.
-    #
-    # Keyed on OBJECT IDENTITY. Two matching slots are safe exactly when they are the same
-    # `SQLField`, which is precisely `get_select_query`'s dedupe relation: it collapses a projection
-    # whose `_as` is already cached onto the cached object, so collapsed slots are `===` and render
-    # byte-identical SQL — which is what PostgreSQL's `equal()` accepts. Anything else is two
-    # distinct expressions under one output name, which PostgreSQL rejects.
-    #
-    # Two earlier keys were wrong, both for reasons worth keeping written down:
-    #
-    #   `_as`  — justified as "equal `_as` means the same object". True of the field/function
-    #            branch, FALSE of the `SQLText` one, which assigns `instruc.select[i]`
-    #            unconditionally without consulting the cache. So
-    #            `values("lbl" => Value("a"), "lbl" => Value("b"))` carries one `_as` over two
-    #            different Params and slipped through.
-    #   rendered text — closer, but SQLite renders EVERY parameter as `?`, so the text key collapses
-    #            any two parameterized projections regardless of their values. That made the guard
-    #            raise on PostgreSQL and stay silent on SQLite for the same query — the strict
-    #            engine refusing while the lax engine sorts by an arbitrary one of two DIFFERENT
-    #            values. Exactly the divergence this guard exists to prevent, introduced by the
-    #            guard itself.
-    #
-    # Identity has neither blind spot and needs no placeholder text. It IS over-strict when two
-    # distinct objects resolve to identical SQL. The reachable instance is two literal-`NULL`
-    # projections — `Value(nothing)` short-circuits to the literal, not a parameter — so
-    # `values("lbl" => Value(nothing), "lbl" => Value(nothing))` renders `NULL as "lbl"` twice.
-    # PostgreSQL parses those as equal `Const`s and accepts; PormG refuses, with a message that
-    # degenerates to "over NULL and NULL". Harmless (ordering by a doubly-projected NULL is
-    # meaningless) and loud rather than silent, which is the direction to err in — but it is a real
-    # case, not the contrived two-spellings-of-one-column one an earlier draft of this comment
-    # named.
     # An ORDER BY term with NO alias cannot name a projection, and must not be compared as if it
     # could: `selected_alias == v_field_copy._as` would reduce to `nothing == nothing` and match
-    # every unaliased select entry. One match then reaches `quote_identifier(nothing, …)`, two
-    # produce the nonsense `Ambiguous order_by("nothing")` — and both are reachable through the
-    # fluent surface, since a bare `Value("hi")` in `values()` projects with no alias at all and
-    # `SQLOrder(SQLField(f, nothing))` is accepted by `order_by`.
+    # every unaliased select entry, which then reaches `quote_identifier(nothing, …)`. Reachable
+    # through the fluent surface — a bare `Value("hi")` in `values()` projects with no alias, and
+    # `SQLOrder(SQLField(f, nothing))` is accepted by `order_by` — hence the empty-tuple guard.
     #
-    # Skipping the scan restores EXACT parity with the pre-#423 path for such a term. To be precise
-    # about what that parity is: the shape was already broken, raising `MethodError: Cannot convert
-    # an object of type Nothing` from the resolution branch — a raw MethodError outside the error
-    # taxonomy (#231/#239). This guard does not fix that; it only keeps #423 from replacing one
-    # untyped failure with a different, more confusing one. The underlying leak is pre-existing and
-    # tracked separately.
-    matched_value = nothing
+    # That shape was already broken before #423, raising `MethodError: Cannot convert an object of
+    # type Nothing` from the resolution branch — a raw MethodError outside the error taxonomy
+    # (#231/#239). Skipping the scan keeps it on exactly that pre-existing path rather than
+    # replacing one untyped failure with a different one. The leak is tracked separately.
+    #
+    # #441 also retired the ambiguity THROW that used to sit inside this loop. It refused
+    # `order_by("x")` when `values(...)` projected `x` twice over two different expressions;
+    # `values()` now refuses that declaration, so the throw was unreachable and was deleted rather
+    # than kept as dead code behind a comment describing an impossible situation. What survives is
+    # the loop itself, which answers only "is this name projected at all?" — and since no name can
+    # now be projected twice, it could `break` on the first hit; it does not, only because running
+    # to completion costs nothing over a projection list.
     for i in (v_field_copy._as === nothing ? () : eachindex(instruc.select))
       isassigned(instruc.select, i) || continue
       value = instruc.select[i]
@@ -194,22 +183,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       selected_alias = value.custom_as !== nothing ? value.custom_as : value._as
       selected_alias == v_field_copy._as || continue
 
-      if found_in_select && !(value === matched_value)
-        # Name each side INDEPENDENTLY: a field-path projection keeps the path in `_as` (which reads
-        # far better than its rendered column), while an `SQLText` one keeps the chosen alias there.
-        # Choosing globally printed the ordered alias back as one of its own sources on a mixed
-        # pair — "over note and x" for `order_by("x")`, which is circular.
-        _name(v) = v._as == v_field_copy._as ? string(v.field) : string(v._as)
-        throw(QueryBuildError(
-          "Ambiguous \e[4m\e[31morder_by(\"$(v_field_copy._as)\")\e[0m: " *
-          "\e[4m\e[32m.values(...)\e[0m projects that name twice, over " *
-          "\e[33m$(_name(matched_value))\e[0m and \e[33m$(_name(value))\e[0m. PostgreSQL " *
-          "rejects an ambiguous ORDER BY alias and SQLite would pick one arbitrarily, so PormG " *
-          "refuses it rather than diverge. Give the two projections distinct names, or order by " *
-          "the underlying field path instead of the alias."))
-      end
       found_in_select = true
-      matched_value = value
     end
 
     # #423: the projection test comes FIRST. It used to be nested inside the `instruc.cache` hit
@@ -233,11 +207,13 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # both the #76 DISTINCT guard and the `instruc.group` push below stay gated on
     # `!found_in_select`, so neither is reachable from the new branch.
     #
-    # The ambiguity guard above is NOT gated on the cache, so it moves a second combination:
-    # found_in_select && cache-HIT. `values("note", "note" => "qty")` renders two output columns
-    # named "note" over different expressions and used to emit `ORDER BY "note"`; PostgreSQL
-    # rejected that at execution as ambiguous, so refusing it at build time is the aligned
-    # behavior — but it IS a second change, and saying "only one" would be wrong.
+    # #423 also moved a second combination — found_in_select && cache-HIT — via an ambiguity guard
+    # that used to sit in the loop above: `values("note", "note" => "qty")` rendered two output
+    # columns named "note" over different expressions and previously emitted `ORDER BY "note"`,
+    # which PostgreSQL rejected at execution. #441 retired that guard and moved the refusal to
+    # `values()` itself, so this combination is now unreachable from here — the declaration throws
+    # before `order_by` is ever consulted. Recorded because the branch inversion's "exactly one
+    # combination" claim above was true only alongside it.
     if found_in_select
       # Use the alias name instead of the expression to avoid double parameterization.
       # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.

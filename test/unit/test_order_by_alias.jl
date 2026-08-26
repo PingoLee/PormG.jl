@@ -187,166 +187,76 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# An ambiguous alias is refused rather than resolved arbitrarily (#423)
-# `.values()` does not reject two projections sharing a name. Once such a name resolves in ORDER BY,
-# `ORDER BY "x"` is ambiguous: PostgreSQL raises at execution, SQLite picks one. Refusing at build
-# time is what keeps the two aligned — otherwise this fix would trade a loud (if confusing)
-# UnknownFieldError for a silent cross-backend divergence.
+# RETIRED by #441 — the ambiguity guard this file was written for is gone
+# #423 refused `order_by("x")` when `values(...)` projected `x` twice over two different
+# expressions, because PostgreSQL rejects an ambiguous ORDER BY alias while SQLite picks one
+# arbitrarily. #441 moved the refusal upstream: `values()` now rejects two projections that would
+# render the same output name, so `order_by` can no longer be handed a shared alias and the guard
+# became unreachable.
 #
-# Keyed on OBJECT IDENTITY, not on a match count and not on the rendered text. Two matching slots
-# are safe exactly when they are the same `SQLField` — which is `get_select_query`'s own dedupe
-# relation, so collapsed slots render byte-identical SQL, which is what PostgreSQL's `equal()`
-# accepts. Naming the same expression twice therefore keeps working, and it keeps working for a
-# reason that is true by construction rather than by proxy. Two earlier keys were wrong and both
-# are pinned below: `_as` (blind to the SQLText branch) and rendered text (blind on SQLite, where
-# every parameter renders as `?`).
+# Six blocks went with it, all because their SETUP is now refused at `.values()` rather than at
+# `order_by`: the guard's primary assertion (`values("x" => "note", "x" => "qty")`), its
+# `values("note", "note")` identity control, the both-backends `Value("a")/Value("b")` pair, the
+# mixed-pair message loop, `shadow_dup`, and the false-positive control below. Their coverage moves
+# to `test_projection_names.jl`, which pins the refusal at its new site.
 #
-# Note this guard is not gated on the cache, so it also moves the found_in_select && cache-HIT
-# combination: `values("note", "note" => "qty")` used to render `ORDER BY "note"` and is now
-# refused. That shape emits two output columns named "note" over different expressions, which
-# PostgreSQL rejected at execution anyway, so the refusal is the aligned behavior — but it means
-# TWO combinations change, not one. Pinned below so the claim stays honest.
+# Everything BELOW and above this note is untouched #423 behaviour and must keep passing — alias
+# over a local column, alias over a join path, an alias shadowing a real column, a declared alias
+# that is never rendered, and the controls block.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "an ambiguous values() alias is refused in order_by() (#423)" begin
-  amb = AO.Ao_child.objects
-  amb.values("x" => "note", "x" => "qty")
-  amb.order_by("x")
 
-  err = try
-    inspect_query(amb; connection = _AO_PG)
-    nothing
-  catch e
-    e
-  end
-  @test err isa PormG.QueryBuildError
-  msg = sprint(showerror, err)
-  @test occursin("Ambiguous", msg)
-  @test occursin("x", msg)
-  # Names BOTH sources, so the caller can see which two projections collided.
-  @test occursin("note", msg)
-  @test occursin("qty", msg)
-
-  # Control: the same expression projected twice shares `_as`, so it is not a new ambiguity. This
-  # rendered before the fix and must still render — a guard keyed on the match count would break it.
-  dup = AO.Ao_child.objects
-  dup.values("note", "note")
-  dup.order_by("note")
-  @test occursin("ORDER BY \"note\" ASC", inspect_query(dup; connection = _AO_PG)[:sql_text])
-
-  # Two `Value(...)` projections under one name. This is the case an `_as`-keyed guard MISSES: the
-  # `SQLText` branch of `get_select_query` assigns unconditionally without consulting the cache, so
-  # both entries carry `_as == "lbl"` while rendering two different Params. PostgreSQL sees two
-  # unequal expressions under one output name and raises `ORDER BY "lbl" is ambiguous`, while an
-  # `_as`-keyed guard sees one name and stays silent. Review finding — that draft justified `_as` as
-  # a faithful proxy for PostgreSQL's rule, and it is not one for this branch.
-  # BOTH backends, deliberately. A rendered-text key made this throw on PostgreSQL (`$1`/`$2`) and
-  # render on SQLite (`?`/`?`) — the guard against divergence introducing one, with the strict
-  # engine refusing while the lax engine sorted by an arbitrary one of two DIFFERENT values.
-  # Identity keying removes the split, and looping here is what would catch its return.
+# ─────────────────────────────────────────────────────────────────────────────
+# A declared alias is always rendered, and orderable (#441 — was the inverse, #423)
+# This testset used to pin the OPPOSITE. `values("note", "gg" => "note")` collapsed the second
+# projection onto the first — `"gg" => "note"` has `_as == "note"`, which the bare `"note"` entry
+# already cached — so `gg` never reached the SQL, and `order_by("gg")` had to raise
+# `UnknownFieldError` rather than emit `ORDER BY "gg"` against a column that does not exist.
+#
+# That collapse WAS #441's symptom 1. It is fixed: the memo is reused only when the cached entry
+# renders under the same OUTPUT name, so two names over one expression are now two output columns
+# and `gg` is emitted. The scenario this testset guarded can no longer arise.
+#
+# Rewritten rather than deleted, on the instruction its own premise-check carried: "if the collapse
+# ever stops happening, this testset is testing nothing and should be rewritten, not silently pass."
+# What survives is the reason the old assertion mattered — `order_by` resolves against what is
+# RENDERED, not what was declared. It still does; it now finds `gg` there.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a declared alias is rendered and orderable (#441)" begin
+  # The file docstring's contract that a name matching NO column still raises `UnknownFieldError`
+  # lost its only assertion when the collapse-dependent testsets were retired. Restored here: the
+  # branch is still live and still the loud path.
   for (label, conn) in (("PostgreSQL", _AO_PG), ("SQLite", _AO_SL))
-    @testset "$label" begin
-      val_amb = AO.Ao_child.objects
-      val_amb.values("note", "lbl" => Value("a"), "lbl" => Value("b"))
-      val_amb.order_by("lbl")
-      val_err = try
-        inspect_query(val_amb; connection = conn)
-        nothing
-      catch e
-        e
-      end
-      @test val_err isa PormG.QueryBuildError
-      @test occursin("Ambiguous", sprint(showerror, val_err))
-    end
+    unknown = AO.Ao_child.objects
+    unknown.values("note")
+    unknown.order_by("no_such_name")
+    err = try; inspect_query(unknown; connection = conn); nothing; catch e; e end
+    @test err isa PormG.UnknownFieldError
+    # Assert the CAUSE, not just the type: this function raises UnknownFieldError from more than
+    # one site, so a bare type check would not prove the right one fired.
+    @test occursin("no_such_name", sprint(showerror, err))
   end
 
-  # A mixed pair — one field path, one Value — must name each side on its own terms. Choosing
-  # globally printed the ordered alias back as one of its own sources ("over note and x"), which is
-  # circular; the message must read "over note and <expr>" in either declaration order.
-  for vals in (("x" => "note", "x" => Value("hi")), ("x" => Value("hi"), "x" => "note"))
-    mixed = AO.Ao_child.objects
-    mixed.values(vals...)
-    mixed.order_by("x")
-    mixed_err = try
-      inspect_query(mixed; connection = _AO_PG)
-      nothing
-    catch e
-      e
-    end
-    @test mixed_err isa PormG.QueryBuildError
-    mixed_msg = sprint(showerror, mixed_err)
-    @test occursin("note", mixed_msg)
-    # Never names the ordered alias itself as a source.
-    @test !occursin("over x and", mixed_msg)
-    @test !occursin("and x.", mixed_msg)
-  end
+  rendered = AO.Ao_child.objects
+  rendered.values("note", "gg" => "note")
+  sql = inspect_query(rendered; connection = _AO_PG)[:sql_text]
+  # The same expression under two names is two output columns, not one emitted twice.
+  @test occursin("as \"note\"", sql)
+  @test occursin("as \"gg\"", sql)
+  @test count("as \"gg\"", sql) == 1
 
-  # The second combination this change moves: an alias that shadows another projection's name over
-  # a DIFFERENT expression. `values("note", "note" => "qty")` renders `as "note"` twice, so it was
-  # already ambiguous to PostgreSQL at execution; it now fails at build time instead. Pinned so the
-  # "only one combination changes" claim cannot quietly reappear.
-  shadow_dup = AO.Ao_child.objects
-  shadow_dup.values("note", "note" => "qty")
-  shadow_dup.order_by("note")
-  @test_throws PormG.QueryBuildError inspect_query(shadow_dup; connection = _AO_PG)
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
-# The alias set comes from what is RENDERED, not from what was declared (#423)
-# `get_select_query` collapses a projection whose `_as` is already cached onto the cached SQLField
-# and discards its `custom_as`, so a declared name can fail to reach the SQL entirely. Deriving
-# `found_in_select` from `object.values` therefore trusted a name that is never emitted.
-#
-# This is the defect an independent review caught in the first draft of this fix, and it was
-# strictly worse than the bug being fixed: `ORDER BY "gg"` names neither an output nor an input
-# column, so PostgreSQL raises `column "gg" does not exist` while SQLite's double-quoted-string
-# fallback degrades it to the literal 'gg' — a constant sort key — and returns the rows UNSORTED
-# with no error. Silent wrong answer on one backend, runtime error on the other, replacing a clean
-# build-time `UnknownFieldError`. Scanning `instruc.select` is what keeps it on the loud path.
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "a declared alias that is never rendered is not treated as projected (#423)" begin
-  # `"gg" => "note"` has `_as == "note"`, which the bare `"note"` entry already cached, so the
-  # second projection collapses onto the first and renders `as "note"` — `gg` never appears.
-  collapsed = AO.Ao_child.objects
-  collapsed.values("note", "gg" => "note")
-
-  # Confirm the premise rather than assuming it: if the collapse ever stops happening, this testset
-  # is testing nothing and should be rewritten, not silently pass.
-  @test !occursin("as \"gg\"", inspect_query(collapsed; connection = _AO_PG)[:sql_text])
-
-  # These two are the discriminating assertions: under the declared-list scan, `order_by("gg")`
-  # took the `found_in_select` branch and rendered `ORDER BY "gg"` without throwing at all.
-  # The cause is asserted too — this function raises more than one error type, so a bare type check
-  # would not prove the right one fired.
   for (label, conn) in (("PostgreSQL", _AO_PG), ("SQLite", _AO_SL))
     @testset "$label" begin
       ordered = AO.Ao_child.objects
       ordered.values("note", "gg" => "note")
       ordered.order_by("gg")
-      err = try
-        inspect_query(ordered; connection = conn)
-        nothing
-      catch e
-        e
-      end
-      @test err isa PormG.UnknownFieldError
-      @test occursin("gg", sprint(showerror, err))
+      osql = inspect_query(ordered; connection = conn)[:sql_text]
+      # `gg` is a real output column now, so ordering by it is legal on both backends — where it
+      # previously had to be refused to keep PostgreSQL (which errors) aligned with SQLite (which
+      # silently degrades `"gg"` to a constant string sort key and returns rows unsorted).
+      @test occursin("as \"gg\"", osql)
+      @test occursin("ORDER BY \"gg\"", osql)
     end
   end
-
-  # ...and the ambiguity guard must not fire on a name only ONE rendered column carries. Here
-  # `"z" => "note"` collapses away, so exactly one `as "z"` is emitted and the sort is unambiguous.
-  # Scanning the declared list reported a collision between `note` and `qty` that the SQL does not
-  # contain — the same review finding, in its false-positive direction.
-  #
-  # The discriminating part is that this RENDERS AT ALL: under the declared-list scan the guard
-  # raised here. The `count == 1` below is a premise check like the one above — it describes
-  # `get_select_query`'s collapse, which this fix does not touch, so it holds in either state.
-  single = AO.Ao_child.objects
-  single.values("note", "z" => "note", "z" => "qty")
-  single.order_by("z")
-  single_sql = inspect_query(single; connection = _AO_PG)[:sql_text]
-  @test count("as \"z\"", single_sql) == 1
-  @test occursin("ORDER BY \"z\" ASC", single_sql)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -151,7 +151,15 @@ function query(q::SQLObjectHandler;
   parameters::Union{Nothing, AbstractPormGParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,
-  show_query::Symbol = :execute
+  show_query::Symbol = :execute,
+  # #432: opt-in for a nested render that will re-emit its own parameters as one clause-ordered run
+  # (see `detach_nested_run!`). A subquery normally suppresses context switching so it cannot clobber
+  # the parent's active bucket — but that also means its values are filed under the PARENT's clause
+  # rather than their own, which is exactly the information the run needs to sort itself into text
+  # order. `query()` restores the ambient bucket itself below (the `is_subquery` branch), so a
+  # caller passing this does NOT need to — and none of them does. Do not delete that restore on the
+  # assumption the caller handles it: the failure would be silent and SQLite-only.
+  own_contexts::Bool = false
   )
 
   @pormg_debug false
@@ -163,6 +171,9 @@ function query(q::SQLObjectHandler;
 
   # Track if this is a subquery
   is_subquery = parameters !== nothing
+  # #432: `own_contexts` keeps the shared collector (PostgreSQL still needs one sequential `$N`
+  # counter) while letting the inner build file its values under its OWN clauses.
+  set_own_contexts = own_contexts || !is_subquery
 
   # IMPORTANT: Create the shared parameters object BEFORE building CTEs
   # This ensures all CTEs and the main query use sequential parameter numbering
@@ -184,7 +195,7 @@ function query(q::SQLObjectHandler;
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
   # Subqueries skip context switching to inherit the parent's current bucket.
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=!is_subquery, outer=outer)
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=set_own_contexts, outer=outer)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
   # Only enforce during actual execution (:execute) — inspection/dry-run modes (:dict, :sql,

@@ -160,9 +160,9 @@ const _UpgradeEntry = @NamedTuple{version::VersionNumber, title::String, body::S
 # written by `/pormg-cut-release`. It groups the entries of one release; it is NOT an entry title.
 #
 # The em-dash separator is REQUIRED, not decoration: without it this also matches a real entry whose
-# title merely starts with a version (`## 0.5.0 config format is now strict`), and the parser then
-# finds no other `##` in that block and drops the entry SILENTLY — it just disappears from the
-# guide. Both forms `/pormg-cut-release` writes carry the separator, so requiring it costs nothing.
+# title merely starts with a version (`## 0.5.0 config format is now strict`), and that entry's
+# whole segment is then skipped as a marker — it disappears from the guide SILENTLY, no error.
+# Both forms `/pormg-cut-release` writes carry the separator, so requiring it costs nothing.
 const _RELEASE_MARKER = r"^(?:Unreleased|\d+\.\d+\.\d+)\s+—"
 
 _asver(v::VersionNumber) = v
@@ -189,10 +189,20 @@ Parse raw `UPGRADING.md` text into change entries, newest-first (see `_read_upgr
 Split out so the parser can be exercised on hand-fed text — the CRLF-robustness regression in
 particular — without touching the on-disk file.
 
+An entry is delimited by its own `## ` heading and runs to the next one — the marker
+`UPGRADING.md`'s *"Writing an entry"* rules actually mandate. The `---` rules between entries are
+decorative and the parser does not depend on them.
+
+#438: it used to split on `^---\$` and gate each block on a `- **Recorded**:` bullet, neither of
+which the writing rules ever asked for. Nine headings written to spec were lost — three
+(`#424`, `#394`, `#396`) never reached any guide at all, and six (`#379`, `#388`, `#380`, `#347`,
+`#346`, and `#300` since `0.4.0` shipped) were merged into a neighbour's body and rendered under
+its title. `upgrade_guide(from = v"0.4.0")` returned 3 entries of 11.
+
 Line endings are normalized to `\\n` up front: a Windows checkout can store `UPGRADING.md`
-with `\\r\\n` (only `*.jl`/`*.sh` are pinned to `eol=lf`), and the `(?m)^---[ \\t]*\$` block
-separator never matches a `---\\r` line — without this the whole file collapses into a single
-bogus entry and every scoped lookup comes back empty.
+with `\\r\\n` (only `*.jl`/`*.sh` are pinned to `eol=lf`), and a `(?m)…\$` anchor never sees past
+a trailing `\\r` — so headings and bullets would match inconsistently and the parse would be
+platform-dependent.
 """
 function _parse_upgrading(text::AbstractString)
     text = replace(text, "\r\n" => "\n", "\r" => "\n")
@@ -203,44 +213,106 @@ function _parse_upgrading(text::AbstractString)
     tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
 
     entries = _UpgradeEntry[]
-    for block in split(text, r"(?m)^---[ \t]*$")
-        # `/pormg-cut-release` writes the release marker (`## 0.3.0 — 2026-07-24`) directly above
-        # the first entry of that release with NO `---` between them, so the first `##` in a block
-        # is not necessarily the entry's own heading. Take the first non-marker heading instead —
-        # otherwise the first entry of every release is titled with the release date and its real
-        # title is lost (visible via `structured = true`).
-        title_m = nothing
-        for h in eachmatch(r"(?m)^##[ \t]+(.+)$", block)
-            occursin(_RELEASE_MARKER, strip(h[1])) && continue
-            title_m = h
-            break
-        end
 
-        # A real change entry has a non-marker `## ` heading AND a `- **Recorded**:` bullet — this
-        # rejects the header/recipe prose and any stray section, regardless of `---` placement.
-        (title_m === nothing || !occursin(r"(?m)^-[ \t]+\*\*Recorded\*\*:", block)) && continue
+    # Segment on the entry heading itself. Each segment runs from its `## ` to just before the
+    # next one, so a body ALWAYS starts at its own heading: a release marker written directly
+    # above the first entry of a release (`/pormg-cut-release` emits it with no `---` between) is
+    # its own skipped segment rather than something to trim off, and every entry renders
+    # identically no matter where it sits in a release.
+    #
+    # The flip side is that a stray `## ` inside an entry body would split that entry. There is
+    # none today, and `test_upgrade_guide.jl` fails if one appears: it asserts every non-marker
+    # heading below the first release marker comes back as a parsed entry.
+    heads = collect(eachmatch(r"(?m)^##[ \t]+(.+?)[ \t]*$", text))
+    for (i, h) in enumerate(heads)
+        occursin(_RELEASE_MARKER, h[1]) && continue
 
+        stop  = i < length(heads) ? prevind(text, heads[i + 1].offset) : lastindex(text)
+        block = text[h.offset:stop]
+
+        # A real change entry carries `- **Version**:` (the policy from 0.2.0 on) or
+        # `- **Recorded**:` (pre-0.2 history, written before that policy existed). The header
+        # prose and the "Writing an entry" recipe carry neither — their only `- **Version**:`
+        # mention is indented inside backticks, which `^-` does not match.
         ver_m = match(r"(?m)^-[ \t]+\*\*Version\*\*:[ \t]*(\S+)", block)
+        (ver_m === nothing && !occursin(r"(?m)^-[ \t]+\*\*Recorded\*\*:", block)) && continue
+
         version = ver_m === nothing        ? _UNSTAMPED_VERSION  :
                   ver_m[1] == "Unreleased" ? _UNRELEASED_VERSION :
                                              VersionNumber(ver_m[1])
 
-        # Start the body at the entry's own heading. This drops a leading release marker, so every
-        # entry renders identically — previously only the first entry of a release carried the
-        # `## <ver> — <date>` line, making later entries from *other* releases look like they
-        # belonged to it. Each entry states its own `- **Version**:`, so nothing is lost.
-        body = block[title_m.offset:end]
-
         # Trim the internal per-app rollout table (which of PormG's own apps adopted it) —
         # noise for a consuming app, which only needs the porting work.
+        body = block
         roll = findfirst("### Per-app rollout", body)
         roll === nothing || (body = body[1:prevind(body, first(roll))])
 
         push!(entries, (version = version,
-                        title = String(strip(title_m[1])),
-                        body = String(strip(body))))
+                        title = String(h[1]),
+                        body = _trim_trailing_structure(body)))
     end
     return entries
+end
+
+# A trailing `---` rule, and a trailing HTML comment (the `<!-- pre-0.2 history (unstamped) -->`
+# divider).
+#
+# THE INVARIANT: peel only WHOLE LINES of structure, never reach into a line that carries prose.
+# Every piece of both patterns exists to hold it, and it is not decorative — this function ate an
+# entry's content twice in review before the invariant was stated:
+#
+#   `\z`               anchors to the end. Structure is peeled off the tail; a rule or a comment
+#                      INSIDE an entry's prose is content and must survive, so neither pattern may
+#                      ever be applied globally.
+#   `(?:\A|\n)[ \t]*`  anchors the START to a line. Without it, `match` takes the leftmost viable
+#                      position, so a stray `<!--` anywhere in the body — a code fence documenting
+#                      HTML, a mid-line mention — paired with any `-->` at the tail swallowed
+#                      everything between them. Measured on a 400-line body: 11,645 chars → 33.
+#                      An unclosed `<!--` inside a fence was worse than lost content: it left the
+#                      fence open, and `upgrade_guide` prints entries into one stream, so every
+#                      LATER entry disappeared into it too.
+#   `(?!-->|<!--)`     tempers the scan so it crosses neither a closed comment nor another opener.
+#                      The `-->` half keeps an interior closed comment intact. The `<!--` half is
+#                      what saves the fence case, where the stray opener IS at a line start and
+#                      the line anchor alone cannot help.
+#   `[\s\S]`           spans newlines, so a multi-line comment is one unit. A single-line-only tail
+#                      check leaked a multi-line divider exactly the way the first cut of this
+#                      leaked the single-line one.
+#
+# `[ ]{0,3}` on the left, NOT `[ \t]*`: CommonMark allows up to three spaces of indent on a
+# thematic break, and four spaces or a tab makes the line an indented CODE BLOCK instead. An
+# unbounded class peels the last line of a code sample the consumer is meant to copy.
+#
+# Known residual, deliberately not chased further: a line-start `<!--` that is never closed, in a
+# body that ends with a prose `-->`, is still peeled along with everything between them. It needs
+# all four conditions at once, `UPGRADING.md` contains no such shape, and the text really is an
+# HTML comment unless a code fence makes it literal — which no regex can know. Tightening past
+# this point costs more than it buys.
+const _TRAILING_RULE    = r"(?:\A|\n)[ ]{0,3}---[ \t]*\z"
+const _TRAILING_COMMENT = r"(?:\A|\n)[ ]{0,3}<!--(?:(?!-->|<!--)[\s\S])*-->[ \t]*\z"
+
+# Drop the file structure that visually precedes the NEXT heading — blank lines, `---` rules and
+# HTML comments. None of it is the entry's content; a segment simply runs up to the next `##`, so
+# all of it lands in this one's tail.
+#
+# All three, not just rules: the divider sits BELOW its rule, so a rule-only trim leaves `---`
+# *and* the comment in `#197`'s rendered body. Caught in review — and the assertion written to
+# catch that leak (`!endswith(body, "---")`) passed anyway, because the leak ends in `-->`.
+#
+# Peeling in a loop rather than one pass: rule and comment alternate, and either may be outermost.
+# It terminates because both patterns require a non-empty match anchored at `\z`, so `s` loses at
+# least three bytes per iteration.
+function _trim_trailing_structure(body::AbstractString)
+    s = rstrip(body)
+    while true
+        m = match(_TRAILING_COMMENT, s)
+        if m === nothing
+            m = match(_TRAILING_RULE, s)
+            m === nothing && break
+        end
+        s = rstrip(s[1:prevind(s, m.offset)])
+    end
+    return String(strip(s))
 end
 
 """

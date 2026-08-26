@@ -223,4 +223,238 @@ using PormG
         @test length(marked) == 1
         @test marked[1].title == "A real change (#9201)"
     end
+
+    # ══ #438 — the parser and UPGRADING.md's own "Writing an entry" rules must agree ══════════
+    #
+    # The parser used to split on `^---$` and gate each block on a `- **Recorded**:` bullet. The
+    # writing rules mandate NEITHER, so nine headings written exactly to spec were lost: three
+    # (#424, #394, #396) never reached any guide, and six (#379, #388, #380, #347, #346, and #300
+    # since 0.4.0 shipped) were merged into a neighbour's body and rendered under its title.
+    # `upgrade_guide(from = v"0.4.0")` returned 3 of 11. Nothing caught it — every other assertion
+    # in this file keys on frozen historical facts or on `!isempty(...)`, which the 40 older
+    # entries satisfied no matter how many new ones were dropped.
+    #
+    # Three layers, and they cover different things — do not collapse them:
+    #
+    #   A + B + E run against the REAL file and guard file↔parser AGREEMENT. They fail the moment
+    #     an entry is written that the parser cannot see (B), that it can see but files under the
+    #     wrong version (E), or that it silently merges into a neighbour (A). They are deliberately
+    #     blind to a parser regression on their own: with every entry carrying both of the old
+    #     markers, the pre-#438 parser also passes them. That is not a gap, it is their scope.
+    #   C + D pin the parser CONTRACT on hand-fed text — reverting `_parse_upgrading` to the
+    #     `---`/`Recorded` gate fails them immediately.
+    #   The `_trim_trailing_structure` testset pins the tail trimmer directly, on shapes the real
+    #     file does not contain and the file-level guards therefore cannot reach.
+    #
+    # Every one of them was mutation-tested before landing — each fails under a change that
+    # reintroduces the defect it describes. Together they are the only thing standing between a
+    # written entry and a consumer never being told to port it.
+
+    # ── A: every declared entry is a parsed entry ──────────────────────────────
+    @testset "every `- **Version**:` bullet parses as its own entry (#438)" begin
+        path = joinpath(pkgdir(PormG), "UPGRADING.md")
+        raw  = read(path, String)
+
+        # Same two normalizations the parser does, so the count is over the same text.
+        text = replace(raw, "\r\n" => "\n", "\r" => "\n")
+        tmpl = findfirst("## Template for new entries", text)
+        tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
+
+        declared = length(collect(eachmatch(r"(?m)^-[ \t]+\*\*Version\*\*:", text)))
+        parsed   = PormG._parse_upgrading(raw)
+        stamped  = count(e -> e.version != PormG._UNSTAMPED_VERSION, parsed)
+
+        @test declared > 0                # the file always has stamped entries
+
+        # Name the offending heading on failure — a bare count mismatch sends the maintainer
+        # hunting through 3700 lines for which entry the parser could not see.
+        #
+        # Re-segment to do it: `declared - stamped` is by definition "headings whose OWN segment
+        # declares a `- **Version**:` but produced no entry", so the segment must be re-derived to
+        # single one out. Listing every unparsed heading instead would bury the culprit among the
+        # four that never parse by design — and the likeliest culprit is a marker-shaped title,
+        # which would sit camouflaged among the three real release markers.
+        if stamped != declared
+            seen  = Set(e.title for e in parsed)
+            heads = collect(eachmatch(r"(?m)^##[ \t]+(.+?)[ \t]*$", text))
+            culprits = String[]
+            for (i, h) in enumerate(heads)
+                h[1] in seen && continue
+                stop = i < length(heads) ? prevind(text, heads[i + 1].offset) : lastindex(text)
+                occursin(r"(?m)^-[ \t]+\*\*Version\*\*:", text[h.offset:stop]) &&
+                    push!(culprits, String(h[1]))
+            end
+            @info "declared an entry but did not parse as one" culprits
+        end
+        @test stamped == declared         # …and every declared entry came back as an entry
+
+        # `---` rules and the `<!-- pre-0.2 history -->` divider are file structure, never content.
+        # NOT `!endswith(body, "---")`: the divider sits below its rule, so a real leak ends in
+        # `-->` and slips straight past a tail check. That weaker assertion shipped in the first
+        # cut of this testset and passed while `#197`'s body carried both (found in review).
+        @test all(e -> !occursin(r"(?m)^---[ \t]*$", e.body), parsed)
+        @test all(e -> !occursin("pre-0.2 history", e.body), parsed)
+    end
+
+    # ── B: no entry heading is silently dropped ────────────────────────────────
+    # Structural, not a whitelist: everything above the first release marker is prose (the file
+    # header and these very rules), everything below it is entries. So each non-marker heading
+    # from the first marker on must come back as exactly one parsed title.
+    #
+    # This also guards the one hazard heading-based segmentation introduces — a stray `## ` inside
+    # an entry body would split that entry, and the orphaned half would show up here as an
+    # unparsed heading instead of silently truncating the entry.
+    @testset "no entry heading is silently dropped (#438)" begin
+        path = joinpath(pkgdir(PormG), "UPGRADING.md")
+        raw  = read(path, String)
+
+        text = replace(raw, "\r\n" => "\n", "\r" => "\n")
+        tmpl = findfirst("## Template for new entries", text)
+        tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
+
+        heads = [String(m[1]) for m in eachmatch(r"(?m)^##[ \t]+(.+?)[ \t]*$", text)]
+        marker_at = findfirst(h -> occursin(PormG._RELEASE_MARKER, h), heads)
+        @test marker_at !== nothing
+
+        expected = filter(h -> !occursin(PormG._RELEASE_MARKER, h), heads[marker_at:end])
+        titles   = [e.title for e in PormG._parse_upgrading(raw)]
+
+        # Named so a failure prints WHICH heading vanished, not just a count mismatch.
+        unparsed = setdiff(expected, titles)
+        unexpected = setdiff(titles, expected)
+        @test unparsed == String[]
+        @test unexpected == String[]
+        @test length(titles) == length(expected)   # no heading parsed twice
+    end
+
+    # ── E: only genuine pre-0.2 history may omit `- **Version**:` ──────────────
+    # The parser accepts `- **Recorded**:` alone as an entry marker, because the pre-0.2 history
+    # predates the `- **Version**:` policy and has no such bullet. That leniency has a sharp edge:
+    # a NEW entry carrying `Recorded` but not `Version` — an easy slip, the two are adjacent in
+    # the template — parses at `_UNSTAMPED_VERSION`, sorts below 0.2.0, and is invisible to every
+    # consumer on ≥ 0.2.0. That is #438's own failure mode in a new place, and A and B both pass
+    # through it: A counts only declared bullets, B only asks that the heading parsed at all.
+    #
+    # So pin the population instead — unstamped entries are exactly the ones below the divider,
+    # and that set is closed. It never grows again.
+    @testset "only pre-0.2 history entries may omit `- **Version**:` (#438)" begin
+        path = joinpath(pkgdir(PormG), "UPGRADING.md")
+        raw  = read(path, String)
+
+        text = replace(raw, "\r\n" => "\n", "\r" => "\n")
+        tmpl = findfirst("## Template for new entries", text)
+        tmpl === nothing || (text = text[1:prevind(text, first(tmpl))])
+
+        # Match the divider COMMENT, not the bare phrase — "Writing an entry" names the marker in
+        # prose hundreds of lines above it, and `findfirst` on the phrase lands there instead.
+        divider = match(r"<!--[^\n]*pre-0\.2 history[^\n]*-->", text)
+        @test divider !== nothing        # the marker `UPGRADING.md`'s own rules point at
+        # Bail rather than let `divider.offset` throw a `FieldError` over the real diagnosis:
+        # every assertion below is about where the divider IS, so a missing one has one cause.
+        divider === nothing && return
+
+        below = count(m -> m.offset > divider.offset && !occursin(PormG._RELEASE_MARKER, m[1]),
+                      eachmatch(r"(?m)^##[ \t]+(.+?)[ \t]*$", text))
+        unstamped = count(e -> e.version == PormG._UNSTAMPED_VERSION,
+                          PormG._parse_upgrading(raw))
+
+        @test below > 0
+        @test unstamped == below
+    end
+
+    # ── C: the contract the writing rules actually state ───────────────────────
+    # A `## ` heading plus a line-start `- **Version**:` — no `---`, no `- **Recorded**:`. This is
+    # the exact shape of the eight entries #438 was filed for.
+    @testset "an entry needs neither `---` nor `- **Recorded**:` (#438)" begin
+        text = "# fixture\n\n" *
+               "## Writing an entry\n\n- One `##` entry per change, with\n" *
+               "  `- **Version**: Unreleased` on it.\n\n" *
+               "## Unreleased — next `0.9.0`\n\n" *
+               "## First uncut change (#9300)\n\n- **Version**: Unreleased\n\nFirst body.\n\n" *
+               "## Second uncut change (#9301)\n\n- **Version**: Unreleased\n\nSecond body.\n"
+        parsed = PormG._parse_upgrading(text)
+
+        @test length(parsed) == 2
+        @test parsed[1].title == "First uncut change (#9300)"
+        @test parsed[2].title == "Second uncut change (#9301)"
+        @test all(e -> e.version == PormG._UNRELEASED_VERSION, parsed)
+
+        # The regression itself: without a `---` between them the first entry used to swallow the
+        # second, which then never appeared under its own title or its own version.
+        @test occursin("First body.", parsed[1].body)
+        @test !occursin("Second uncut change", parsed[1].body)
+        @test occursin("Second body.", parsed[2].body)
+
+        # The writing rules themselves are prose, not an entry — their `- **Version**:` mention is
+        # indented inside backticks, which the line-start marker does not match.
+        @test !any(e -> occursin("Writing an entry", e.title), parsed)
+    end
+
+    # ── the tail trimmer, directly ─────────────────────────────────────────────
+    # `_trim_trailing_structure` is the one piece of #438 with a silent failure mode: whatever it
+    # fails to strip is rendered to the consumer, and whatever it strips too eagerly is content
+    # they never see. Both halves are pinned below, and the second half needs its own coverage
+    # because NO file-level guard can reach it — testset A asserts a body contains no stray rule
+    # and no divider, and eating content makes both of those assertions *more* satisfied. B only
+    # checks headings, which sit at a body's start and always survive. An over-strip is invisible
+    # everywhere except here.
+    @testset "`_trim_trailing_structure` peels structure, keeps content (#438)" begin
+        T = PormG._trim_trailing_structure
+
+        # strips: blanks, rules, single- and multi-line comments, in any order
+        @test T("Body.")                              == "Body."
+        @test T("Body.\n\n\n")                        == "Body."
+        @test T("Body.\n\n---\n")                     == "Body."
+        @test T("Body.\n\n---\n\n<!-- div -->")       == "Body."
+        @test T("Body.\n\n---\n\n<!--\nmulti\n-->")   == "Body."   # multi-line: one unit
+        @test T("Body.\n\n<!-- x -->\n")              == "Body."
+        @test T("Body.\n\n<!-- x -->\n\n---\n")       == "Body."   # alternating, either outermost
+
+        @test T("Body.\n\n  ---\n")                   == "Body."   # ≤3 spaces: still a rule
+
+        # …but 4 spaces or a tab makes it an indented CODE BLOCK, not a rule. Peeling there
+        # deletes the last line of a code sample the consumer is meant to copy.
+        @test T("Body.\n\n    ---\n")                 == "Body.\n\n    ---"
+        @test T("Body.\n\n\t---\n")                   == "Body.\n\n\t---"
+        @test T("Example:\n\n    key: v\n    ---\n")  == "Example:\n\n    key: v\n    ---"
+
+        # keeps: anything interior
+        @test T("Top\n\n---\n\nBottom.")              == "Top\n\n---\n\nBottom."
+        @test T("Top\n<!-- keep -->\nBottom.")        == "Top\n<!-- keep -->\nBottom."
+        @test T("```html\n<!-- keep me -->\n```")     == "```html\n<!-- keep me -->\n```"
+
+        # near-misses that are markdown content, not a rule
+        @test T("Body.\n\n----\n")                    == "Body.\n\n----"
+        @test T("Body.\n\n| --- |\n")                 == "Body.\n\n| --- |"
+
+        # ── the over-strip half: a line carrying prose is never peeled, whole or in part ──
+        # This is the invariant, and it is the one this function broke twice. A trimmer that can
+        # only remove whole structural LINES cannot delete prose by construction; one that can
+        # start matching mid-line always can. Every row below returned less — sometimes far less —
+        # than its input under an earlier cut.
+        @test T("<!-- a --> VISIBLE <!-- b -->")      == "<!-- a --> VISIBLE <!-- b -->"
+
+        # a stray opener + any `-->` at the tail used to swallow everything between them
+        @test T("stray <!-- opener\n\nKEEP ME\n\n<!-- div -->") == "stray <!-- opener\n\nKEEP ME"
+        @test T("prose with <!-- open\nMORE PROSE\nthe arrow points -->") ==
+              "prose with <!-- open\nMORE PROSE\nthe arrow points -->"
+
+        # worst case: an unclosed opener inside a fence. Losing the content is the small half —
+        # eating the closing fence leaves it open, and `upgrade_guide` prints entries into one
+        # stream, so every LATER entry vanishes into it as well.
+        @test T("```html\n<!-- unclosed\n```\nKEEP\n\n<!-- div -->") ==
+              "```html\n<!-- unclosed\n```\nKEEP"
+    end
+
+    # ── the `---` rule is a visual separator, never content ────────────────────
+    @testset "a decorative `---` rule never reaches an entry body (#438)" begin
+        parsed = PormG._parse_upgrading(
+            "# fixture\n\n## 0.9.0 — 2026-09-09\n\n" *
+            "## A change (#9400)\n\n- **Version**: 0.9.0\n\nBody.\n\n---\n\n" *
+            "## Another change (#9401)\n\n- **Version**: 0.9.0\n\nOther body.\n")
+        @test length(parsed) == 2
+        @test endswith(parsed[1].body, "Body.")
+        @test !occursin("---", parsed[1].body)
+        @test endswith(parsed[2].body, "Other body.")
+    end
 end

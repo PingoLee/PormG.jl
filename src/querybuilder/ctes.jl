@@ -302,7 +302,7 @@ function _cjoin(
 
   @pormg_debug false
   if (split(main_join.first, "__") |> length) == 1 && main_join.first ∉ q.model.field_names
-    throw(UnknownFieldError("The field '$(main_join.first)' is not a field in model '$(q.model.table_name)'. The fields are: $(q.model.field_names)"))
+    throw(UnknownFieldError("The field '$(main_join.first)' is not a field in model '$(Models.model_table_name(q.model))'. The fields are: $(q.model.field_names)"))
   end
 
   # Validation: if field already exists as a FK on the model, ensure target model matches

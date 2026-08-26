@@ -121,6 +121,31 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# cjoin() on an unknown main-model field → UnknownFieldError
+# The guard existed and built the right exception, but its message interpolated
+# `q.model.table_name` — a property `Model_Type` does not have and has no getproperty overload
+# for. So constructing the message raised `FieldError: type Model_Type has no field table_name`
+# BEFORE the intended `UnknownFieldError` could be thrown: an untyped error, naming an internal
+# struct, for ordinary user misuse. The canonical accessor is `Models.model_table_name(model)`.
+# Found while working #433; the fix is a one-token change in `ctes.jl`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "cjoin() unknown main field is UnknownFieldError, not FieldError" begin
+    q = object(typed_errs_model)
+    err = try
+        q.cjoin("no_such_field" => "SomeModel", filters = ["points" => 1], warn = false)
+        nothing
+    catch e
+        e
+    end
+    @test err isa PormG.UnknownFieldError
+    msg = sprint(showerror, err)
+    # Names the offending field and the model's TABLE, which is what the message always meant to
+    # report. Asserting the table name is what fails if the accessor regresses to a bare property.
+    @test occursin("no_such_field", msg)
+    @test occursin(PormG.model_table_name(typed_errs_model), msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ISNULL guard → FilterError
 # ISNULL refuses a function expression as its column operand.
 # ─────────────────────────────────────────────────────────────────────────────

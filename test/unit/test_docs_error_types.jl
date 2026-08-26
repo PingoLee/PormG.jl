@@ -141,6 +141,57 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        # #433. A subquery consumed by @in / Subquery / Exists must not declare a CTE: the nested
+        # WITH binds into the `:cte` bucket, which flattens ahead of `:select`/`:where`, so on
+        # SQLite its values overtake any value whose text comes first. Refused on both backends so
+        # the same query does not build on one and misbind on the other.
+        "read/subqueries_and_ctes.md — a subquery consumed by @in cannot declare its own .with(...)",
+        QueryBuildError,
+        () -> begin
+            fast = DOCERR_STATUS_PG.objects
+            fast.values("statusid", "status")
+            inner = DOCERR_RESULT_PG.objects
+            inner.with("fast" => fast, join_field = "statusid" => "statusid")
+            inner.filter("fast__status" => "Finished")
+            inner.values("driverid")
+            q = DOCERR_DRIVER_PG.objects
+            q.values("driverid")
+            q.filter("driverid__@in" => inner)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #433. Only a statement that emits a WITH clause can reference a CTE. Reads do; update()
+        # does not, and used to reach an "internal error … please report it" instead of saying so.
+        "read/subqueries_and_ctes.md — update() cannot reference a CTE (it emits no WITH clause)",
+        QueryBuildError,
+        () -> begin
+            fast = DOCERR_STATUS_PG.objects
+            fast.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("fast" => fast, join_field = "statusid" => "statusid")
+            q.filter("fast__status" => "Finished")
+            q.update("points" => 0, show_query = :dict)
+        end,
+    ),
+    (
+        # #433. delete() re-uses the queryset being deleted as a scoping subquery
+        # (`DELETE ... WHERE pk IN (<query>)`), which puts a declared CTE in exactly the nested
+        # position that misbinds on SQLite. Refused on the cascade and leaf paths alike.
+        # UnsafeMutationError, not QueryBuildError: the same query is legal on a read path, so the
+        # discriminator is that it is a mutation — matching delete()'s four other shape guards.
+        "read/subqueries_and_ctes.md — delete() refuses a CTE-scoped queryset",
+        UnsafeMutationError,
+        () -> begin
+            ev = DOCERR_STATUS_PG.objects
+            ev.values("statusid", "status")
+            q = DOCERR_RESULT_PG.objects
+            q.with("ev" => ev, join_field = "statusid" => "statusid")
+            q.filter("ev__status" => "Finished")
+            q.delete(show_query = :dict)
+        end,
+    ),
+    (
         "write/update.md — UPDATE cannot carry LIMIT/OFFSET/ORDER BY",
         UnsafeMutationError,
         () -> DOCERR_RESULT_PG.objects.filter("resultid" => 1).limit(5).

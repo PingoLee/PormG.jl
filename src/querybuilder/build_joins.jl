@@ -385,8 +385,39 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     @pormg_debug false
     cte_name = vector[1]
     cte_dict = instruct.object.ctes[cte_name]
+    # #433: this is NOT an internal invariant, which is what it claimed to be until the #433 audit.
+    # `cte_dict["model"]` is written in exactly one place — `_build_cte_custom_model`, reached only
+    # from `build_cte_clause`. So a missing "model" means precisely one thing: THIS statement never
+    # ran `build_cte_clause`, and therefore emits no `WITH` clause at all. Referencing the CTE would
+    # name a relation the statement never declares. That is a property of the statement kind, not a
+    # broken invariant, and it is reachable from ordinary user input:
+    #
+    #     q.with("gv" => sub, join_field = "parent" => "id")
+    #     q.filter("gv__code" => "X")
+    #     q.update("note" => "n")        # update() never calls build_cte_clause
+    #
+    # `update()`'s own CTE refusal (#394, `_get_join_condition_list`) cannot catch that, because it
+    # inspects `row_join` entries — which this function is in the middle of producing.
+    #
+    # Guarding HERE rather than at each caller is deliberate. `build()` has SIX call sites and only
+    # three render a `WITH`: `execution.jl` `query`/`_count`/`_exists` do; `_update`,
+    # `bulk_update` (`execution_bulk.jl`) and `_build_exists_query` (`build_helpers.jl`, which
+    # hand-rolls its own SELECT) do not. A per-caller guard would have to be re-added for each
+    # future one. This is the single point where the missing render step becomes observable.
+    #
+    # The message deliberately does NOT name `update()` as the only culprit: `_build_exists_query`
+    # is a READ-path renderer that also emits no `WITH`, so "reads render a CTE" would be a lie on
+    # that route. It is currently unreachable only because `_guard_no_nested_cte` refuses a nested
+    # CTE earlier with a better message — a single-point dependency worth not encoding into text.
     if !haskey(cte_dict, "model")
-      error(_emsg("PormG internal error: CTE $(cte_name) has not been materialized yet — this should not happen; please report it."))
+      throw(QueryBuildError(
+        "The CTE \e[4m\e[31m$(cte_name)\e[0m is referenced here, but the statement being built " *
+        "emits no \e[4m\e[32mWITH\e[0m clause — so the CTE would never be declared.\n  " *
+        "\e[4m\e[32mlist\e[0m / \e[4m\e[32mfirst\e[0m / \e[4m\e[32mcount\e[0m / " *
+        "\e[4m\e[32mexists\e[0m render a CTE. \e[4m\e[32mupdate(...)\e[0m and " *
+        "\e[4m\e[32mbulk_update(...)\e[0m do not.\n  " *
+        "Scope the statement with a plain \e[4m\e[32m.filter(...)\e[0m or a subquery instead of a " *
+        "CTE (#433)."))
     end
     cte_model = cte_dict["model"]::PormGModel
     

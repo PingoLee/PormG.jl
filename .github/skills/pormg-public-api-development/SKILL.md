@@ -26,6 +26,30 @@ Centering on the migration subsystem, or on low-level query-builder/SQL renderin
 
 ## Public API First
 
+### Before designing a guard, check the prior art
+
+When a bug report is really an **API ambiguity** — two things can legitimately claim one name, one
+spelling means two things depending on call order — check what Django, SQLAlchemy, django-cte or
+peewee do with the same construct *before* writing a validation guard. It costs minutes and it
+changes the answer often enough to be worth the habit.
+
+Two distinct outcomes, both useful:
+
+- **They hit the same ambiguity and refuse it.** Then a guard is the right shape, and you can match
+  a message users may already recognise. Django raises `ValueError: The annotation 'x' conflicts
+  with a field on the model.` at query-construction time
+  ([ticket #11256](https://code.djangoproject.com/ticket/11256)).
+- **They never have the ambiguity**, because their API is shaped so it cannot arise. Then a guard is
+  policing a problem PormG invented, and the real fix is the shape. SQLAlchemy, django-cte and
+  peewee all hand back a CTE **object** with its own namespace (`cte.c.sku`) rather than putting CTE
+  names into the field-path namespace — which is why only PormG had #431/#434, and why #444 is a
+  redesign rather than a validation.
+
+Pair this with the pre-publish bullet in
+[`general.instructions.md`](../../instructions/general.instructions.md): prior art tells you whether
+the shape is wrong, the downstream call-site count tells you what fixing it costs. Neither answers
+on its own.
+
 ### Preferred query style
 
 Use the fluent surface exposed by `ObjectHandler` and `model.objects`.

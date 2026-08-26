@@ -259,7 +259,7 @@ guards, declined findings, scope you widened and on whose say-so.
 - Do not run an integration suite without asking, even when a plan lists it
 - Do not reach for the full integration suite when a slice covers the diff — nor slice one of the four files that cannot be sliced
 - Do not slice against a database that was never bootstrapped — the slice does no DDL and no reseed
-- Do not claim a doc example works because it looks right — run it against `f1.sqlite`
+- Do not claim a doc example works because it looks right — run it against `f1.sqlite`. The same applies to **any claim you are about to act on, including one you wrote yourself**: an issue's diagnosis, a reviewer's classification, a premise in your own approved plan. #433 shipped three corrections from this alone — a "genuine internal invariant" that `update()` reached from ordinary input, a misbind described as universal that was conditional, and a doc example that was fabricated on the first pass and semantically wrong on the second
 - Do not commit, push, or open a PR on plan approval alone
 - Do not `git add -A` in a worktree
 - Do not narrow an issue's task list without saying so

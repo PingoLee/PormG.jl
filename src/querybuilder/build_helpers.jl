@@ -828,11 +828,16 @@ function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Unio
   # Passing the shared `parameters` makes query() treat this as a subquery: it inherits the ambient
   # :select bucket (set by build()) and restores the context afterward, so the inner params flatten in
   # :select — textually correct (the SELECT list precedes FROM/JOIN/WHERE). Correlate via outer=instruc.
+  # #432: same nested-run reordering as `_build_exists_query` — this subquery's text sits in the
+  # SELECT list, so everything it binds must be one clause-ordered run in the ambient bucket.
+  nested_mark = nested_parameter_mark(instruc)
   inner_sql = query(handler,
                     table_alias=instruc.table_alias,
                     connection=instruc.connection,
                     parameters=instruc.parameters,
-                    outer=instruc)
+                    outer=instruc,
+                    own_contexts=true)
+  reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   return string("(", inner_sql, ")")
 end
 function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
@@ -861,18 +866,25 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   q.object.offset = 0
 
   old_context = instruc.parameters isa PormGSQLiteParam ? instruc.parameters.current_context : nothing
+  # #432: the inner build scatters its values across its own clause buckets while this EXISTS text is
+  # spliced into ONE of the parent's clauses. Mark every bucket, then re-emit what it bound as one
+  # contiguous run, clause-ordered, at this fragment's position. See `detach_nested_run!`.
+  nested_mark = nested_parameter_mark(instruc)
   instruction = try
     build(
       q.object,
       table_alias=instruc.table_alias,
       connection=instruc.connection,
       parameters=instruc.parameters,
-      set_contexts=false,
+      # #432: record this subquery's OWN clause roles so `detach_nested_run!` can sort its values
+      # into text order. The `finally` below restores the parent's ambient bucket.
+      set_contexts=true,
       outer=instruc,
     )
   finally
     old_context !== nothing && set_context!(instruc.parameters, old_context)
   end
+  reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
 
   safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
@@ -1322,7 +1334,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _validate_membership_subquery(v)
     # #433: renders an inline WITH that binds into `:cte` while its text sits in the WHERE clause.
     _guard_no_nested_cte(v.values, "A membership filter (__@in / __@nin)")
-    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
+    # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
+    nested_mark = nested_parameter_mark(instruc)
+    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc, own_contexts=true)
+    reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     return string(_get_filter_query(v.column, instruc), " ", v.operator, " ($placeholders)")
   else
     @pormg_debug false

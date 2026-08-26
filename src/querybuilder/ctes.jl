@@ -504,8 +504,23 @@ function build_cte_clause(ctes::Dict{String,CTEDict}, connection, parameters::Un
     # and appear before main query parameters in the final SQL order.
     set_context!(parameters, :cte)
 
+    # #432: a CTE BODY is a nested render too — the fourth one. Its own joins bind through the
+    # ungated `set_context!(:join)` in `build_row_join_sql_text`, so a `.with(...)` whose body
+    # carries a parameterized join scattered its values across `:cte` and `:join` while its whole
+    # text sits inside the leading `WITH`. Measured before this: a CTE body with a `cjoin` ON filter
+    # plus its own WHERE bound SQLite `["CTEWHERE", "CTEON"]` against a text order of
+    # `CTEON, CTEWHERE`, because `:cte` flattens ahead of `:join`. Correct on PostgreSQL, silent
+    # wrong rows on SQLite, and NOT refused by anything — a plain documented `.with(...)`.
+    #
+    # Same treatment as the other three sites: let the body file its values under its own clauses,
+    # then lift them and re-emit as one clause-ordered run in `:cte`, where this text lives.
+    nested_mark = nested_parameter_mark(parameters)
+
     # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
-    cte_sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields)
+    cte_sql = query(cte_query, table_alias=table_alias, connection=connection, parameters=parameters, cte=cte_fields, own_contexts=true)
+
+    set_context!(parameters, :cte)
+    reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
 
     @pormg_debug false
 

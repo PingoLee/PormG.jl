@@ -55,8 +55,31 @@ PORMG_DB=db_sl julia --project=test/integration test/integration/runtests.jl   #
 
 ## Steps
 
-1. **List the wave.** Show every `## Unreleased` entry title and its `**Severity**`, so the maintainer
-   sees exactly what's shipping. Count them.
+1. **List the wave — through the parser, not by eye.** Show every `## Unreleased` entry title and its
+   `**Severity**`, so the maintainer sees exactly what's shipping. Get the list from
+   `upgrade_guide`, which is what a consumer will actually run:
+
+   ```bash
+   julia --project=. -e 'using PormG
+     w = PormG.upgrade_guide(from = pkgversion(PormG), structured = true)
+     println(length(w), " entries")
+     for e in w
+       sev = match(r"(?m)^-[ \t]+\*\*Severity\*\*:[ \t]*(.+)$", e.body)
+       println("  ", e.title, "\n      ", sev === nothing ? "(no Severity bullet)" : sev[1])
+     end'
+   ```
+
+   Then **cross-check that count against the headings** — if they disagree, an entry is invisible to
+   the guide and cutting would ship it unannounced:
+
+   ```bash
+   grep -c '^- \*\*Version\*\*: Unreleased' UPGRADING.md   # template block adds 1
+   ```
+
+   This is #438: of an 11-entry wave, `upgrade_guide` returned **3** — three entries never reached
+   any guide, and five more were merged into a neighbour's body and rendered under its title.
+   Every step below passed anyway. `test/unit/test_upgrade_guide.jl` now fails on that state —
+   run it here if the counts disagree, it will name the heading.
 
 2. **Choose the new version.** Read the current `version` in `Project.toml`.
    - **Default: bump the `y` slot** (`0.a.z → 0.(a+1).0`) — a train that carries any
@@ -69,6 +92,17 @@ PORMG_DB=db_sl julia --project=test/integration test/integration/runtests.jl   #
 4. **Stamp `UPGRADING.md`** (use today's real date, `YYYY-MM-DD`):
    - For **each** entry currently under `## Unreleased`: replace its
      `- **Version**: Unreleased` line with `- **Version**: <new>`.
+   - **Add a `- **Recorded**: <date-the-entry-landed>` bullet to any entry missing one** (between
+     `- **PormG ref**:` and `- **Severity**:`, as the template has it). `Recorded` is the date the
+     change landed, **not** the cut date. Recover it from the **oldest** pickaxe match, not the
+     newest — a later reword of the heading would otherwise hand you its edit date:
+
+     ```bash
+     git log --reverse --format='%as' -S'<the entry heading line>' -- UPGRADING.md | head -1
+     ```
+
+     Every entry carries one as of #438; keep it that way, because the file header promises this
+     step "dates them".
    - Replace the `## Unreleased — next \`<x>\`` heading (and its italic placeholder note) with
      `## <new> — <YYYY-MM-DD>`.
    - Insert a **fresh empty** `## Unreleased — next \`<next-y>\`` block at the very top of the entries
@@ -86,8 +120,18 @@ PORMG_DB=db_sl julia --project=test/integration test/integration/runtests.jl   #
    - Leave already-stamped (older) entries untouched.
 
 5. **Verify the parser.** Run `julia --project=. test/unit/test_upgrade_guide.jl` (via a runner that
-   loads drivers, or the full `test/runtests.jl`). The stamped entries must now parse at `<new>` and
-   the empty `## Unreleased` must produce no entries. Fix any mismatch before committing.
+   loads drivers, or the full `test/runtests.jl`). Then assert the stamp actually landed — the count
+   must match step 1's, at the new version, with `## Unreleased` now empty:
+
+   ```bash
+   julia --project=. -e 'using PormG
+     println("at <new>  : ", length(PormG.upgrade_guide(from = v"<previous>", to = v"<new>", structured = true)))
+     println("uncut     : ", count(e -> e.version == PormG._UNRELEASED_VERSION, PormG._read_upgrading_entries()))'
+   ```
+
+   Expect `at <new>` == the step-1 count and `uncut` == 0. Fix any mismatch before committing —
+   before #438 this step read *"the stamped entries must now parse"* with nothing to check it, and
+   the precondition passed while being false.
 
 6. **Commit** (respect the commit gate — show the diff, get explicit approval):
    `chore(release): cut <new>` with the entry titles in the body.

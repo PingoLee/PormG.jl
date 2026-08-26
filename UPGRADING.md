@@ -18,6 +18,13 @@ Tracks **breaking / behavior changes in PormG** that require source-code changes
   release number when cutting a train (`/pormg-cut-release`).
 - Each entry records: the PormG **version** it shipped in, what changed, why, a *"How to find the
   calls to migrate"* grep, and the concrete **before → after** code edit.
+- **What makes it an entry, for `upgrade_guide`:** its `##` heading, plus a `- **Version**:` bullet
+  at the **start of a line**. Nothing else. The `---` rules between entries are visual — the parser
+  does not split on them — and `- **Recorded**:` is metadata, not a marker. Copying the template
+  block at the bottom of this file gives you both bullets. (#438: the parser used to require `---`
+  **and** `- **Recorded**:`, which these rules never asked for. Nine headings written to spec were
+  lost — three never reached any guide, six were rendered under a neighbour's title — and
+  `upgrade_guide(from = v"0.4.0")` returned 3 entries of 11.)
 - **Not for additive features.** This log is only what **forces** an app edit. A new opt-in
   capability (operator, kwarg, function) requires no change to keep an app working → document it in
   `docs/`, not here.
@@ -43,6 +50,7 @@ consuming app, `/pormg-cut-release` stamps every entry below with `0.5.0`, dates
 - **Version**: Unreleased
 - **PormG ref**: #424 (landed with #421); `src/querybuilder/build_query.jl`,
   `docs/src/read/custom_joins.md`
+- **Recorded**: 2026-08-25
 - **Severity**: **behavior change (very narrow)** — two shapes that silently returned row-multiplied
   results now raise at query-build time. Part of the `0.5.x` pre-publish wave.
 
@@ -170,12 +178,15 @@ q.filter("ev__year" => 2009)
 > (`filter("raceid" => F("ev__raceid"))`, #44), never by a literal predicate. If you are not writing
 > that comparison, you want `join_field`.
 
+---
+
 ## A CTE joined in a correlated `UPDATE … FROM` is refused instead of emitting broken SQL (#394)
 
 - **Version**: Unreleased
 - **PormG ref**: #394; `src/querybuilder/sanitization.jl`, `src/querybuilder/execution.jl`,
   `src/Dialect.jl`, `src/Generator.jl`, `src/migrations/planner.jl`,
   `docs/src/schema_conventions.md`
+- **Recorded**: 2026-08-24
 - **Severity**: **behavior change (very narrow)** — one shape that was already failing now fails
   earlier and with a message. Everything else in #394 is a widening and forces nothing. Part of the
   `0.5.x` pre-publish wave.
@@ -243,11 +254,14 @@ M.Result.objects.
     update("points" => 25)
 ```
 
+---
+
 ## Reverse accessors — every relation in a multi-relation group is disambiguated (#396)
 
 - **Version**: Unreleased
 - **PormG ref**: #396; `src/Models.jl`, `docs/src/many_to_many.md`,
   `docs/src/read/values_and_joins.md`, `docs/src/fields.md`, `src/models/fields.jl`
+- **Recorded**: 2026-08-24
 - **Severity**: **breaking (narrow, source-visible)** — a model declaring **two or more** relations to
   the same target model, with `related_name` omitted on any of them, now installs different reverse
   accessors on that target. A lookup path or a `related_objects[…]` read using the old key raises
@@ -538,11 +552,14 @@ Then `makemigrations()` again; the plan should be empty. That empty second plan 
 of #409 — before it, that column churned on every run and there was no model you could write to
 stop it.
 
+---
+
 ## `bulk_update` — a `match_on` key PormG would auto-populate is refused, not bound (#379)
 
 - **Version**: Unreleased
 - **PormG ref**: #379; `src/querybuilder/execution_bulk.jl`, `docs/src/write/bulk.md`,
   `docs/src/api.md`
+- **Recorded**: 2026-08-21
 - **Severity**: **behavior change (narrow)** — a `bulk_update()` whose `match_on=` (or primary-key
   fallback) names a field PormG auto-populates, and for which the `DataFrame` supplies **no** source
   column, now raises `UnknownFieldError` where it used to run. Runtime, not compile-time. Every other
@@ -648,11 +665,14 @@ timestamp string is fine and is what every example above passes; `DateTimeField`
 the same defect surfacing rather than a new one, and the fix is the same: give the key column values
 the field can actually read.
 
+---
+
 ## Foreign keys — an unresolved `to` target is refused, not lowercased into a table name (#388)
 
 - **Version**: Unreleased
 - **PormG ref**: #388; `src/Models.jl` (`fk_target_table`), `src/querybuilder/build_joins.jl`,
   `docs/src/schema_conventions.md`
+- **Recorded**: 2026-08-18
 - **Severity**: **behavior change (narrow)** — a `ForeignKey`/`OneToOneField` whose `to` names a model
   that is **not in the models module** now raises instead of referencing/joining a fabricated table.
   Runtime, not load time: the models file still loads, and the failure happens when the key is
@@ -722,10 +742,13 @@ its table name differs from the model name:
 Tb_dia_semana = Models.Model("tb_dia_semana", co_dia_semana = Models.IDField())
 ```
 
+---
+
 ## Bulk writes — `columns=` refuses two different source columns for one model field (#380)
 
 - **Version**: Unreleased
 - **PormG ref**: #380; `src/querybuilder/execution_bulk.jl`, `docs/src/write/bulk.md`
+- **Recorded**: 2026-08-14
 - **Severity**: **behavior change (narrow)** — a `columns=` list that names the same model field twice
   from *different* `DataFrame` columns now raises `QueryBuildError` where it used to run. Runtime, not
   compile-time: the call only fails once it executes. Exact repeats are unaffected. Part of the
@@ -795,12 +818,15 @@ bulk_insert(M.Stint.objects, df, columns = ["driver", "c2" => "laps"])
 If both columns genuinely carry data you want, they belong in two different fields — or combine them
 in the `DataFrame` first (`df[!, :laps] = coalesce.(df.c1, df.c2)`) and map that one column.
 
+---
+
 ## `indexes` becomes a model-level option, so a field of that name needs `db_column` (#347)
 
 - **Version**: Unreleased
 - **PormG ref**: #347; `src/constants.jl`, `src/Models.jl`, `src/migrations/planner.jl`,
   `src/migrations/introspection.jl`, `src/migrations/importers.jl`, `docs/src/models.md`,
   `docs/src/import_django.md`
+- **Recorded**: 2026-08-14
 - **Severity**: **breaking (very narrow)** — exactly one case, and it fails loudly at model load.
   Everything else in #347 is additive: the new `Models.Index` type, the `indexes =` keyword, the
   composite-index introspection on both backends, and the Django `Meta.indexes` /
@@ -844,11 +870,14 @@ models file loads — not a silent misread. Query paths that referenced the old 
 (`"indexes"`, `"indexes__@gt"`, `values("indexes")`) must move to the new one; the physical column,
 and therefore every schema, is untouched, so no migration is generated.
 
+---
+
 ## Multi-app Django import: `ignore_table` removed, `Model_to_str` drops `settings`, unresolvable relations degrade (#346)
 
 - **Version**: Unreleased
 - **PormG ref**: #346; `src/Models.jl`, `src/migrations/importers.jl`, `docs/src/import_django.md`,
   `docs/src/schema_conventions.md`, `docs/src/configuration/connection_yml.md`
+- **Recorded**: 2026-08-14
 - **Severity**: **breaking (narrow)** — **five** cases. The first two are compile-time: a removed
   keyword and a removed positional argument, so an affected call fails loudly with a `MethodError`
   the first time it runs. The rest fire only when you **regenerate** a Django import — one for
@@ -1734,6 +1763,9 @@ q = M.Result.objects.
 Note the argument shape differs: the free function took the CTE name and sub-query as two positional
 arguments plus `q.object` (the underlying `SQLObject`); the fluent method takes a `Pair` and operates
 on the handler. Same for `cjoin(query, "result" => "Result")` → `query.cjoin("result" => "Result")`.
+
+---
+
 ## A positional model name must be lowercase (#300)
 
 - **Version**: 0.4.0

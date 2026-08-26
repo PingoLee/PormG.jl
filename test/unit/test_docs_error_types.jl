@@ -125,8 +125,10 @@ const DOCERR_CASES = [
     (
         # #424. `cjoin_on`'s `on` is the whole ON clause and is NOT path-prefixed, so a bare
         # `"ev__col" => v` resolves against a `join_field`-less (CROSS-joined) CTE — which has no ON
-        # clause to carry it. Two predicates: with only one, the "produced no ON conditions" guard
-        # fires first and the case would pin the wrong error.
+        # clause to carry it. ONE predicate, which is the doc's own shape: this used to need a
+        # second as padding, because relocating the only predicate away emptied `d`'s extras and
+        # the "produced no ON conditions" guard fired first, pinning the wrong error. #435 hoisted
+        # the CROSS check ahead of emission, so the cause wins regardless of join order.
         "read/custom_joins.md — a cjoin_on ON predicate on a CROSS-joined CTE is refused",
         QueryBuildError,
         () -> begin
@@ -135,8 +137,21 @@ const DOCERR_CASES = [
             q = DOCERR_RESULT_PG.objects
             q.with("ev" => ev)                       # no join_field => CROSS JOIN (#44)
             q.values("resultid")
-            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d",
-                       on = [F("d.driverid") == F("driverid"), "ev__status" => "Finished"])
+            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = ["ev__status" => "Finished"])
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #435. Resolving `driverid__surname` builds the driver join DURING Phase 1, so it lands at
+        # a higher `row_join` index than `d` — a forward reference. Phase 1b moves the predicate
+        # onto it, and since it is `d`'s only one, `d` is left with no ON clause. The doc note tells
+        # the reader this raises and names the alias the predicates went to.
+        "read/custom_joins.md — a cjoin_on whose predicates all relocate away is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("resultid")
+            q.cjoin_on("DOCERR_STATUS_PG", alias = "d", on = ["driverid__surname" => "Senna"])
             q.list(show_query = :dict)
         end,
     ),

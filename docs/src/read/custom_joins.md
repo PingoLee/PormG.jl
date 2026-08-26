@@ -330,17 +330,74 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     (`"b2.col__@gte" => 3`) are not supported yet — express a joined-side comparison-to-literal by
     restructuring, or filter the base side with a bare pair (`"col__@gte" => 3`). Referencing a
     *third* table (another join's alias) inside one `cjoin_on` is also out of scope for now — and
-    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it now
+    when that third table is a **CROSS-joined CTE** (`.with(...)` with no `join_field`), it
     raises `QueryBuildError` instead of quietly dropping the predicate (#424) — a `CROSS JOIN` has
-    no `ON` clause to carry one, so the join would otherwise match every row. The same guard fires
+    no `ON` clause to carry one, so the join would otherwise match every row. That fires even when
+    the predicate is the join's **only** one (#435). The same guard fires
     when a `cjoin_on`'s **alias** happens to equal an unkeyed CTE's name: that collision hands the
     CTE this join's predicates. Rename the CTE, give it a `join_field`, or move the predicate to
     `.filter(...)` (#44).
+
     `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
     subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
     table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74
     aggregate fan-out guard — if the join is to-many, aggregate the base table with `distinct=true`
     (or over the joined table's own column) to avoid silent row multiplication.
+
+!!! warning "Give the join a predicate that names its own alias"
+    Every predicate in `on` that references a join emitted *after* this one is moved onto that
+    join — it has to be, because a join cannot reference an alias that has not appeared yet. If
+    **all** of them move, your join is left with no `ON` clause and PormG raises, naming the alias
+    they went to (#435):
+
+    ```julia
+    query = M.Result.objects
+    query.values("points")
+    query.cjoin_on("Driver", alias = "d", on = ["raceid__circuitid__country" => "Italy"])
+    # ERROR: Every ON predicate given for d resolved onto Tb_2 instead, …
+    ```
+
+    **The fix depends on whether your predicates name the alias at all**, and the two cases pull
+    in opposite directions. The error message tells you which one you are in.
+
+    *Nothing names it* — as above. The join has nothing correlating it. Add a predicate that does
+    (`F("d.driverid") == F("driverid")`), or move the conditions to `.filter(...)` and drop the
+    `cjoin_on` entirely — it needs at least one `on` predicate, so moving them all out without
+    removing the call raises too.
+
+    Here, **do not** "fix" it by projecting the path in `values(...)` first. That builds those
+    joins ahead of the `cjoin_on`, so nothing needs to move and the query renders — as
+    `INNER JOIN "driver" AS "d" ON "Tb_2"."country" = ?`, an `ON` clause that never mentions `d`.
+    That is an unconstrained join: every `driver` row against every qualifying base row, silently.
+    The error is the better outcome.
+
+    *It names the alias and a deeper path* — `on = [F("d.nationality") == F("raceid__circuitid__country")]`,
+    drivers racing in their home country — is a real correlation that moved only because the join
+    on its other side is built later. Projecting **is** the fix here: add
+    `raceid__circuitid__country` to `values(...)` and the clause renders exactly as written.
+
+    *It names the alias and another `cjoin_on` alias* — there is no path to project, so declare
+    the predicate on whichever of the two PormG emits **later**; the reference then points
+    backwards and nothing moves. The error message names that join for you. Give the first join an
+    `ON` predicate of its own as well — it is still joined, and `cjoin_on` requires at least one:
+
+    ```julia
+    # ✗ before — d1's only predicate names d2, which is emitted after it
+    query.cjoin_on("Driver", alias = "d1", on = [F("d1.surname") == F("d2.surname")])
+    query.cjoin_on("Driver", alias = "d2", on = [F("d2.driverid") == F("driverid")])
+
+    # ✓ after — the shared predicate moves to d2, and d1 gets one of its own
+    query.cjoin_on("Driver", alias = "d1", on = [F("d1.driverid") == F("driverid")])
+    query.cjoin_on("Driver", alias = "d2", on = [F("d2.surname") == F("d1.surname")])
+    ```
+
+    (Which of two `cjoin_on` aliases is emitted first is currently decided by alias hashing rather
+    than declaration order — [#449](https://github.com/PingoLee/PormG.jl/issues/449).)
+
+    More generally, PormG checks that the join *has* an `ON` clause, not that the clause
+    constrains it — `on = ["points__@gt" => 10]` renders and multiplies rows just the same
+    ([#448](https://github.com/PingoLee/PormG.jl/issues/448)). Make sure at least one predicate
+    names the alias you gave.
 
 ## Use Cases
 
